@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------
+# status.sh - what terminals exist on this machine, which of them the
+#             tools are configured to act on, and whether the copier is
+#             actually deployed there and up to date.
+#
+# Use this whenever something "doesn't appear in MetaTrader". The usual
+# cause is that the files went to a different data folder than the one
+# the running terminal uses - and a portable install makes that very
+# easy to get wrong, because %APPDATA% can hold a stale folder for an
+# installation whose live data is next to the executable.
+#
+#   ./tools/status.sh            # configured targets
+#   ./tools/status.sh --all      # every data folder found
+# ---------------------------------------------------------------------
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+source "$HERE/lib.sh"
+
+SHOW_ALL=0
+[[ "${1:-}" == "--all" ]] && SHOW_ALL=1
+
+list_terminals() {
+  if [[ $SHOW_ALL -eq 1 ]]; then discover_terminals; else target_terminals; fi
+}
+
+printf '\n=== MetaTrader data folders %s ===\n' \
+  "$([[ $SHOW_ALL -eq 1 ]] && echo '(ALL found)' || echo '(configured in tools/targets.conf)')"
+print_targets
+printf '\n'
+
+#--- compare the deployed sources against src/ so "stale" is visible.
+#--- EVERY loop variable must be local: a stray one overwrites the
+#--- caller's variable of the same name and silently corrupts its report.
+needs_deploy() {
+  local root="$1" f base ext
+  for f in "$REPO/src/Include/Copier/"*.mqh; do
+    base="$(basename "$f")"
+    cmp -s "$f" "$root/Include/Copier/$base" || return 0
+  done
+  for f in "$REPO/src/Experts/"*.mq4; do
+    base="$(basename "$f" .mq4)"
+    for ext in mq4 mq5; do
+      [[ -f "$root/Experts/$base.$ext" ]] || continue
+      cmp -s "$f" "$root/Experts/$base.$ext" || return 0
+    done
+  done
+  for f in "$REPO/src/Scripts/"*.mq4; do
+    base="$(basename "$f" .mq4)"
+    for ext in mq4 mq5; do
+      [[ -f "$root/Scripts/$base.$ext" ]] || continue
+      cmp -s "$f" "$root/Scripts/$base.$ext" || return 0
+    done
+  done
+  return 1
+}
+
+#--- When an installation has BOTH an %APPDATA% folder and a portable one,
+#--- only one of them is actually live - whichever the terminal was
+#--- launched against. The most recently touched one is almost always the
+#--- answer, so surface it instead of making the user guess.
+last_used() {
+  local d="$1" cand t=""
+  for cand in "$d/experts.dat" "$d"; do
+    [[ -e "$cand" ]] || continue
+    t="$(date -r "$cand" '+%Y-%m-%d %H:%M' 2>/dev/null)" && [[ -n "$t" ]] && break
+  done
+  printf '%s' "${t:-?}"
+}
+
+#--- Are the COMPILED binaries older than the sources they were built from?
+#---
+#--- Without this, status.sh answered only "is the source deployed" and "do
+#--- the binaries exist" - and those two together look exactly like a correct
+#--- build even when the binaries were compiled BEFORE the last deploy. That
+#--- is not hypothetical: compile.sh compiles whatever source is ALREADY in
+#--- the terminal folder, so running it before deploy.sh builds the PREVIOUS
+#--- revision, and deploy.sh then copies the new sources in without
+#--- recompiling. The terminal reports "4/4 compiled" while running code one
+#--- revision old, and nothing says so.
+#---
+#--- Every loop variable is local on purpose: a stray one overwrites the
+#--- caller's variable of the same name and silently corrupts its report.
+bin_stale() {
+  local root="$1" ext="$2" binext="$3" f base dir
+  for f in "$root/Experts/"*."$ext" "$root/Scripts/"*."$ext"; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f" ".$ext")"
+    [[ "$base" == Copier* ]] || continue
+    dir="$(dirname "$f")"
+    [[ -f "$dir/$base.$binext" ]] || continue
+    [[ "$f" -nt "$dir/$base.$binext" ]] && return 0
+  done
+  return 1
+}
+
+printf '=== deployment ===\n'
+printf '  %-34s %-6s %-9s %-8s %-9s %-8s %s\n' \
+  "TARGET" "PLAT" "SOURCES" "DLLS" "COMPILED" "FRESH" "LAST USED"
+found_any=0
+while IFS='|' read -r id plat label; do
+  [[ -n "$id" ]] || continue
+  found_any=1
+  dir="$(resolve_data_dir "$id" "$plat")"
+
+  #--- source extension and compiled extension are different things:
+  #--- .mq4/.mq5 are what you write, .ex4/.ex5 are what MetaEditor emits
+  if [[ "$plat" == "MQL5" ]]; then
+    ext="mq5"; binext="ex5"
+  else
+    ext="mq4"; binext="ex4"
+  fi
+
+  if [[ ! -d "$dir" ]]; then
+    printf '  %-34s %-6s %s\n' "$id" "$plat" "(data folder missing: $dir)"
+    continue
+  fi
+  used="$(last_used "$dir")"
+
+  if [[ ! -f "$dir/Include/Copier/CopierDefs.mqh" ]]; then
+    src="MISSING"
+  elif needs_deploy "$dir"; then
+    src="STALE"
+  else
+    src="ok"
+  fi
+
+  #--- libsodium is statically linked into libzmq.dll since the 4.3.5 upgrade,
+  #--- so requiring libsodium.dll here would report MISSING on a healthy install.
+  if [[ -f "$dir/Libraries/libzmq.dll" ]]; then
+    dll="ok"
+  else
+    dll="MISSING"
+  fi
+
+  #--- CopierKeygen is gone: the CURVE keypair is now generated by the EAs
+  #--- themselves into MQL\Files\copier_curve.key on first start.
+  bins=0
+  for b in CopierSender CopierReceiver; do
+    [[ -f "$dir/Experts/$b.$binext" ]] && bins=$((bins+1))
+  done
+  for b in CopierSelfTest; do
+    [[ -f "$dir/Scripts/$b.$binext" ]] && bins=$((bins+1))
+  done
+
+  #--- "no" here is the dangerous one: the binaries are all present, so
+  #--- COMPILED looks healthy, but at least one was built from an older
+  #--- source than the one now sitting next to it. Re-run deploy.sh THEN
+  #--- compile.sh. Cannot be judged when the source is not deployed at all,
+  #--- so it reports "-" rather than a misleading "ok".
+  if [[ "$src" != "ok" ]]; then
+    fresh="-"
+  elif bin_stale "$dir" "$ext" "$binext"; then
+    fresh="no"
+  else
+    fresh="ok"
+  fi
+
+  printf '  %-34s %-6s %-9s %-8s %-9s %-8s %s\n' \
+    "$id" "$plat" "$src" "$dll" "$bins/3 $binext" "$fresh" "$used"
+done < <(list_terminals)
+
+if [[ $found_any -eq 0 ]]; then
+  echo "  (none - check tools/targets.conf, or run with --all)"
+fi
+
+printf '\n=== next steps ===\n'
+echo "  ./tools/deploy.sh     push sources + DLLs to the listed targets"
+echo "  ./tools/compile.sh    compile there and print the compiler logs"
+echo
+echo "A target is either a 32-hex folder name under %APPDATA% or an absolute"
+echo "path (which is how a PORTABLE install is named - its data lives next to"
+echo "terminal64.exe, not in %APPDATA%). Run './tools/status.sh --all' to see"
+echo "every data folder on this machine."
+echo

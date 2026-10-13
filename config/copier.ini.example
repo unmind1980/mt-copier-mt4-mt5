@@ -1,0 +1,96 @@
+; ---------------------------------------------------------------------
+; copier.ini - RECEIVER configuration
+;
+; Copy this file to <terminal data folder>\MQL4\Files\copier.ini
+;                              or ...\MQL5\Files\copier.ini
+;
+; Why a file instead of EA inputs: each sender needs its own endpoint,
+; CURVE key, symbol table and sizing rule. With 3-4 senders the input
+; list becomes unmanageable and impossible to review or diff.
+;
+; Sections are [sender0], [sender1], ... and must be numbered without
+; gaps - the receiver stops at the first missing id.
+; ---------------------------------------------------------------------
+
+[sender0]
+; --- identity. The sender has NO SenderId input any more: its identity IS
+;     its EventsPort, as a string. Both ends derive it from the same number,
+;     so there is nothing to keep in step - and no way to mistype one side
+;     into silence, which is what a mismatched id looks like (a receiver
+;     ignores an unknown SID without saying so).
+;     Two senders on DIFFERENT hosts may use the same port and would then
+;     collide, so either give them different ports or set id= explicitly,
+;     as this file does.
+id          = 5555
+; --- endpoint. The sender binds ONE port on its own machine, carrying
+;     both streams: events (opens/closes) and snapshots (full state,
+;     authoritative, self-healing). They are told apart by the message
+;     type inside the envelope, not by the port.
+;     If your VPSes are on a private network (Tailscale/WireGuard),
+;     use the private IP here and you can leave UseCurve off.
+events      = tcp://10.0.0.5:5555
+; --- snap= is OBSOLETE and ignored. It is still parsed so that an existing
+;     copier.ini keeps working, but nothing connects to it. Delete it if you
+;     like; leaving it does no harm and the receiver says so once at startup.
+; snap      = tcp://10.0.0.5:5556
+; --- CURVE public key of THAT sender. Only needed when UseCurve=true.
+;     The sender prints this in its Experts log at every start, under
+;     "CURVE PUBLIC KEY (sender)"; nothing else on the sender side needs
+;     configuring. This receiver's OWN keypair is generated automatically
+;     into MQL\Files\copier_curve.key - there is no key input to set here.
+serverkey   = PLACEHOLDER_PUBLIC_KEY_OF_THIS_SENDER
+
+; --- lot sizing -----------------------------------------------------
+; lotmode = multiplier  -> lots = senderLots * lotparam    (code 0)
+; lotmode = fixed       -> lots = lotparam                 (code 1)
+; lotmode = off         -> lots = senderLots, unchanged    (code 2)
+;
+; The numeric codes are the SAME ones the EA's SenderLotMode dropdown uses,
+; so a value written here by the central hub means the same thing in both
+; places. An unrecognised value still falls back to multiplier, but it is
+; reported at startup rather than applied in silence.
+;
+; Sizing is computed HERE, on the receiver, from the sender's volume.
+; Below-minimum results are rejected, never silently rounded up.
+lotmode     = multiplier
+lotparam    = 1.0
+
+; --- magic number for this sender's mirrored trades. Must be unique
+;     per sender, and must not collide with your other EAs.
+;
+;     SET THIS EXPLICITLY. If you leave it out, the sender's magic becomes
+;     MagicBase + <its section index> - so REORDERING these sections (or
+;     changing MagicBase) silently moves a sender onto a different magic.
+;     The receiver finds a sender's positions by magic alone, so everything
+;     already open under the old one turns into an invisible orphan: never
+;     matched, never closed, while the sender's live positions get mirrored
+;     again under the new magic. You end up holding both, with nothing logged.
+;     Pin the number here and a reorder becomes harmless.
+magic       = 770000
+
+; --- symbol translation ---------------------------------------------
+; The sender broadcasts its OWN broker's names. Map them to what YOUR
+; broker calls them. Explicit mapping is intentional: a silently wrong
+; symbol is far worse than a skipped trade.
+; A blanket suffix rule (e.g. suffix = m  ->  EURUSD becomes EURUSD.m)
+; is applied only to symbols not listed explicitly below.
+suffix      =
+symbol.GOLD      = XAUUSD
+symbol.SILVER    = XAGUSD
+symbol.SP500     = US500
+symbol.CRUDE_OIL = XTIUSD
+
+
+[sender1]
+; --- a DIFFERENT port from sender0 on purpose: both hosts could otherwise
+;     derive the same id from 5555 and the receiver could not tell them apart
+id          = 5565
+events      = 10.0.0.9:5565
+serverkey   = PLACEHOLDER_PUBLIC_KEY_OF_THIS_SENDER
+
+; Same sender, different account size: trade a quarter of its volume.
+lotmode     = multiplier
+lotparam    = 0.25
+magic       = 770001
+suffix      = m
+symbol.GOLD      = XAUUSD.m

@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mt-copier hub</title>
+<!--
+  ONE FILE, ON PURPOSE.
+
+  No bundler, no npm, no framework, no second origin to get a CORS rule
+  wrong for. The hub serves this with include_str!, so the binary is the
+  deployment and the page is same-origin with the API it calls - which is
+  what the plan's §18 wants and what a reverse proxy would otherwise have
+  to be configured for.
+
+  WebSocket first, polling as the fallback. The fallback is not decoration:
+  a corporate proxy that eats the upgrade is the normal case, not the exotic
+  one, and a dashboard that goes blank there is a dashboard nobody trusts
+  again. Three missed WS reconnects and it polls every 5 s instead, saying so
+  in the header so the switch is visible rather than mysterious.
+-->
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --line:#e3e6ea; --ink:#1c2128;
+    --dim:#6a737d; --ok:#1a7f37; --warn:#9a6700; --bad:#c9311c;
+    --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);
+         padding:12px 20px;display:flex;gap:20px;align-items:baseline;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:650}
+  .pill{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:10px;
+        border:1px solid var(--line);background:var(--bg);color:var(--dim)}
+  .pill.live{color:var(--ok);border-color:#b7ddc2}
+  .pill.poll{color:var(--warn);border-color:#e6d29a}
+  main{padding:20px;display:grid;gap:16px;grid-template-columns:1fr 1fr}
+  @media(max-width:1000px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  section h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+             color:var(--dim);padding:10px 14px;border-bottom:1px solid var(--line);
+             display:flex;justify-content:space-between;align-items:baseline}
+  section h2 span{font-family:var(--mono);text-transform:none;letter-spacing:0}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  th,td{padding:6px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  th.num{padding-right:14px}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  .online{background:var(--ok)} .stale{background:var(--warn)} .offline{background:var(--bad)}
+  .empty{padding:22px 14px;color:var(--dim);font-size:13px;text-align:center}
+  #topo svg{display:block;width:100%;height:260px}
+  .nd{fill:#eef1f4;stroke:var(--line)}
+  .nd.sender{fill:#e8f2fb} .nd.receiver{fill:#f0efe4}
+  .edge{stroke:#c3cad1;stroke-width:1.5;fill:none}
+  text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
+  .lbl{fill:var(--dim);font-size:9.5px}
+  footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>mt-copier hub</h1>
+  <span class="pill" id="mode">connecting</span>
+  <span class="pill" id="counts">-</span>
+  <span class="pill" id="up">-</span>
+  <span class="pill" id="age">-</span>
+</header>
+
+<main>
+  <section>
+    <h2>Nodes <span id="ncount"></span></h2>
+    <div id="nodes"><div class="empty">loading</div></div>
+  </section>
+
+  <section>
+    <h2>Positions <span id="pcount"></span></h2>
+    <div id="pos"><div class="empty">loading</div></div>
+  </section>
+
+  <section id="topo" style="grid-column:1/-1">
+    <h2>Topology <span id="tcount"></span></h2>
+    <div id="topobody"><div class="empty">loading</div></div>
+  </section>
+</main>
+
+<footer id="foot">read-only view. The hub exposes no write endpoint yet.</footer>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- state
+var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null,
+          // What the two tables currently show. Compared rather than
+          // assumed, so a change of SET rebuilds and a change of VALUES
+          // does not - see renderNodes/renderPositions.
+          nodeKeys:null, nodeRows:null, posKeys:null, posRows:null };
+
+function $(id){ return document.getElementById(id); }
+function esc(x){
+  return String(x).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+function fmtAge(sec){
+  sec = Math.max(0, Math.round(sec));
+  if(sec < 60) return sec + "s ago";
+  if(sec < 3600) return Math.floor(sec/60) + "m ago";
+  return Math.floor(sec/3600) + "h ago";
+}
+
+// ---------------------------------------------------------------- fetch
+function api(path){
+  return fetch(path).then(function(r){
+    if(!r.ok) throw new Error(path + " -> " + r.status);
+    return r.json();
+  });
+}
+
+// ---------------------------------------------------------------- order
+// Sorted HERE as well as on the server, and that is not redundancy.
+//
+// The server now sends one order (see nodes_json_list / positions_json_list in
+// hub/src/api.rs - the bug was that REST sorted by account while the WebSocket
+// pushed sorted by last_seen, so every heartbeat reshuffled the table). But a
+// page that depends on somebody remembering to sort a future endpoint is a
+// page that will reshuffle again. So the order that the user sees is decided
+// in one place: here.
+//
+// Plain < / > rather than localeCompare: the server compares bytes, and these
+// are account numbers and node keys. A locale-ware comparison could disagree
+// with it, which would reintroduce exactly the flicker being fixed.
+function cmp(a, b){
+  a = (a === undefined || a === null) ? "" : String(a);
+  b = (b === undefined || b === null) ? "" : String(b);
+  return a < b ? -1 : (a > b ? 1 : 0);
+}
+function sortNodes(n){ return n.slice().sort(function(x, y){ return cmp(x.key, y.key); }); }
+function sortPos(n){ return n.slice().sort(function(x, y){ return cmp(x.sid, y.sid); }); }
+
+// ---------------------------------------------------------------- text
+// The STATE cell, in one function, because it used to be inline and it used to
+// go BLANK.
+//
+// `n.quiet_secs > 0 ? " · quiet " + fmtAge(...) : ""` dropped the entire suffix
+// whenever the value was zero, and the server quantises quiet_secs to a
+// multiple of 0.1 - so a heartbeat that had just landed produced exactly 0.0,
+// the suffix vanished, and one second later "quiet 0s ago" was back. Reported
+// off the screenshot as "a moment of complete blank".
+//
+// The suffix is unconditional now. It may say "quiet 0s ago" - that is honest,
+// and a number that ticks 1 -> 0 -> 1 is readable, whereas text that appears
+// and disappears is not.
+function stateText(n){
+  var q = Math.max(0, Math.round(n.quiet_secs || 0));
+  return n.liveness + " \u00b7 quiet " + q + "s ago";
+}
+
+// ---------------------------------------------------------------- render
+function render(){
+  var d = s.data;
+  if(!d){ return; }
+  var nodes = sortNodes(d.nodes || []);
+  var pos = sortPos(d.positions || []);
+  var counts = {online:0,stale:0,offline:0};
+  nodes.forEach(function(n){ if(counts[n.liveness] !== undefined) counts[n.liveness]++; });
+  $("counts").textContent =
+    counts.online + " online / " + counts.stale + " stale / " + counts.offline + " offline";
+  $("up").textContent = "up " + fmtAge(d.hub_uptime_secs);
+  $("age").textContent = "updated " + (s.lastAt ? fmtAge((Date.now()-s.lastAt)/1000) : "-");
+  $("ncount").textContent = nodes.length + " node(s)";
+  $("pcount").textContent = pos.length + " sender(s)";
+
+  renderNodes(nodes);
+  renderPositions(pos);
+  drawTopology(nodes);
+}
+
+// --- NODES ---------------------------------------------------------------
+//
+// Rebuilt only when the SET of keys changes. In between, the cells are
+// updated in place. That matters more than it sounds: `innerHTML` on a table
+// destroys and recreates every node every second, and a DOM that is being
+// rebuilt while you read it flickers even when the text is identical.
+//
+// The state cell is the one that changes on its own (quiet_secs ticks), so it
+// is the one that made the rebuild-per-second visible.
+function renderNodes(nodes){
+  var host = $("nodes");
+  if(!nodes.length){
+    host.innerHTML = '<div class="empty">no node has registered yet</div>';
+    s.nodeKeys = null; s.nodeRows = null;
+    return;
+  }
+  var keys = nodes.map(function(n){ return n.key; }).join("\u0000");
+  if(keys !== s.nodeKeys){
+    var rows = nodes.map(function(n){
+      return "<tr data-k=\"" + esc(n.key) + "\">" +
+             "<td><span class='dot'></span><span class='k'></span></td>" +
+             "<td class='nm'></td>" +
+             "<td class='num ps'></td>" +
+             "<td class='st'></td></tr>";
+    }).join("");
+    host.innerHTML =
+      "<table><thead><tr><th>node</th><th>name</th><th class=\"num\">pos</th>" +
+      "<th>state</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    s.nodeKeys = keys;
+    s.nodeRows = {};
+    var trs = host.getElementsByTagName("tr");
+    for(var i = 0; i < trs.length; i++){
+      var k = trs[i].getAttribute("data-k");
+      if(!k) continue;
+      s.nodeRows[k] = {
+        dot: trs[i].getElementsByClassName("dot")[0],
+        k:   trs[i].getElementsByClassName("k")[0],
+        nm:  trs[i].getElementsByClassName("nm")[0],
+        ps:  trs[i].getElementsByClassName("ps")[0],
+        st:  trs[i].getElementsByClassName("st")[0]
+      };
+    }
+  }
+  nodes.forEach(function(n){
+    var r = s.nodeRows[n.key];
+    if(!r) return;
+    r.dot.className = "dot " + n.liveness;
+    r.k.textContent = n.key;
+    r.nm.textContent = n.name || "-";
+    // The POS column. `positions` is the join the server now puts on every
+    // sender node - null for a receiver, and null for a sender whose first
+    // SNAP has not arrived yet, which is "nothing to report yet" rather than
+    // zero. Those two are shown differently on purpose: a dash means "not
+    // applicable / not yet", a 0 would mean "holds nothing".
+    r.ps.textContent = (n.positions && n.positions.count !== undefined)
+      ? n.positions.count : "-";
+    r.st.textContent = stateText(n);
+  });
+}
+
+// --- POSITIONS -----------------------------------------------------------
+//
+// Same shape, and for the same reason. The lot counts and the receipt hash
+// change on every snapshot, so this table was being destroyed and rebuilt a
+// few times a second.
+function renderPositions(pos){
+  var host = $("pos");
+  if(!pos.length){
+    host.innerHTML = '<div class="empty">no snapshot received yet</div>';
+    s.posKeys = null; s.posRows = null;
+    return;
+  }
+  var keys = pos.map(function(p){ return p.sid; }).join("\u0000");
+  if(keys !== s.posKeys){
+    var rows = pos.map(function(p){
+      return "<tr data-s=\"" + esc(p.sid) + "\">" +
+             "<td class='sd'></td>" +
+             "<td class='num c'></td>" +
+             "<td class='num l'></td>" +
+             "<td class='sy'></td>" +
+             "<td class='h'></td></tr>";
+    }).join("");
+    host.innerHTML =
+      "<table><thead><tr><th>sender</th><th class=\"num\">pos</th>" +
+      "<th class=\"num\">lots</th><th>symbols</th><th>H</th></tr></thead><tbody>" +
+      rows + "</tbody></table>";
+    s.posKeys = keys;
+    s.posRows = {};
+    var trs = host.getElementsByTagName("tr");
+    for(var i = 0; i < trs.length; i++){
+      var sid = trs[i].getAttribute("data-s");
+      if(!sid) continue;
+      s.posRows[sid] = {
+        sd: trs[i].getElementsByClassName("sd")[0],
+        c:  trs[i].getElementsByClassName("c")[0],
+        l:  trs[i].getElementsByClassName("l")[0],
+        sy: trs[i].getElementsByClassName("sy")[0],
+        h:  trs[i].getElementsByClassName("h")[0]
+      };
+    }
+  }
+  pos.forEach(function(p){
+    var r = s.posRows[p.sid];
+    if(!r) return;
+    var syms = (p.symbols || []).map(function(x){
+      return esc(x.symbol) + "×" + esc(x.count) + "/" + esc(x.lots);
+    }).join(" ");
+    r.sd.textContent = p.sid;
+    r.c.textContent = p.count;
+    r.l.textContent = p.lots;
+    r.sy.textContent = syms || "-";
+    r.h.textContent = p.receipt || "-";
+  });
+}
+
+function drawTopology(nodes){
+  var senders = nodes.filter(function(n){ return n.role === "sender"; });
+  var receivers = nodes.filter(function(n){ return n.role === "receiver"; });
+  $("tcount").textContent = senders.length + " sender(s) · " + receivers.length + " receiver(s)";
+  if(!nodes.length){
+    $("topobody").innerHTML = '<div class="empty">nothing to draw yet</div>';
+    return;
+  }
+  // A hub in the middle, senders left, receivers right. Not a graph layout:
+  // the shape IS the topology, so it never has to be computed.
+  // The gap. The labels used to sit at the box EDGE (x +- 72, and the box is
+  // 144 wide), so a name and its account-number box rendered as one smeared
+  // block - reported as "像素块连起来". Everything below is in units of that
+  // one number: BOX_W/2 is the box half-width, LBL_GAP the clear space between
+  // the box and the text, and the columns are pushed out far enough that the
+  // longest name still has room rather than being clipped by the viewBox.
+  var BOX_W = 148, BOX_HALF = BOX_W / 2, LBL_GAP = 16, TEXT_W = 96;
+  var W = BOX_HALF * 2 + LBL_GAP + TEXT_W * 2 + 340;
+  var H = 60 + Math.max(senders.length, receivers.length, 1) * 46;
+  var cx = W / 2;
+  var cols = { s: { x: TEXT_W + BOX_HALF }, r: { x: W - TEXT_W - BOX_HALF } };
+  function slot(i){ return { y: 40 + i*46 }; }
+  var out = ['<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet">'];
+  var hub = { x: cx, y: H/2 };
+  senders.forEach(function(n,i){
+    var p = slot(i);
+    out.push('<path class="edge" d="M' + cols.s.x + ' ' + p.y + ' L' + hub.x + ' ' + hub.y + '"/>');
+  });
+  receivers.forEach(function(n,i){
+    var p = slot(i);
+    out.push('<path class="edge" d="M' + hub.x + ' ' + hub.y + ' L' + cols.r.x + ' ' + p.y + '"/>');
+  });
+  out.push('<rect class="nd" x="' + (hub.x-34) + '" y="' + (hub.y-13) +
+           '" width="68" height="26" rx="5"/>');
+  out.push('<text x="' + hub.x + '" y="' + (hub.y+4) + '" text-anchor="middle">hub</text>');
+  senders.forEach(function(n,i){
+    var p = slot(i);
+    out.push(box(cols.s.x, p.y, "nd sender", esc(n.acc)));
+    out.push('<text class="lbl" x="' + (cols.s.x - BOX_HALF - LBL_GAP) + '" y="' + (p.y+4) + '" text-anchor="end">' +
+             esc(n.name || "sender") + '</text>');
+  });
+  receivers.forEach(function(n,i){
+    var p = slot(i);
+    out.push(box(cols.r.x, p.y, "nd receiver", esc(n.acc)));
+    out.push('<text class="lbl" x="' + (cols.r.x + BOX_HALF + LBL_GAP) + '" y="' + (p.y+4) + '">' +
+             esc(n.name || "receiver") + '</text>');
+  });
+  out.push('</svg>');
+  $("topobody").innerHTML = out.join("");
+  function box(x,y,cls,label){
+    return '<rect class="' + cls + '" x="' + (x - BOX_HALF) + '" y="' + (y - 13) +
+           '" width="' + BOX_W + '" height="26" rx="5"/><text x="' + x + '" y="' + (y + 4) +
+           '" text-anchor="middle">' + label + '</text>';
+  }
+}
+
+// ---------------------------------------------------------------- data paths
+function accept(payload){
+  s.data = payload;
+  s.lastAt = Date.now();
+  s.misses = 0;
+  render();
+}
+
+// The initial / fallback fetch. It fetches /api/v1/topology, which answers
+// {senders, receivers, edges, counts} - and render() reads {nodes, positions}.
+//
+// That mismatch was a real bug, not a cosmetic one: with the WebSocket down
+// and polling as the fallback, the NODES table rendered EMPTY, because the
+// payload it was handed had no `nodes` key at all. It only ever looked fine
+// because the WebSocket path - which sends exactly {nodes, positions} - was
+// the one normally in use.
+//
+// So the shape is converted here, once, rather than making render() know
+// about two payload shapes.
+function refresh(){
+  api("/api/v1/topology").then(function(t){
+    accept({
+      nodes: (t.senders || []).concat(t.receivers || []),
+      positions: [],
+      hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0
+    });
+  }).catch(function(){});
+}
+
+function startPolling(){
+  if(s.poller) return;
+  s.mode = "poll";
+  $("mode").textContent = "polling";
+  $("mode").className = "pill poll";
+  s.poller = setInterval(refresh, 5000);
+  refresh();
+}
+
+function startWS(){
+  var proto = location.protocol === "https:" ? "wss:" : "ws:";
+  var ws = new WebSocket(proto + "//" + location.host + "/api/v1/stream");
+  ws.onopen = function(){
+    s.mode = "ws"; s.misses = 0;
+    $("mode").textContent = "live";
+    $("mode").className = "pill live";
+    if(s.poller){ clearInterval(s.poller); s.poller = null; }
+  };
+  ws.onmessage = function(ev){
+    try { var m = JSON.parse(ev.data); } catch(e){ return; }
+    if(m.t === "snapshot"){
+      accept({ nodes:m.data.nodes || [], positions:m.data.positions || [],
+               hub_uptime_secs:m.data.hub_uptime_secs || 0 });
+    }
+  };
+  ws.onclose = function(){
+    s.misses++;
+    if(s.misses >= 3){ startPolling(); return; }
+    $("mode").textContent = "reconnecting";
+    setTimeout(startWS, 800);
+  };
+  ws.onerror = function(){ /* onclose follows */ };
+}
+
+// ---------------------------------------------------------------- boot
+refresh();
+if(window.WebSocket){ startWS(); } else { startPolling(); }
+setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
+</script>
+</body>
+</html>

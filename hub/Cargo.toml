@@ -1,0 +1,58 @@
+[package]
+name = "copier-hub"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 1 transparent-proxy hub for mt-copier: forwards two-frame messages, consumes control"
+license = "MIT"
+
+[[bin]]
+name = "copier-hub"
+path = "src/main.rs"
+
+[dependencies]
+#--- Pinned to 0.9.2, and that is not laziness - it is the only version that
+#--- can be built here at all.
+#---
+#--- zmq 0.10 pulls zmq-sys 0.12, whose build script UNCONDITIONALLY vendors
+#--- libzmq from source (zeromq_src::Build::new().build()). That needs cmake
+#--- and a C++ compiler, and - worse for this project - it would link a
+#--- DIFFERENT libzmq from the one the EAs use, which is exactly what the
+#--- plan's §14 says must not happen.
+#---
+#--- zmq-sys 0.11 (used by zmq 0.9.2) makes `vendored` an OPTIONAL feature.
+#--- With it off, the build script looks for a system libzmq via
+#--- LIBZMQ_LIB_DIR / LIBZMQ_INCLUDE_DIR (or LIBZMQ_PREFIX), which is how this
+#--- crate links the very libzmq.dll shipped in third_party/zmq-prefix.
+#---
+#--- Verified, not assumed: all 70 zmq_* symbols zmq 0.9.2 uses were checked
+#--- against the DLL's export table (96 exports, libzmq 4.3.5) before this pin
+#--- was written, and every one of them is present. See hub/README.md.
+zmq = "0.9.2"
+
+#--- M8/M10: the read-only HTTP + WebSocket half.
+#---
+#--- The plan's §14 names tokio + axum, and that is what this is. It was
+#--- believed for a while that they could not build on this machine; that was
+#--- wrong, and the reason is worth knowing because it will come up again:
+#--- windows-sys generates its import libraries at build time with `dlltool`,
+#--- and the Rust GNU toolchain ships dlltool WITHOUT the assembler it calls.
+#--- The failure - a bare `dlltool.exe: CreateProcess` - names nothing, so it
+#--- was misread as "async cannot build here". Fixed in hub/build.sh section 2
+#--- by vendoring a complete-enough binutils; see hub/README.md.
+#---
+#--- `ws` is on for the axum WebSocket extractor, and nothing else is pulled
+#--- in for the frontend: the dashboard is ONE self-contained HTML file served
+#--- by include_str!, so there is no npm, no bundler, no asset pipeline, and
+#--- no second origin to reason about (the plan's §18 wants same-origin).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+#--- NO ctrlc, deliberately and separately from anything above.
+#---
+#--- `ctrlc` would pull windows-sys, which is now buildable (see above), so
+#--- this is a choice rather than a necessity: the handler is ~20 lines of
+#--- direct FFI in main.rs - see `sig` - and it does exactly the one thing
+#--- needed, which is to set a flag so the final stats line still prints.
+#--- Pulling a crate and a platform layer for a flag is not worth it.
