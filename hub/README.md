@@ -643,6 +643,11 @@ M5b lands, a `CMD` is issued, goes out on the wire, and is acknowledged (or time
 out) — but the receiver does not yet change behaviour. This is safe to enable
 because it changes nothing on the node; it is just not yet useful there.
 
+The same endpoint is wired into the hub dashboard (`hub/src/assets/dashboard.html`):
+every **receiver** row now carries `pause` / `resume` / `close all` / `reload`
+buttons that POST here and show the returned `command_id` (and poll URL) inline;
+the footer reflects whether this hub was started with `--writes on`.
+
 | Method | Path | Answers |
 |---|---|---|
 | POST | `/api/v1/nodes/{id}/commands` | body `{"op":"pause"}` or the bare word `pause` → **202** + `command_id` + a poll URL; **403** unless `--writes on`, **400** for a non-receiver or an unknown op |

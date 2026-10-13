@@ -58,6 +58,16 @@
   text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
   .lbl{fill:var(--dim);font-size:9.5px}
   footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
+  .ops{white-space:nowrap}
+  .opbtn{font:11px/1 var(--mono);padding:3px 6px;margin:0 2px 2px 0;border:1px solid var(--line);
+         background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer}
+  .opbtn:hover{border-color:#b9c0c8}
+  .opbtn:disabled{opacity:.5;cursor:default}
+  .opbtn.danger{color:var(--bad);border-color:#e8b4ab}
+  .opbtn.danger:hover{border-color:var(--bad)}
+  .opmsg{display:block;font-family:var(--mono);font-size:11px;color:var(--dim);
+         margin-top:2px;min-height:1em;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opmsg.ok{color:var(--ok)} .opmsg.warn{color:var(--warn)} .opmsg.bad{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -86,12 +96,12 @@
   </section>
 </main>
 
-<footer id="foot">read-only view. The hub exposes no write endpoint yet.</footer>
+<footer id="foot">loading command state…</footer>
 
 <script>
 "use strict";
 // ---------------------------------------------------------------- state
-var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null,
+var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
@@ -196,15 +206,26 @@ function renderNodes(nodes){
   var keys = nodes.map(function(n){ return n.key; }).join("\u0000");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
+      // Operational commands (M5a) target a RECEIVER only - the hub refuses
+      // them for a sender. So the buttons appear for receivers and a dash for
+      // senders, keeping the column aligned and the semantics honest.
+      var ops = (n.role === "receiver")
+        ? "<button class='opbtn' data-op='pause'>pause</button>" +
+          "<button class='opbtn' data-op='resume'>resume</button>" +
+          "<button class='opbtn danger' data-op='closeall'>close all</button>" +
+          "<button class='opbtn' data-op='reload'>reload</button>" +
+          "<span class='opmsg'></span>"
+        : "<span class='opmsg'>-</span>";
       return "<tr data-k=\"" + esc(n.key) + "\">" +
              "<td><span class='dot'></span><span class='k'></span></td>" +
              "<td class='nm'></td>" +
              "<td class='num ps'></td>" +
-             "<td class='st'></td></tr>";
+             "<td class='st'></td>" +
+             "<td class='ops'>" + ops + "</td></tr>";
     }).join("");
     host.innerHTML =
       "<table><thead><tr><th>node</th><th>name</th><th class=\"num\">pos</th>" +
-      "<th>state</th></tr></thead><tbody>" + rows + "</tbody></table>";
+      "<th>state</th><th>ops</th></tr></thead><tbody>" + rows + "</tbody></table>";
     s.nodeKeys = keys;
     s.nodeRows = {};
     var trs = host.getElementsByTagName("tr");
@@ -411,10 +432,84 @@ function startWS(){
   ws.onerror = function(){ /* onclose follows */ };
 }
 
+// ---------------------------------------------------------------- commands (M5a)
+// Issue an operational command to a node via POST /api/v1/nodes/{id}/commands.
+// The hub (M5a) accepts it, puts it on the retry ladder and returns a
+// command_id; the EA only acts on it once M5b lands. A click therefore proves
+// the hub half works even before the EA executes anything.
+//
+// Feedback is written into the .opmsg span of the same row. renderNodes never
+// overwrites that span (it only updates dot/k/nm/ps/st), so a status survives
+// the once-per-second re-render until the row SET itself changes.
+function sendCommand(k, op, msgEl){
+  if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing " + op + "…"; }
+  var url = "/api/v1/nodes/" + encodeURIComponent(k) + "/commands";
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op: op })
+  }).then(function(r){
+    return r.json().then(function(j){ return { status: r.status, j: j }; });
+  }).then(function(res){
+    if(!msgEl) return;
+    if(res.j && res.j.error){
+      msgEl.className = "opmsg bad";
+      var extra = res.j.detail
+        ? " — " + res.j.detail
+        : (res.j.known ? " (known: " + res.j.known.join(", ") + ")" : "");
+      msgEl.textContent = res.j.error + extra;
+    } else if(res.j && res.j.id){
+      msgEl.className = "opmsg ok";
+      msgEl.textContent = "issued " + res.j.id + (res.j.poll ? " — poll " + res.j.poll : "");
+    } else {
+      msgEl.className = "opmsg warn";
+      msgEl.textContent = "HTTP " + res.status;
+    }
+  }).catch(function(e){
+    if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
+  });
+}
+
+// One delegated listener on #nodes survives the table's innerHTML rebuilds, so
+// handlers never have to be re-bound when the row SET changes.
+function onOpClick(ev){
+  var t = ev.target, btn = null;
+  while(t && t.parentNode && t !== this){
+    if(t.classList && t.classList.contains("opbtn")){ btn = t; break; }
+    t = t.parentNode;
+  }
+  if(!btn) return;
+  var td = btn.parentNode;
+  var k = td.parentNode.getAttribute("data-k");
+  var op = btn.getAttribute("data-op");
+  var msg = td.querySelector ? td.querySelector(".opmsg") : null;
+  sendCommand(k, op, msg);
+}
+
+// Reflect whether this hub allows writes (--writes on). The flag is a startup
+// setting, so one check at boot is enough; it also drives the footer note.
+function refreshWritesState(){
+  api("/api/v1/commands").then(function(j){
+    s.writes = !!j.writes_enabled;
+    var f = $("foot");
+    if(!s.writes){
+      f.textContent = "commands are OFF: this hub started with --writes off (the default). " +
+        "Restart with --writes on to issue operational commands (pause / resume / close-all / reload).";
+    } else {
+      f.textContent = "operational commands target receivers; the EA acts on them once M5b lands. " +
+        "Each click issues a command via the M5a hub endpoint and shows its command_id.";
+    }
+  }).catch(function(){
+    $("foot").textContent = "could not read command state from the hub.";
+  });
+}
+
 // ---------------------------------------------------------------- boot
 refresh();
 if(window.WebSocket){ startWS(); } else { startPolling(); }
 setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
+$("nodes").addEventListener("click", onOpClick);
+refreshWritesState();
 </script>
 </body>
 </html>
