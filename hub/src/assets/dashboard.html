@@ -68,6 +68,11 @@
   .opmsg{display:block;font-family:var(--mono);font-size:11px;color:var(--dim);
          margin-top:2px;min-height:1em;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .opmsg.ok{color:var(--ok)} .opmsg.warn{color:var(--warn)} .opmsg.bad{color:var(--bad)}
+  /* A sender holding many different symbols filled the symbols cell with one
+     long run of "SYM x n/lots" and stretched the whole table past the panel.
+     Every other cell stays nowrap (numbers and ids read badly broken); this
+     one cell is a LIST, so let it wrap like one. */
+  #pos td.sy{white-space:normal}
 </style>
 </head>
 <body>
@@ -458,9 +463,15 @@ function sendCommand(k, op, msgEl){
         ? " — " + res.j.detail
         : (res.j.known ? " (known: " + res.j.known.join(", ") + ")" : "");
       msgEl.textContent = res.j.error + extra;
-    } else if(res.j && res.j.id){
+    } else if(res.j && (res.j.command_id || res.j.id)){
+      //--- The 202 body names it `command_id` (`id` is the audit record's
+      //--- field); both are accepted so this can never degrade to a bare
+      //--- status code again - which is exactly what it did show, because
+      //--- the first cut read `id` and fell through to the fallback.
+      var cid = res.j.command_id || res.j.id;
       msgEl.className = "opmsg ok";
-      msgEl.textContent = "issued " + res.j.id + (res.j.poll ? " — poll " + res.j.poll : "");
+      msgEl.textContent = "issued " + cid + " · " + (res.j.state || "?");
+      pollCommand(res.j.poll, cid, msgEl, 0);
     } else {
       msgEl.className = "opmsg warn";
       msgEl.textContent = "HTTP " + res.status;
@@ -468,6 +479,37 @@ function sendCommand(k, op, msgEl){
   }).catch(function(e){
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
   });
+}
+
+//--- The 202 only means the hub TOOK the command. Whether the receiver
+//--- answered is visible only in the command's state, so follow the poll
+//--- URL: once at 2.5 s (a live receiver ACKs in milliseconds - the ladder's
+//--- first retry is at 2 s, so 2.5 s separates "answered" from "retrying"
+//--- cleanly), and once more at 10 s before settling on whatever it says.
+//--- A receiver running the OLD build, or with AcceptCommands=false, shows
+//--- up here as rejected (it answers OK=0) or as pending climbing to
+//--- unknown - which is the honest picture of "the node did not obey".
+function pollCommand(poll, cid, msgEl, attempt){
+  if(!poll || !msgEl) return;
+  setTimeout(function(){
+    api(poll).then(function(j){
+      if(!j || !j.state) return;
+      if(j.state === "pending" && attempt < 1){
+        pollCommand(poll, cid, msgEl, attempt + 1);
+        return;
+      }
+      if(j.state === "acked"){
+        msgEl.className = "opmsg ok";
+        msgEl.textContent = cid + " · acked by the node";
+      } else if(j.state === "rejected"){
+        msgEl.className = "opmsg bad";
+        msgEl.textContent = cid + " · rejected: " + (j.err || "no reason given");
+      } else {
+        msgEl.className = "opmsg warn";
+        msgEl.textContent = cid + " · " + j.state + (j.err ? " (" + j.err + ")" : "");
+      }
+    }).catch(function(){ /* the row may have been rebuilt; nothing to say */ });
+  }, attempt === 0 ? 2500 : 10000);
 }
 
 // One delegated listener on #nodes survives the table's innerHTML rebuilds, so
