@@ -85,6 +85,16 @@
 </header>
 
 <main>
+  <section id="globalops" style="grid-column:1/-1">
+    <h2>Global operations <span id="gstate"></span></h2>
+    <div style="padding:10px 14px">
+      <button class="opbtn" data-gop="pause">pause ALL receivers</button>
+      <button class="opbtn" data-gop="resume">resume ALL receivers</button>
+      <button class="opbtn danger" data-gop="closeall">CLOSE ALL (every receiver, every mirror)</button>
+      <span class="opmsg" id="gmsg"></span>
+    </div>
+  </section>
+
   <section>
     <h2>Nodes <span id="ncount"></span></h2>
     <div id="nodes"><div class="empty">loading</div></div>
@@ -528,6 +538,48 @@ function onOpClick(ev){
   sendCommand(k, op, msg);
 }
 
+// G10: one call, every receiver. The hub mints ONE COMMAND PER RECEIVER (a
+// broadcast frame would be one id shared by N nodes - see api.rs), so the
+// feedback lists every command_id. closeall asks first: it queues a close
+// for every mirrored position the copier holds.
+function sendGlobal(op){
+  var msgEl = $("gmsg");
+  if(op === "closeall" &&
+     !window.confirm("CLOSE ALL queues a close for EVERY mirrored position on EVERY receiver. Continue?"))
+    return;
+  if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing global " + op + "…"; }
+  fetch("/api/v1/commands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op: op })
+  }).then(function(r){
+    return r.json().then(function(j){ return { status: r.status, j: j }; });
+  }).then(function(res){
+    if(!msgEl) return;
+    if(res.j && res.j.error){
+      msgEl.className = "opmsg bad";
+      msgEl.textContent = res.j.error + (res.j.detail ? " — " + res.j.detail : "");
+      return;
+    }
+    var ids = (res.j.issued || []).map(function(x){ return x.command_id; }).join(", ");
+    msgEl.className = "opmsg ok";
+    msgEl.textContent = "global " + op + ": " + (res.j.count || 0) + " command(s) issued"
+      + (ids ? " — " + ids : "");
+  }).catch(function(e){
+    if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
+  });
+}
+
+// One delegated listener on #globalops, same pattern as the per-row one.
+function onGlobalClick(ev){
+  var t = ev.target, btn = null;
+  while(t && t.parentNode && t !== this){
+    if(t.classList && t.classList.contains("opbtn") && t.getAttribute("data-gop")){ btn = t; break; }
+    t = t.parentNode;
+  }
+  if(btn) sendGlobal(btn.getAttribute("data-gop"));
+}
+
 // Reflect whether this hub allows writes (--writes on). The flag is a startup
 // setting, so one check at boot is enough; it also drives the footer note.
 function refreshWritesState(){
@@ -551,6 +603,7 @@ refresh();
 if(window.WebSocket){ startWS(); } else { startPolling(); }
 setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
 $("nodes").addEventListener("click", onOpClick);
+$("globalops").addEventListener("click", onGlobalClick);
 refreshWritesState();
 </script>
 </body>

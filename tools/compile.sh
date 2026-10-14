@@ -65,6 +65,16 @@
 #   ./tools/compile.sh            # targets.conf (or all); reuse across targets
 #   ./tools/compile.sh --all
 #   ./tools/compile.sh --no-reuse # compile per target (old behaviour)
+#   ./tools/compile.sh --no-guard # skip the stale-source guard (NOT recommended)
+#
+# THE GUARD (added 2026-10-14, after it burned a full day): compile.sh does
+# NOT copy sources - deploy.sh does. compile.sh compiles whatever source
+# copies ALREADY SIT in each terminal's data folder. Skip deploy.sh and every
+# compile is a fresh-timestamped binary of OLD code: "ALL GREEN" over and
+# over while none of the day's fixes are in the file the EA runs. The guard
+# byte-compares every Copier*.mq4/.mq5 and every Include/Copier/*.mqh in the
+# target against src/ and refuses to compile a stale target. deploy.sh first,
+# or pass --no-guard when you truly mean to compile what is there.
 # ---------------------------------------------------------------------
 set -uo pipefail
 
@@ -74,10 +84,12 @@ source "$HERE/lib.sh"
 
 SHOW_ALL=0
 REUSE=1
+NO_GUARD=0
 for arg in "$@"; do
   case "$arg" in
     --all)      SHOW_ALL=1 ;;
     --no-reuse) REUSE=0 ;;
+    --no-guard) NO_GUARD=1 ;;
   esac
 done
 list_terminals() {
@@ -185,6 +197,42 @@ pick_editor() {
   return 1
 }
 
+#--- SOURCE FRESHNESS GUARD. Byte-compares the source copies the compile is
+#--- about to consume against src/ (the repo is the only source of truth).
+#--- Experts/ and Scripts/ are the .mq4 renamed to the platform's .mq5 by
+#--- deploy.sh where needed; Include/Copier/*.mqh is copied verbatim - and
+#--- it matters just as much, because a stale CopierDefs.mqh silently drops
+#--- every new message type. Returns non-zero if anything is stale/missing.
+verify_sources_fresh() {
+  local real_dir="$1" ext="$2" sub f base tgt mql
+  #--- real_dir IS the platform dir (resolve_data_dir already appends
+  #--- MQL4/MQL5) - appending it again here produced .../MQL4/MQL4/... and
+  #--- a guard that refused everything.
+  mql="$real_dir"
+  for sub in Experts Scripts; do
+    for f in "$REPO/src/$sub/"*.mq4; do
+      [[ -f "$f" ]] || continue
+      base="$(basename "$f" .mq4)"
+      tgt="$mql/$sub/$base.$ext"
+      if [[ ! -f "$tgt" ]] || ! cmp -s "$f" "$tgt"; then
+        echo "  STALE SOURCE: $mql/$sub/$base.$ext differs from (or is missing"
+        echo "                versus) $REPO/src/$sub/$base.mq4"
+        return 1
+      fi
+    done
+  done
+  for f in "$REPO/src/Include/Copier/"*.mqh; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    tgt="$mql/Include/Copier/$base"
+    if [[ ! -f "$tgt" ]] || ! cmp -s "$f" "$tgt"; then
+      echo "  STALE SOURCE: $mql/Include/Copier/$base differs from src/Include/Copier/."
+      return 1
+    fi
+  done
+  return 0
+}
+
 echo
 echo "=== targets ==="
 print_targets
@@ -206,6 +254,21 @@ while IFS='|' read -r id plat label; do
 
   build="$(prepare_build_dir "$id" "$plat" "$real_dir" "$ext")"
   [[ "$build" != "$real_dir" ]] && echo "  staging build in: $build"
+
+  if [[ $NO_GUARD -eq 0 ]]; then
+    if ! verify_sources_fresh "$real_dir" "$ext"; then
+      echo "  REFUSING to compile this target: its source copies are stale."
+      echo "  compile.sh compiles what already sits in the terminal data"
+      echo "  folder - run 'tools/deploy.sh' to refresh it from src/, or"
+      echo "  re-run with --no-guard if you really mean the stale copy."
+      echo
+      total_fail=$((total_fail+1))
+      continue
+    fi
+    echo "  source guard: OK (Experts/Scripts/Include match src/)"
+  else
+    echo "  source guard: SKIPPED (--no-guard)"
+  fi
 
   editor="$(pick_editor "$plat" "$label" "$build" "$ext" || true)"
   if [[ -z "$editor" ]]; then

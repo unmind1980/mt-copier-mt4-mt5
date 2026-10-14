@@ -799,7 +799,7 @@ master 挂
 | G7  | receiver 中央模式（`HubEndpoint`，订阅列表来自 ini）   | 未做                                                                                        | **P0**      |
 | G8  | 多帧收发（`sendMore()` / `more()`）             | **API 已核实存在，无需补丁**                                                                        | P0          |
 | G9  | `STAT` 在中枢模式下由中枢消费（D13）                   | **消费部分：已生效**（中枢本就在消费）。**收据中继（`RCPT`）：已完成** —— 见 §3.3 的 D13 细化。剩余：把监控数字接到网页前端                                                                                       | P1          |
-| G10 | 全局暂停 / 紧急停止                               | 未做                                                                                        | P1          |
+| G10 | 全局暂停 / 紧急停止                               | **✅ 已实现**（2026-10-14）：`POST /api/v1/commands` 一次对每个已知 receiver 各下发一条命令（不是广播——每节点独立幂等 id / 退避阶梯 / 审计）；dashboard 顶部"Global operations"操作条，`closeall` 带确认                                                                                       | P1          |
 | G11 | 告警出口（Telegram / 邮件 / Webhook）             | 未做                                                                                        | P1          |
 | G12 | 审计日志                                      | **✅ 已实现**：append-only `audit.jsonl` + `GET /api/v1/audit`；**写操作类目**（config/command）等 M4/M5 | P1 |
 | G13 | 时钟健康上报（复用 `g_senderClockOffset`）          | 未做                                                                                        | P2          |

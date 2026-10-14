@@ -415,6 +415,7 @@ which the hub learns as a by-product of relaying snapshot receipts.
 | GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`) |
 | GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **PUT is 403 with `--writes off`** |
 | POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
+| POST | `/api/v1/commands` | G10 global: one command per known receiver → **202** + counts + per-command ids; **403 with `--writes off`**, same **400** door |
 | GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
 | WS | `/api/v1/stream` | a full snapshot on connect, and one per change |
 

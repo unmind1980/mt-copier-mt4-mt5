@@ -677,6 +677,19 @@ the footer reflects whether this hub was started with `--writes on`.
 | Method | Path | Answers |
 |---|---|---|
 | POST | `/api/v1/nodes/{id}/commands` | body `{"op":"pause"}` or the bare word `pause` → **202** + `command_id` + a poll URL; **403** with `--writes off`, **400** for a non-receiver or an unknown op |
+| POST | `/api/v1/commands` (no node id) | **G10 — the global button**: issues one command per *known receiver*, each with its own id, ladder and audit entry → **202** + `{count, issued:[{node, command_id, poll}]}`; same **403** with `--writes off`, same **400** door |
+
+### The global button is N commands, not one broadcast (G10)
+
+`POST /api/v1/commands` with no node id is what the dashboard's **Global
+operations** strip calls. It looks like a broadcast and is deliberately *not*:
+the hub mints one `issue_op` per receiver, so each node gets its own id
+(§5.4 rule 1 — two receivers are two distinct commands), walks its own ladder,
+and is audited individually. One shared broadcast frame would put N nodes on
+one id, which is exactly the idempotency model the write path is built on. The
+response lists every minted command; the dashboard confirms `closeall` before
+sending, because that one queues a close for every mirrored position on every
+receiver.
 
 ## The audit log (M7)
 

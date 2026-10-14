@@ -126,14 +126,22 @@ target_terminals() {
     return
   fi
 
-  while IFS='|' read -r id plat label; do
-    for w in "${want[@]}"; do
+  #--- Emit targets in CONF ORDER, not discovery order. The first target of
+  #--- each platform becomes that platform's BUILD HOST (the one that really
+  #--- compiles; every other target of the platform copies its binary), so
+  #--- the order is load-bearing: the operator uses it to keep the portable
+  #--- MT5 out of the host seat, because its staging-compile environment is
+  #--- the least reliable of the four.
+  local w dline
+  while IFS= read -r w; do
+    [[ -n "$w" ]] || continue
+    while IFS='|' read -r dline; do
+      id="${dline%%|*}"
       if [[ "$w" == "$id" ]]; then
-        printf '%s|%s|%s\n' "$id" "$plat" "$label"
-        break
+        printf '%s\n' "$dline"
       fi
-    done
-  done < <(discover_terminals)
+    done < <(discover_terminals)
+  done < <(printf '%s\n' "${want[@]}")
 }
 
 #--- every MetaEditor that might be able to compile for this target, most

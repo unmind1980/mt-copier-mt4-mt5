@@ -147,6 +147,10 @@ def main():
               "writes" in json.dumps(d).lower() and "--writes" in json.dumps(d),
               json.dumps(d)[:80])
 
+        # G10's global endpoint sits behind the SAME gate.
+        st, d = js("POST", "/api/v1/commands", "pause")
+        check("global POST -> 403 with writes off", st == 403, f"status {st}")
+
         st, d = js("GET", "/api/v1/commands")
         check("...and nothing was queued", d.get("commands") == [],
               f"{len(d.get('commands', []))} command(s)")
@@ -226,6 +230,74 @@ def main():
               all(c.get("state") == "pending" for c in cmds),
               str([c.get("state") for c in cmds]))
 
+    finally:
+        stop(hub, out)
+
+    # =====================================================================
+    print()
+    print("== 2b. G10: one POST, every receiver - one command per node ==")
+    RECV2 = "112233445"          # a second fake receiver, distinct nid
+    for f in (cfg_path, audit_path, cmds_path):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    hub, out = start(True, audit_path, cfg_path, cmds_path)
+    try:
+        ctx = zmq.Context()
+        sockets = []
+        seq = 0
+        for nid in (RECV, RECV2):
+            s = ctx.socket(zmq.XSUB)
+            s.setsockopt(zmq.LINGER, 0)
+            s.connect(f"tcp://127.0.0.1:{ZMQ_PORT}")
+            s.send(b"\x01@" + nid.encode())
+            #--- The hub's node table is built from REG/HBT2 and NOTHING else
+            #--- - subscribing alone makes the socket visible but the NODE
+            #--- imaginary, and the global endpoint would mint zero commands.
+            #--- So announce, exactly the way HubAnnounce does.
+            seq += 1
+            reg = (f"V=1|SID={nid}|SSID={nid}|SEQ={seq}|TS={int(time.time())}|MS=0|"
+                   f"T=REG|P=ROLE=receiver;ACC={nid};VER=2.0;NAME=fake-{nid};UP=0")
+            s.send_multipart([b"@hub", reg.encode()])
+            sockets.append(s)
+        time.sleep(1.0)
+
+        st, d = js("POST", "/api/v1/commands", json.dumps({"op": "pause"}))
+        check("global pause -> 202", st == 202, f"status {st}")
+        check("...covers every known receiver", d.get("count") == 2, str(d.get("count")))
+        issued = d.get("issued", [])
+        nodes_issued = sorted(x.get("node", "") for x in issued)
+        check("...the nodes are the two receivers",
+              nodes_issued == sorted([NODE, f"receiver:{RECV2}"]), str(nodes_issued))
+        ids = [x.get("command_id") for x in issued]
+        check("...distinct command ids (two nodes are two commands)",
+              len(set(ids)) == 2, str(ids))
+        check("...each carries its own poll URL",
+              all(x.get("poll", "").endswith(x.get("command_id", "?")) for x in issued),
+              str([x.get("poll") for x in issued]))
+
+        # The CMD must arrive on EACH node's own topic - per-node delivery,
+        # not one shared broadcast frame.
+        for s, nid in zip(sockets, (RECV, RECV2)):
+            got = None
+            deadline = time.time() + 4
+            while time.time() < deadline:
+                try:
+                    parts = s.recv_multipart(zmq.NOBLOCK)
+                except zmq.Again:
+                    time.sleep(0.1)
+                    continue
+                if len(parts) >= 2 and b"T=CMD" in parts[1]:
+                    got = parts
+                    break
+            check(f"the CMD arrived on @{nid}", got is not None,
+                  "nothing" if got is None else got[0].decode())
+
+        # Same door validation as the per-node endpoint.
+        st, d = js("POST", "/api/v1/commands", json.dumps({"op": "nope"}))
+        check("global unknown op -> 400 with the known list",
+              st == 400 and "known" in d, f"status {st}")
     finally:
         stop(hub, out)
 

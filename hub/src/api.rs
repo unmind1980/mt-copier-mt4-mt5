@@ -629,7 +629,7 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
             axum::routing::post(rollback_node_config),
         )
         .route("/api/v1/config", get(config_list))
-        .route("/api/v1/commands", get(commands_list))
+        .route("/api/v1/commands", get(commands_list).post(commands_global))
         .route("/api/v1/commands/:id", get(command_one))
         .route(
             "/api/v1/nodes/:id/commands",
@@ -1063,6 +1063,120 @@ async fn post_command(
             "command_id": cmd.id,
             "state": cmd.state,
             "poll": format!("/api/v1/commands/{}", cmd.id),
+        })),
+    )
+        .into_response()
+}
+
+/// G10: issue an operational command to EVERY known receiver at once.
+///
+/// One REST call, many commands - and deliberately NO ZMQ broadcast under the
+/// hood. Each receiver gets its own `issue_op` call, so every command carries
+/// its own per-node id (§5.4 rule 1: two distinct receivers are two distinct
+/// commands with distinct ids), walks its own ladder, and lands in the audit
+/// individually. A single broadcast frame would be one id shared by N nodes,
+/// which is exactly the idempotency model the M4/M5 write path is built on.
+///
+/// Same gates as the per-node endpoint: 403 behind `--writes off`, 400 for an
+/// unknown op. An empty receiver table answers 202 with an empty list - there
+/// was nothing to refuse, and the operator should see that plainly rather
+/// than have a missing node look like an error.
+async fn commands_global(
+    State(st): State<SharedState>,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    //--- THE GATE, identical to the per-node endpoint's.
+    let writes = st.lock().unwrap().writes;
+    if !writes {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "writes are disabled",
+                "detail": "this hub was started with --writes off. \
+                           Restart it with --writes on to allow commands.",
+                "why": "the plan's §19 requires role checks on the write path and \
+                        M9 (users and roles) does not exist yet",
+            })),
+        )
+            .into_response();
+    }
+
+    //--- Parse the operation exactly as the per-node endpoint does.
+    let op = {
+        let body = body.trim();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            v.get("op")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| body.to_string())
+        } else {
+            body.to_string()
+        }
+    };
+    if !crate::commands::is_known_op(&op) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "unknown operation",
+                "op": op,
+                "known": crate::commands::OPS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            })),
+        )
+            .into_response();
+    }
+
+    //--- Every known receiver, in a deterministic order, one command each.
+    let nodes: Vec<String> = {
+        let s = st.lock().unwrap();
+        let mut v: Vec<String> = s
+            .reg
+            .nodes()
+            .iter()
+            .filter(|n| n.key.starts_with("receiver:"))
+            .map(|n| n.key.clone())
+            .collect();
+        v.sort();
+        v
+    };
+
+    let mut issued: Vec<Value> = Vec::new();
+    {
+        let s = st.lock().unwrap();
+        for node in &nodes {
+            let cmd = s.cmds.issue_op(node, &op, "", "operator", "");
+            s.audit.record(
+                "operator",
+                "",
+                "command.issued",
+                node,
+                None,
+                Some(json!({ "id": cmd.id, "op": op, "global": true })),
+                "ok",
+            );
+            issued.push(json!({
+                "node": node,
+                "command_id": cmd.id,
+                "poll": format!("/api/v1/commands/{}", cmd.id),
+            }));
+        }
+    }
+
+    let note = if issued.is_empty() {
+        "no receiver is known to this hub yet"
+    } else {
+        "one command per receiver; each walks its own ladder"
+    };
+
+    (
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({
+            "accepted": true,
+            "op": op,
+            "count": issued.len(),
+            "note": note,
+            "issued": issued,
         })),
     )
         .into_response()
