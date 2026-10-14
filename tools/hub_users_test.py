@@ -197,6 +197,25 @@ def main():
 
         # =================================================================
         print()
+        print("== 4b. an EMPTY password on /users means keep the existing one ==")
+        # The dashboard's user table sends password:"" for every disable /
+        # enable / role change - requiring a password there would silently
+        # RESET the user's credential on each toggle.
+        st, _ = js("POST", "/api/v1/users",
+                   {"id": "viewer1", "password": "", "role": "operator",
+                    "disabled": False}, tok)
+        check("role change with an empty password -> 200", st == 200, f"status {st}")
+        st, _ = login("viewer1", "v-pass-new")
+        check("...and the OLD password still works", st == 200, f"status {st}")
+        st, _ = login("viewer1", "wrong-password")
+        check("...and it is not 'no password at all'", st == 401, f"status {st}")
+        st, _ = js("POST", "/api/v1/users",
+                   {"id": "brandnew", "password": "", "role": "viewer",
+                    "disabled": False}, tok)
+        check("a NEW user with an empty password -> 400", st == 400, f"status {st}")
+
+        # =================================================================
+        print()
         print("== 5. logout and disable ==")
         st, _ = js("POST", "/api/v1/logout", None, otok)
         check("logout -> 200", st == 200, f"status {st}")

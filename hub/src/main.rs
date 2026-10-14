@@ -869,6 +869,11 @@ fn main() {
     //--- so nobody "fixes" it by adding a flush loop.
 
     let ctx = zmq::Context::new();
+    //--- The CURVE identity the API/dashboard will show (see the block below).
+    //--- Stashed here and applied to `shared` after it exists, because the
+    //--- socket has to be configured before bind and the shared state is not
+    //--- built yet at that point.
+    let mut curve_for_api: Option<(String, bool)> = None;
     let sock = match ctx.socket(zmq::XPUB) {
         Ok(s) => s,
         Err(e) => {
@@ -1007,6 +1012,7 @@ fn main() {
         //--- listening before the server socket binds - libzmq asks it
         //--- during the handshake and obeys the answer. See curve.rs.
         let _zap = curve::spawn_zap_handler(&ctx, list, args.curve_learn, clients_path.clone());
+        curve_for_api = Some((keys.public.clone(), args.curve_learn));
         std::thread::sleep(std::time::Duration::from_millis(80));
     }
 
@@ -1150,6 +1156,14 @@ fn main() {
     let shared: api::SharedState = std::sync::Arc::new(std::sync::Mutex::new(
         api::Shared::new(args.port, audit.clone(), cfg.clone(), cmds.clone(), args.writes),
     ));
+    //--- Hand the CURVE identity (set up above, before bind) to the API so the
+    //--- dashboard can show the public key - the one value every node's
+    //--- HubPublicKey input needs, and public by definition.
+    if let Some((pubkey, learn)) = &curve_for_api {
+        let mut s = shared.lock().unwrap();
+        s.curve_public = pubkey.clone();
+        s.curve_learn = *learn;
+    }
     //--- Wake signal for the WebSocket clients. Created by the API, held by
     //--- the ZMQ thread, and used ONLY after a state change - never on a
     //--- timer. A timer would mean a push per second per node for no new

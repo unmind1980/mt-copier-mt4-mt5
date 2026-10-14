@@ -164,14 +164,21 @@ impl AllowList {
                 any = true;
                 continue;
             }
-            //--- A line that is not a well-formed key is an ERROR the
-            //--- operator must see, not a silently ignored one: an allow-list
-            //--- that quietly drops the entry you just added is
-            //--- indistinguishable from a node whose key is wrong, and the
-            //--- debugging would start at the wrong end.
-            if shape_ok(line) {
-                if !keys.iter().any(|k| k == line) {
-                    keys.push(line.to_string());
+            //--- A data line is KEY + an optional trailing comment, because
+            //--- learn mode writes "KEY   # learned ... (delete to revoke)"
+            //--- on ONE line. The key length is FIXED at 40, so taking the
+            //--- first 40 characters is unambiguous - and it has to be done
+            //--- this way, because '#' is a legal Z85 CHARACTER: stripping
+            //--- everything from the first '#' would corrupt any key that
+            //--- happens to contain one. (Learned lines had exactly this bug
+            //--- on their first outing: written as KEY+comment, then refused
+            //--- on the next start as "not a 40-character key" - which would
+            //--- have locked the whole fleet out the moment learn was
+            //--- switched off.)
+            let candidate = line.get(..40).unwrap_or(line);
+            if shape_ok(candidate) {
+                if !keys.iter().any(|k| k == candidate) {
+                    keys.push(candidate.to_string());
                 }
             } else {
                 eprintln!(
@@ -465,6 +472,23 @@ mod tests {
         assert!(!l.permits_credential(&zmq::z85_decode(&k3).unwrap()));
         assert!(!l.is_any());
         assert!(!l.is_empty());
+    }
+
+    #[test]
+    fn a_learned_line_with_inline_comment_still_parses() {
+        // The exact shape learn mode writes: KEY + spaces + '# learned ...'.
+        // '#' is a legal Z85 character, so the comment cannot be stripped by
+        // scanning for it - the fixed key length is what makes the split
+        // unambiguous. Before this was handled, a restart refused every
+        // learned line and the fleet would have been locked out.
+        let k = zmq::z85_encode(&zmq::CurveKeyPair::new().unwrap().public_key).unwrap();
+        let text = format!("{}   # learned 1792013438 (delete this line to revoke)\n", k);
+        let l = AllowList::parse(&text);
+        assert_eq!(l.len(), 1);
+        assert!(l.permits_credential(k.as_bytes()));
+        assert!(l.permits_credential(&zmq::z85_decode(&k).unwrap()));
+        // ...and the file is not re-appended to on the next learn.
+        assert!(l.has_key(&k));
     }
 
     #[test]

@@ -649,13 +649,26 @@ def main():
         time.sleep(1.5)
         # If 'none' really means off, a hub started with an EXPLICIT
         # --http on a port we choose must answer on it - and the one with
-        # 'none' must not. So the assertion is that port 6010 is closed.
+        # 'none' must not. The port check assumes 6010 is otherwise free,
+        # which is true on a test bench and FALSE while a real hub is
+        # running (it binds 6010 by default) - so the PRIMARY assertion is
+        # hub2's own banner: --http none must say the dashboard is off, not
+        # print an address. The port probe stays as a secondary signal and
+        # is reported informationally when 6010 is occupied by someone else.
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         c.settimeout(1.0)
-        refused = c.connect_ex(("127.0.0.1", 6010)) != 0
+        occupied = c.connect_ex(("127.0.0.1", 6010)) == 0
         c.close()
-        check("--http none leaves nothing on 6010", refused,
-              "connection refused" if refused else "SOMETHING ANSWERED")
+        if occupied:
+            print("  NOTE  6010 is held by another hub - the port probe is "
+                  "skipped (it cannot tell who is listening)")
+        else:
+            c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            c.settimeout(1.0)
+            refused = c.connect_ex(("127.0.0.1", 6010)) != 0
+            c.close()
+            check("--http none leaves nothing on 6010", refused,
+                  "connection refused" if refused else "SOMETHING ANSWERED")
     finally:
         hub2.terminate()
         try:
@@ -673,6 +686,18 @@ def main():
     # and cross-checked by connecting to 6010 on loopback while proving nothing
     # is on the external interface is out of scope for this machine.
     out3 = open(os.path.join(HERE, "_hub_api3.out"), "wb")
+    # This section asserts the DEFAULT --http (loopback:6010) by reaching it -
+    # which is only possible when 6010 is free. A real hub running on this
+    # machine holds 6010 by definition, so if it is occupied these two checks
+    # are SKIPPED with a note rather than failed: they cannot tell who is
+    # listening, and blaming hub3 for somebody else's bind is a false red.
+    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    c.settimeout(1.0)
+    port6010_occupied = c.connect_ex(("127.0.0.1", 6010)) == 0
+    c.close()
+    if port6010_occupied:
+        print("  NOTE  6010 is held by another hub - the default-bind checks "
+              "are skipped (they cannot distinguish who is listening)")
     hub3 = subprocess.Popen(
         [HUB, "--port", "6183", "--users", users_path, "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
@@ -684,8 +709,9 @@ def main():
         c.settimeout(1.0)
         ok = c.connect_ex(("127.0.0.1", 6010)) == 0
         c.close()
-        check("default --http binds 6010 on loopback", ok,
-              "reachable" if ok else "nothing there")
+        if not port6010_occupied:
+            check("default --http binds 6010 on loopback", ok,
+                  "reachable" if ok else "nothing there")
     finally:
         hub3.terminate()
         try:
@@ -700,10 +726,11 @@ def main():
                 os.remove(f)
             except OSError:
                 pass
-    check("...and the banner says 127.0.0.1, not 0.0.0.0",
-          "http://127.0.0.1:6010" in banner,
-          [l for l in banner.splitlines() if "REST" in l][0].strip()
-          if "REST" in banner else "no banner")
+    if not port6010_occupied:
+        check("...and the banner says 127.0.0.1, not 0.0.0.0",
+              "http://127.0.0.1:6010" in banner,
+              [l for l in banner.splitlines() if "REST" in l][0].strip()
+              if "REST" in banner else "no banner")
 
     print()
     p = sum(1 for _, ok, _ in CHECKS if ok)

@@ -202,6 +202,19 @@ def main():
         got = nodes(tok)
         check("the CURVE client's node was registered",
               "sender:11111111" in got, str(sorted(got)))
+
+        # The dashboard shows the hub's public key from the topology payload -
+        # it is PUBLIC by definition, but it still has to actually BE there.
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=5)
+        c.request("GET", "/api/v1/topology", headers={"Cookie": "mtc_session=" + tok})
+        r = c.getresponse()
+        top = json.loads(r.read())
+        c.close()
+        cv = top.get("curve") or {}
+        check("topology carries the CURVE state",
+              cv.get("on") is True and cv.get("public_key") == hub_pub,
+              str(cv)[:90])
+
         s.close(0)
         ctx.term()
 

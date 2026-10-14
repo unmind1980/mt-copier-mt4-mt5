@@ -116,6 +116,13 @@ pub struct Shared {
     /// and the dedup/re-arm state the rules consult. The audit log holds the
     /// durable record; this holds the cheap one.
     pub alerts: AlertEngine,
+    /// M9/§19.1. The hub's CURVE public key (empty string when `--curve off`)
+    /// and whether learn mode is on. The dashboard shows both: the key is the
+    /// one value every node's `HubPublicKey` input needs, and it is PUBLIC by
+    /// definition - showing it here is no different from printing it in the
+    /// log at every start.
+    pub curve_public: String,
+    pub curve_learn: bool,
     /// M9. Users, roles and sessions. The users persist to users.json; the
     /// sessions are in-memory by design (a hub restart logs everyone out,
     /// which is the honest trade for keeping tokens out of disk).
@@ -148,6 +155,8 @@ impl Shared {
             writes,
             node_rev: std::collections::HashMap::new(),
             alerts: AlertEngine::new(),
+            curve_public: String::new(),
+            curve_learn: false,
             users: UserStore::new(),
             auth_enabled: true,
         }
@@ -414,6 +423,11 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
             "receivers": Value::Array(receivers),
             "edges": Value::Array(edges),
             "alerts": Value::Array(s.alerts.recent_json(20)),
+            //--- M9/§19.1. The PUBLIC key is not a secret - it is the thing
+            //--- every node's HubPublicKey input needs - so showing it on the
+            //--- dashboard is exactly as safe as printing it in the log, and
+            //--- saves the operator a trip to the console.
+            "curve": curve_json(&s),
             "counts": {
                 "senders": s.reg.count_by_role(Role::Sender),
                 "receivers": s.reg.count_by_role(Role::Receiver),
@@ -633,9 +647,20 @@ fn snapshot_text(st: &SharedState) -> String {
             "positions": Value::Array(positions_json_list(&s.pos)),
             "mismatched": s.pos.mismatched,
             "alerts": Value::Array(s.alerts.recent_json(20)),
+            "curve": curve_json(&s),
         })
     };
     json!({ "t": "snapshot", "data": body }).to_string()
+}
+
+/// The CURVE state the dashboard shows: is the link encrypted, what is the
+/// hub's public key (public, not secret), and is learn mode on.
+fn curve_json(s: &Shared) -> Value {
+    json!({
+        "on": !s.curve_public.is_empty(),
+        "public_key": s.curve_public,
+        "learn": s.curve_learn,
+    })
 }
 
 //--- ------------------------------------------------------------------ auth (M9)
@@ -866,6 +891,10 @@ pub struct Token(pub String);
 #[derive(serde::Deserialize)]
 struct UserBody {
     id: String,
+    /// Optional on PURPOSE: an empty password means "keep the existing hash",
+    /// so a role change or a disable/enable does not silently reset the
+    /// user's credential. Required for a user that does not exist yet.
+    #[serde(default)]
     password: String,
     role: String,
     #[serde(default)]
@@ -909,14 +938,33 @@ async fn users_upsert(
                 .into_response()
         }
     };
-    let salt = crate::users::random_token()[..16].to_string();
+    let mut s = st.lock().unwrap();
+    //--- An EMPTY password means "keep what is there", which is what a role
+    //--- change or a disable/enable wants - the dashboard's user table sends
+    //--- exactly that, and requiring a password here would silently RESET
+    //--- the user's credential every time an admin toggled a switch. A user
+    //--- that does not exist yet has nothing to keep, so it is refused.
+    let pass = if b.password.is_empty() {
+        match s.users.get(&b.id) {
+            Some(u) => u.pass.clone(),
+            None => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "a new user needs a password" })),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        let salt = crate::users::random_token()[..16].to_string();
+        hash_password(&b.password, &salt)
+    };
     let u = User {
         id: b.id.clone(),
-        pass: hash_password(&b.password, &salt),
+        pass,
         role,
         disabled: b.disabled,
     };
-    let mut s = st.lock().unwrap();
     if let Err(e) = s.users.upsert(u) {
         return (
             axum::http::StatusCode::CONFLICT,

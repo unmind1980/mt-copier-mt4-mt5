@@ -97,6 +97,23 @@
   #pwdlg button:hover{border-color:#b9c0c8}
   #pwderr{color:var(--bad);font-size:12px;min-height:1em}
   #pwdok{color:var(--ok);font-size:12px;min-height:1em}
+  /* --- M9 user management ------------------------------------------- */
+  #users-sec form{display:flex;gap:8px;align-items:center;margin-top:8px;
+                  flex-wrap:wrap}
+  #users-sec input,#users-sec select{padding:7px 9px;border:1px solid var(--line);
+               border-radius:6px;font:13px/1.4 system-ui,sans-serif;color:var(--ink)}
+  #users-sec button{padding:7px 12px;border:1px solid var(--line);border-radius:6px;
+                background:var(--bg);cursor:pointer;font:13px system-ui,sans-serif;
+                color:var(--ink)}
+  #users-sec button:hover{border-color:#b9c0c8}
+  #users-sec td button{padding:3px 8px;font-size:12px}
+  #uerr{color:var(--bad);font-size:12px}
+  #usersbody td .ops{white-space:nowrap}
+  /* The hub's CURVE public key: public by definition, shown where it can be
+     copied (it is what every node's HubPublicKey input needs). */
+  #curvekey{color:var(--ink)}
+  #curvekey code{font-family:ui-monospace,Consolas,monospace;font-size:11px;
+                 color:var(--ink);cursor:pointer;border-bottom:1px dotted var(--dim)}
   .ops{white-space:nowrap}
   .opbtn{font:11px/1 var(--mono);padding:3px 6px;margin:0 2px 2px 0;border:1px solid var(--line);
          background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer}
@@ -150,9 +167,27 @@
     <h2>Topology <span id="tcount"></span></h2>
     <div id="topobody"><div class="empty">loading</div></div>
   </section>
+
+  <!-- M9: user management. Rendered ONLY for an admin (a 403 on the users
+       endpoint hides it) - the server is the gate, this is just the chrome. -->
+  <section id="users-sec" class="hidden" style="grid-column:1/-1">
+    <h2>Users <span id="ucount"></span></h2>
+    <div id="usersbody"><div class="empty">loading</div></div>
+    <form id="userform">
+      <input id="uid" placeholder="user id" autocapitalize="off" style="flex:0 0 160px">
+      <input id="upass" type="password" placeholder="password (min 8 chars)" style="flex:0 0 200px">
+      <select id="urole" style="flex:0 0 120px">
+        <option value="viewer">viewer</option>
+        <option value="operator">operator</option>
+        <option value="admin">admin</option>
+      </select>
+      <button type="submit">add / update</button>
+      <span id="uerr"></span>
+    </form>
+  </section>
 </main>
 
-<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <span id="curvekey" class="hidden">CURVE <code id="ckey" title="click to copy"></code> <a href="#" id="ckeycopy" style="color:inherit">(copy)</a></span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
 
 <div id="pwdlg" class="hidden">
   <form id="pwdform">
@@ -183,6 +218,7 @@
 "use strict";
 // ---------------------------------------------------------------- state
 var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
+          users:{ rows:[] },
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
@@ -202,8 +238,8 @@ function fmtAge(sec){
 }
 
 // ---------------------------------------------------------------- fetch
-function api(path){
-  return fetch(path).then(function(r){
+function api(path, opts){
+  return fetch(path, opts).then(function(r){
     if(!r.ok) throw new Error(path + " -> " + r.status);
     return r.json();
   });
@@ -267,6 +303,20 @@ function render(){
   renderNodes(nodes);
   renderPositions(pos);
   drawTopology(nodes);
+  renderCurveKey(d.curve || null);
+}
+
+// M9/§19.1: the hub's CURVE public key lives in the footer, because it is
+// the one value every node's HubPublicKey input needs and it is PUBLIC by
+// definition (the log prints it at every start; this is the same string).
+function renderCurveKey(cv){
+  var box = $("curvekey");
+  if(!cv || !cv.on || !cv.public_key){ box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  var code = $("ckey");
+  if(code.textContent !== cv.public_key){ code.textContent = cv.public_key; }
+  var note = cv.learn ? " (learn mode: new keys are added to curve_clients.txt automatically)" : "";
+  box.setAttribute("title", "CURVE public key - what every node's HubPublicKey input holds." + note);
 }
 
 //--- M6: the alert bar. The hub's WebSocket (and the polling fallback) put
@@ -496,7 +546,8 @@ function refresh(){
       nodes: (t.senders || []).concat(t.receivers || []),
       positions: [],
       hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0,
-      alerts: t.alerts || []
+      alerts: t.alerts || [],
+      curve: t.curve || null
     });
   }).catch(function(){
     // A 401 here means the session died between heartbeats - go back to the
@@ -527,7 +578,9 @@ function startWS(){
     try { var m = JSON.parse(ev.data); } catch(e){ return; }
     if(m.t === "snapshot"){
       accept({ nodes:m.data.nodes || [], positions:m.data.positions || [],
-               hub_uptime_secs:m.data.hub_uptime_secs || 0 });
+               hub_uptime_secs:m.data.hub_uptime_secs || 0,
+               alerts:m.data.alerts || [],
+               curve:m.data.curve || null });
     }
   };
   ws.onclose = function(){
@@ -708,9 +761,103 @@ function startDashboard(){
   $("globalops").addEventListener("click", onGlobalClick);
   refreshWritesState();
 }
+
+// --- M9 user management (admin only) ---------------------------------
+// The SERVER is the gate (every /users endpoint 403s a non-admin); the UI
+// merely hides the section when the caller is not one, so a viewer never
+// sees controls that cannot work. loadUsers() asks the server, not the
+// snapshot: users are not part of the per-second state.
+function loadUsers(){
+  api("/api/v1/users").then(function(j){
+    $("users-sec").classList.remove("hidden");
+    renderUsers(j.users || []);
+  }).catch(function(){
+    // 403 = a viewer or operator looking at an admin panel. Hidden, and
+    // that is the gate working - not an error to report.
+    $("users-sec").classList.add("hidden");
+  });
+}
+function renderUsers(users){
+  s.users.rows = users;
+  $("ucount").textContent = users.length + " user(s)";
+  $("usersbody").innerHTML =
+    "<table><thead><tr><th>user</th><th>role</th><th>state</th><th></th></tr></thead><tbody>" +
+    users.map(function(u){
+      return "<tr data-u='" + esc(u.id) + "'>" +
+             "<td class='k'>" + esc(u.id) + "</td>" +
+             "<td>" + esc(u.role) + "</td>" +
+             "<td>" + (u.disabled ? "disabled" : "active") + "</td>" +
+             "<td class='ops'><button data-act='toggle'>" + (u.disabled ? "enable" : "disable") +
+             "</button> <button data-act='del'>delete</button></td></tr>";
+    }).join("") +
+    "</tbody></table>" +
+    "<p style='color:var(--dim);font-size:12px;margin:6px 0 0'>add / update needs a password;" +
+    " disable, enable and role changes keep the existing one. The last admin cannot be" +
+    " deleted, demoted or disabled.</p>";
+}
+function userAction(act, id, ev){
+  ev.preventDefault();
+  var u = s.users.rows.filter(function(x){ return x.id === id; })[0];
+  if(act === "del"){
+    if(!confirm("Delete user " + id + "?")) return;
+    api("/api/v1/users/" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function(){ loadUsers(); })
+      .catch(function(e){ $("uerr").textContent = "delete failed: " + e.message; });
+  } else if(act === "toggle" && u){
+    // Empty password = keep the existing credential (the API refuses a NEW
+    // user without one, and keeps an existing one - so a toggle cannot
+    // silently reset somebody's password).
+    api("/api/v1/users", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: u.id, password: "", role: u.role, disabled: !u.disabled }) })
+      .then(function(){ loadUsers(); })
+      .catch(function(e){ $("uerr").textContent = "change failed: " + e.message; });
+  }
+}
+$("usersbody").addEventListener("click", function(ev){
+  var btn = ev.target.closest("button");
+  if(!btn) return;
+  var tr = btn.closest("tr");
+  var id = tr ? tr.getAttribute("data-u") : "";
+  if(id) userAction(btn.getAttribute("data-act"), id, ev);
+});
+$("userform").addEventListener("submit", function(ev){
+  ev.preventDefault();
+  var id = $("uid").value.trim(), pw = $("upass").value, role = $("urole").value;
+  var err = $("uerr");
+  err.textContent = "";
+  if(!id){ err.textContent = "user id is required"; return; }
+  if(pw && pw.length < 8){ err.textContent = "password must be at least 8 characters (or leave it empty to keep an existing user's)"; return; }
+  fetch("/api/v1/users", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id, password: pw, role: role })
+  }).then(function(r){
+    return r.json().then(function(j){ return { status: r.status, j: j }; });
+  }).then(function(res){
+    if(res.status === 200){
+      $("uid").value = ""; $("upass").value = "";
+      loadUsers();
+    } else {
+      err.textContent = (res.j && res.j.error) || ("HTTP " + res.status);
+    }
+  }).catch(function(e){
+    err.textContent = "request failed: " + e.message;
+  });
+});
+$("ckeycopy").addEventListener("click", function(ev){
+  ev.preventDefault();
+  var key = $("ckey").textContent;
+  var done = function(){ $("ckeycopy").textContent = "(copied)";
+                         setTimeout(function(){ $("ckeycopy").textContent = "(copy)"; }, 1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(key).then(done, done);
+  } else { done(); }
+});
+api("/api/v1/whoami").then(function(j){
+}
 api("/api/v1/whoami").then(function(j){
   $("login").classList.add("hidden");
   $("who").textContent = j.user + " · " + j.role;
+  if(j.role === "admin") loadUsers();
   startDashboard();
 }).catch(function(){
   showLogin();
@@ -725,8 +872,9 @@ $("loginform").addEventListener("submit", function(ev){
   }).then(function(r){
     if(!r.ok) throw new Error("invalid credentials");
     return r.json();
-  }).then(function(){
+  }).then(function(j){
     $("login").classList.add("hidden");
+    if(j.role === "admin") loadUsers();
     startDashboard();
   }).catch(function(){
     $("loginerr").textContent = "sign-in failed - check the id and password";
