@@ -451,14 +451,16 @@ The hub stores each receiver's ini, versions it, serves it over REST, and emits
 hub, M4b is the EA.
 
 The two halves are gated separately, on purpose. **Both shipped defaulting to
-off; on 2026-10-14 the owner flipped both defaults ON for the test campaign** —
-the refusal behavior is unchanged and still tested, only the resting position
-moved:
+off as inputs; on 2026-10-14 the owner flipped both ON and then removed the
+receiver ones from the inputs dialog entirely** (MQL charts remember per-chart
+input values, so the old false kept resurfacing and read as "the default did
+not change" — they are hard-coded globals now). The refusal behavior is
+unchanged, only the resting position moved:
 
-| side | gate | default (since 2026-10-14) | with it off |
+| side | gate | state (since 2026-10-14) | with it off / false |
 |---|---|---|---|
-| hub | `--writes` | **on** | refuses PUT with 403, never emits a `CFG` |
-| receiver | `AcceptConfigPush` | **true** | ACKs `OK=0` and does not touch the file |
+| hub | `--writes` | default **on** | refuses PUT with 403, never emits a `CFG` |
+| receiver | `AcceptConfigPush` | **hard-coded on** | would ACK `OK=0`, not touch the file |
 
 Two keys rather than one, because this is the only operation in the system that
 can stop a receiver from starting. The plan's §19.1 makes the firewall the
@@ -650,7 +652,8 @@ not a command sitting on the ladder forever — see `tools/hub_commands_test.py`
 The hub half issues, retries, tracks and audits `CMD`s exactly as it does `CFG`s,
 behind the same write gate (default ON since 2026-10-14, `--writes off` refuses).
 The receiver half (M5b, `HandleCmd` in
-`CopierReceiver.mq4`) now acts on `OP=`: `pause` stops new mirrors (management of
+`CopierReceiver.mq4`) now acts on `OP=` — the receiver's `AcceptCommands` gate
+is hard-coded ON — and: `pause` stops new mirrors (management of
 existing ones never stops), `resume` clears it, `closeall` pauses AND queues a
 close for every position this receiver owns, and `reload` re-reads `copier.ini`.
 The receiver answers `OK=0` when it refuses, the same way it does for `CFG`.

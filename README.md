@@ -441,22 +441,24 @@ pushes it as `CMD`. Both share one command engine (issue → retry → ack, same
 `202` + `command_id` semantics, same audit trail) — see `hub/README.md` and
 `doc/CENTRAL-HUB-PLAN.md` §5.4.
 
-| side | gate | default (since 2026-10-14) | with it off / false |
+| side | gate | state (since 2026-10-14) | with it off / false |
 |---|---|---|---|
-| hub | `--writes` | **on** | answers **403**, never emits a `CFG`/`CMD` |
-| receiver (config) | `AcceptConfigPush` | **true** | ACKs `OK=0`, does not touch the file |
-| receiver (commands) | `AcceptCommands` | **true** | ACKs `OK=0`, acts on nothing |
+| hub | `--writes` | default **on** | answers **403**, never emits a `CFG`/`CMD` |
+| receiver (config) | `AcceptConfigPush` | **hard-coded on** (no longer an input) | would ACK `OK=0`, not touch the file |
+| receiver (commands) | `AcceptCommands` | **hard-coded on** (no longer an input) | would ACK `OK=0`, act on nothing |
 
-A receiver gets two switches rather than one, because a `CMD` can pause a receiver
+A receiver gets two gates rather than one, because a `CMD` can pause a receiver
 and close every mirror it holds — more invasive than a file rewrite — and §19.1
 makes the firewall the *only* trust boundary on the hub port, with no token. All
-three shipped defaulting to OFF; on 2026-10-14 the owner flipped them ON for the
-test campaign now under way. The plan's long-term stance is unchanged (OFF until
-M9 users and roles exist), so before the hub faces anything but the owner's own
-test bench, flip back in three places: `--writes` in `hub/src/main.rs`, the two
-inputs in `CopierReceiver.mq4`, and the default assertions in
-`tools/hub_config_test.py` / `tools/hub_commands_test.py` that would otherwise
-pin the old values. M5 is complete on both sides: the receiver acts on `OP=`
+three shipped defaulting to OFF as *inputs*; on 2026-10-14 the owner flipped them
+ON for the test campaign and then removed the two receiver ones from the inputs
+dialog entirely — MQL charts remember per-chart input values, so the old false
+kept resurfacing on every chart that had ever attached and read as "the default
+did not change". The gates are plain globals now (`AcceptConfigPush` /
+`AcceptCommands` in `CopierReceiver.mq4`): set false there, plus `--writes` in
+`hub/src/main.rs` and the default assertions in `tools/hub_config_test.py` /
+`tools/hub_commands_test.py`, before the hub faces anything but the owner's own
+test bench. M5 is complete on both sides: the receiver acts on `OP=`
 (`pause` / `resume` / `closeall` / `reload`; `closeall` implies `pause` —
 converge would otherwise re-open the flatten within seconds — and the pause
 survives a receiver restart).

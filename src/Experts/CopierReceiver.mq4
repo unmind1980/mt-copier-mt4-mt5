@@ -83,20 +83,18 @@ input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty 
 //--- be turned on here. Until M9 (users and roles) exists there is nothing else
 //--- standing in the way, and one switch is not enough for the one operation
 //--- that can stop a receiver from starting.
-//--- DEFAULT TRUE since 2026-10-14, by the owner's call: every session from
-//--- here on is a test session that needs the push path live. The original
-//--- default was false, for the reason that still stands below - a CFG
-//--- rewrites copier.ini and reloads, and until the hub link is
-//--- authenticated anything that can reach it can send one. Flip this back
-//--- to false (here AND in hub/src/main.rs's --writes default) before the
-//--- hub faces anything but the owner's own test bench.
-input bool   AcceptConfigPush = true; // AcceptConfigPush - apply copier.ini pushed by the hub
-//--- M5b: the command-side twin of the switch above. A CMD can pause this
-//--- receiver and close every mirror it holds - more invasive than a file
-//--- rewrite - so it gets the same treatment: default TRUE for the owner's
-//--- test sessions (set the same day, for the same reason), with the same
-//--- "flip it back before real deployment" rule.
-input bool   AcceptCommands   = true; // AcceptCommands - act on operational commands (pause/resume/closeall/reload) from the hub
+//--- NOT INPUTS any more (owner decision, 2026-10-14): "remove them from the
+//--- dialog and hard-code true - do not let the user choose". The history
+//--- that got here is worth keeping: both gates shipped as inputs defaulting
+//--- FALSE (the plan's no-auth stance), the owner flipped the defaults to
+//--- TRUE for the test campaign, and the per-chart input memory still showed
+//--- the old false on every chart that had ever attached - so recompiling
+//--- read as "the default did not change". A plain global keeps every gate
+//--- branch below working and keeps the flip-back a one-word edit: set false
+//--- here (and --writes in hub/src/main.rs) before the hub faces anything
+//--- but the owner's own test bench.
+bool AcceptConfigPush=true;   // apply a copier.ini the hub pushed
+bool AcceptCommands=true;     // act on operational commands (pause/resume/closeall/reload)
 //--- MagicBase is GONE. It only ever supplied a default magic derived from a
 //--- sender's position in copier.ini, so reordering the sections silently
 //--- changed a sender's magic and orphaned its open positions. Every sender
@@ -4862,7 +4860,8 @@ void OnTimer()
    //--- comparison in §7.3 covers a node that is BEHIND; this covers a node
    //--- that has never been sent anything at all.
    //---
-   //--- Every 30 s, and only while AcceptConfigPush is on - asking for
+   //--- Every 30 s, and only while the config gate is on (hard-coded on
+   //--- since 2026-10-14) - asking for
    //--- something you have already decided not to accept is just noise on
    //--- somebody else's log.
    if(g_hubOn && AcceptConfigPush && g_nSenders<=0

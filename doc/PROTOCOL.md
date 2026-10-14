@@ -119,20 +119,23 @@ cleanly can still leave positions nothing manages any more, and that is worth
 saying in the same breath as the success.
 
 > **State — `CFG` (M4): both halves implemented (M4a hub, M4b EA).** Both were
-> shipped gated and defaulting to off; on 2026-10-14 the owner flipped both
-> defaults ON for the test campaign. The refusal behavior is unchanged: the hub
-> refuses to write with `--writes off`; the receiver refuses to apply with
-> `AcceptConfigPush=false`, and answers `OK=0` when it refuses rather than
+> shipped gated and defaulting to off; on 2026-10-14 the owner flipped the
+> defaults ON for the test campaign, and removed the receiver gates from the
+> inputs dialog entirely (hard-coded globals) — per-chart input memory kept
+> resurfacing the old false. The refusal behavior is unchanged: the hub
+> refuses to write with `--writes off`; the receiver refuses to apply with its
+> `AcceptConfigPush` gate off, and answers `OK=0` when it refuses rather than
 > staying silent (silence would leave the hub walking its retry ladder for a
 > refusal it could have been told about at once). The plan's long-term stance
 > stays "off until M9" — flip the defaults back before real deployment.
 >
 > **State — `CMD` (M5): both halves implemented (M5a hub, M5b EA).** Same story:
-> shipped defaulting to off, defaults ON since 2026-10-14 for testing. The hub
-> refuses to issue with `--writes off`; the receiver refuses to act with
-> `AcceptCommands=false`, and answers `OK=0` when it refuses rather than staying
-> silent (silence would leave the hub walking its retry ladder for a refusal it
-> could have been told about at once). The ops map
+> shipped defaulting to off, ON since 2026-10-14, the receiver's
+> `AcceptCommands` gate now hard-coded on. The hub
+> refuses to issue with `--writes off`; the receiver refuses to act with its
+> `AcceptCommands` gate off, and answers `OK=0` when it refuses rather than
+> staying silent (silence would leave the hub walking its retry ladder for a
+> refusal it could have been told about at once). The ops map
 > onto the receiver as: `pause` gates new mirrors only — management of existing
 > ones never stops, the same rule as every receiver entry gate; `resume` clears
 > it; `closeall` pauses AND queues a close for every position the receiver owns
