@@ -853,8 +853,6 @@ $("ckeycopy").addEventListener("click", function(ev){
   } else { done(); }
 });
 api("/api/v1/whoami").then(function(j){
-}
-api("/api/v1/whoami").then(function(j){
   $("login").classList.add("hidden");
   $("who").textContent = j.user + " · " + j.role;
   if(j.role === "admin") loadUsers();
