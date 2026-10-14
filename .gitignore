@@ -25,6 +25,9 @@ tools/_hub_*
 memwatch*.csv
 .memwatch*
 audit.jsonl
+# M9 user table: holds salted password hashes, never belongs in git.
+users.json
+users.json.tmp
 config_revisions.jsonl
 commands.jsonl
 
