@@ -264,16 +264,20 @@ involved.
                     entirely - every request is treated as an anonymous
                     viewer, for throwaway local runs only)
 --curve on|off      is the ZMQ link encrypted and machine-authenticated?
-                    (default OFF). ON makes this hub the CURVE server: the
-                    link is encrypted and every node must present a keypair
-                    on the allow-list. A coordinated change - a node without
-                    the hub's public key cannot connect at all.
+                    (default ON since 2026-10-15 — the EAs ship expecting it,
+                    and a hub without CURVE leaves the position stream in the
+                    clear). OFF is the way back.
 --curve-keys PATH   this hub's CURVE keypair, Z85 (default curve_hub.keys;
                     generated on first start when --curve on)
 --curve-clients P   the client allow-list (default curve_clients.txt): one
                     40-char Z85 PUBLIC key per line, # comments, or a lone *
-                    for "any authenticated keypair". An EMPTY list with
-                    --curve on refuses to start.
+                    for "any authenticated keypair". An EMPTY list refuses to
+                    start unless --curve-learn is on.
+--curve-learn on|off   bring-up mode (default off): accept ANY authenticated
+                    keypair and append its key to the allow-list file, marked
+                    "# learned". The fleet registers itself instead of
+                    somebody transcribing 40-char keys. Trust on first use —
+                    restart WITHOUT it once every node has joined.
 --curve-show        print this hub's CURVE public key (and the allow-list's
                     state) and exit WITHOUT binding anything. This is how you
                     read the key while a hub is already running - `--curve on`
@@ -302,12 +306,12 @@ who may connect; these decide what a connection that got through can cost.
 ## CURVE — the link's cryptographic boundary (§19.1)
 
 §19.1 decided the ZMQ port's trust boundary is the firewall, and said in the
-same breath that CURVE "can be turned on independently". This is that switch.
-It is **off by default on the hub**, because turning it on is a coordinated
-change: a node that has not been given the hub's public key cannot connect at
-all. (The EA side of that coordination is already done for this test campaign
-— `HubUseCurve` ships true with this hub's key in `HubPublicKey` — so the
-only thing still to switch is the hub itself, and the order below.)
+same breath that CURVE "can be turned on independently". This is that switch,
+**on by default since 2026-10-15** (the owner's test campaign): the link is
+encrypted, every node must present a keypair, and the EAs ship `HubUseCurve`
+already true with this hub's key in `HubPublicKey` — so both halves of the
+coordination are in place, and the only remaining step for a new node is
+attaching it.
 
 `--curve on` makes the hub the **CURVE server**:
 
@@ -351,17 +355,25 @@ copy it straight across.
    check it in the dialog if the chart has been attached before, because MQL
    remembers per-chart input values. Set `HubUseCurve=true` if it is not
    already (it is the shipped default).
-3. **Collect the nodes' keys.** Restart each EA and copy the public key it
-   prints in its Experts log into `curve_clients.txt`, one per line.
-4. **Restart the hub with `--curve on`** (the list is read at startup). If
-   you needed a placeholder to get this far, delete the `*` now.
+3. **Let the nodes register themselves** — `--curve-learn on`. The hub
+   already knows each connecting node's public key (libzmq hands it over
+   with the handshake; that is the whole reason ZAP can decide anything), so
+   with learn mode on it ACCEPTS any authenticated keypair and appends its
+   key to `curve_clients.txt`, marked `# learned`. Nobody transcribes
+   anything. It is trust-on-first-use: the first machine to connect is
+   trusted, which is why it is a bring-up tool and the port's firewall still
+   matters.
+4. **Enforce.** Once every node has connected once, restart the hub WITHOUT
+   `--curve-learn` (and delete the `*` placeholder if you used one). The
+   learned list is now a real allow-list: a key not on it is denied at the
+   handshake, and deleting a `# learned` line revokes that node.
 
 > **The order is not a suggestion.** `HubUseCurve=true` makes the hub link
 > *require* CURVE, and in central mode the hub is a receiver's only feed — so
 > a node re-attached while the hub is still `--curve off` completes no
-> handshake and goes blind. Bring the hub up with CURVE first (a `*`
-> allow-list is the intended placeholder for exactly this window), then
-> attach the nodes, then tighten the list.
+> handshake and goes blind. Bring the hub up with CURVE **first** (learn mode
+> or a `*` allow-list is the intended placeholder for exactly this window),
+> then attach the nodes, then enforce.
 
 `HubUseCurve` is separate from the EAs' `UseCurve`: on the **direct** channel
 the sender is the CURVE server and receivers hold its key, while on the **hub**

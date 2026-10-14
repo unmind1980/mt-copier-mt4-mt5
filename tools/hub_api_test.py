@@ -197,6 +197,11 @@ def main():
     hub = subprocess.Popen(
         [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
          "--audit", audit_path, "--users", users_path,
+         #--- --curve off: this suite tests the API/audit/http surface, and its
+         #--- fake clients speak plaintext. CURVE has its own suite
+         #--- (hub_curve_test.py); since CURVE became the hub's DEFAULT, every
+         #--- suite that does not test it must say so explicitly.
+         "--curve", "off",
          "--stats-every", "30", "--duration", "40"],
         stdout=out, stderr=subprocess.STDOUT,
     )
@@ -636,6 +641,7 @@ def main():
     out2 = open(os.path.join(HERE, "_hub_api2.out"), "wb")
     hub2 = subprocess.Popen(
         [HUB, "--port", "6182", "--http", "none", "--users", users_path,
+         "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
         stdout=out2, stderr=subprocess.STDOUT,
     )
@@ -668,7 +674,7 @@ def main():
     # is on the external interface is out of scope for this machine.
     out3 = open(os.path.join(HERE, "_hub_api3.out"), "wb")
     hub3 = subprocess.Popen(
-        [HUB, "--port", "6183", "--users", users_path,
+        [HUB, "--port", "6183", "--users", users_path, "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
         stdout=out3, stderr=subprocess.STDOUT,
     )

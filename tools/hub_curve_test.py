@@ -50,8 +50,11 @@ def read_public_key(path):
     return None
 
 
-def start(clients_text):
-    """Start the hub with CURVE on. Returns (proc, out_path, keys_path)."""
+def start(clients_text, learn=False):
+    """Start the hub with CURVE on. Returns (proc, out, out_path, keys_path...).
+
+    `clients_text=None` means the clients file is left ABSENT - which is the
+    real bring-up state for learn mode (an empty list that must not refuse)."""
     keys = os.path.join(HERE, "_hub_curve.keys")
     clients = os.path.join(HERE, "_hub_curve_clients.txt")
     audit = os.path.join(HERE, "_hub_curve_audit.jsonl")
@@ -68,12 +71,13 @@ def start(clients_text):
     out = open(out_path, "wb")
     env = dict(os.environ)
     env["MTC_ADMIN_PASSWORD"] = "hub-test-pass"
-    p = subprocess.Popen(
-        [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
-         "--curve", "on", "--curve-keys", keys, "--curve-clients", clients,
-         "--audit", audit, "--users", users,
-         "--stats-every", "0", "--duration", "60"],
-        stdout=out, stderr=subprocess.STDOUT, env=env)
+    args = [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
+            "--curve", "on", "--curve-keys", keys, "--curve-clients", clients,
+            "--audit", audit, "--users", users,
+            "--stats-every", "0", "--duration", "60"]
+    if learn:
+        args += ["--curve-learn", "on"]
+    p = subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT, env=env)
     return p, out, out_path, keys, clients, audit, users
 
 
@@ -275,6 +279,44 @@ def main():
         s_wrong.close(0)
         s_plain.close(0)
         ctx.term()
+    finally:
+        stop(p, out, keys, clients, audit, users, out_path)
+
+    # =====================================================================
+    print()
+    print("== 5. --curve-learn on: the fleet registers ITSELF ==")
+    # The bring-up case: NO clients file at all (an empty list must not
+    # refuse), a node that has never been named, and the hub writing the
+    # node's key into the file by itself. This is what removes the manual
+    # 40-character transcription the operator used to have to do.
+    p, out, out_path, keys, clients, audit, users = start(None, learn=True)
+    try:
+        if not wait_http():
+            check("hub came up (learn, empty list)", False, "no HTTP")
+            return 1
+        hub_pub = read_public_key(keys)
+        tok = api_login()
+
+        ctx = zmq.Context()
+        l_pub, l_sec = zmq.curve_keypair()
+        s = curve_client(ctx, hub_pub, l_pub, l_sec)
+        time.sleep(1.5)
+        announce(s, "66666666", "learning")
+        time.sleep(2.5)
+
+        got = nodes(tok)
+        check("an UNLISTED client is accepted in learn mode",
+              "sender:66666666" in got, str(sorted(got)))
+        listed = open(clients, encoding="utf-8", errors="replace").read()
+        check("...and its key was auto-appended to curve_clients.txt",
+              l_pub.decode() in listed, listed.strip()[:80])
+        check("...marked '# learned' so it can be pruned", "# learned" in listed, "")
+        s.close(0)
+        ctx.term()
+
+        text = open(out_path, encoding="utf-8", errors="replace").read()
+        check("the hub logged ZAP LEARNED", "ZAP LEARNED" in text,
+              [l for l in text.splitlines() if "LEARNED" in l][:1])
     finally:
         stop(p, out, keys, clients, audit, users, out_path)
 

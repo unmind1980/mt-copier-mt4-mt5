@@ -205,6 +205,19 @@ impl AllowList {
         self.any
     }
 
+    /// Is this exact key already named in the list? Used by learn mode, which
+    /// must not append the same key twice.
+    pub fn has_key(&self, z85: &str) -> bool {
+        self.keys.iter().any(|k| k == z85)
+    }
+
+    /// Remember a key we just learned, in memory.
+    pub fn add_key(&mut self, z85: &str) {
+        if !self.has_key(z85) {
+            self.keys.push(z85.to_string());
+        }
+    }
+
     /// Does this ZAP credential belong to a permitted client?
     ///
     /// The credential a CURVE ZAP request carries is the client's public
@@ -236,6 +249,33 @@ impl AllowList {
         }
         false
     }
+}
+
+/// Append a freshly-learned key to the allow-list FILE, so the list an
+/// operator reads is the list the hub is actually enforcing.
+///
+/// Re-reads the file first rather than trusting the in-memory copy: the
+/// operator may have edited it since the hub started, and appending to a
+/// stale view is how a hand-added key disappears.
+pub fn append_learned_key(path: &Path, z85: &str) -> Result<bool, String> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    if AllowList::parse(&existing).has_key(z85) {
+        return Ok(false); // already there - nothing to do
+    }
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!(
+        "{}   # learned {} (delete this line to revoke)\n",
+        z85,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    ));
+    std::fs::write(path, text).map_err(|e| format!("{}: {}", path.display(), e))?;
+    Ok(true)
 }
 
 /// Render a ZAP credential the way an operator can compare it with the
@@ -278,8 +318,29 @@ fn describe_credential(cred: &[u8]) -> String {
 ///
 /// The handler must be listening before the CURVE server socket binds, hence
 /// the small sleep at the call site.
-pub fn spawn_zap_handler(ctx: &zmq::Context, list: AllowList) -> std::thread::JoinHandle<()> {
+///
+/// LEARN MODE (`learn`)
+///
+/// The hub already knows every node's public key - libzmq hands it over with
+/// the handshake, which is the whole reason this handler can decide anything.
+/// So the operator does not have to carry 40-character keys by hand: with
+/// learn mode on, any authenticated keypair is accepted AND its key is
+/// appended to the allow-list file, marked `# learned <ts>`. The list builds
+/// itself; deleting a line revokes that node; and once the fleet has
+/// connected once, the hub is restarted without learn mode and the list is
+/// enforced.
+///
+/// It is trust-on-first-use, and worth naming as such: the first machine to
+/// connect is trusted. That is why learn mode is a bring-up tool and not a
+/// resting state - and why the port's firewall still matters.
+pub fn spawn_zap_handler(
+    ctx: &zmq::Context,
+    list: AllowList,
+    learn: bool,
+    clients_path: std::path::PathBuf,
+) -> std::thread::JoinHandle<()> {
     let ctx = ctx.clone();
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(list));
     std::thread::spawn(move || {
         let sock = match ctx.socket(zmq::REP) {
             Ok(s) => s,
@@ -322,17 +383,46 @@ pub fn spawn_zap_handler(ctx: &zmq::Context, list: AllowList) -> std::thread::Jo
                     if mechanism.is_empty() { "plaintext" } else { mechanism.as_str() }
                 );
                 ("400", "this hub requires CURVE", Vec::new())
-            } else if list.permits_credential(&cred) {
-                println!("[hub] ZAP ALLOW {}", describe_credential(&cred));
-                ("200", "OK", cred.clone())
             } else {
-                denied += 1;
-                println!(
-                    "[hub] ZAP DENY  unknown client key {} ({} denied so far)",
-                    describe_credential(&cred),
-                    denied
-                );
-                ("400", "key is not on this hub's allow-list", Vec::new())
+                let key = describe_credential(&cred);
+                let mut l = shared.lock().unwrap();
+                //--- Learn mode means "accept anyone who can authenticate,
+                //--- and write down who they were".
+                let known = l.permits_credential(&cred);
+                if known || learn {
+                    if learn && !l.has_key(&key) && key.len() == 40 {
+                        match append_learned_key(&clients_path, &key) {
+                            Ok(true) => println!(
+                                "[hub] ZAP LEARNED {} -> appended to {}",
+                                key,
+                                clients_path.display()
+                            ),
+                            Ok(false) => {}
+                            Err(e) => eprintln!(
+                                "[hub] ZAP LEARNED {} but could not write {}: {}",
+                                key,
+                                clients_path.display(),
+                                e
+                            ),
+                        }
+                        l.add_key(&key);
+                    }
+                    if known {
+                        println!("[hub] ZAP ALLOW {}", key);
+                    } else {
+                        println!("[hub] ZAP ALLOW {} (learn mode - not on the list yet)", key);
+                    }
+                    drop(l);
+                    ("200", "OK", cred.clone())
+                } else {
+                    denied += 1;
+                    println!(
+                        "[hub] ZAP DENY  unknown client key {} ({} denied so far)",
+                        key, denied
+                    );
+                    drop(l);
+                    ("400", "key is not on this hub's allow-list", Vec::new())
+                }
             };
 
             let reply = vec![

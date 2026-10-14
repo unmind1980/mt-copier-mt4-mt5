@@ -254,11 +254,24 @@ struct Args {
     users: String,
     /// Whether the ZMQ link is encrypted and machine-authenticated (CURVE).
     ///
-    /// OFF by default, and it has to be: turning it on makes every node that
-    /// has not been given the hub's public key unable to connect at all.
-    /// That is a coordinated change across the hub and every EA, so it is a
-    /// deliberate switch rather than a new resting state. See `curve.rs`.
+    /// ON by default since 2026-10-15, by the owner's call, for the same
+    /// reason the write gate was flipped on: every session from here on is a
+    /// test session that needs the hub link encrypted, and a flag that has to
+    /// be typed every time is a flag somebody forgets - which on THIS flag
+    /// means the whole position stream goes out in the clear, silently.
+    ///
+    /// The cost of the flip is that every node must be configured for CURVE,
+    /// which is why the EAs were flipped in the same change and why
+    /// `--curve-learn` exists (see below): a node that has not been listed
+    /// yet can still join and be recorded, instead of the fleet being locked
+    /// out until somebody transcribes 40-character keys by hand.
+    ///
+    /// `--curve off` is the way back, and it is a one-word change.
     curve: bool,
+    /// Learn mode: accept any authenticated keypair AND append its key to the
+    /// allow-list file. Bring-up only - it is trust-on-first-use, so it
+    /// stops being safe the moment the fleet has connected once.
+    curve_learn: bool,
     /// The hub's own CURVE keypair (Z85). Created on first start when
     /// `--curve on`, so the file has to exist somewhere writable.
     curve_keys: String,
@@ -308,7 +321,8 @@ fn parse_args() -> Result<Args, String> {
         config: "config_revisions.jsonl".to_string(),
         commands: "commands.jsonl".to_string(),
         users: "users.json".to_string(),
-        curve: false,
+        curve: true,
+        curve_learn: false,
         curve_keys: "curve_hub.keys".to_string(),
         curve_clients: "curve_clients.txt".to_string(),
         curve_show: false,
@@ -385,15 +399,29 @@ fn parse_args() -> Result<Args, String> {
                 i += 2;
             }
             "--curve" => {
-                // Explicit on|off, like --writes. Turning CURVE on locks out
-                // every node that has not been given the hub's public key, so
-                // it must not be possible to enable it by accident (or to
-                // disable it by omitting a value).
+                // Explicit on|off, like --writes. ON is now the DEFAULT
+                // (2026-10-15), because the EAs ship expecting it - a hub
+                // without CURVE leaves the position stream in the clear, and
+                // a flag that must be typed every time is a flag somebody
+                // forgets. `off` is the way back, one word.
                 let v = need(i)?;
                 a.curve = match v.as_str() {
                     "on" => true,
                     "off" => false,
                     _ => return Err(format!("--curve takes on or off, not {}", v)),
+                };
+                i += 2;
+            }
+            "--curve-learn" => {
+                // Trust-on-first-use for bring-up: accept any authenticated
+                // keypair and write its key into the allow-list file, so the
+                // fleet can be brought up without anybody transcribing
+                // 40-character keys. Not a resting state - see the Args doc.
+                let v = need(i)?;
+                a.curve_learn = match v.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(format!("--curve-learn takes on or off, not {}", v)),
                 };
                 i += 2;
             }
@@ -469,19 +497,21 @@ fn usage() {
     println!("                 change any node's config: PUT/POST return 403 and");
     println!("                 no CFG/CMD is ever sent. With M9 the write path also");
     println!("                 needs an operator/admin session - two gates, not one.");
-    println!("  --curve        on | off (default OFF). ON makes this hub the CURVE");
-    println!("                 server on the ZMQ port: the link is encrypted and");
-    println!("                 every node must present a keypair. It is a");
-    println!("                 coordinated change - a node without the hub's public");
-    println!("                 key cannot connect at all - which is why it is off");
-    println!("                 until you switch it on for the whole fleet.");
+    println!("  --curve        on | off (default ON since 2026-10-15, owner's");
+    println!("                 test-period setting: the EAs ship expecting it, and a");
+    println!("                 hub without CURVE leaves the position stream in the");
+    println!("                 clear). OFF is the way back - one word, nothing else.");
     println!("  --curve-keys   this hub's CURVE keypair, Z85 (default curve_hub.keys;");
     println!("                 generated on first start when --curve on).");
     println!("  --curve-clients  the client allow-list (default curve_clients.txt):");
     println!("                 one 40-char Z85 PUBLIC key per line, # comments, or a");
     println!("                 lone * for 'any authenticated keypair'. An EMPTY list");
-    println!("                 with --curve on refuses to start - a hub that accepts");
-    println!("                 every keypair is a hub that accepts every keypair.");
+    println!("                 refuses to start unless --curve-learn is on.");
+    println!("  --curve-learn  on | off (default off). Bring-up mode: accept ANY");
+    println!("                 authenticated keypair and append its key to the");
+    println!("                 allow-list file, so the fleet registers itself instead");
+    println!("                 of somebody transcribing 40-char keys. Trust on first");
+    println!("                 use - restart WITHOUT it once every node has joined.");
     println!("  --curve-show   print this hub's CURVE public key (and the allow-list's");
     println!("                 state) and exit WITHOUT binding anything. Use this to");
     println!("                 read the key while the hub is already running -");
@@ -875,29 +905,59 @@ fn main() {
         let clients_path = std::path::PathBuf::from(&args.curve_clients);
         let list = match curve::AllowList::load(&clients_path) {
             Ok(l) => l,
+            Err(e) if args.curve_learn => {
+                //--- Learn mode starts from NOTHING: an absent (or unusable)
+                //--- file is the normal bring-up state, not a misconfiguration.
+                //--- The fleet populates it as it connects.
+                println!(
+                    "[hub] LEARN MODE: {} is {} - the fleet will populate it as it connects",
+                    clients_path.display(),
+                    if e.contains("does not exist") {
+                        "absent".to_string()
+                    } else {
+                        format!("unusable ({})", e)
+                    }
+                );
+                curve::AllowList::parse("")
+            }
             Err(e) => {
                 eprintln!("[hub] --curve on but the client allow-list is unusable: {}", e);
                 eprintln!(
                     "[hub]   create {} with one 40-char Z85 public key per node,",
                     clients_path.display()
                 );
-                eprintln!("[hub]   or write a lone '*' to accept any keypair.");
+                eprintln!("[hub]   or write a lone '*' to accept any keypair, or start");
+                eprintln!("[hub]   with --curve-learn on to build the list automatically.");
                 eprintln!("[hub]   Every node's public key is printed in its EA log.");
                 std::process::exit(1);
             }
         };
-        if list.is_empty() {
+        if list.is_empty() && !args.curve_learn {
             //--- REFUSING, not opening. See curve.rs: CURVE proves "has a
             //--- keypair", and only the list turns that into "is authorised".
+            //--- LEARN MODE is the one exception, and it is the exception that
+            //--- makes bring-up possible: an empty list is exactly what a
+            //--- fleet looks like before any node has reported its key.
             eprintln!(
                 "[hub] --curve on but {} contains no keys.",
                 clients_path.display()
             );
             eprintln!("[hub]   Add each node's 40-char public key (printed in its EA log),");
-            eprintln!("[hub]   or write a lone '*' on its own line to accept any keypair.");
+            eprintln!("[hub]   write a lone '*' to accept any keypair, or start with");
+            eprintln!("[hub]   --curve-learn on to build the list automatically.");
             eprintln!("[hub]   Refusing to start: CURVE with no allow-list accepts every");
             eprintln!("[hub]   keypair, which is the same exposure as no CURVE at all.");
             std::process::exit(1);
+        }
+        if args.curve_learn && !list.is_empty() {
+            println!(
+                "[hub] LEARN MODE with {} key(s) already in {} - new keys will be",
+                list.len(),
+                clients_path.display()
+            );
+            println!("[hub]   appended. Any authenticated keypair is accepted while");
+            println!("[hub]   learning: restart WITHOUT --curve-learn once the fleet has");
+            println!("[hub]   connected once, and the list is enforced.");
         }
         //--- The socket takes 32 raw bytes; the file and the operator speak
         //--- Z85. Decode here, once, and fail closed if either key is wrong.
@@ -946,7 +1006,7 @@ fn main() {
         //--- ZAP is what actually ENFORCES the list, and it must be
         //--- listening before the server socket binds - libzmq asks it
         //--- during the handshake and obeys the answer. See curve.rs.
-        let _zap = curve::spawn_zap_handler(&ctx, list);
+        let _zap = curve::spawn_zap_handler(&ctx, list, args.curve_learn, clients_path.clone());
         std::thread::sleep(std::time::Duration::from_millis(80));
     }
 

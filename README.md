@@ -368,14 +368,15 @@ never disagree.
 > because a hub subscriber is handed *every* sender's position stream. The two
 > switches are separate (`HubUseCurve` + `HubPublicKey` on the EAs, `--curve`
 > on the hub) because the roles are inverted: on the direct channel the sender
-> is the server; on the hub link the hub is. The EAs ship with `HubUseCurve`
-> **on** and this hub's key in `HubPublicKey` (2026-10-15, the owner's test
-> campaign), while the **hub** still defaults to `--curve off` — so a hub
-> link is plaintext until the hub is started with `--curve on`, and a node
-> must not be attached against a plaintext hub (it completes no handshake and
-> goes blind). Until the hub side is switched, keep the port on a private
-> network or a VPN. The direct channel's `UseCurve` is separate and still
-> defaults off.
+> is the server; on the hub link the hub is. **Both default ON now** (2026-10-15,
+> the owner's test campaign): the EAs ship `HubUseCurve=true` with this hub's key
+> in `HubPublicKey`, and the hub defaults to `--curve on`. The order still
+> matters — a node must not be attached against a hub that is not yet in CURVE
+> mode (it completes no handshake and goes blind) — and bring-up uses
+> `--curve-learn on`: the hub accepts any authenticated keypair and records its
+> key into `curve_clients.txt` itself, so nobody transcribes 40-char strings;
+> restart without it once every node has joined. The direct channel's
+> `UseCurve` is separate and still defaults off.
 
 ---
 
@@ -457,22 +458,22 @@ bootstraps user `admin` and prints its password **once**; it is stored only as
 a salted hash. `--users none` skips the login entirely for throwaway local
 runs: every request is an anonymous viewer, and writes still 403.
 
-**CURVE can be switched on for the ZMQ link** (§19.1). The link is then
+**CURVE is ON for the ZMQ link** (§19.1, default since 2026-10-15). The link is
 encrypted and every node must present a keypair listed in the hub's
 `curve_clients.txt`. The list is enforced by a ZAP handler during the
 handshake, which is the only place it *can* be enforced — a subscriber the
 hub never authorises would otherwise still be handed every position the hub
 publishes, because publishing is libzmq's job, not the application's.
 
-The two sides default differently, and deliberately. The **hub** still
-defaults to `--curve off`, because enabling it locks out every node that has
-not been given its key. The **EAs** now ship `HubUseCurve=true` with this
-hub's public key in `HubPublicKey` (2026-10-15, the owner's test campaign),
-so a fresh chart needs nothing typed. The order still matters: bring the hub
-up with `--curve on` (a `*` allow-list is the intended placeholder while the
-nodes' keys are still being collected), then attach the nodes, then tighten
-the list — a node attached against a plaintext hub completes no handshake and
-goes blind. See `hub/README.md` and `doc/PROTOCOL.md`.
+**Both sides default ON**, so a fresh deployment needs no key transcription:
+the EAs ship `HubUseCurve=true` with this hub's public key in `HubPublicKey`,
+and the hub defaults to `--curve on`. Bring-up uses `--curve-learn on`: the
+hub accepts any authenticated keypair and writes its key into
+`curve_clients.txt` itself (marked `# learned`), so the fleet registers
+itself; restart without learn once every node has joined and the list is
+enforced. The order still matters — a node attached against a hub that is not
+in CURVE mode completes no handshake and goes blind. See `hub/README.md` and
+`doc/PROTOCOL.md`.
 
 **The audit log is `audit.jsonl`** — one JSON object per line, in the plan's §15
 `audit` shape (`seq, ts, actor, ip, action, node, before, after, result`).
