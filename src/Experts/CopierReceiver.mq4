@@ -4066,20 +4066,37 @@ void HandleMessage(const string msg,const int stream)
    //--- THE HUB'S OWN MESSAGES, before the per-sender lookup below.
    //---
    //--- That lookup drops anything whose SID is not a configured sender, and
-   //--- the hub's SID is "hub" - so a WHO handled after it would be discarded
-   //--- without a trace. Hub control is not per-sender and must not be routed
-   //--- as if it were.
-   if(e.type==CP_T_WHO)
+   //--- the hub's SID is "hub" - so EVERY hub-addressed frame would be
+   //--- discarded here without a trace. WHO was exempted when it was the only
+   //--- such frame; M4b added CFG and M5b added CMD without extending the
+   //--- exemption, and BOTH were silently eaten by this lookup - found live
+   //--- when the first real CMD never reached the receiver while a wire probe
+   //--- showed the hub publishing it correctly, and the config-push half of
+   //--- M4b had the same latent break because no real CFG had ever been
+   //--- pushed (every CFG test drove the handler directly, not this router).
+   //--- Route by SID FIRST: hub control is not per-sender and must not be
+   //--- routed as if it were. Hub frames also skip the per-sender sequence
+   //--- guard on purpose - each carries its own idempotency key (§5.4), and
+   //--- a hub frame is not evidence that any SENDER is alive.
+   if(e.sid=="hub")
      {
-      //--- The hub lost its node table (it restarted) and is asking everyone
-      //--- to say who they are. Answering is the entire job - and it is why
-      //--- this node subscribed to @all.
-      //---
-      //--- ONE REG, and the counter is deliberately NOT reset. Resetting it
-      //--- would re-arm the REG burst every 60s for as long as the hub runs,
-      //--- because the sweep is unconditional. Same reasoning as the sender;
-      //--- see the longer note there.
-      HubAnnounce(true);
+      if(e.type==CP_T_WHO)
+        {
+         //--- The hub lost its node table (it restarted) and is asking
+         //--- everyone to say who they are. Answering is the entire job -
+         //--- and it is why this node subscribed to @all.
+         //---
+         //--- ONE REG, and the counter is deliberately NOT reset. Resetting
+         //--- it would re-arm the REG burst every 60s for as long as the hub
+         //--- runs, because the sweep is unconditional. Same reasoning as
+         //--- the sender; see the longer note there.
+         HubAnnounce(true);
+        }
+      else if(e.type==CP_T_CFG) HandleCfg(e);
+      else if(e.type==CP_T_CMD) HandleCmd(e);
+      else if(g_once.ShouldEmit("hubctl|"+e.type))
+         g_log.Info("central channel: hub sent "+e.type
+                    +" (no receiver action for it)");
       return;
      }
 
