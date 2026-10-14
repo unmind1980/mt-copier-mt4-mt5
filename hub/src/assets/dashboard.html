@@ -81,6 +81,22 @@
                 background:var(--bg);cursor:pointer;font:13px system-ui,sans-serif;color:var(--ink)}
   #login button:hover{border-color:#b9c0c8}
   #loginerr{color:var(--bad);font-size:12px;min-height:1em}
+  /* The change-password dialog reuses the login form's look, but sits over
+     the page rather than replacing it (a scrim, not a takeover). */
+  #pwdlg{position:fixed;inset:0;background:rgba(20,24,28,.38);display:flex;
+         align-items:center;justify-content:center;z-index:11}
+  #pwdlg.hidden{display:none}
+  #pwdlg form{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+              padding:22px;width:300px;display:flex;flex-direction:column;gap:9px}
+  #pwdlg h2{margin:0 0 4px;font-size:14px}
+  #pwdlg input{padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+               font:13px/1.4 system-ui,sans-serif;color:var(--ink)}
+  #pwdlg .row{display:flex;gap:8px}
+  #pwdlg button{padding:8px;border:1px solid var(--line);border-radius:6px;flex:1;
+                background:var(--bg);cursor:pointer;font:13px system-ui,sans-serif;color:var(--ink)}
+  #pwdlg button:hover{border-color:#b9c0c8}
+  #pwderr{color:var(--bad);font-size:12px;min-height:1em}
+  #pwdok{color:var(--ok);font-size:12px;min-height:1em}
   .ops{white-space:nowrap}
   .opbtn{font:11px/1 var(--mono);padding:3px 6px;margin:0 2px 2px 0;border:1px solid var(--line);
          background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer}
@@ -136,7 +152,22 @@
   </section>
 </main>
 
-<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+
+<div id="pwdlg" class="hidden">
+  <form id="pwdform">
+    <h2>change your password</h2>
+    <input id="pwdold" type="password" placeholder="current password" autocomplete="current-password">
+    <input id="pwdnew" type="password" placeholder="new password (at least 8 characters)" autocomplete="new-password">
+    <input id="pwdnew2" type="password" placeholder="repeat the new password" autocomplete="new-password">
+    <div class="row">
+      <button type="submit">change</button>
+      <button type="button" id="pwdcancel">cancel</button>
+    </div>
+    <div id="pwderr"></div>
+    <div id="pwdok"></div>
+  </form>
+</div>
 
 <div id="login" class="hidden">
   <form id="loginform">
@@ -706,6 +737,45 @@ $("logout").addEventListener("click", function(ev){
   fetch("/api/v1/logout", { method: "POST" }).then(function(){
     // Drop the in-page state so the next login re-primes it.
     location.reload();
+  });
+});
+
+// --- change your own password (M9). Any role may; the old password is
+// --- required even though the session is already authenticated, so a
+// --- borrowed session cannot lock the real owner out.
+$("pwdlink").addEventListener("click", function(ev){
+  ev.preventDefault();
+  $("pwdold").value = $("pwdnew").value = $("pwdnew2").value = "";
+  $("pwderr").textContent = ""; $("pwdok").textContent = "";
+  $("pwdlg").classList.remove("hidden");
+  $("pwdold").focus();
+});
+$("pwdcancel").addEventListener("click", function(){ $("pwdlg").classList.add("hidden"); });
+$("pwdform").addEventListener("submit", function(ev){
+  ev.preventDefault();
+  var o = $("pwdold").value, n = $("pwdnew").value, n2 = $("pwdnew2").value;
+  var err = $("pwderr"), ok = $("pwdok");
+  err.textContent = ""; ok.textContent = "";
+  if(n.length < 8){ err.textContent = "the new password must be at least 8 characters"; return; }
+  if(n !== n2){ err.textContent = "the two new passwords do not match"; return; }
+  err.textContent = "saving…";
+  fetch("/api/v1/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old: o, new: n })
+  }).then(function(r){
+    return r.json().then(function(j){ return { status: r.status, j: j }; });
+  }).then(function(res){
+    if(res.j && res.j.ok){
+      err.textContent = "";
+      ok.textContent = "password changed" +
+        (res.j.other_sessions_ended ? " — other sessions were signed out" : "") + ".";
+      $("pwdold").value = $("pwdnew").value = $("pwdnew2").value = "";
+    } else {
+      err.textContent = (res.j && res.j.error) || ("failed (HTTP " + res.status + ")");
+    }
+  }).catch(function(e){
+    err.textContent = "request failed: " + e.message;
   });
 });
 </script>

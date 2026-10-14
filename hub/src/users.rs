@@ -166,6 +166,34 @@ impl UserStore {
         self.users.iter().find(|u| u.id == id)
     }
 
+    /// Replace one user's password, keeping the role and disabled flag. This
+    /// is the SELF-SERVICE path: any authenticated user may change their own
+    /// password, and that is deliberately not an admin privilege - an
+    /// operator locked out of their own credential is an operator who shares
+    /// somebody else's.
+    pub fn set_password(&mut self, id: &str, new_password: &str) -> Result<(), String> {
+        let salt = random_token()[..16].to_string();
+        let hashed = hash_password(new_password, &salt);
+        let u = self
+            .users
+            .iter_mut()
+            .find(|u| u.id == id)
+            .ok_or_else(|| format!("no such user: {}", id))?;
+        u.pass = hashed;
+        Ok(())
+    }
+
+    /// Drop every session for `id` except `keep`. Called when a password
+    /// changes: the credential a session was minted from is gone, so the
+    /// session should not outlive it - except the one doing the changing,
+    /// which would otherwise be logged out by its own act.
+    pub fn drop_other_sessions(&mut self, id: &str, keep: Option<&str>) -> usize {
+        let before = self.sessions.len();
+        self.sessions
+            .retain(|tok, s| s.user_id != id || Some(tok.as_str()) == keep);
+        before - self.sessions.len()
+    }
+
     /// Create or replace a user. The last admin cannot be demoted or
     /// disabled - a hub with no administrators is a hub nobody can fix.
     pub fn upsert(&mut self, u: User) -> Result<(), String> {
@@ -185,8 +213,7 @@ impl UserStore {
         Ok(())
     }
 
-    pub fn remove(&mut self, id: &str) -> Result<(), String> {
-        let idx = self
+    pub fn remove(&mut self, id: &str) -> Result<(), String> {        let idx = self
             .users
             .iter()
             .position(|u| u.id == id)
@@ -548,8 +575,35 @@ mod tests {
     }
 
     #[test]
-    fn a_viewer_can_join_an_empty_store() {
-        // Regression: the last-admin guard once read an empty store as
+    fn a_password_change_replaces_the_hash_and_ends_other_sessions() {
+        let mut s = UserStore::new();
+        s.upsert(User {
+            id: "op".into(),
+            pass: hash_password("oldpw", "saltsalt"),
+            role: Role::Operator,
+            disabled: false,
+        })
+        .unwrap();
+        let (t1, _) = s.login("op", "oldpw", 1000).unwrap();
+        let (t2, _) = s.login("op", "oldpw", 1001).unwrap();
+        assert_eq!(s.session_count(), 2);
+
+        s.set_password("op", "newpw").unwrap();
+
+        // The session doing the change survives, the other one does not.
+        // Checked BEFORE any further login, so the count is unambiguous.
+        let dropped = s.drop_other_sessions("op", Some(&t1));
+        assert_eq!(dropped, 1);
+        assert!(s.session(&t1, 1004).is_some());
+        assert!(s.session(&t2, 1004).is_none());
+
+        // The old password no longer works; the new one does.
+        assert!(s.login("op", "oldpw", 1005).is_err());
+        assert!(s.login("op", "newpw", 1006).is_ok());
+    }
+
+    #[test]
+    fn a_viewer_can_join_an_empty_store() {        // Regression: the last-admin guard once read an empty store as
         // "about to have no admin" and refused the FIRST user outright.
         let mut s = UserStore::new();
         s.upsert(User {

@@ -16,8 +16,12 @@ matrix against the real HTTP API:
   * **The last admin cannot be removed or demoted** - a hub with no
     administrators is a hub nobody can fix.
   * **Logout kills the session**, and a disabled user cannot log back in.
+  * **Changing your own password** requires the old one, is open to every
+    role (rotating your own credential is not an admin privilege), and ends
+    the user's OTHER sessions while keeping the one that made the change.
   * **The audit log records it all**: auth.login (ok + rejected), auth.denied,
-    auth.logout, user.upsert, user.delete, user.bootstrap.
+    auth.logout, user.upsert, user.delete, user.bootstrap,
+    user.password_changed.
 """
 import http.client
 import json
@@ -159,6 +163,28 @@ def main():
 
         # =================================================================
         print()
+        print("== 3b. change your own password (any role; the old one is required) ==")
+        st, _ = js("POST", "/api/v1/password",
+                   {"old": "not-my-password", "new": "v-pass-new"}, cookie=vtok)
+        check("a wrong current password -> 403", st == 403, f"status {st}")
+        st, _ = js("POST", "/api/v1/password",
+                   {"old": "v-pass", "new": "short"}, cookie=vtok)
+        check("a too-short new password -> 400", st == 400, f"status {st}")
+        st, d = js("POST", "/api/v1/password",
+                   {"old": "v-pass", "new": "v-pass-new"}, cookie=vtok)
+        check("a VIEWER may change their own password (not admin-only)",
+              st == 200 and d.get("ok") is True, f"status {st} {str(d)[:60]}")
+        st, _ = js("GET", "/api/v1/topology", cookie=vtok)
+        check("the session that made the change survives", st == 200, f"status {st}")
+        st, _ = login("viewer1", "v-pass")
+        check("the old password no longer works", st == 401, f"status {st}")
+        st, vtok2 = login("viewer1", "v-pass-new")
+        check("...and the new one does", st == 200, f"status {st}")
+        st, _ = js("GET", "/api/v1/topology", cookie=vtok2)
+        check("...and its fresh session works", st == 200, f"status {st}")
+
+        # =================================================================
+        print()
         print("== 4. the last admin is protected ==")
         st, _ = js("DELETE", "/api/v1/users/admin", cookie=tok)
         check("deleting the only admin -> 409", st == 409, f"status {st}")
@@ -189,7 +215,7 @@ def main():
         st, d = js("GET", "/api/v1/audit?limit=300", cookie=tok)
         actions = {e.get("action") for e in d.get("records", [])}
         for need in ("auth.login", "auth.denied", "auth.logout",
-                     "user.upsert", "user.bootstrap"):
+                     "user.upsert", "user.bootstrap", "user.password_changed"):
             check(f"audit has {need}", need in actions, str(sorted(actions)))
     finally:
         p.terminate()

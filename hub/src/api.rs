@@ -51,7 +51,9 @@ use serde_json::{json, Value};
 use crate::audit::Audit;
 use crate::commands::CommandStore;
 use crate::alerts::AlertEngine;
-use crate::users::{hash_password, Role as UserRole, Session, User, UserStore, SESSION_IDLE_SECS};
+use crate::users::{
+    hash_password, verify_password, Role as UserRole, Session, User, UserStore, SESSION_IDLE_SECS,
+};
 use crate::config::ConfigStore;
 use crate::positions::{Positions, SenderView};
 use crate::registry::{Liveness, Node, Registry, Role};
@@ -686,6 +688,7 @@ async fn require_session(
             role: UserRole::Viewer,
             seen: unix_secs(),
         });
+        req.extensions_mut().insert(Token(String::new()));
         return next.run(req).await;
     }
     let token = req
@@ -703,6 +706,10 @@ async fn require_session(
         let sess = st.lock().unwrap().users.session(&t, unix_secs());
         if let Some(sess) = sess {
             req.extensions_mut().insert(sess);
+            //--- The raw token too, for the one handler that must tell the
+            //--- caller's session apart from the caller's other sessions
+            //--- (a password change drops those, keeps this).
+            req.extensions_mut().insert(Token(t));
             return next.run(req).await;
         }
     }
@@ -851,6 +858,11 @@ async fn whoami(
         .into_response()
 }
 
+/// The raw session token, stashed by the middleware for handlers that need
+/// to distinguish "this session" from "this user's other sessions".
+#[derive(Clone)]
+pub struct Token(pub String);
+
 #[derive(serde::Deserialize)]
 struct UserBody {
     id: String,
@@ -949,6 +961,83 @@ async fn users_delete(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PasswordBody {
+    old: String,
+    new: String,
+}
+
+/// `POST /api/v1/password` - change YOUR OWN password. Open to any role,
+/// because needing an admin to rotate your own credential is how credentials
+/// get shared. The old password is required even though the caller is already
+/// authenticated: a borrowed session (a shoulder-surfed laptop) must not be
+/// enough to lock the real owner out.
+async fn change_password(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    axum::extract::Extension(tok): axum::extract::Extension<Token>,
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    Json(b): Json<PasswordBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if b.new.chars().count() < 8 {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "the new password must be at least 8 characters" })),
+        )
+            .into_response();
+    }
+    let mut s = st.lock().unwrap();
+    if !s.auth_enabled {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({ "error": "login is disabled on this hub (--users none)" })),
+        )
+            .into_response();
+    }
+    let old_ok = s
+        .users
+        .get(&sess.user_id)
+        .map(|u| verify_password(&b.old, &u.pass))
+        .unwrap_or(false);
+    if !old_ok {
+        s.audit.record(
+            &sess.user_id,
+            "",
+            "user.password_changed",
+            &sess.user_id,
+            None,
+            Some(json!({ "reason": "wrong current password" })),
+            "rejected",
+        );
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({ "error": "the current password is not correct" })),
+        )
+            .into_response();
+    }
+    if let Err(e) = s.users.set_password(&sess.user_id, &b.new) {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": e })),
+        )
+            .into_response();
+    }
+    let _ = s.users.save();
+    //--- The old credential is gone, so every session it minted should be
+    //--- too - except this one, which the caller is still using.
+    let dropped = s.users.drop_other_sessions(&sess.user_id, Some(&tok.0));
+    s.audit.record(
+        &sess.user_id,
+        "",
+        "user.password_changed",
+        &sess.user_id,
+        None,
+        Some(json!({ "other_sessions_ended": dropped })),
+        "ok",
+    );
+    Json(json!({ "ok": true, "other_sessions_ended": dropped })).into_response()
+}
+
 /// The router. Versioned under `/api/v1`, because the plan's §16 says a
 /// breaking change goes to v2 rather than editing v1 under a deployed
 /// dashboard.
@@ -983,6 +1072,7 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
         .route("/api/v1/logout", axum::routing::post(logout))
         .route("/api/v1/whoami", get(whoami))
         .route("/api/v1/users", get(users_list).post(users_upsert))
+        .route("/api/v1/password", axum::routing::post(change_password))
         .route("/api/v1/users/:id", axum::routing::delete(users_delete))
         .layer(axum::extract::Extension(tx))
         .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))

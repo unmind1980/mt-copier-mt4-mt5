@@ -402,6 +402,7 @@ that never offered.
 | GET | `/` | the dashboard (one HTML file, compiled in) |
 | POST | `/api/v1/login` | `{id, password}` → session cookie; the ONLY unauthenticated endpoint besides the health probes |
 | POST | `/api/v1/logout` | kills the caller's session |
+| POST | `/api/v1/password` | `{old, new}` — change YOUR OWN password (any role; the old one is required); ends the caller's other sessions |
 | GET | `/api/v1/whoami` | the caller's id and role |
 | GET | `/api/v1/nodes` | every node, with liveness derived from the registry's own rules |
 | GET | `/api/v1/nodes/{id}` | one node (`ROLE:ACC`), plus its positions if a sender |

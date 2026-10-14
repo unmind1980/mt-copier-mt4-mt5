@@ -416,6 +416,7 @@ which the hub learns as a by-product of relaying snapshot receipts.
 |---|---|---|
 | GET | `/` | the dashboard — one self-contained HTML file, compiled into the binary |
 | POST | `/api/v1/login` · `/logout` | M9: session cookie in, session out |
+| POST | `/api/v1/password` | M9: change your OWN password (any role, old one required) |
 | GET | `/api/v1/whoami` | the caller's id and role (the dashboard's login probe) |
 | GET | `/api/v1/nodes` · `/nodes/{id}` | nodes, and one node with its positions |
 | GET | `/api/v1/topology` | senders, receivers, and the edges between them |

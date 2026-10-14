@@ -827,7 +827,7 @@ master 挂
 | M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口 —— **✅ 中枢侧已实现**（2026-10-14）：`hub/src/alerts.rs` 5 秒评估一次，规则含 `node.offline`（60s 静默，恢复后再掉线即重新告警）、`node.clock.drift`（≥300s）、`risk.blocked`/`risk.tripped`（来自 receiver STAT 的 `BLOCKED=`/`RISK=`）、`command.unknown`（阶梯耗尽，重启后从 journal 重放）；双落点：M7 审计（`alert.*`）+ 内存环（`/api/v1/alerts`、WS 快照、dashboard 红色横幅）。孤儿持仓仍属 receiver 面板职责（§10 layer 2）
 | M7 审计  | append-only —— **✅ 已实现**（2026-10-14，落在 `audit.jsonl`；SQLite 属 M11） |
 | M8 API | REST + WebSocket —— **✅ 读的一半已完成**（2026-10-13）｜
-| M9 认证  | 用户、角色（viewer/operator/admin）—— **✅ 已实现**（2026-10-14）：`hub/src/users.rs`（纯 Rust SHA-256 加盐迭代哈希 + FIPS 向量测试，无新增 crate）；`users.json` 持久化（temp+rename 原子写），首次启动引导唯一 admin 并**只打印一次**密码（测试可用 `MTC_ADMIN_PASSWORD`，仅存盐哈希）；会话 cookie（`mtc_session`，默认 30 分钟空闲过期、滑动续期）；`/api/v1/login` `/logout` `/whoami` `/users` CRUD；§17.2 权限矩阵落地：viewer 只读、operator 可命令/配置、admin 管用户 + 读审计，写路径为「`--writes` + 角色」双闸门，拒绝均入审计（`auth.denied`） |
+| M9 认证  | 用户、角色（viewer/operator/admin）—— **✅ 已实现**（2026-10-14）：`hub/src/users.rs`（纯 Rust SHA-256 加盐迭代哈希 + FIPS 向量测试，无新增 crate）；`users.json` 持久化（temp+rename 原子写），首次启动引导唯一 admin 并**只打印一次**密码（测试可用 `MTC_ADMIN_PASSWORD`，仅存盐哈希）；会话 cookie（`mtc_session`，默认 30 分钟空闲过期、滑动续期）；`/api/v1/login` `/logout` `/whoami` `/users` CRUD；自助改密 `/api/v1/password`（任何角色可改自己的，需旧密码，改完踢掉该用户的其他会话）；§17.2 权限矩阵落地：viewer 只读、operator 可命令/配置、admin 管用户 + 读审计，写路径为「`--writes` + 角色」双闸门，拒绝均入审计（`auth.denied`） |
 | M10 前端 | 控制台 —— **✅ 自包含 dashboard 已上线**（2026-10-13）；React/Vite 方案未采用 |
 | M11 存储 | SQLite（默认）/ Postgres                     |
 | M12 运维 | systemd / Docker、健康检查、备份                 |
