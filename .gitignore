@@ -28,6 +28,12 @@ audit.jsonl
 # M9 user table: holds salted password hashes, never belongs in git.
 users.json
 users.json.tmp
+# CURVE (§19.1): the hub keypair holds a SECRET - never versioned, never
+# shared. The allow-list is per-deployment config, not source, so it is not
+# versioned either (a committed allow-list is a list somebody forgets to edit).
+curve_hub.keys
+curve_hub.keys.tmp
+curve_clients.txt
 config_revisions.jsonl
 commands.jsonl
 
