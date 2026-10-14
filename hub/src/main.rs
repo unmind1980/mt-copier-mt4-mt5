@@ -266,6 +266,16 @@ struct Args {
     /// `*` for "any authenticated keypair". See `curve.rs` for why an empty
     /// list is a refusal to start rather than an open door.
     curve_clients: String,
+    /// `--curve-show`: print this hub's CURVE public key and the allow-list's
+    /// state, then exit WITHOUT binding anything.
+    ///
+    /// It exists because of a trap in the obvious procedure. The natural way
+    /// to learn the hub's public key is to start it with `--curve on` and read
+    /// the banner - but that needs port 6000, and the hub that is already
+    /// running holds it. So the moment an operator needs the key is the one
+    /// moment that command cannot run. This does the same keypair work and
+    /// stops, so the key can be read (and the file created) any time.
+    curve_show: bool,
     /// Whether the hub may CHANGE a node's config.
     ///
     /// The plan's §19 requires role checks and an audit trail for the write
@@ -301,6 +311,7 @@ fn parse_args() -> Result<Args, String> {
         curve: false,
         curve_keys: "curve_hub.keys".to_string(),
         curve_clients: "curve_clients.txt".to_string(),
+        curve_show: false,
         //--- Default ON, by the owner's call (2026-10-14): every session from
         //--- here on is a test session, and the flag was being typed every
         //--- time anyway. The struct field's doc comment carries the full
@@ -396,6 +407,11 @@ fn parse_args() -> Result<Args, String> {
                 a.curve_clients = v.clone();
                 i += 2;
             }
+            "--curve-show" => {
+                // A bare flag: no value, because there is nothing to choose.
+                a.curve_show = true;
+                i += 1;
+            }
             "--writes" => {
                 // Deliberately requires an explicit value. `--writes` with
                 // nothing after it would be the kind of flag somebody adds to
@@ -466,6 +482,10 @@ fn usage() {
     println!("                 lone * for 'any authenticated keypair'. An EMPTY list");
     println!("                 with --curve on refuses to start - a hub that accepts");
     println!("                 every keypair is a hub that accepts every keypair.");
+    println!("  --curve-show   print this hub's CURVE public key (and the allow-list's");
+    println!("                 state) and exit WITHOUT binding anything. Use this to");
+    println!("                 read the key while the hub is already running -");
+    println!("                 '--curve on' would need the port it is holding.");
     println!("  --verbose      log every message, not just events and stats");
     println!("  --stats-every  seconds between stats lines (default 30, 0 = never)");
     println!("  --duration     exit after this many seconds (0 = run until Ctrl-C)");
@@ -756,6 +776,49 @@ fn main() {
             std::process::exit(if e == "help" { 0 } else { 2 });
         }
     };
+
+    //--- `--curve-show`: report this hub's CURVE identity and exit, binding
+    //--- NOTHING. Handled here, before the Ctrl-C handler and before any
+    //--- socket, so it works while another hub owns port 6000.
+    if args.curve_show {
+        let keys_path = std::path::PathBuf::from(&args.curve_keys);
+        let (keys, created) = match curve::load_or_create_keys(&keys_path) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("copier-hub: cannot read or create {}: {}", keys_path.display(), e);
+                std::process::exit(1);
+            }
+        };
+        println!("[hub] CURVE identity for this hub");
+        println!("[hub]   key file: {}", keys_path.display());
+        if created {
+            println!("[hub]             (created just now - it did not exist before)");
+        }
+        println!("[hub]   PUBLIC KEY - give this to every node's HubPublicKey input:");
+        println!("[hub]     {}", keys.public);
+        println!("[hub]   the SECRET half stays in that file and is never printed.");
+        let clients_path = std::path::PathBuf::from(&args.curve_clients);
+        match curve::AllowList::load(&clients_path) {
+            Ok(l) if l.is_any() => println!(
+                "[hub]   allow-list: {} = ANY authenticated keypair ('*')",
+                clients_path.display()
+            ),
+            Ok(l) if l.is_empty() => println!(
+                "[hub]   allow-list: {} is EMPTY - '--curve on' will REFUSE to start",
+                clients_path.display()
+            ),
+            Ok(l) => println!(
+                "[hub]   allow-list: {} - {} key(s)",
+                clients_path.display(),
+                l.len()
+            ),
+            Err(_) => println!(
+                "[hub]   allow-list: {} does not exist yet (create it before --curve on)",
+                clients_path.display()
+            ),
+        }
+        std::process::exit(0);
+    }
 
     //--- Ctrl-C sets a flag rather than killing the process, so the final
     //--- stats line still prints. That matters more than it looks: the numbers

@@ -877,8 +877,10 @@ one:
 Either end's own keypair lives in one file, `MQL\Files\copier_curve.key`
 (`copier_hub.keys` on the hub), is generated on first use, and **the public
 half is printed in the log at every start** — that printed line is the thing
-that gets carried to the other side. The secret half never leaves the machine
-and is never logged.
+that gets carried to the other side. The hub can also print it on demand with
+`--curve-show`, which binds nothing and so works while the hub is already
+running (reading the banner instead would need the port that hub is holding).
+The secret half never leaves the machine and is never logged.
 
 **A key is 40 Z85 characters and 32 bytes, and the two are not
 interchangeable.** The file, the log and the operator all speak the 40-character

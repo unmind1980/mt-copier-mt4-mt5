@@ -274,6 +274,10 @@ involved.
                     40-char Z85 PUBLIC key per line, # comments, or a lone *
                     for "any authenticated keypair". An EMPTY list with
                     --curve on refuses to start.
+--curve-show        print this hub's CURVE public key (and the allow-list's
+                    state) and exit WITHOUT binding anything. This is how you
+                    read the key while a hub is already running - `--curve on`
+                    would need the port that hub is holding.
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
@@ -330,14 +334,19 @@ copy it straight across.
 
 ### Turning it on, in order
 
-1. Start the hub once with `--curve on`. It writes `curve_hub.keys` and prints
-   its **public key**. (It will refuse to start if `curve_clients.txt` is
-   missing or empty — create it with a lone `*` to get through this first run.)
+1. **Read the hub's public key.** Run `copier-hub.exe --curve-show`. It
+   creates `curve_hub.keys` if it does not exist and prints the **public**
+   key. It binds nothing, so it works while a hub is already running —
+   which matters, because the alternative (start with `--curve on` and read
+   the banner) needs port 6000, i.e. exactly the port the running hub holds.
+   The same key is printed in the startup banner whenever the hub does run
+   with `--curve on`, and it lives on the `PUBLIC=` line of
+   `curve_hub.keys`.
 2. On every node, set `HubUseCurve=true` and `HubPublicKey=<the hub's key>`.
    Restart the EA: it prints **its own** public key in the Experts log.
 3. Put each node's public key into `curve_clients.txt`, one per line.
-4. Restart the hub (the list is read at startup), and delete the `*` if you
-   used it as a placeholder.
+4. Restart the hub with `--curve on` (the list is read at startup). If you
+   needed a placeholder to get this far, delete the `*` now.
 
 `HubUseCurve` is separate from the EAs' `UseCurve`: on the **direct** channel
 the sender is the CURVE server and receivers hold its key, while on the **hub**

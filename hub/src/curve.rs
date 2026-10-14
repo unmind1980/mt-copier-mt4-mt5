@@ -193,12 +193,6 @@ impl AllowList {
         }
     }
 
-    /// Is this authenticated peer key welcome? `peer` is the Z85 public key
-    /// libzmq reports for a CURVE connection (the message's `User-Id`).
-    pub fn permits(&self, peer: &str) -> bool {
-        self.any || self.keys.iter().any(|k| k == peer)
-    }
-
     pub fn is_empty(&self) -> bool {
         !self.any && self.keys.is_empty()
     }
@@ -370,9 +364,15 @@ mod tests {
         );
         let l = AllowList::parse(&text);
         assert_eq!(l.len(), 2, "duplicates collapse");
-        assert!(l.permits(&k1));
-        assert!(l.permits(&k2));
-        assert!(!l.permits("nope"));
+        // Both credential encodings, because libzmq has used both: the Z85
+        // text form, and the 32 raw bytes this build actually sends.
+        assert!(l.permits_credential(k1.as_bytes()));
+        assert!(l.permits_credential(k2.as_bytes()));
+        assert!(l.permits_credential(&zmq::z85_decode(&k1).unwrap()));
+        assert!(!l.permits_credential(b"nope"));
+        // A key that is NOT on the list, in its binary form, is still out.
+        let k3 = zmq::z85_encode(&zmq::CurveKeyPair::new().unwrap().public_key).unwrap();
+        assert!(!l.permits_credential(&zmq::z85_decode(&k3).unwrap()));
         assert!(!l.is_any());
         assert!(!l.is_empty());
     }
@@ -381,17 +381,17 @@ mod tests {
     fn a_star_means_any_and_an_empty_list_means_nobody() {
         let star = AllowList::parse("*\n");
         assert!(star.is_any());
-        assert!(star.permits("anything at all"));
+        assert!(star.permits_credential(b"anything at all"));
 
         let empty = AllowList::parse("# nothing yet\n\n");
         assert!(empty.is_empty());
-        assert!(!empty.permits("anything"));
+        assert!(!empty.permits_credential(b"anything"));
 
         // A malformed line is warned about and dropped, not fatal - but it
         // must NOT be treated as a wildcard.
         let junk = AllowList::parse("this-is-not-a-key\n");
         assert!(junk.is_empty());
-        assert!(!junk.permits("this-is-not-a-key"));
+        assert!(!junk.permits_credential(b"this-is-not-a-key"));
     }
 
     #[test]
