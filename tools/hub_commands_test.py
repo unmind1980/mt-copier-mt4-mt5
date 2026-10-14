@@ -131,10 +131,12 @@ def stop(p, out):
         except subprocess.TimeoutExpired:
             p.kill()
     out.close()
-    try:
-        os.remove(os.path.join(HERE, "_hub_cmd.out"))
-    except OSError:
-        pass
+    for f in (os.path.join(HERE, "_hub_cmd.out"),
+              os.path.join(HERE, "_hub_cmd_users.json")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 
 
 def main():

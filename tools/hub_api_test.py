@@ -689,10 +689,11 @@ def main():
         out3.close()
         with open(os.path.join(HERE, "_hub_api3.out"), "rb") as fh:
             banner = fh.read().decode("utf-8", "replace")
-        try:
-            os.remove(os.path.join(HERE, "_hub_api3.out"))
-        except OSError:
-            pass
+        for f in (os.path.join(HERE, "_hub_api3.out"), users_path):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
     check("...and the banner says 127.0.0.1, not 0.0.0.0",
           "http://127.0.0.1:6010" in banner,
           [l for l in banner.splitlines() if "REST" in l][0].strip()

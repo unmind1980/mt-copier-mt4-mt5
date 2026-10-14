@@ -19,6 +19,9 @@ hub/target/
 # ---- Runtime data / logs ----
 *.log
 *.jsonl
+# Test scratch: the Python suites write these next to themselves and clean
+# them up on success; a crashed run leaves them behind, never to be tracked.
+tools/_hub_*
 memwatch*.csv
 .memwatch*
 audit.jsonl
