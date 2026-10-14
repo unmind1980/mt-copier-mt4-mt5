@@ -8,10 +8,13 @@ M4b and it is the half that can brick a receiver.
 
 WHAT THIS PINS DOWN, in the order it matters:
 
-  * **--writes off is the default and it REFUSES.** Not "silently accepts and
-    does nothing" - a 403 with a reason. The whole safety argument for shipping
-    a write path before M9 (users and roles) is that it is off until somebody
-    turns it on, and that argument is only worth anything if it is tested.
+  * **The write gate refuses, and the default says so.** Since 2026-10-14 the
+    DEFAULT is ON (owner's test-period call; see main.rs). The safety property
+    is unchanged and still tested both ways: an explicit `--writes off`
+    REFUSES - not "silently accepts and does nothing" but a 403 with a reason
+    - and the shipped default is ASSERTED, so a future flip of the default
+    cannot happen silently. The plan's long-term stance stays "off until M9";
+    flipping the default back must flip the assertion here with it.
   * **With writes on, a PUT is recorded and a CFG goes out** - and the ini that
     arrives is BYTE-IDENTICAL to the one sent. An ini contains every character
     the payload uses as a separator, so this is where a truncating escape would
@@ -131,17 +134,32 @@ def main():
     audit_path = os.path.join(HERE, "_hub_cfg_audit.jsonl")
 
     # =====================================================================
-    print("== 1. the DEFAULT (no --writes flag) must refuse, not silently no-op ==")
+    print("== 1. the write gate: the DEFAULT is ON, and explicit --writes off refuses ==")
     for f in (cfg_path, audit_path):
         try:
             os.remove(f)
         except OSError:
             pass
+
+    #--- The default flipped to ON on 2026-10-14 (owner's test-period call,
+    #--- see main.rs). Asserting the default here means a future flip of it
+    #--- cannot happen silently - the test goes red and forces the change to
+    #--- be a decision.
     hub, out, cmds_path = start(None, audit_path, cfg_path)      # <- no --writes at all
     try:
         st, d = js("GET", "/api/v1/config")
         check("/api/v1/config -> 200", st == 200, f"status {st}")
-        check("...says writes are disabled", d.get("writes_enabled") is False,
+        check("...the DEFAULT says writes are ENABLED",
+              d.get("writes_enabled") is True, str(d.get("writes_enabled")))
+    finally:
+        stop(hub, out, cmds_path)
+
+    #--- The refusal path is no longer the default, but the switch must still
+    #--- exist and still refuse WITH A REASON.
+    hub, out, cmds_path = start(False, audit_path, cfg_path)     # <- explicit --writes off
+    try:
+        st, d = js("GET", "/api/v1/config")
+        check("--writes off says writes are disabled", d.get("writes_enabled") is False,
               str(d.get("writes_enabled")))
 
         st, d = js("PUT", f"/api/v1/nodes/{NODE}/config", INI)

@@ -98,9 +98,11 @@ doc/CENTRAL-HUB-PLAN.md central-hub architecture plan (TIER 2: the
                         transparent-proxy hub + registry + M3 position view +
                         M7 audit + the REST/WS API and its dashboard are BUILT
                         and running; the WRITE half (M4 config push, M5
-                        commands) is implemented behind the `--writes on` gate -
-                        see hub/README.md. M5b (the EA acting on OP=) is done,
-                        behind the receiver's `AcceptCommands` switch)
+                        commands) is implemented - the write gate defaults ON
+                        since 2026-10-14 for the test campaign (`--writes off`
+                        refuses; see hub/README.md). M5b (the EA acting on
+                        OP=) is done, behind the receiver's `AcceptCommands`
+                        switch)
 doc/PHASE1-DESIGN.md    Phase 1 transparent-proxy design (BUILT: EAs + hub/)
 ```
 
@@ -411,8 +413,8 @@ which the hub learns as a by-product of relaying snapshot receipts.
 | GET | `/api/v1/topology` | senders, receivers, and the edges between them |
 | GET | `/api/v1/positions` | the M3 position view as data |
 | GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`) |
-| GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **PUT is 403 unless `--writes on`** |
-| POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 unless `--writes on`**, **400** for unknown op |
+| GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **PUT is 403 with `--writes off`** |
+| POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
 | GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
 | WS | `/api/v1/stream` | a full snapshot on connect, and one per change |
 
@@ -439,20 +441,25 @@ pushes it as `CMD`. Both share one command engine (issue → retry → ack, same
 `202` + `command_id` semantics, same audit trail) — see `hub/README.md` and
 `doc/CENTRAL-HUB-PLAN.md` §5.4.
 
-| side | gate | default |
-|---|---|---|
-| hub | `--writes off` | answers **403**, never emits a `CFG`/`CMD` |
-| receiver (config) | `AcceptConfigPush = false` | ACKs `OK=0`, does not touch the file |
-| receiver (commands) | `AcceptCommands = false` | ACKs `OK=0`, acts on nothing |
+| side | gate | default (since 2026-10-14) | with it off / false |
+|---|---|---|---|
+| hub | `--writes` | **on** | answers **403**, never emits a `CFG`/`CMD` |
+| receiver (config) | `AcceptConfigPush` | **true** | ACKs `OK=0`, does not touch the file |
+| receiver (commands) | `AcceptCommands` | **true** | ACKs `OK=0`, acts on nothing |
 
 A receiver gets two switches rather than one, because a `CMD` can pause a receiver
 and close every mirror it holds — more invasive than a file rewrite — and §19.1
-makes the firewall the *only* trust boundary on the hub port, with no token. Until
-M9 (users and roles) exists, the honest position is that the hub and the EA *can*
-do this and are *not* doing it by default. M5 is complete on both sides now: the
-receiver acts on `OP=` (`pause` / `resume` / `closeall` / `reload`; `closeall`
-implies `pause` — converge would otherwise re-open the flatten within seconds —
-and the pause survives a receiver restart).
+makes the firewall the *only* trust boundary on the hub port, with no token. All
+three shipped defaulting to OFF; on 2026-10-14 the owner flipped them ON for the
+test campaign now under way. The plan's long-term stance is unchanged (OFF until
+M9 users and roles exist), so before the hub faces anything but the owner's own
+test bench, flip back in three places: `--writes` in `hub/src/main.rs`, the two
+inputs in `CopierReceiver.mq4`, and the default assertions in
+`tools/hub_config_test.py` / `tools/hub_commands_test.py` that would otherwise
+pin the old values. M5 is complete on both sides: the receiver acts on `OP=`
+(`pause` / `resume` / `closeall` / `reload`; `closeall` implies `pause` —
+converge would otherwise re-open the flatten within seconds — and the pause
+survives a receiver restart).
 
 **These are the only write endpoints, deliberately.** Config push and commands are
 M4/M5, with their `202` + `command_id` semantics and their audit trail; the

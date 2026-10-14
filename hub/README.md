@@ -257,7 +257,10 @@ involved.
                      has seen. `--http none` turns it off.)
 --config PATH       config revision log (default config_revisions.jsonl)
 --commands PATH     command journal — in-flight CFG/CMD commands (default commands.jsonl; `none` = off, commands forgotten on restart)
---writes on|off     may this hub change a node's config? (default OFF)
+--writes on|off     may this hub change a node's config? (default ON since
+                    2026-10-14, the owner's test-period setting - the plan's
+                    long-term stance is OFF until M9; `off` refuses PUT/POST
+                    with 403 and never emits a CFG/CMD)
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
@@ -447,29 +450,38 @@ The hub stores each receiver's ini, versions it, serves it over REST, and emits
 `CFG`; the receiver applies it and `ACK`s. **Both halves exist** — M4a is the
 hub, M4b is the EA.
 
-The two halves are gated separately, on purpose, and **both default to off**:
+The two halves are gated separately, on purpose. **Both shipped defaulting to
+off; on 2026-10-14 the owner flipped both defaults ON for the test campaign** —
+the refusal behavior is unchanged and still tested, only the resting position
+moved:
 
-| side | gate | default |
-|---|---|---|
-| hub | `--writes off` | refuses PUT with 403, never emits a `CFG` |
-| receiver | `AcceptConfigPush = false` | ACKs `OK=0` and does not touch the file |
+| side | gate | default (since 2026-10-14) | with it off |
+|---|---|---|---|
+| hub | `--writes` | **on** | refuses PUT with 403, never emits a `CFG` |
+| receiver | `AcceptConfigPush` | **true** | ACKs `OK=0` and does not touch the file |
 
 Two keys rather than one, because this is the only operation in the system that
 can stop a receiver from starting. The plan's §19.1 makes the firewall the
 *only* trust boundary on the hub port and there is no token — so anything that
 can reach it can publish a `CFG`, and a forged one would let it replace a
-receiver's configuration. That is strictly worse than pushing fake trades.
+receiver's configuration. That is strictly worse than pushing fake trades, and
+it is the reason the defaults go back to off before the hub faces anything but
+the owner's own test bench.
 
-### Writes are off unless asked for
+### The write gate
 
-`--writes off` is the default. With it off, PUT answers **403** and no `CFG` is
-ever emitted. That is not timidity: the plan's §19 requires role checks on the
-write path and **M9 (users and roles) does not exist yet**. The honest position
-until it does is that the hub *can* do this and is *not* doing it.
+`--writes off` refuses: PUT answers **403** and no `CFG` is ever emitted. That
+is not timidity: the plan's §19 requires role checks on the write path and
+**M9 (users and roles) does not exist yet**. The default is currently ON (the
+owner's call, 2026-10-14 — every session from here on is a test session), so
+the honest framing is: the hub *can* do this, the firewall is the only
+boundary, and every change is audited.
 
-`tools/hub_config_test.py` proves the **default** rather than the flag — it
-starts the hub with **no `--writes` argument at all**, because passing
-`--writes off` would only show that the flag works.
+`tools/hub_config_test.py` asserts BOTH ends of that: the **default** (a hub
+started with no `--writes` argument reports writes enabled) and the
+**refusal** (an explicit `--writes off` 403s with the reason). Flip the
+default back and the test's assertion flips with it — it cannot happen
+silently.
 
 | Method | Path | Answers |
 |---|---|---|
@@ -633,10 +645,11 @@ guessing `config`.
 `(is_known_op`, case-sensitive). A typo'd op is a **400 with the known list**,
 not a command sitting on the ladder forever — see `tools/hub_commands_test.py`.
 
-### State: both halves done, both default to off
+### State: both halves done; the gate defaults ON for testing
 
 The hub half issues, retries, tracks and audits `CMD`s exactly as it does `CFG`s,
-behind the same `--writes on` gate. The receiver half (M5b, `HandleCmd` in
+behind the same write gate (default ON since 2026-10-14, `--writes off` refuses).
+The receiver half (M5b, `HandleCmd` in
 `CopierReceiver.mq4`) now acts on `OP=`: `pause` stops new mirrors (management of
 existing ones never stops), `resume` clears it, `closeall` pauses AND queues a
 close for every position this receiver owns, and `reload` re-reads `copier.ini`.
@@ -660,7 +673,7 @@ the footer reflects whether this hub was started with `--writes on`.
 
 | Method | Path | Answers |
 |---|---|---|
-| POST | `/api/v1/nodes/{id}/commands` | body `{"op":"pause"}` or the bare word `pause` → **202** + `command_id` + a poll URL; **403** unless `--writes on`, **400** for a non-receiver or an unknown op |
+| POST | `/api/v1/nodes/{id}/commands` | body `{"op":"pause"}` or the bare word `pause` → **202** + `command_id` + a poll URL; **403** with `--writes off`, **400** for a non-receiver or an unknown op |
 
 ## The audit log (M7)
 
@@ -735,9 +748,10 @@ itself is a log nobody reads, and then a log nobody checks.
 
 - **No alerts (M6), no users or roles (M9).** M5 is now complete on both sides:
   the hub issues and audits `CMD`s, and the receiver acts on them (M5b:
-  pause / resume / closeall / reload, behind the receiver's `AcceptCommands=false`
-  switch, the twin of `AcceptConfigPush`). Until M9 the write path stays behind
-  `--writes off` on the hub and the two receiver switches default to false.
+  pause / resume / closeall / reload, behind the receiver's `AcceptCommands`
+  switch, the twin of `AcceptConfigPush`). Until M9 the write path has no role
+  checks — the defaults are ON for the owner's test campaign (2026-10-14) and
+  are meant to go back to OFF before real deployment.
 - **No CURVE on the hub link.** §19.1's firewall is the only trust boundary,
   which is why the two write gates above exist.
 - **No SQLite.** Nothing is persisted yet, and for the registry that is correct

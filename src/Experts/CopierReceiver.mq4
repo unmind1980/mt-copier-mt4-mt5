@@ -83,15 +83,20 @@ input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty 
 //--- be turned on here. Until M9 (users and roles) exists there is nothing else
 //--- standing in the way, and one switch is not enough for the one operation
 //--- that can stop a receiver from starting.
-input bool   AcceptConfigPush = false; // AcceptConfigPush - apply copier.ini pushed by the hub
-//--- M5b: the command-side twin of the switch above. A CFG rewrites a file;
-//--- a CMD can pause this receiver and close every mirror it holds, which is
-//--- more invasive still. Same rule, same reason: until the hub link is
-//--- authenticated, anything that can reach it can send one, so acting on a
-//--- command is a deliberate operator opt-in that defaults to off. The hub
-//--- side has its own gate (--writes off); the two defaults are the plan's
-//--- "both halves default off" stance applied to M5.
-input bool   AcceptCommands   = false; // AcceptCommands - act on operational commands (pause/resume/closeall/reload) from the hub
+//--- DEFAULT TRUE since 2026-10-14, by the owner's call: every session from
+//--- here on is a test session that needs the push path live. The original
+//--- default was false, for the reason that still stands below - a CFG
+//--- rewrites copier.ini and reloads, and until the hub link is
+//--- authenticated anything that can reach it can send one. Flip this back
+//--- to false (here AND in hub/src/main.rs's --writes default) before the
+//--- hub faces anything but the owner's own test bench.
+input bool   AcceptConfigPush = true; // AcceptConfigPush - apply copier.ini pushed by the hub
+//--- M5b: the command-side twin of the switch above. A CMD can pause this
+//--- receiver and close every mirror it holds - more invasive than a file
+//--- rewrite - so it gets the same treatment: default TRUE for the owner's
+//--- test sessions (set the same day, for the same reason), with the same
+//--- "flip it back before real deployment" rule.
+input bool   AcceptCommands   = true; // AcceptCommands - act on operational commands (pause/resume/closeall/reload) from the hub
 //--- MagicBase is GONE. It only ever supplied a default magic derived from a
 //--- sender's position in copier.ini, so reordering the sections silently
 //--- changed a sender's magic and orphaned its open positions. Every sender

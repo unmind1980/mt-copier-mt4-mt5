@@ -245,12 +245,19 @@ struct Args {
     /// Where the M5 command journal is appended (in-flight commands, so a hub
     /// restart does not forget what it told a node to do).
     commands: String,
-    /// Whether the hub may CHANGE a node's config. Off by default.
+    /// Whether the hub may CHANGE a node's config.
     ///
     /// The plan's §19 requires role checks and an audit trail for the write
-    /// path, and M9 (users and roles) does not exist yet. Until it does, the
-    /// hub can do this and is not doing it - which is a different and more
-    /// honest state than having quietly started.
+    /// path, and M9 (users and roles) does not exist yet - which is why the
+    /// shipped default was OFF for a long time. The OWNER flipped the default
+    /// to ON (2026-10-14) because every session from here on is a test
+    /// session that needs the write path live, and typing the flag each time
+    /// invited the "started without it, why is everything 403" detour. The
+    /// honest state is unchanged and is printed in the banner either way:
+    /// the hub CAN change nodes' configs, the firewall is the only boundary,
+    /// and every change is audited. Turn it back off (`--writes off`) - or
+    /// flip this default - before the hub faces anything but the owner's own
+    /// test bench.
     writes: bool,
     /// Where the M7 audit log is appended. Empty string = off (`--audit none`).
     ///
@@ -269,7 +276,11 @@ fn parse_args() -> Result<Args, String> {
         http: "127.0.0.1:6010".to_string(),
         config: "config_revisions.jsonl".to_string(),
         commands: "commands.jsonl".to_string(),
-        writes: false,
+        //--- Default ON, by the owner's call (2026-10-14): every session from
+        //--- here on is a test session, and the flag was being typed every
+        //--- time anyway. The struct field's doc comment carries the full
+        //--- reasoning and the "flip it back" reminder.
+        writes: true,
         audit: "audit.jsonl".to_string(),
         verbose: false,
         stats_every: 30.0,
@@ -379,10 +390,12 @@ fn usage() {
     println!("                 in-flight CFG/CMD commands are logged here so a hub");
     println!("                 restart does not forget what it told a node to do;");
     println!("                 --commands none keeps them in memory only.");
-    println!("  --writes       on | off (default OFF). OFF means the hub cannot");
-    println!("                 change any node's config: PUT returns 403 and no");
-    println!("                 CFG is ever sent. See §19 - the write path needs");
-    println!("                 role checks, and M9 does not exist yet.");
+    println!("  --writes       on | off (default ON since 2026-10-14, owner's");
+    println!("                 test-period setting). OFF means the hub cannot");
+    println!("                 change any node's config: PUT/POST return 403 and");
+    println!("                 no CFG/CMD is ever sent. See §19 - the write path");
+    println!("                 needs role checks, and M9 does not exist yet, so");
+    println!("                 turn it OFF before anything but your own test bench.");
     println!("  --verbose      log every message, not just events and stats");
     println!("  --stats-every  seconds between stats lines (default 30, 0 = never)");
     println!("  --duration     exit after this many seconds (0 = run until Ctrl-C)");

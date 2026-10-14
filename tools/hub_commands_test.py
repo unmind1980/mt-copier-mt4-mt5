@@ -7,9 +7,12 @@ one issue/retry/ack machine, with the same content-vs-sequence id and the same
 2/5/15/60 ladder. What M5 adds is the operational command and the `CMD` wire
 frame. This test pins down:
 
-  * **--writes off is the default and it REFUSES.** Same as M4's PUT gate,
-    because the argument is identical: the plan's §19 wants role checks that
-    M9 (users and roles) has not built yet.
+  * **The write gate refuses on an explicit --writes off, and the default is
+    asserted.** Same as M4's PUT gate, because the argument is identical: the
+    plan's §19 wants role checks that M9 (users and roles) has not built yet.
+    Since 2026-10-14 the DEFAULT is ON (owner's test-period call, see main.rs)
+    - so this test asserts the default AND the refusal, and flipping the
+    default back means flipping the assertion here with it.
   * **With writes on, POST /nodes/{id}/commands -> 202 + command_id**, and a
     `CMD` frame arrives on the node's own `@<nid>` topic carrying that id and
     the op. The node-side half (M5b) is not built, so here the test plays the
@@ -113,17 +116,29 @@ def main():
     cmds_path = os.path.join(HERE, "_hub_cmd_journal.jsonl")
 
     # =====================================================================
-    print("== 1. the DEFAULT (no --writes flag) must refuse commands ==")
+    print("== 1. the write gate: the DEFAULT is ON, and explicit --writes off refuses ==")
     for f in (cfg_path, audit_path, cmds_path):
         try:
             os.remove(f)
         except OSError:
             pass
-    hub, out = start(None, audit_path, cfg_path, cmds_path)
+
+    #--- Default flipped to ON on 2026-10-14 (owner's test-period call, see
+    #--- main.rs); asserted so it cannot flip back silently.
+    hub, out = start(None, audit_path, cfg_path, cmds_path)      # <- no --writes at all
     try:
         st, d = js("GET", "/api/v1/commands")
         check("/api/v1/commands -> 200", st == 200, f"status {st}")
-        check("...says writes are disabled", d.get("writes_enabled") is False,
+        check("...the DEFAULT says writes are ENABLED",
+              d.get("writes_enabled") is True, str(d.get("writes_enabled")))
+    finally:
+        stop(hub, out)
+
+    #--- The refusal path, spelled out explicitly.
+    hub, out = start(False, audit_path, cfg_path, cmds_path)     # <- explicit --writes off
+    try:
+        st, d = js("GET", "/api/v1/commands")
+        check("--writes off says writes are disabled", d.get("writes_enabled") is False,
               str(d.get("writes_enabled")))
 
         st, d = js("POST", f"/api/v1/nodes/{NODE}/commands", "pause")
