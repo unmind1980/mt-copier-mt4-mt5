@@ -93,6 +93,24 @@
 #define CP_MAXMSGSIZE      CP_MAX_MSG_LEN
 
 //=====================================================================
+// ZMQ CURVE key sizes.
+//
+// A CURVE key is 32 raw bytes, conventionally written as 40 Z85
+// characters (Z85 packs 4 bytes into 5 printable characters, so
+// 32 bytes -> 40 chars, with no padding and no way to be short).
+//
+// Both numbers are named because both are load-bearing in different
+// places, and mixing them up is the failure this project already hit:
+//   * the FILE and the operator see 40 (Z85, printable);
+//   * zmq_setsockopt wants exactly 32 (binary).
+// Handing libzmq 40 characters' worth of STRING - which is what the
+// binding's string overloads do, plus a NUL - fails with EINVAL and
+// never completes a handshake. See CopierTransport::CurveRaw().
+//=====================================================================
+#define CP_CURVE_KEY_LEN   40
+#define CP_CURVE_KEY_BYTES 32
+
+//=====================================================================
 // Compile-time build stamp.
 //
 // Answers "which binary is actually running?" from the log, instead of

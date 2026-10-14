@@ -263,6 +263,17 @@ involved.
 --users PATH        user table (default users.json; `none` disables the login
                     entirely - every request is treated as an anonymous
                     viewer, for throwaway local runs only)
+--curve on|off      is the ZMQ link encrypted and machine-authenticated?
+                    (default OFF). ON makes this hub the CURVE server: the
+                    link is encrypted and every node must present a keypair
+                    on the allow-list. A coordinated change - a node without
+                    the hub's public key cannot connect at all.
+--curve-keys PATH   this hub's CURVE keypair, Z85 (default curve_hub.keys;
+                    generated on first start when --curve on)
+--curve-clients P   the client allow-list (default curve_clients.txt): one
+                    40-char Z85 PUBLIC key per line, # comments, or a lone *
+                    for "any authenticated keypair". An EMPTY list with
+                    --curve on refuses to start.
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
@@ -283,6 +294,55 @@ copied to every subscriber.
 
 None of this replaces the **IP allow-list** on the host. The firewall decides
 who may connect; these decide what a connection that got through can cost.
+
+## CURVE — the link's cryptographic boundary (§19.1)
+
+§19.1 decided the ZMQ port's trust boundary is the firewall, and said in the
+same breath that CURVE "can be turned on independently". This is that switch.
+It is **off by default**, because turning it on is a coordinated change: a node
+that has not been given the hub's public key cannot connect at all.
+
+`--curve on` makes the hub the **CURVE server**:
+
+* the link is encrypted with a key neither end ever sends;
+* every node must present a keypair (proving it is *a* machine, not *which*);
+* and the hub enforces a **client allow-list** — `curve_clients.txt`, one
+  40-character Z85 public key per line — which is what turns "has a keypair"
+  into "is a machine we authorised".
+
+**The allow-list is enforced by a ZAP handler (RFC 27), and that choice is the
+whole design.** The hub's main loop only ever sees messages it *receives*; a
+subscriber that completed a handshake but is not on the list would still be
+delivered every position the hub publishes, and the hub would never learn it
+was there, because publishing is libzmq's job rather than the application's.
+Checking incoming messages would therefore protect the hub from forged data
+while leaving the position stream readable — the half of §19.1's exposure that
+matters most. ZAP is the one place libzmq asks the application a question it
+then obeys, *during the handshake*, before the connection exists: a DENY means
+the peer never becomes a subscriber.
+
+An **empty allow-list with `--curve on` is a refusal to start**, not a hub that
+quietly accepts everyone. The only way to say "any keypair" is to write a lone
+`*`, and writing it is a decision somebody has to make on purpose. The hub
+prints each handshake as `ZAP ALLOW <key>` / `ZAP DENY` — the key in the log is
+the same 40-character spelling that goes in the allow-list, so an operator can
+copy it straight across.
+
+### Turning it on, in order
+
+1. Start the hub once with `--curve on`. It writes `curve_hub.keys` and prints
+   its **public key**. (It will refuse to start if `curve_clients.txt` is
+   missing or empty — create it with a lone `*` to get through this first run.)
+2. On every node, set `HubUseCurve=true` and `HubPublicKey=<the hub's key>`.
+   Restart the EA: it prints **its own** public key in the Experts log.
+3. Put each node's public key into `curve_clients.txt`, one per line.
+4. Restart the hub (the list is read at startup), and delete the `*` if you
+   used it as a placeholder.
+
+`HubUseCurve` is separate from the EAs' `UseCurve`: on the **direct** channel
+the sender is the CURVE server and receivers hold its key, while on the **hub**
+link the hub is the server and nodes hold *its* key. Different roles, so
+different switches — a deployment can encrypt one link and not the other.
 
 ## Phase 2 — the registry (M2)
 
@@ -811,10 +871,13 @@ itself is a log nobody reads, and then a log nobody checks.
 
 ## Not yet
 
-- **No CURVE on the hub link.** §19.1's firewall is the ZMQ port's only trust
-  boundary — M9's login covers the HTTP API, not the wire protocol, which is
-  why the two write gates on the receivers remain hard-wired decisions rather
-  than network-facing defaults.
+- **Key ROTATION is manual (the plan's G15).** CURVE itself is implemented -
+  see below - but rotating a client key is "stop that node, delete its
+  `copier_curve.key`, restart it, put the new public key in
+  `curve_clients.txt`, restart the hub". The allow-list is read once at
+  startup; there is no reload. Deliberately P2: a key is not a credential
+  that leaks on a schedule, and a hub link on a private network is not
+  attacked by key theft.
 - **No orphan-position alert from the hub (the rest of M6 is done).** The
   receiver's panel owns that view (§10 layer 2); the hub cannot see a
   receiver's mirror table. Offline / clock drift / risk / command-unknown all

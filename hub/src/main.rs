@@ -73,6 +73,7 @@ mod api;
 mod audit;
 mod commands;
 mod config;
+mod curve;
 mod envelope;
 mod positions;
 mod registry;
@@ -251,6 +252,20 @@ struct Args {
     /// are in-memory; users persist here. `--users none` = an empty store,
     /// which bootstraps a fresh admin on the next start.
     users: String,
+    /// Whether the ZMQ link is encrypted and machine-authenticated (CURVE).
+    ///
+    /// OFF by default, and it has to be: turning it on makes every node that
+    /// has not been given the hub's public key unable to connect at all.
+    /// That is a coordinated change across the hub and every EA, so it is a
+    /// deliberate switch rather than a new resting state. See `curve.rs`.
+    curve: bool,
+    /// The hub's own CURVE keypair (Z85). Created on first start when
+    /// `--curve on`, so the file has to exist somewhere writable.
+    curve_keys: String,
+    /// The client allow-list: Z85 public keys, one per line, `#` comments,
+    /// `*` for "any authenticated keypair". See `curve.rs` for why an empty
+    /// list is a refusal to start rather than an open door.
+    curve_clients: String,
     /// Whether the hub may CHANGE a node's config.
     ///
     /// The plan's §19 requires role checks and an audit trail for the write
@@ -283,6 +298,9 @@ fn parse_args() -> Result<Args, String> {
         config: "config_revisions.jsonl".to_string(),
         commands: "commands.jsonl".to_string(),
         users: "users.json".to_string(),
+        curve: false,
+        curve_keys: "curve_hub.keys".to_string(),
+        curve_clients: "curve_clients.txt".to_string(),
         //--- Default ON, by the owner's call (2026-10-14): every session from
         //--- here on is a test session, and the flag was being typed every
         //--- time anyway. The struct field's doc comment carries the full
@@ -355,6 +373,29 @@ fn parse_args() -> Result<Args, String> {
                 a.users = v.clone();
                 i += 2;
             }
+            "--curve" => {
+                // Explicit on|off, like --writes. Turning CURVE on locks out
+                // every node that has not been given the hub's public key, so
+                // it must not be possible to enable it by accident (or to
+                // disable it by omitting a value).
+                let v = need(i)?;
+                a.curve = match v.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(format!("--curve takes on or off, not {}", v)),
+                };
+                i += 2;
+            }
+            "--curve-keys" => {
+                let v = need(i)?;
+                a.curve_keys = v.clone();
+                i += 2;
+            }
+            "--curve-clients" => {
+                let v = need(i)?;
+                a.curve_clients = v.clone();
+                i += 2;
+            }
             "--writes" => {
                 // Deliberately requires an explicit value. `--writes` with
                 // nothing after it would be the kind of flag somebody adds to
@@ -410,9 +451,21 @@ fn usage() {
     println!("  --writes       on | off (default ON since 2026-10-14, owner's");
     println!("                 test-period setting). OFF means the hub cannot");
     println!("                 change any node's config: PUT/POST return 403 and");
-    println!("                 no CFG/CMD is ever sent. See §19 - the write path");
-    println!("                 needs role checks, and M9 does not exist yet, so");
-    println!("                 turn it OFF before anything but your own test bench.");
+    println!("                 no CFG/CMD is ever sent. With M9 the write path also");
+    println!("                 needs an operator/admin session - two gates, not one.");
+    println!("  --curve        on | off (default OFF). ON makes this hub the CURVE");
+    println!("                 server on the ZMQ port: the link is encrypted and");
+    println!("                 every node must present a keypair. It is a");
+    println!("                 coordinated change - a node without the hub's public");
+    println!("                 key cannot connect at all - which is why it is off");
+    println!("                 until you switch it on for the whole fleet.");
+    println!("  --curve-keys   this hub's CURVE keypair, Z85 (default curve_hub.keys;");
+    println!("                 generated on first start when --curve on).");
+    println!("  --curve-clients  the client allow-list (default curve_clients.txt):");
+    println!("                 one 40-char Z85 PUBLIC key per line, # comments, or a");
+    println!("                 lone * for 'any authenticated keypair'. An EMPTY list");
+    println!("                 with --curve on refuses to start - a hub that accepts");
+    println!("                 every keypair is a hub that accepts every keypair.");
     println!("  --verbose      log every message, not just events and stats");
     println!("  --stats-every  seconds between stats lines (default 30, 0 = never)");
     println!("  --duration     exit after this many seconds (0 = run until Ctrl-C)");
@@ -744,6 +797,96 @@ fn main() {
         std::process::exit(1);
     }
 
+    //--- CURVE (the plan's §19.1 link boundary). Set BEFORE bind: a CURVE
+    //--- server that binds first can complete a handshake with a client that
+    //--- connects in the window between bind and setsockopt.
+    if args.curve {
+        let keys_path = std::path::PathBuf::from(&args.curve_keys);
+        let (keys, created) = match curve::load_or_create_keys(&keys_path) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("[hub] cannot use CURVE keys: {}", e);
+                std::process::exit(1);
+            }
+        };
+        let clients_path = std::path::PathBuf::from(&args.curve_clients);
+        let list = match curve::AllowList::load(&clients_path) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[hub] --curve on but the client allow-list is unusable: {}", e);
+                eprintln!(
+                    "[hub]   create {} with one 40-char Z85 public key per node,",
+                    clients_path.display()
+                );
+                eprintln!("[hub]   or write a lone '*' to accept any keypair.");
+                eprintln!("[hub]   Every node's public key is printed in its EA log.");
+                std::process::exit(1);
+            }
+        };
+        if list.is_empty() {
+            //--- REFUSING, not opening. See curve.rs: CURVE proves "has a
+            //--- keypair", and only the list turns that into "is authorised".
+            eprintln!(
+                "[hub] --curve on but {} contains no keys.",
+                clients_path.display()
+            );
+            eprintln!("[hub]   Add each node's 40-char public key (printed in its EA log),");
+            eprintln!("[hub]   or write a lone '*' on its own line to accept any keypair.");
+            eprintln!("[hub]   Refusing to start: CURVE with no allow-list accepts every");
+            eprintln!("[hub]   keypair, which is the same exposure as no CURVE at all.");
+            std::process::exit(1);
+        }
+        //--- The socket takes 32 raw bytes; the file and the operator speak
+        //--- Z85. Decode here, once, and fail closed if either key is wrong.
+        let pub_raw = match zmq::z85_decode(&keys.public) {
+            Ok(b) if b.len() == 32 => b,
+            _ => {
+                eprintln!("[hub] the CURVE public key in {} is not 40-char Z85",
+                          keys_path.display());
+                std::process::exit(1);
+            }
+        };
+        let sec_raw = match zmq::z85_decode(&keys.secret) {
+            Ok(b) if b.len() == 32 => b,
+            _ => {
+                eprintln!("[hub] the CURVE secret key in {} is not 40-char Z85",
+                          keys_path.display());
+                std::process::exit(1);
+            }
+        };
+        let applied = (|| -> zmq::Result<()> {
+            sock.set_curve_server(true)?;
+            sock.set_curve_publickey(&pub_raw)?;
+            sock.set_curve_secretkey(&sec_raw)?;
+            Ok(())
+        })();
+        if let Err(e) = applied {
+            eprintln!("[hub] cannot enable CURVE on the socket: {}", e);
+            std::process::exit(1);
+        }
+
+        println!("[hub] CURVE ENABLED - this hub is the CURVE server");
+        println!("[hub]   public key (give this to every node):");
+        println!("[hub]     {}", keys.public);
+        if created {
+            println!("[hub]   a new keypair was written to {}", keys_path.display());
+        }
+        if list.is_any() {
+            println!("[hub]   clients: ANY authenticated keypair ('*' in {})",
+                     clients_path.display());
+            println!("[hub]   ^ this is not an allow-list - it only proves a node");
+            println!("[hub]     generated a keypair. Prefer naming the keys.");
+        } else {
+            println!("[hub]   clients: {} key(s) allowed from {}",
+                     list.len(), clients_path.display());
+        }
+        //--- ZAP is what actually ENFORCES the list, and it must be
+        //--- listening before the server socket binds - libzmq asks it
+        //--- during the handshake and obeys the answer. See curve.rs.
+        let _zap = curve::spawn_zap_handler(&ctx, list);
+        std::thread::sleep(std::time::Duration::from_millis(80));
+    }
+
     let endpoint = format!("tcp://{}:{}", args.bind, args.port);
     if let Err(e) = sock.bind(&endpoint) {
         println!("[hub] cannot bind {}: {}", endpoint, e);
@@ -752,6 +895,11 @@ fn main() {
 
     println!("[hub] listening on {}", endpoint);
     println!("[hub] EAs connect an XSUB here; the hub needs no other configuration");
+    if !args.curve {
+        println!("[hub] the link is PLAINTEXT (--curve off). §19.1's firewall is");
+        println!("[hub]   the only boundary on this port - keep it on a private");
+        println!("[hub]   network or a VPN, or turn --curve on.");
+    }
     if args.duration > 0.0 {
         println!("[hub] will exit after {:.0}s", args.duration);
     }

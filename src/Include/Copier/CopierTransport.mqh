@@ -150,6 +150,27 @@ private:
       s.setMaxMessageSize(CP_MAXMSGSIZE);
      }
 
+   //--- Decode a 40-character Z85 CURVE key into the 32 raw bytes that the
+   //--- ZMQ_CURVE_* options actually take.
+   //---
+   //--- This helper exists because the binding's STRING overloads cannot be
+   //--- used for these options. setStringOption() defaults to ending=true, so
+   //--- StringToUtf8 appends a NUL and a 40-character key reaches
+   //--- zmq_setsockopt as 41 bytes. libzmq accepts exactly 32 (binary) or 40
+   //--- (Z85) and rejects anything else with EINVAL - and the bool that
+   //--- reports it was IGNORED at every call site here, so a CURVE link
+   //--- configured that way never completed a handshake and said nothing
+   //--- anywhere. The uchar[] overloads are correct (exactly 32 bytes), so
+   //--- the fix is to decode first and call those.
+   static bool       CurveRaw(const string z85,uchar &raw[])
+     {
+      ArrayResize(raw,0);
+      if(StringLen(z85)!=CP_CURVE_KEY_LEN) return false;
+      if(!Z85::decode(z85,raw)) return false;
+      if(ArraySize(raw)!=CP_CURVE_KEY_BYTES) return false;
+      return true;
+     }
+
 public:
                      CopierTransport():m_ctx(NULL),m_pub(NULL),m_sub(NULL),
                      m_errno(0) {}
@@ -204,8 +225,13 @@ public:
       m_pub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve && StringLen(curveSecretKey)>0)
         {
-         m_pub.setCurveServer(true);
-         m_pub.setCurveSecretKey(curveSecretKey);
+         //--- Fail CLOSED. If CURVE was asked for and the key cannot be
+         //--- installed, binding anyway would quietly serve plaintext - the
+         //--- exact silent downgrade the operator asked us not to do.
+         uchar sec[];
+         if(!CurveRaw(curveSecretKey,sec)) return false;
+         if(!m_pub.setCurveServer(true)) return false;
+         if(!m_pub.setCurveSecretKey(sec)) return false;
         }
       //--- "*" or "10.0.0.5" is accepted as well as "tcp://*". Same reason as
       //--- the receiver's endpoint: the scheme is the only one this speaks,
@@ -243,8 +269,11 @@ public:
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       if(useCurve)
         {
-         m_sub.setCurvePublicKey(myPublicKey);
-         m_sub.setCurveSecretKey(mySecretKey);
+         uchar pub[],sec[];
+         if(!CurveRaw(myPublicKey,pub)) return false;
+         if(!CurveRaw(mySecretKey,sec)) return false;
+         if(!m_sub.setCurvePublicKey(pub)) return false;
+         if(!m_sub.setCurveSecretKey(sec)) return false;
         }
       //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
       //--- send the subscription itself: one byte, 0x01 for "everything",
@@ -255,7 +284,18 @@ public:
         {
          if(StringLen(endpoints[i])==0) continue;
          if(useCurve && StringLen(serverKeys[i])>0)
-            m_sub.setCurveServerKey(serverKeys[i]);
+           {
+            //--- ONE serverkey per SOCKET, not per connection: a second
+            //--- assignment replaces the first, so several senders with
+            //--- several DIFFERENT keys cannot all be reached from this one
+            //--- socket. That is a libzmq property, not a choice - the direct
+            //--- channel's CURVE therefore supports one key for all its
+            //--- senders (i.e. a shared key), while the hub link - one
+            //--- endpoint, one key - has no such limit.
+            uchar sk[];
+            if(!CurveRaw(serverKeys[i],sk)) return false;
+            if(!m_sub.setCurveServerKey(sk)) return false;
+           }
          m_sub.connect(endpoints[i]);
         }
       return true;
@@ -296,9 +336,20 @@ public:
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       if(useCurve)
         {
-         m_sub.setCurvePublicKey(myPublicKey);
-         m_sub.setCurveSecretKey(mySecretKey);
-         if(StringLen(hubPublicKey)>0) m_sub.setCurveServerKey(hubPublicKey);
+         //--- A client needs all three: the server's public key (so it can
+         //--- encrypt TO the server and verify the server), and its own
+         //--- keypair (so the server can verify IT). Failing any of the three
+         //--- is fatal - see the fail-closed note in BindSender.
+         uchar pub[],sec[],srv[];
+         if(!CurveRaw(myPublicKey,pub)) return false;
+         if(!CurveRaw(mySecretKey,sec)) return false;
+         if(!m_sub.setCurvePublicKey(pub)) return false;
+         if(!m_sub.setCurveSecretKey(sec)) return false;
+         if(StringLen(hubPublicKey)>0)
+           {
+            if(!CurveRaw(hubPublicKey,srv)) return false;
+            if(!m_sub.setCurveServerKey(srv)) return false;
+           }
         }
       //--- deliberately NO \x01 here. See the note above.
       m_sub.connect(ep);

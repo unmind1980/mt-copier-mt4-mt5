@@ -863,6 +863,58 @@ of another.
 `DEDUP` is the one kind that stays safe in the ring without this: its key  
 carries the position ticket, which is unique per position and cannot recur.
 
+## Link security (CURVE)
+
+CURVE is **optional, off by default, and per link**. There are two links and
+they have **opposite roles**, which is why there are two switches rather than
+one:
+
+| link | who binds (CURVE **server**) | what the other end needs |
+| --- | --- | --- |
+| direct (`<nid>`) | the **sender** (`UseCurve`) | each receiver's `SenderServerKey` = the sender's public key |
+| hub (`@<nid>`) | the **hub** (`--curve on`) | each node's `HubPublicKey` = the hub's public key |
+
+Either end's own keypair lives in one file, `MQL\Files\copier_curve.key`
+(`copier_hub.keys` on the hub), is generated on first use, and **the public
+half is printed in the log at every start** — that printed line is the thing
+that gets carried to the other side. The secret half never leaves the machine
+and is never logged.
+
+**A key is 40 Z85 characters and 32 bytes, and the two are not
+interchangeable.** The file, the log and the operator all speak the 40-character
+form; `zmq_setsockopt` wants the 32 raw bytes. Handing it the 40-character
+*string* - which is what the MQL binding's string overload does, plus a NUL
+terminator, so 41 bytes - is rejected by libzmq with `EINVAL` and the bool that
+says so is easy to ignore. The failure mode is not an error message: it is a
+handshake that never completes, with nothing anywhere saying why. Both ends
+therefore decode Z85 explicitly and pass raw bytes, and both **fail closed** -
+a key that cannot be installed aborts the connection rather than continuing in
+the clear.
+
+### The hub's allow-list is enforced at the handshake
+
+Encryption alone accepts **any** keypair: it proves a peer holds *a* key, not
+that it is *authorised*. The hub therefore keeps `curve_clients.txt` (one
+40-character public key per line, `#` comments, or a lone `*` for "any
+keypair") and enforces it through a **ZAP handler** (RFC 27).
+
+That placement is the whole point. The hub's main loop only sees messages it
+*receives*; a subscriber that is not on the list would still be delivered every
+position the hub publishes, and the hub would never know it was there, because
+publishing is libzmq's job rather than the application's. ZAP is the one place
+libzmq asks the application a question **during the handshake** and obeys the
+answer, so a denial means the peer never becomes a subscriber at all.
+
+An empty allow-list with `--curve on` is a **refusal to start**, not a hub that
+quietly accepts everyone.
+
+### What CURVE does not do
+
+It does not replace §19.1's firewall: the network-layer allow-list still
+decides who can reach the port. It does not distinguish accounts — it is
+link-layer, and the account-level boundary is M9's login on the HTTP side. And
+key rotation (G15) is a manual procedure: the allow-list is read at startup.
+
 ## Failure behaviour
 
 | situation                                                                                                                                    | behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |

@@ -85,6 +85,26 @@ input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty 
 //--- and no script to re-run.
 input bool   UseCurve        = false;       // UseCurve - turn Curve encryption on (key is automatic)
 
+//--- CURVE on the HUB link, which is a SEPARATE decision from UseCurve.
+//---
+//--- The roles are inverted, and that is the whole reason for a second
+//--- switch. On the direct channel this sender is the CURVE SERVER, so the
+//--- receivers hold ITS public key. On the hub link the HUB is the server
+//--- (§19.1 - it is the one binding the port), so this node is a CLIENT: it
+//--- needs the hub's public key in HubPublicKey, and the hub needs THIS
+//--- node's public key in its curve_clients.txt allow-list.
+//---
+//--- Keeping them separate means a deployment can run the direct channel in
+//--- plaintext and the hub link encrypted (or the other way round) without
+//--- dragging a keypair into a link that does not use one.
+//---
+//--- The keypair itself is the same file either way (MQL\Files\
+//--- copier_curve.key) - one terminal, one identity. It is generated on
+//--- first use and the PUBLIC half is printed in the log at every start;
+//--- that printed line is what goes into the hub's allow-list.
+input bool   HubUseCurve      = false;      // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
+input string HubPublicKey     = "";         // HubPublicKey - the HUB's 40-char public key (the hub prints it)
+
 //--- cadence --------------------------------------------------------
 //--- SnapshotSeconds is the BASELINE full-state push interval, not the only
 //--- time a snapshot goes out: a receiver whose receipt says it is behind gets
@@ -518,25 +538,26 @@ int OnInit()
    //--- not. A failing Ensure() is FATAL when UseCurve is on: binding a CURVE
    //--- server without a key cannot work, and starting anyway would produce
    //--- exactly the silent-never-connects symptom this design exists to kill.
-   string curveSecret="";
-   if(UseCurve)
+   string curveSecret="",curvePublic="";
+   if(UseCurve || HubUseCurve)
      {
       CP_KEY_RESULT kr=g_key.Ensure(GetPointer(g_log));
       if(kr==CP_KEY_FAILED)
         {
-         g_log.Error("UseCurve is on but no CURVE key could be obtained."
+         g_log.Error("CURVE is on but no CURVE key could be obtained."
                      +" See the lines above for the reason.");
          return INIT_FAILED;
         }
       curveSecret=g_key.SecretKey();
-      if(StringLen(curveSecret)!=CP_KEY_LEN)
+      curvePublic=g_key.PublicKey();
+      if(StringLen(curveSecret)!=CP_KEY_LEN || StringLen(curvePublic)!=CP_KEY_LEN)
         {
-         g_log.Error("UseCurve is on but this sender's secret key is not"
+         g_log.Error("CURVE is on but this node's key is not"
                      +" "+IntegerToString(CP_KEY_LEN)+" characters after"
                      +" loading "+g_key.Path()+". Refusing to start.");
          return INIT_FAILED;
         }
-      g_key.AnnouncePublic(GetPointer(g_log),"sender");
+      if(UseCurve) g_key.AnnouncePublic(GetPointer(g_log),"sender");
      }
 
    if(!g_tp.BindSender(BindAddress,EventsPort,UseCurve,curveSecret))
@@ -558,19 +579,41 @@ int OnInit()
    //--- mirroring this sender through the hub would otherwise simply never
    //--- hear anything, with nothing on this side saying why.
    //---
-   //--- CURVE is deliberately off on this link for now. The hub is the CURVE
-   //--- *server* on its side, so the roles are not the ones UseCurve sets up
-   //--- for the direct channel - wiring that correctly is its own change, and
-   //--- Phase 1 is about proving the routing.
+   //--- CURVE on this link is HubUseCurve, NOT UseCurve - see the input
+   //--- block. The hub is the CURVE server on its side, so the roles are the
+   //--- opposite of the direct channel's.
    g_nid=CopierNid(CopierAccountLogin());
    g_hubEp=CopierNormalizeEndpoint(HubEndpoint);   // bare IP:port gains tcp://
    //--- Uptime starts here, not at the top of OnInit: everything before this is
    //--- file loading and validation, and reporting it as "up" would claim a
    //--- node is serving before it has bound anything.
    g_bootMs=CopierNowMs();
-   if(StringLen(g_hubEp)>0)
+   //--- CURVE on the hub link: the hub is the SERVER here, so this node is
+   //--- the client and needs the hub's public key. A missing or malformed
+   //--- one is reported and the hub link is left OFF - never connected in
+   //--- the clear as a fallback, which is the failure mode that would look
+   //--- like success.
+   bool hubCurveOk=true;
+   if(HubUseCurve)
      {
-      if(!g_tp.ConnectHub(g_hubEp,false,"","",""))
+      if(StringLen(HubPublicKey)!=CP_KEY_LEN)
+        {
+         g_log.Error("HubUseCurve is on but HubPublicKey is not a"
+                     +" "+IntegerToString(CP_KEY_LEN)+"-character key (it is "
+                     +IntegerToString(StringLen(HubPublicKey))+"). The hub prints"
+                     +" its public key in its startup banner. Hub link NOT opened.");
+         hubCurveOk=false;
+        }
+      else
+        {
+         g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted.");
+         g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt:");
+         g_log.Info("  "+curvePublic);
+        }
+     }
+   if(StringLen(g_hubEp)>0 && hubCurveOk)
+     {
+      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,HubPublicKey,curvePublic,curveSecret))
         {
          g_log.Error("central channel: cannot open a socket to "+g_hubEp
                      +" errno="+(string)g_tp.LastErrno()

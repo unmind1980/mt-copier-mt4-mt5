@@ -81,6 +81,9 @@ tools/                  copier.bat   <- the Windows entry point for all of these
                         hub_users_test.py          <- M9: the auth + role matrix,
                                                       the last-admin rule, and
                                                       --users none
+                        hub_curve_test.py          <- CURVE: the hub link is
+                                                      encrypted and only listed
+                                                      keys get in (§19.1)
                         hub_proto.py, hub_proto_test.py, hub.sh, hub.bat,
                         hubrs.bat    <- run the RUST hub (see hub/)
                         hublog.bat   <- run the hub with stdout also going to
@@ -346,19 +349,28 @@ any log to say why. The file also lets `PUBLIC` always be *derived* from
 `SECRET` (`zmq_curve_public`) and the two cross-checked, so the two halves can  
 never disagree.
 
-> **What CURVE does NOT do here: the sender does not check WHO is connecting.**  
-> The client verifies the server; the server accepts any client that knows its  
-> public key, because the copier installs no ZAP handler and no client  
-> allow-list. So CURVE gives you confidentiality and a guarantee that you  
-> reached the right sender — not authorisation of the peer.
+> **What CURVE does NOT do on the DIRECT channel: the sender does not check WHO
+> is connecting.** The client verifies the server; the server accepts any
+> client that knows its public key, because the direct channel installs no ZAP
+> handler and no client allow-list. So there CURVE gives you confidentiality
+> and a guarantee that you reached the right sender — not authorisation of the
+> peer.
 >
-> That is why the sender still needs an **IP allow-list on its VPS**. The two  
-> are complementary, not alternatives: CURVE protects the payload, the  
+> That is why a sender still needs an **IP allow-list on its VPS**. The two
+> are complementary, not alternatives: CURVE protects the payload, the
 > allow-list decides who may open the connection.
 
-> **Hub mode has no CURVE yet.** The central channel is opened with CURVE off  
-> on both sides by design (Phase 1). A hub link across a public network is  
-> therefore plaintext for now — put it on a private network or a VPN.
+> **The HUB link does check, and that difference is the point of §19.1.**
+> `--curve on` makes the hub the CURVE server and gives it a client
+> **allow-list** (`curve_clients.txt`), enforced by a **ZAP handler** during
+> the handshake. A node whose key is not listed never completes the handshake,
+> so it cannot subscribe — which matters more here than on the direct channel,
+> because a hub subscriber is handed *every* sender's position stream. The two
+> switches are separate (`HubUseCurve` + `HubPublicKey` on the EAs, `--curve`
+> on the hub) because the roles are inverted: on the direct channel the sender
+> is the server; on the hub link the hub is. CURVE is still **off by default**
+> on both links, so a hub link across a public network is plaintext until you
+> turn it on — until then, put it on a private network or a VPN.
 
 ---
 
@@ -439,6 +451,17 @@ users and reads the audit log — so the write path now has *two* gates
 bootstraps user `admin` and prints its password **once**; it is stored only as
 a salted hash. `--users none` skips the login entirely for throwaway local
 runs: every request is an anonymous viewer, and writes still 403.
+
+**CURVE can be switched on for the ZMQ link** (§19.1, `--curve on`, default
+off). The link is then encrypted and every node must present a keypair listed
+in the hub's `curve_clients.txt`. The list is enforced by a ZAP handler during
+the handshake, which is the only place it *can* be enforced — a subscriber the
+hub never authorises would otherwise still be handed every position the hub
+publishes, because publishing is libzmq's job, not the application's. It is a
+coordinated switch (a node without the hub's public key cannot connect at all),
+so it stays off until turned on for the whole fleet; an empty allow-list with
+`--curve on` refuses to start rather than accepting everyone. See
+`hub/README.md` and `doc/PROTOCOL.md`.
 
 **The audit log is `audit.jsonl`** — one JSON object per line, in the plan's §15
 `audit` shape (`seq, ts, actor, ip, action, node, before, after, result`).
@@ -932,7 +955,7 @@ a burst of routine `STAT` must write **zero** lines, and an unrecognised
 control type must still write one, so widening the suppression list can never
 silently become a mode. Run it after any change to the hub's logging rule.
 
-`bash hub/build.sh --test` runs the 84 hub unit tests. Not `cargo test` — Rust
+`bash hub/build.sh --test` runs the 88 hub unit tests. Not `cargo test` — Rust
 lives in an **isolated** toolchain and is not on `PATH`, so a bare `cargo` is
 just `command not found`; `hub/build.sh` sets `RUSTUP_HOME` / `CARGO_HOME` /
 `LIBZMQ_PREFIX` / `PATH` in one place. Its header explains why that is

@@ -126,6 +126,22 @@ input bool   UseCurve        = false;         // UseCurve - turn Curve encryptio
 //--- makes this field inert - it is neither validated nor sent - so a leftover
 //--- value here is harmless, and turning UseCurve back on finds it still there.
 input string SenderServerKey = "";   // SenderServerKey - SENDER public key; needs UseCurve ON
+
+//--- CURVE on the HUB link (central mode), which is a SEPARATE switch from
+//--- UseCurve above.
+//---
+//--- On the direct channel the SENDER is the CURVE server, so this receiver
+//--- holds the sender's public key in SenderServerKey. On the hub link the
+//--- HUB is the server (§19.1 - it is the one binding the port), so this node
+//--- is a CLIENT: it needs the hub's public key in HubPublicKey, and the hub
+//--- needs THIS node's public key in its curve_clients.txt allow-list.
+//---
+//--- Two switches rather than one because a deployment may run the direct
+//--- channel in plaintext and the hub link encrypted (or the reverse). The
+//--- keypair is the same file either way (MQL\Files\copier_curve.key): one
+//--- terminal, one identity.
+input bool   HubUseCurve      = false; // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
+input string HubPublicKey     = "";    // HubPublicKey - the HUB's 40-char public key (the hub prints it)
 input long   Magic           = 5555;          // Magic - unique per sender; the port works well
 //--- A dropdown, not free text. Typing "multiplier" by hand is a silent
 //--- failure waiting to happen: anything misspelt falls through to the
@@ -4329,12 +4345,12 @@ int OnInit()
    //--- automatic while the server's cannot.
    g_myPublicKey="";
    string mySecret="";
-   if(UseCurve)
+   if(UseCurve || HubUseCurve)
      {
       CP_KEY_RESULT kr=g_key.Ensure(GetPointer(g_log));
       if(kr==CP_KEY_FAILED)
         {
-         g_log.Error("UseCurve is on but no CURVE key could be obtained for"
+         g_log.Error("CURVE is on but no CURVE key could be obtained for"
                      +" this receiver. See the lines above for the reason.");
          return INIT_FAILED;
         }
@@ -4342,11 +4358,11 @@ int OnInit()
       g_myPublicKey=g_key.PublicKey();
       if(StringLen(mySecret)!=CP_KEY_LEN || StringLen(g_myPublicKey)!=CP_KEY_LEN)
         {
-         g_log.Error("UseCurve is on but the keys loaded from "+g_key.Path()
+         g_log.Error("CURVE is on but the keys loaded from "+g_key.Path()
                      +" are the wrong length. Refusing to start.");
          return INIT_FAILED;
         }
-      g_key.AnnouncePublic(GetPointer(g_log),"receiver");
+      if(UseCurve) g_key.AnnouncePublic(GetPointer(g_log),"receiver");
      }
 
    //--- must precede the context creation inside ConnectReceiver / ConnectHub
@@ -4382,10 +4398,39 @@ int OnInit()
       //--- keeps the hub from delivering every OTHER sender's stream too - the
       //--- whole point of the topic frame.
       //---
-      //--- CURVE is off on this link for now: the hub is the CURVE SERVER on
-      //--- its side, so the roles are not the ones UseCurve sets up for the
-      //--- direct channel. Wiring that correctly is its own change.
-      if(!g_tp.ConnectHub(g_hubEp,false,"","",""))
+      //--- CURVE on this link is HubUseCurve, NOT UseCurve: the hub is the
+      //--- CURVE SERVER on its side (§19.1 - it binds the port), so this node
+      //--- is a client and holds the HUB's public key, not the sender's.
+      bool hubCurveOk=true;
+      if(HubUseCurve)
+        {
+         if(StringLen(HubPublicKey)!=CP_KEY_LEN)
+           {
+            g_log.Error("HubUseCurve is on but HubPublicKey is not a"
+                        +" "+IntegerToString(CP_KEY_LEN)+"-character key (it is "
+                        +IntegerToString(StringLen(HubPublicKey))+"). The hub"
+                        +" prints its public key in its startup banner.");
+            hubCurveOk=false;
+           }
+         else
+           {
+            g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted.");
+            g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt:");
+            g_log.Info("  "+g_myPublicKey);
+           }
+        }
+      if(!hubCurveOk)
+        {
+         //--- FATAL, like every other central-mode failure: with HubEndpoint
+         //--- set, the hub IS this receiver's channel - there is no direct
+         //--- one to fall back to. Starting without it would look like a
+         //--- running receiver that mirrors nothing.
+         g_log.Error("central mode: the hub link was NOT opened - fix"
+                     +" HubPublicKey (see above) and restart.");
+         return INIT_FAILED;
+        }
+      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,HubPublicKey,
+                          g_myPublicKey,mySecret))
         {
          g_log.Error("central mode: cannot open a socket to "+g_hubEp
                      +" errno="+(string)g_tp.LastErrno());
