@@ -633,15 +633,25 @@ guessing `config`.
 `(is_known_op`, case-sensitive). A typo'd op is a **400 with the known list**,
 not a command sitting on the ladder forever — see `tools/hub_commands_test.py`.
 
-### State: M5a (hub) done, M5b (EA) not
+### State: both halves done, both default to off
 
-The hub half is complete: it issues, retries, tracks and audits `CMD`s exactly as
-it does `CFG`s, behind the same `--writes on` gate, and the REST endpoint is
-live. **What is missing is the receiver side that *acts* on `OP=`.** A node that
-receives a `CMD` today has no code to pause, resume, close-all or reload. Until
-M5b lands, a `CMD` is issued, goes out on the wire, and is acknowledged (or times
-out) — but the receiver does not yet change behaviour. This is safe to enable
-because it changes nothing on the node; it is just not yet useful there.
+The hub half issues, retries, tracks and audits `CMD`s exactly as it does `CFG`s,
+behind the same `--writes on` gate. The receiver half (M5b, `HandleCmd` in
+`CopierReceiver.mq4`) now acts on `OP=`: `pause` stops new mirrors (management of
+existing ones never stops), `resume` clears it, `closeall` pauses AND queues a
+close for every position this receiver owns, and `reload` re-reads `copier.ini`.
+The receiver answers `OK=0` when it refuses, the same way it does for `CFG`.
+
+Two properties worth knowing before reaching for the button:
+
+* **`closeall` implies `pause`**, deliberately: converge runs on every snapshot,
+  so a flatten that leaves the sender's desired set mirrored would re-open
+  everything within seconds. `resume` is the way back.
+* **The pause survives a restart.** It is persisted (`copier_cmd<instance>.st`,
+  the same pattern as the config revision) together with the last command id and
+  its ACK, so a hub retry that outruns a crash gets the same ACK rather than a
+  second execution (§5.4 rule 2 held across the restart). The four ops are
+  idempotent by nature, which bounds what a crash-window repeat can do anyway.
 
 The same endpoint is wired into the hub dashboard (`hub/src/assets/dashboard.html`):
 every **receiver** row now carries `pause` / `resume` / `close all` / `reload`
@@ -723,13 +733,11 @@ itself is a log nobody reads, and then a log nobody checks.
 
 ## Not yet
 
-- **No commands *executed* on the node (M5b).** The hub half of M5 (M5a) is done —
-  `CMD` is issued, retried and audited behind the same `--writes on` gate — but
-  the receiver has no code yet that acts on `OP=` (pause/resume/closeall/reload).
-  Until M5b lands, enabling writes changes nothing on a node, it just is not yet
-  useful there. No alerts (M6), no users or roles (M9). Until M9 the write path
-  stays behind `--writes off` on the hub and `AcceptConfigPush=false` on the
-  receiver.
+- **No alerts (M6), no users or roles (M9).** M5 is now complete on both sides:
+  the hub issues and audits `CMD`s, and the receiver acts on them (M5b:
+  pause / resume / closeall / reload, behind the receiver's `AcceptCommands=false`
+  switch, the twin of `AcceptConfigPush`). Until M9 the write path stays behind
+  `--writes off` on the hub and the two receiver switches default to false.
 - **No CURVE on the hub link.** §19.1's firewall is the only trust boundary,
   which is why the two write gates above exist.
 - **No SQLite.** Nothing is persisted yet, and for the registry that is correct

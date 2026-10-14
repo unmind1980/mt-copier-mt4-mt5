@@ -84,6 +84,14 @@ input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty 
 //--- standing in the way, and one switch is not enough for the one operation
 //--- that can stop a receiver from starting.
 input bool   AcceptConfigPush = false; // AcceptConfigPush - apply copier.ini pushed by the hub
+//--- M5b: the command-side twin of the switch above. A CFG rewrites a file;
+//--- a CMD can pause this receiver and close every mirror it holds, which is
+//--- more invasive still. Same rule, same reason: until the hub link is
+//--- authenticated, anything that can reach it can send one, so acting on a
+//--- command is a deliberate operator opt-in that defaults to off. The hub
+//--- side has its own gate (--writes off); the two defaults are the plan's
+//--- "both halves default off" stance applied to M5.
+input bool   AcceptCommands   = false; // AcceptCommands - act on operational commands (pause/resume/closeall/reload) from the hub
 //--- MagicBase is GONE. It only ever supplied a default magic derived from a
 //--- sender's position in copier.ini, so reordering the sections silently
 //--- changed a sender's magic and orphaned its open positions. Every sender
@@ -683,6 +691,15 @@ int             g_announceCount=0;      // first CP_REG_REPEATS are REG, then HB
 string          g_cfgId="";             // the last applied command id
 long            g_cfgRev=0;             // the revision currently on disk
 string          g_cfgAck="";            // the ACK body to repeat for a duplicate id
+//--- M5b: the last CMD we answered, and the pause flag. id/ack follow the
+//--- g_cfgId/g_cfgAck pattern (in-memory; see HandleCmd for why the four ops
+//--- being idempotent is what bounds a repeat after a crash). PAUSED is
+//--- PERSISTED via CmdStateSave, because a restart that silently un-paused
+//--- would converge straight back into every position the operator just
+//--- flattened - the one outcome a pause exists to prevent.
+string          g_cmdId="";             // the last command id we answered
+string          g_cmdAck="";            // the ACK body to repeat for a duplicate id
+bool            g_cmdPaused=false;      // set by CMD pause / closeall, cleared by resume
 long            g_lastCfgrMs=0;         // when we last asked the hub for a config
                                         // NOT reset on a WHO reply - same reason as
                                         // the sender; see its declaration.
@@ -1136,6 +1153,41 @@ string InstanceSuffix()
 
 string ReceiverStatePath() { return "copier_receiver"+InstanceSuffix()+".st"; }
 
+//--- M5b: the operational-command state, one small file, the same pattern
+//--- CopierCfgRevSave uses for the config revision. The ACK body is stored
+//--- percent-escaped (it is full of ';' and '='), which is exactly what the
+//--- CFG push already does to a whole ini - the escape is proven on a much
+//--- larger input, and CopierIniUnescape reverses it byte for byte.
+//--- A torn file degrades safely: a failed parse yields paused=false, which
+//--- is the pre-command default, and the hub's ladder re-asks anything the
+//--- receiver never answered.
+string CmdStatePath() { return "copier_cmd"+InstanceSuffix()+".st"; }
+
+void CmdStateSave()
+  {
+   string body="PAUSED="+(g_cmdPaused?"1":"0")
+              +"\nID="+g_cmdId
+              +"\nACK="+CopierIniEscape(g_cmdAck);
+   CopierIniWriteAll(CmdStatePath(),body);
+  }
+
+void CmdStateLoad()
+  {
+   g_cmdPaused=false; g_cmdId=""; g_cmdAck="";
+   string text="";
+   if(!CopierIniReadAll(CmdStatePath(),text)) return;
+   string lines[];
+   int n=CopierSplitLines(text,lines);
+   for(int i=0;i<n;i++)
+     {
+      string line=CopierTrim(lines[i]);
+      string v="";
+      if(CopierKvGet(line,"PAUSED",v)) g_cmdPaused=(v=="1");
+      if(CopierKvGet(line,"ID",v))     g_cmdId=v;
+      if(CopierKvGet(line,"ACK",v))    CopierIniUnescape(v,g_cmdAck);
+     }
+  }
+
 void SaveReceiverMap()
   {
    CopierPos all[];
@@ -1415,6 +1467,11 @@ void ReportEntryGates()
   {
    string on="";
    if(IgnoreNewEntrySignals)          on+="IgnoreNewEntrySignals ";
+   //--- Not a configured gate but a runtime one, and it IS persisted - so a
+   //--- receiver that starts up paused must say so in the same line that
+   //--- lists every other gate, or the operator reads "none configured" and
+   //--- believes it.
+   if(g_cmdPaused)                    on+="HubPaused ";
    if(IgnoreAllExitSignals)           on+="IgnoreAllExitSignals ";
    if(NoBuy)                          on+="NoBuy ";
    if(NoSell)                         on+="NoSell ";
@@ -1654,6 +1711,23 @@ void ExecuteQueue()
          if(g_once.ShouldEmit("qclosed|"+a.sym))
             g_log.Info("market for "+a.sym+" is closed - holding every queued"
                        +" action on it; they go through when it reopens");
+         RotateQueue();
+         skipped++;
+         continue;
+        }
+
+      //--- PAUSED BY HUB COMMAND, on the way OUT. Same reason as every gate
+      //--- above: an open queued BEFORE the pause arrived would still fire
+      //--- if only converge were gated. Rotated, not dropped - a held open
+      //--- is a DELAY; RESUME releases it, and converge re-derives the open
+      //--- from the sender's desired set if it is still desired by then.
+      //--- Opens only: a pause must never hold the closes that reduce this
+      //--- account's exposure.
+      if(a.kind==CP_ACT_OPEN && g_cmdPaused)
+        {
+         if(g_once.ShouldEmit("qcmdpause"))
+            g_log.Warn("paused by a hub command - holding queued OPEN"
+                       +" actions; they go through on RESUME");
          RotateQueue();
          skipped++;
          continue;
@@ -2424,7 +2498,13 @@ void PendingOpens(int &count,double &lots)
 // just tripped. Queued rather than done inline, like every other trade
 // operation, so MaxActionsPerTick still paces it.
 //=====================================================================
-void RiskCloseEverything()
+//--- Enumerate every position that is OURS (magic matches a configured
+//--- sender), skip the ones handed over to the operator, and queue a close
+//--- for the rest through the SAME path converge uses - so throttling, the
+//--- seen-ring, backoff and failure parking all apply unchanged.
+//--- Returns how many closes were queued. Shared by the risk switch and by
+//--- the hub's closeall command (M5b); the reason string is only for the log.
+int CloseAllOurs(const string reason)
   {
    CopierPos all[];
    int an=CopierReadPositions(all,CP_MAX_POSITIONS);
@@ -2444,8 +2524,15 @@ void RiskCloseEverything()
                  all[i].ticket);
       queued++;
      }
-   g_log.Error("RiskCloseAllOnTrip is on - queueing closes for "
-               +(string)queued+" of our position(s)");
+   if(StringLen(reason)>0)
+      g_log.Error(reason+" - queueing closes for "+(string)queued
+                 +" of our position(s)");
+   return queued;
+  }
+
+void RiskCloseEverything()
+  {
+   CloseAllOurs("RiskCloseAllOnTrip is on");
   }
 
 //--- Convert a timestamp the SENDER reported into our own timebase.
@@ -2722,6 +2809,20 @@ void ConvergeSender(const int si)
          if(g_once.ShouldEmit("gatenew"))
             g_log.Info("IgnoreNewEntrySignals is on - no new mirrors are"
                        +" opened. Existing ones are still managed normally.");
+         continue;
+        }
+      //--- M5b: the hub's pause command lands here, at the same choke point
+      //--- as the configured gates, for the same reason - and with the same
+      //--- rule as every gate in this block: OPENING only. A mirror that
+      //--- already exists keeps having its stops synced, its volume trimmed
+      //--- and its sender's closes followed, so a pause never freezes risk
+      //--- management on live trades.
+      if(g_cmdPaused)
+        {
+         if(g_once.ShouldEmit("cmdpause"))
+            g_log.Warn("paused by a hub command - no new mirrors are opened."
+                       +" Existing ones are still managed normally. RESUME"
+                       +" clears this.");
          continue;
         }
       if(NoBuy && d.side==CP_SIDE_BUY)   continue;
@@ -3567,6 +3668,171 @@ void HandleCfg(const CopierEnv &e)
                  +" managed. Check the panel's orphan rows.");
   }
 
+// M5b: acting on an operational command the hub pushed.
+//
+// The skeleton is HandleCfg's ON PURPOSE: gate, then idempotency, then act,
+// then answer - on the same upward path, with the same ACK frame. The one
+// structural difference is what gets PERSISTED. HandleCfg records the id and
+// the answer because a config must not be applied twice; here only the PAUSE
+// flag is, because the four ops are idempotent by nature (pause twice is
+// pause, a second closeall finds nothing left to close, a reload re-reads
+// the same file) - which is exactly the fallback the plan's §5.4 rule 1
+// leans on for the crash window. A repeated OLD id answered after a restart
+// re-executes the op; for these four that is bounded and harmless, and it
+// still never leaves the hub without an answer.
+//
+// OK=0 refusals at the GATE are deliberately NOT recorded (like HandleCfg):
+// the operator may flip the switch on and the hub's retry should then
+// succeed without anyone re-issuing the command. Refusals from the op
+// itself (a failed reload) ARE recorded, so the hub sees the same answer
+// on every retry instead of a fresh failure each time.
+void HandleCmd(const CopierEnv &e)
+  {
+   string id="",op="";
+   CopierKvGet(e.payload,"ID",id);
+   CopierKvGet(e.payload,"OP",op);
+   //--- ARGS is reserved and ignored here, on purpose. A future op that
+   //--- needs parameters reads them itself; today's four take none.
+
+   //--- No ID means there is nothing to acknowledge against, and the hub
+   //--- would retry forever against a node that cannot answer.
+   if(StringLen(id)==0)
+     {
+      g_log.Error("CMD with no ID - cannot acknowledge it, so the hub will"
+                  +" retry. Ignoring.");
+      return;
+     }
+
+   //--- THE GATE, the twin of AcceptConfigPush in HandleCfg.
+   if(!AcceptCommands)
+     {
+      SendCfgAck("ID="+id+";OK=0;ERR=commands disabled on this receiver");
+      if(g_once.ShouldEmit("cmd|off"))
+         g_log.Warn("the hub sent a command (id="+id+", op="
+                    +(StringLen(op)>0?op:"(none)")
+                    +") but AcceptCommands is false, so it was NOT acted on."
+                    +" That switch exists because a CMD can pause this"
+                    +" receiver and close every mirror it holds - and until"
+                    +" there is authentication on the hub link, anything that"
+                    +" can reach it can send one.");
+      return;
+     }
+   if(!g_hubOn)
+     {
+      SendCfgAck("ID="+id+";OK=0;ERR=not in central mode");
+      return;
+     }
+
+   //--- IDEMPOTENCY, the plan's §5.4 rule 2 - same as HandleCfg.
+   if(StringLen(g_cmdId)>0 && id==g_cmdId && StringLen(g_cmdAck)>0)
+     {
+      SendCfgAck(g_cmdAck);
+      g_log.Info("CMD "+id+" is a repeat - re-sent the same ACK, not re-applied");
+      return;
+     }
+
+   if(StringLen(op)==0)
+     {
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=0;ERR=no OP in command";
+      SendCfgAck(g_cmdAck);
+      g_log.Error("CMD "+id+": no OP field. Refused.");
+      return;
+     }
+
+   if(op=="pause")
+     {
+      g_cmdPaused=true;
+      CmdStateSave();
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      g_log.Warn("CMD "+id+": PAUSED by the hub - no new mirrors will be"
+                 +" opened. Existing positions are still managed normally"
+                 +" (stops, trims, sender closes). RESUME clears this.");
+      return;
+     }
+
+   if(op=="resume")
+     {
+      bool was=g_cmdPaused;
+      g_cmdPaused=false;
+      CmdStateSave();
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      if(was) g_log.Info("CMD "+id+": RESUMED by the hub - new mirrors are"
+                         +" opened again");
+      else    g_log.Info("CMD "+id+": RESUME - the receiver was not paused");
+      return;
+     }
+
+   if(op=="closeall")
+     {
+      //--- Pause FIRST, and save it, because converge runs on every snapshot:
+      //--- a flatten that leaves the sender's desired set mirrored re-opens
+      //--- everything within seconds, and the operator would watch closeall
+      //--- undo itself. Pausing is also what makes closeall and pause two
+      //--- buttons the operator can reason about: closeall is "stop AND
+      //--- flatten", resume is the way back.
+      g_cmdPaused=true;
+      CmdStateSave();
+      int n=CloseAllOurs("CMD "+id+": CLOSEALL from the hub");
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      g_log.Warn("CMD "+id+": closeall queued "+(string)n+" close(s); the"
+                 +" receiver also paused itself - leaving the sender's"
+                 +" desired set mirrored would re-open everything. RESUME"
+                 +" re-enables opening.");
+      return;
+     }
+
+   if(op=="reload")
+     {
+      //--- The file is NOT rewritten (that is CFG's job): reload re-reads
+      //--- whatever copier.ini says NOW. The sender set is captured first so
+      //--- the log can say what the reload changed, the way HandleCfg does.
+      //--- No backup/restore dance either: the file on disk is the one
+      //--- already running, and LoadConfig failing leaves it untouched.
+      string beforeSid[CP_MAX_SENDERS];
+      long   beforeMagic[CP_MAX_SENDERS];
+      ArrayInitialize(beforeMagic,0);
+      for(int z=0;z<CP_MAX_SENDERS;z++) beforeSid[z]="";
+      int beforeN=g_nSenders;
+      for(int i=0;i<beforeN;i++)
+        {
+         beforeSid[i]=g_sid[i];
+         beforeMagic[i]=g_magic[i];
+        }
+      if(!LoadConfig())
+        {
+         g_cmdId=id;
+         g_cmdAck="ID="+id+";OK=0;ERR=config reload failed";
+         SendCfgAck(g_cmdAck);
+         g_log.Error("CMD "+id+": reload failed - the receiver keeps running"
+                     +" the configuration it had");
+         return;
+        }
+      int added=ResubscribeSenders(beforeSid,beforeN);
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      g_log.Info("CMD "+id+": reload applied - "
+                 +IntegerToString(beforeN)+" -> "+IntegerToString(g_nSenders)
+                 +" sender(s), "+IntegerToString(added)+" new subscription(s)");
+      return;
+     }
+
+   //--- The hub validates OP at the door, so reaching this line means a hub
+   //--- a version apart, or a hand-crafted frame. Answer rather than leave
+   //--- the ladder running against an op that will never become known.
+   g_cmdId=id;
+   g_cmdAck="ID="+id+";OK=0;ERR=unknown op "+op;
+   SendCfgAck(g_cmdAck);
+   g_log.Error("CMD "+id+": unknown op \""+op+"\". Refused.");
+  }
+
 void HandleModifyEvent(const int si,const CopierEnv &e)
   {
    CopierPos p;
@@ -3888,6 +4154,7 @@ void HandleMessage(const string msg,const int stream)
      }
 
    if(e.type==CP_T_CFG)        HandleCfg(e);
+   else if(e.type==CP_T_CMD)   HandleCmd(e);
    else if(e.type==CP_T_SNAP)  HandleSnapshot(si,e);
    else if(e.type==CP_T_OPEN)  HandleOpenEvent(si,e);
    else if(e.type==CP_T_CLOSE) HandleCloseEvent(si,e);
@@ -4076,6 +4343,17 @@ int OnInit()
          g_log.Info("central mode: running config rev "+(string)g_cfgRev
                     +" (id "+(StringLen(cfgId)>0?cfgId:"?")+")");
    }
+
+   //--- M5b: restore the operational-command state. PAUSED must survive a
+   //--- restart - converge runs the moment the first snapshot lands, and a
+   //--- silently un-paused receiver would re-open everything the operator
+   //--- had just flattened. The last CMD id/ack come back too, so a hub
+   //--- retry that outruns a crash gets the same ACK rather than a second
+   //--- execution (§5.4 rule 2 across the restart as well).
+   CmdStateLoad();
+   if(g_cmdPaused)
+      g_log.Warn("operational state: PAUSED (from "+CmdStatePath()+") - no"
+                 +" new mirrors will be opened until the hub sends RESUME");
 
    if(g_hubOn)
      {

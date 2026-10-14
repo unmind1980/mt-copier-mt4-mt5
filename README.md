@@ -99,8 +99,8 @@ doc/CENTRAL-HUB-PLAN.md central-hub architecture plan (TIER 2: the
                         M7 audit + the REST/WS API and its dashboard are BUILT
                         and running; the WRITE half (M4 config push, M5
                         commands) is implemented behind the `--writes on` gate -
-                        see hub/README.md. EA-side M5b (acting on OP=) is still
-                        pending)
+                        see hub/README.md. M5b (the EA acting on OP=) is done,
+                        behind the receiver's `AcceptCommands` switch)
 doc/PHASE1-DESIGN.md    Phase 1 transparent-proxy design (BUILT: EAs + hub/)
 ```
 
@@ -442,15 +442,17 @@ pushes it as `CMD`. Both share one command engine (issue → retry → ack, same
 | side | gate | default |
 |---|---|---|
 | hub | `--writes off` | answers **403**, never emits a `CFG`/`CMD` |
-| receiver | `AcceptConfigPush = false` | ACKs `OK=0`, does not touch the file |
+| receiver (config) | `AcceptConfigPush = false` | ACKs `OK=0`, does not touch the file |
+| receiver (commands) | `AcceptCommands = false` | ACKs `OK=0`, acts on nothing |
 
-Two keys rather than one, because config push is the only operation in the system
-that can stop a receiver from starting — and §19.1 makes the firewall the *only*
-trust boundary on the hub port, with no token. Until M9 (users and roles) exists,
-the honest position is that the hub and the EA *can* do this and are *not* doing
-it. Commands (M5a, hub side) are issued and audited behind the same gate; the
-receiver side that *acts* on `OP=` (M5b) is not built yet, so a `CMD` is today
-acknowledged but not yet obeyed by the node.
+A receiver gets two switches rather than one, because a `CMD` can pause a receiver
+and close every mirror it holds — more invasive than a file rewrite — and §19.1
+makes the firewall the *only* trust boundary on the hub port, with no token. Until
+M9 (users and roles) exists, the honest position is that the hub and the EA *can*
+do this and are *not* doing it by default. M5 is complete on both sides now: the
+receiver acts on `OP=` (`pause` / `resume` / `closeall` / `reload`; `closeall`
+implies `pause` — converge would otherwise re-open the flatten within seconds —
+and the pause survives a receiver restart).
 
 **These are the only write endpoints, deliberately.** Config push and commands are
 M4/M5, with their `202` + `command_id` semantics and their audit trail; the

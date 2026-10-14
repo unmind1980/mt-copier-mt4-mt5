@@ -823,7 +823,7 @@ master 挂
 | M2 注册表 | 节点表（`ROLE:ACC`、版本、最后心跳）；靠 `REG`/`WHO` 重建 |
 | M3 监控  | last-seen、RTT、断线判定、持仓视图（只读解析副本）—— **✅ 已完成**（2026-10-13） |
 | M4 配置  | 版本库、下发、重试、`ACK` 跟踪、漂移检测 —— **✅ 两侧均已实现**（2026-10-14，M4a 中枢 + M4b EA）；主备复制未做 |
-| M5 命令  | 暂停/恢复/紧急停止/reload —— **✅ 中枢侧已实现（M5a，2026-10-14）**：复用 M4 的命令引擎（`commands.rs`），同一套 `ID` 幂等 + 退避阶梯 + `ACK` 处理，新增 `CMD` 线帧与 `POST /api/v1/nodes/{id}/commands` 端点。EA 侧（M5b，真正执行 `OP=` 的那一半）**未做** |
+| M5 命令  | 暂停/恢复/紧急停止/reload —— **✅ 两侧均已实现**（2026-10-14，M5a 中枢 + M5b EA）：复用 M4 的命令引擎（`commands.rs`），同一套 `ID` 幂等 + 退避阶梯 + `ACK` 处理；EA 侧 `HandleCmd` 执行 `OP=`（`closeall` 先自暂停再平仓，`pause` 状态与最后命令 id/ACK 跨重启持久化），接收端以 `AcceptCommands=false` 默认关闸 |
 | M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口                |
 | M7 审计  | append-only —— **✅ 已实现**（2026-10-14，落在 `audit.jsonl`；SQLite 属 M11） |
 | M8 API | REST + WebSocket —— **✅ 读的一半已完成**（2026-10-13）｜
@@ -949,8 +949,8 @@ alerts(id INTEGER PK, ts INTEGER, node_id TEXT, rule TEXT,
 > 必须带 `--writes on` 启动中枢才允许写入。这是有意为之的安全边界 —— M9（用户/角色，
 > `viewer`/`operator`/`admin`）尚未实现，在它落地之前，唯一的写闸门就是「启动开关」，
 > 而不是「角色校验」。该边界已被测试覆盖：不带开关时 `PUT`/`POST` 一律 403，并提示如何开启。
-> 命令侧（M5a）已就绪；**EA 侧（M5b，真正执行 `OP=` 的那一半）尚未实现** —— 目前一个 `CMD`
-> 会被正常下发、重试、记审计，但接收端还没有代码去暂停/恢复/平仓/重载，行为不变。
+> 命令侧（M5a）与 EA 侧（M5b）**均已实现**：接收端 `HandleCmd` 执行 `OP=`，并以
+> `AcceptCommands=false` 默认关闸（`--writes off` 的 EA 侧对偶闸门）。
 >
 > 落地形态与 §14 的草图有一处偏离：**没有**把 ZMQ socket 放进 tokio，
 > 而是另起一个 tokio 线程，两边用 `Arc<Mutex<Shared>>` + `broadcast` 桥接。
@@ -964,7 +964,7 @@ alerts(id INTEGER PK, ts INTEGER, node_id TEXT, rule TEXT,
 | GET ✅ | `/nodes/{id}/config`                | 当前生效配置 + `REV` + 历史 + 漂移 —— M4a 已实现 |
 | PUT ✅ | `/nodes/{id}/config`                | **下发新配置** → `202` + `command_id` —— **默认 403**（`--writes off`） |
 | POST ✅ | `/nodes/{id}/config/rollback/{rev}` | 回滚 = **追加新 rev**（不重写历史）—— M4a     |
-| POST ✅ | `/nodes/{id}/commands`              | pause / resume / closeall / reload → `202` + `command_id`（轮询 `/commands/{id}` 兜底）—— **默认 403**（`--writes off`）；M5a 中枢侧已实现，M5b EA 侧未做 |
+| POST ✅ | `/nodes/{id}/commands`              | pause / resume / closeall / reload → `202` + `command_id`（轮询 `/commands/{id}` 兜底）—— **默认 403**（`--writes off`）；M5a/M5b 两侧均已实现（接收端另需 `AcceptCommands=true`） |
 | GET ✅ | `/commands/{id}`                    | 命令状态（轮询兜底）—— M4a 已实现              |
 | GET ⬜ · PATCH ⬜ | `/alerts` / `/alerts/{id}`  | 告警 —— M6                          |
 | GET ✅ | `/audit?limit=&since=`              | 审计流水（**有界**：文件永久增长）—— M7 已实现          |

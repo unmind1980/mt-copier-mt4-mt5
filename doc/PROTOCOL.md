@@ -124,15 +124,19 @@ saying in the same breath as the success.
 > refuses rather than staying silent (silence would leave the hub walking its
 > retry ladder for a refusal it could have been told about at once).
 >
-> **State — `CMD` (M5): the hub half (M5a) is implemented; the EA half (M5b) is
-> not yet.** The hub issues, retries and tracks `CMD`s exactly as it does `CFG`s,
-> behind the same `--writes on` gate, and the REST endpoint
-> `POST /api/v1/nodes/{id}/commands` is live. What is missing is the receiver
-> side that *acts* on `OP=`: a node that receives a `CMD` today has no code to
-> pause, resume, close-all or reload. Until M5b lands, a `CMD` is issued, goes
-> out on the wire, and is acknowledged (or times out) — but the receiver does not
-> yet change behaviour. It is safe to enable because it changes nothing on the
-> node; it is just not yet useful there.
+> **State — `CMD` (M5): both halves implemented (M5a hub, M5b EA), and BOTH
+> default to off.** The hub refuses to issue without `--writes on`; the receiver
+> refuses to act without `AcceptCommands=true`, and answers `OK=0` when it
+> refuses rather than staying silent (silence would leave the hub walking its
+> retry ladder for a refusal it could have been told about at once). The ops map
+> onto the receiver as: `pause` gates new mirrors only — management of existing
+> ones never stops, the same rule as every receiver entry gate; `resume` clears
+> it; `closeall` pauses AND queues a close for every position the receiver owns
+> — pausing first is what stops converge from re-opening the flatten on the next
+> snapshot; and `reload` re-reads `copier.ini` without rewriting it. The pause
+> and the last command id/ACK survive a receiver restart, so §5.4 rule 2 holds
+> across the crash window too; and because the four ops are idempotent by
+> nature, a repeat that does re-execute is bounded and harmless.
 >
 > Two gates because this is the only operation in the system that can stop a
 > receiver from starting, and §19.1 makes the firewall the only trust boundary

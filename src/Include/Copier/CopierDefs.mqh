@@ -187,6 +187,7 @@ bool CopierSeenRingApplies(const int kind)
 #define CP_T_CFG     "CFG"    // hub -> node : apply this config (M4b)
 #define CP_T_ACK     "ACK"    // node -> hub : the result of a CFG
 #define CP_T_CFGR    "CFGR"   // node -> hub : send me my config again
+#define CP_T_CMD     "CMD"    // hub -> node : operational command (M5b)
 //--- SNAPSHOT RECEIPT, hub -> sender (central channel only).
 //---
 //--- In DIRECT mode the receiver's STAT reaches the sender on its own, and the
