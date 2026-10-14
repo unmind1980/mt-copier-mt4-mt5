@@ -303,8 +303,11 @@ who may connect; these decide what a connection that got through can cost.
 
 §19.1 decided the ZMQ port's trust boundary is the firewall, and said in the
 same breath that CURVE "can be turned on independently". This is that switch.
-It is **off by default**, because turning it on is a coordinated change: a node
-that has not been given the hub's public key cannot connect at all.
+It is **off by default on the hub**, because turning it on is a coordinated
+change: a node that has not been given the hub's public key cannot connect at
+all. (The EA side of that coordination is already done for this test campaign
+— `HubUseCurve` ships true with this hub's key in `HubPublicKey` — so the
+only thing still to switch is the hub itself, and the order below.)
 
 `--curve on` makes the hub the **CURVE server**:
 
@@ -342,11 +345,23 @@ copy it straight across.
    The same key is printed in the startup banner whenever the hub does run
    with `--curve on`, and it lives on the `PUBLIC=` line of
    `curve_hub.keys`.
-2. On every node, set `HubUseCurve=true` and `HubPublicKey=<the hub's key>`.
-   Restart the EA: it prints **its own** public key in the Experts log.
-3. Put each node's public key into `curve_clients.txt`, one per line.
-4. Restart the hub with `--curve on` (the list is read at startup). If you
-   needed a placeholder to get this far, delete the `*` now.
+2. **Get the key to the nodes.** The EAs' `HubPublicKey` input currently
+   ships with this hub's key already in it (2026-10-15, the owner's test
+   campaign), so a node attached from a fresh chart needs nothing typed —
+   check it in the dialog if the chart has been attached before, because MQL
+   remembers per-chart input values. Set `HubUseCurve=true` if it is not
+   already (it is the shipped default).
+3. **Collect the nodes' keys.** Restart each EA and copy the public key it
+   prints in its Experts log into `curve_clients.txt`, one per line.
+4. **Restart the hub with `--curve on`** (the list is read at startup). If
+   you needed a placeholder to get this far, delete the `*` now.
+
+> **The order is not a suggestion.** `HubUseCurve=true` makes the hub link
+> *require* CURVE, and in central mode the hub is a receiver's only feed — so
+> a node re-attached while the hub is still `--curve off` completes no
+> handshake and goes blind. Bring the hub up with CURVE first (a `*`
+> allow-list is the intended placeholder for exactly this window), then
+> attach the nodes, then tighten the list.
 
 `HubUseCurve` is separate from the EAs' `UseCurve`: on the **direct** channel
 the sender is the CURVE server and receivers hold its key, while on the **hub**

@@ -368,9 +368,14 @@ never disagree.
 > because a hub subscriber is handed *every* sender's position stream. The two
 > switches are separate (`HubUseCurve` + `HubPublicKey` on the EAs, `--curve`
 > on the hub) because the roles are inverted: on the direct channel the sender
-> is the server; on the hub link the hub is. CURVE is still **off by default**
-> on both links, so a hub link across a public network is plaintext until you
-> turn it on — until then, put it on a private network or a VPN.
+> is the server; on the hub link the hub is. The EAs ship with `HubUseCurve`
+> **on** and this hub's key in `HubPublicKey` (2026-10-15, the owner's test
+> campaign), while the **hub** still defaults to `--curve off` — so a hub
+> link is plaintext until the hub is started with `--curve on`, and a node
+> must not be attached against a plaintext hub (it completes no handshake and
+> goes blind). Until the hub side is switched, keep the port on a private
+> network or a VPN. The direct channel's `UseCurve` is separate and still
+> defaults off.
 
 ---
 
@@ -452,16 +457,22 @@ bootstraps user `admin` and prints its password **once**; it is stored only as
 a salted hash. `--users none` skips the login entirely for throwaway local
 runs: every request is an anonymous viewer, and writes still 403.
 
-**CURVE can be switched on for the ZMQ link** (§19.1, `--curve on`, default
-off). The link is then encrypted and every node must present a keypair listed
-in the hub's `curve_clients.txt`. The list is enforced by a ZAP handler during
-the handshake, which is the only place it *can* be enforced — a subscriber the
+**CURVE can be switched on for the ZMQ link** (§19.1). The link is then
+encrypted and every node must present a keypair listed in the hub's
+`curve_clients.txt`. The list is enforced by a ZAP handler during the
+handshake, which is the only place it *can* be enforced — a subscriber the
 hub never authorises would otherwise still be handed every position the hub
-publishes, because publishing is libzmq's job, not the application's. It is a
-coordinated switch (a node without the hub's public key cannot connect at all),
-so it stays off until turned on for the whole fleet; an empty allow-list with
-`--curve on` refuses to start rather than accepting everyone. See
-`hub/README.md` and `doc/PROTOCOL.md`.
+publishes, because publishing is libzmq's job, not the application's.
+
+The two sides default differently, and deliberately. The **hub** still
+defaults to `--curve off`, because enabling it locks out every node that has
+not been given its key. The **EAs** now ship `HubUseCurve=true` with this
+hub's public key in `HubPublicKey` (2026-10-15, the owner's test campaign),
+so a fresh chart needs nothing typed. The order still matters: bring the hub
+up with `--curve on` (a `*` allow-list is the intended placeholder while the
+nodes' keys are still being collected), then attach the nodes, then tighten
+the list — a node attached against a plaintext hub completes no handshake and
+goes blind. See `hub/README.md` and `doc/PROTOCOL.md`.
 
 **The audit log is `audit.jsonl`** — one JSON object per line, in the plan's §15
 `audit` shape (`seq, ts, actor, ip, action, node, before, after, result`).

@@ -102,8 +102,27 @@ input bool   UseCurve        = false;       // UseCurve - turn Curve encryption 
 //--- copier_curve.key) - one terminal, one identity. It is generated on
 //--- first use and the PUBLIC half is printed in the log at every start;
 //--- that printed line is what goes into the hub's allow-list.
-input bool   HubUseCurve      = false;      // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
-input string HubPublicKey     = "";         // HubPublicKey - the HUB's 40-char public key (the hub prints it)
+//--- DEFAULT TRUE since 2026-10-15, by the owner's call, for the same reason
+//--- the write gates above were hard-wired on: every session from here on is
+//--- a test session that needs the hub link encrypted.
+//---
+//--- COORDINATION - read before changing either of these back or forth:
+//---   HubUseCurve=true means the hub link REQUIRES CURVE. If the hub is
+//---   still started with `--curve off`, the handshake never completes and
+//---   this node simply never hears from the hub. So the order is always:
+//---     1. the hub's public key here (HubPublicKey),
+//---     2. this node's public key in the hub's curve_clients.txt,
+//---     3. the hub restarted with `--curve on`,
+//---     4. and only then re-attach the EA.
+//---   Turning it off is the same list in reverse.
+input bool   HubUseCurve      = true;       // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
+//--- The hub prints its public key with `copier-hub.exe --curve-show` (and in
+//--- its startup banner when it runs with --curve on). A PUBLIC key is not a
+//--- secret, so it is fine to ship it here - unlike the keypair file.
+//---
+//--- If the hub's key is ever rotated, THIS line has to be updated on every
+//--- node (that is the cost of baking it in; the input still overrides it).
+input string HubPublicKey     = "P7dvTYW2y7P2GRb0%cyi-T$<?bb/$e^1NzLc?G(5"; // HubPublicKey - the HUB's 40-char public key
 
 //--- cadence --------------------------------------------------------
 //--- SnapshotSeconds is the BASELINE full-state push interval, not the only

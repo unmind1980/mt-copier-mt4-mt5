@@ -865,7 +865,7 @@ carries the position ticket, which is unique per position and cannot recur.
 
 ## Link security (CURVE)
 
-CURVE is **optional, off by default, and per link**. There are two links and
+CURVE is **optional and per link**. There are two links and
 they have **opposite roles**, which is why there are two switches rather than
 one:
 
