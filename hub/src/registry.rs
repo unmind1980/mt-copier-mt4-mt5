@@ -227,20 +227,29 @@ impl Registry {
     /// clock and stores the difference. The previous drift is kept: what
     /// matters is not the offset (a stable one is a timezone fact) but a
     /// CHANGE in it.
+    ///
+    /// UPDATE-ONLY, never `entry()`: a first REG is still in flight when
+    /// this runs, and pre-creating the node would make the REG's `is_new`
+    /// false - the registry would log "named" instead of "registered",
+    /// and a node the hub never heard REG from would be visible anyway.
+    /// The hub learns who exists ONLY from REG/HBT2, as it always has.
     pub fn note_ts(&mut self, role: &str, acc: &str, node_ts: i64, hub_now: i64) {
-        let e = self.entry(role, acc, std::time::Instant::now());
-        e.drift_prev_secs = e.drift_secs;
-        e.node_ts = Some(node_ts);
-        e.drift_secs = Some(node_ts - hub_now);
+        if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.drift_prev_secs = e.drift_secs;
+            e.node_ts = Some(node_ts);
+            e.drift_secs = Some(node_ts - hub_now);
+        }
     }
 
     /// M6: record the risk state from the node's STAT - how many entries it
-    /// is blocking and which limit (if any) tripped. The node is the
-    /// RECEIVER (`receiver:<acc>`); a sender's STAT is not relayed here.
+    /// is blocking and which limit (if any) tripped. Update-only, for the
+    /// same reason as note_ts: a STAT is not a registration, and a hub that
+    /// learned nodes from STATs would be a hub that trusts the wire.
     pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str) {
-        let e = self.entry(role, acc, std::time::Instant::now());
-        e.blocked = blocked;
-        e.risk = if risk.is_empty() { "ok".to_string() } else { risk.to_string() };
+        if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.blocked = blocked;
+            e.risk = if risk.is_empty() { "ok".to_string() } else { risk.to_string() };
+        }
     }
 
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {

@@ -74,6 +74,7 @@ hub_api_test.py
 hub_config_test.py
 hub_commands_test.py
 hub_alerts_test.py
+hub_users_test.py
 "
 
 echo "== Python contract tests =="

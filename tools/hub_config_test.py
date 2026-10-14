@@ -45,6 +45,32 @@ NODE = f"receiver:{RECV}"
 
 CHECKS = []
 
+#--- M9: the API is closed without a session, so every hub suite signs in
+#--- first. The hub bootstraps the FIRST admin from MTC_ADMIN_PASSWORD when
+#--- the env is set (tests), or prints a random one once (production).
+os.environ.setdefault("MTC_ADMIN_PASSWORD", "hub-test-pass")
+COOKIE = {"v": None}
+
+
+def login(password="hub-test-pass", user="admin", port=HTTP_PORT):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        body = json.dumps({"id": user, "password": password})
+        c.request("POST", "/api/v1/login", body=body,
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        raw = r.read()
+        if r.status != 200:
+            return False
+        sc = r.getheader("Set-Cookie") or ""
+        for part in sc.split(";"):
+            part = part.strip()
+            if part.startswith("mtc_session="):
+                COOKIE["v"] = "mtc_session=" + part[len("mtc_session="):]
+        return True
+    finally:
+        c.close()
+
 
 def check(name, ok, detail=""):
     CHECKS.append((name, ok, detail))
@@ -58,7 +84,8 @@ def env(sid, ty, payload):
 def req(method, path, body=None, port=HTTP_PORT):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=6)
     try:
-        c.request(method, path, body=body)
+        headers = {"Cookie": COOKIE["v"]} if COOKIE["v"] else {}
+        c.request(method, path, body=body, headers=headers)
         r = c.getresponse()
         return r.status, r.read()
     finally:
@@ -86,19 +113,22 @@ def start(writes, audit, cfg):
     do not collide), and the caller removes it in stop().
     """
     cmds = os.path.join(HERE, "_hub_cfg_cmds.jsonl")
-    for f in (cfg, audit, cmds):
+    users = os.path.join(HERE, "_hub_cfg_users.json")
+    for f in (cfg, audit, cmds, users):
         try:
             os.remove(f)
         except OSError:
             pass
     args = [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
             "--audit", audit, "--config", cfg, "--commands", cmds,
-            "--stats-every", "0", "--duration", "45"]
+            "--users", users, "--stats-every", "0", "--duration", "45"]
     if writes is not None:
         args += ["--writes", "on" if writes else "off"]
     out = open(os.path.join(HERE, "_hub_cfg.out"), "wb")
     p = subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT)
     time.sleep(2.0)
+    if not login():
+        raise RuntimeError("could not log in to the test hub - M9 bootstrap failed?")
     return p, out, cmds
 
 

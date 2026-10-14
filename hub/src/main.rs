@@ -68,6 +68,7 @@
 //! highest-risk step, and is not in this file.
 
 mod alerts;
+mod users;
 mod api;
 mod audit;
 mod commands;
@@ -246,6 +247,10 @@ struct Args {
     /// Where the M5 command journal is appended (in-flight commands, so a hub
     /// restart does not forget what it told a node to do).
     commands: String,
+    /// M9. The user store (admin/operator/viewer, salted hashes). Sessions
+    /// are in-memory; users persist here. `--users none` = an empty store,
+    /// which bootstraps a fresh admin on the next start.
+    users: String,
     /// Whether the hub may CHANGE a node's config.
     ///
     /// The plan's §19 requires role checks and an audit trail for the write
@@ -277,6 +282,7 @@ fn parse_args() -> Result<Args, String> {
         http: "127.0.0.1:6010".to_string(),
         config: "config_revisions.jsonl".to_string(),
         commands: "commands.jsonl".to_string(),
+        users: "users.json".to_string(),
         //--- Default ON, by the owner's call (2026-10-14): every session from
         //--- here on is a test session, and the flag was being typed every
         //--- time anyway. The struct field's doc comment carries the full
@@ -342,6 +348,13 @@ fn parse_args() -> Result<Args, String> {
                 a.commands = if v == "none" { String::new() } else { v.clone() };
                 i += 2;
             }
+            "--users" => {
+                let v = need(i)?;
+                // "none" is passed through verbatim: the bootstrap skips it
+                // and the middleware answers as an anonymous viewer.
+                a.users = v.clone();
+                i += 2;
+            }
             "--writes" => {
                 // Deliberately requires an explicit value. `--writes` with
                 // nothing after it would be the kind of flag somebody adds to
@@ -391,6 +404,9 @@ fn usage() {
     println!("                 in-flight CFG/CMD commands are logged here so a hub");
     println!("                 restart does not forget what it told a node to do;");
     println!("                 --commands none keeps them in memory only.");
+    println!("  --users        M9 user store (default users.json); sessions are");
+    println!("                 always in-memory. --users none = empty store, which");
+    println!("                 bootstraps a fresh admin on next start.");
     println!("  --writes       on | off (default ON since 2026-10-14, owner's");
     println!("                 test-period setting). OFF means the hub cannot");
     println!("                 change any node's config: PUT/POST return 403 and");
@@ -924,6 +940,75 @@ fn main() {
         "ok",
     );
 
+    //--- M9: load the user store, and bootstrap the first admin when there is
+    //--- none. The password is printed ONCE and never stored in the clear: a
+    //--- fresh hub that says nothing about how to log in is a fresh hub nobody
+    //--- can use, and one that ships a known password is one nobody should.
+    //--- This is also the last time the hub can talk about its own first user
+    //--- without the user in question - every later answer is "ask an admin".
+    //--- Runs AFTER the restart marker on purpose: that marker is the first
+    //--- record of every hub's life, and "started, then bootstrapped" is the
+    //--- order a reader of the audit log expects.
+    if args.users == "none" {
+        //--- --users none: no login at all. Every request is answered as an
+        //--- anonymous viewer - read-only by construction, since every write
+        //--- endpoint demands operator/admin and the role gate still runs.
+        //--- For throwaway local runs; a real hub never starts this way.
+        shared.lock().unwrap().auth_enabled = false;
+        println!("[hub] M9 login DISABLED (--users none): all requests are");
+        println!("[hub]     anonymous viewers. Write endpoints still 403.");
+        audit.record("hub", "", "user.auth_disabled", "", None, None, "ok");
+    } else {
+        let users_path = std::path::PathBuf::from(if args.users.is_empty() {
+            crate::users::USERS_PATH.to_string()
+        } else {
+            args.users.clone()
+        });
+        let mut store = match crate::users::UserStore::load_at(&users_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[hub] {} is unreadable ({}), refusing to start",
+                          users_path.display(), e);
+                std::process::exit(1);
+            }
+        };
+        if store.users().is_empty() {
+            //--- MTC_ADMIN_PASSWORD overrides the random one. That is not a
+            //--- back door: the file still stores only the salted hash, and
+            //--- the env is for the test suites - a harness cannot read a
+            //--- password out of the console of a hub it also controls.
+            let (pw, from_env) = match std::env::var("MTC_ADMIN_PASSWORD") {
+                Ok(p) if !p.is_empty() => (p, true),
+                _ => (crate::users::random_password(), false),
+            };
+            let salt = crate::users::random_token()[..16].to_string();
+            let u = crate::users::User {
+                id: "admin".to_string(),
+                pass: crate::users::hash_password(&pw, &salt),
+                role: crate::users::Role::Admin,
+                disabled: false,
+            };
+            if store.upsert(u).is_ok() && store.save().is_ok() {
+                if from_env {
+                    println!("[hub] M9 first run: user 'admin' created with the password");
+                    println!("[hub]     from MTC_ADMIN_PASSWORD (testing; not a back door -");
+                    println!("[hub]     only the salted hash is stored).");
+                } else {
+                    println!("[hub] M9 first run: created user 'admin' (password printed ONCE):");
+                    println!("[hub]     {}", pw);
+                    println!("[hub]     it is stored salted+hashed; log in and change the");
+                    println!("[hub]     password from the dashboard (or POST /api/v1/users).");
+                }
+                audit.record("hub", "", "user.bootstrap", "admin", None, None, "ok");
+            } else {
+                eprintln!("[hub] could not write {} - the hub cannot start unauthenticated",
+                          users_path.display());
+                std::process::exit(1);
+            }
+        }
+        shared.lock().unwrap().users = store;
+    } //--- end of the M9 bootstrap (or its --users none bypass)
+
     while !EXIT.load(Ordering::SeqCst) {
         match sock.poll(zmq::POLLIN, POLL_MS) {
             Ok(0) => {} // timeout - nothing to do, fall through to stats
@@ -1080,14 +1165,17 @@ fn main() {
                                         .insert(format!("{}:{}", role, acc), node_rev);
                                 }
                                 //--- M6: the node's own clock, for drift
-                                //--- detection. REG and HBT2 both carry TS;
-                                //--- the STAT branch feeds the risk side.
+                                //--- detection. REG and HBT2 both carry TS.
+                                //--- Captured here but APPLIED BELOW, after
+                                //--- on_reg/on_hbt has had its say: note_ts
+                                //--- deliberately does not create nodes (a
+                                //--- STAT must not), and a call that lands
+                                //--- before the registration would silently
+                                //--- no-op on a node's very first REG - the
+                                //--- baseline would never be set and no drift
+                                //--- could ever fire.
                                 let node_ts: i64 =
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
-                                if node_ts > 0 {
-                                    let mut s = shared.lock().unwrap();
-                                    s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
-                                }
                                 if ty == "REG" {
                                     let name = envelope_kv(&payload, "NAME");
                                     //--- captured BEFORE the update, because
@@ -1204,6 +1292,15 @@ fn main() {
                                             up
                                         );
                                     }
+                                }
+
+                                //--- M6: the node's clock, now that the node
+                                //--- exists (REG created it, or HBT2 implies
+                                //--- it registered earlier). Baseline on the
+                                //--- first observation, jump-detect ever after.
+                                if node_ts > 0 {
+                                    let mut s = shared.lock().unwrap();
+                                    s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
                                 }
 
                                 //--- THE CONFIG COMPARISON (§7.3). Only for a

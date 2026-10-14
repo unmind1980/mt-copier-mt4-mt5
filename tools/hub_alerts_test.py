@@ -48,6 +48,33 @@ def check(name, ok, detail=""):
     print(("  PASS  " if ok else "  FAIL  ") + name + (f"   [{detail}]" if detail else ""))
 
 
+#--- M9: the API is closed without a session, so every hub suite signs in
+#--- first. The hub bootstraps the FIRST admin from MTC_ADMIN_PASSWORD when
+#--- the env is set (tests), or prints a random one once (production).
+os.environ.setdefault("MTC_ADMIN_PASSWORD", "hub-test-pass")
+COOKIE = {"v": None}
+
+
+def login(password="hub-test-pass", user="admin", port=HTTP_PORT):
+    c = http.client.HTTPConnection(f"127.0.0.1:{port}", timeout=5)
+    try:
+        body = json.dumps({"id": user, "password": password})
+        c.request("POST", "/api/v1/login", body=body,
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        raw = r.read()
+        if r.status != 200:
+            return False
+        sc = r.getheader("Set-Cookie") or ""
+        for part in sc.split(";"):
+            part = part.strip()
+            if part.startswith("mtc_session="):
+                COOKIE["v"] = "mtc_session=" + part[len("mtc_session="):]
+        return True
+    finally:
+        c.close()
+
+
 def start():
     #--- Isolated data paths, like the other suites. This one MATTERS more:
     #--- the command journal is where ladders that exhausted in an earlier
@@ -57,25 +84,31 @@ def start():
     cmds = os.path.join(HERE, "_hub_alert_cmds.jsonl")
     audit = os.path.join(HERE, "_hub_alert_audit.jsonl")
     cfg = os.path.join(HERE, "_hub_alert_revs.jsonl")
-    for f in (cmds, audit, cfg):
+    users = os.path.join(HERE, "_hub_alert_users.json")
+    for f in (cmds, audit, cfg, users):
         try:
             os.remove(f)
         except OSError:
             pass
     p = subprocess.Popen([HUB, "--http", f"127.0.0.1:{HTTP_PORT}", "--port",
                           str(ZMQ_PORT), "--commands", cmds, "--audit", audit,
-                          "--config", cfg],
+                          "--config", cfg, "--users", users],
                          stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    #--- ANY status counts as up, including 401: since M9 the topology
+    #--- endpoint answers without a session, which is exactly the signal
+    #--- that the API thread is listening.
     for _ in range(50):
         try:
             c = http.client.HTTPConnection(f"127.0.0.1:{HTTP_PORT}", timeout=1)
             c.request("GET", "/api/v1/topology")
-            if c.getresponse().status == 200:
+            if c.getresponse().status:
+                if not login():
+                    continue
                 return p
         except Exception:
             pass
         time.sleep(0.1)
-    raise RuntimeError("hub did not come up")
+    raise RuntimeError("hub did not come up, or login failed")
 
 
 def stop(p):
@@ -86,7 +119,7 @@ def stop(p):
         except subprocess.TimeoutExpired:
             p.kill()
     for f in ("_hub_alert_cmds.jsonl", "_hub_alert_audit.jsonl",
-              "_hub_alert_revs.jsonl"):
+              "_hub_alert_revs.jsonl", "_hub_alert_users.json"):
         try:
             os.remove(os.path.join(HERE, f))
         except OSError:
@@ -95,7 +128,8 @@ def stop(p):
 
 def js(method, path, body=None):
     c = http.client.HTTPConnection(f"127.0.0.1:{HTTP_PORT}", timeout=5)
-    c.request(method, path, body)
+    headers = {"Cookie": COOKIE["v"]} if COOKIE["v"] else {}
+    c.request(method, path, body, headers=headers)
     r = c.getresponse()
     raw = r.read().decode()
     try:

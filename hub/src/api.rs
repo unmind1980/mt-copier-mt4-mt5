@@ -51,6 +51,7 @@ use serde_json::{json, Value};
 use crate::audit::Audit;
 use crate::commands::CommandStore;
 use crate::alerts::AlertEngine;
+use crate::users::{hash_password, Role as UserRole, Session, User, UserStore, SESSION_IDLE_SECS};
 use crate::config::ConfigStore;
 use crate::positions::{Positions, SenderView};
 use crate::registry::{Liveness, Node, Registry, Role};
@@ -113,6 +114,14 @@ pub struct Shared {
     /// and the dedup/re-arm state the rules consult. The audit log holds the
     /// durable record; this holds the cheap one.
     pub alerts: AlertEngine,
+    /// M9. Users, roles and sessions. The users persist to users.json; the
+    /// sessions are in-memory by design (a hub restart logs everyone out,
+    /// which is the honest trade for keeping tokens out of disk).
+    pub users: UserStore,
+    /// M9. False only under `--users none`: the middleware then answers as
+    /// an anonymous viewer instead of demanding a session. Write endpoints
+    /// still run the role gate, so this is read-only by construction.
+    pub auth_enabled: bool,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -137,6 +146,8 @@ impl Shared {
             writes,
             node_rev: std::collections::HashMap::new(),
             alerts: AlertEngine::new(),
+            users: UserStore::new(),
+            auth_enabled: true,
         }
     }
 
@@ -443,9 +454,18 @@ async fn positions(State(st): State<SharedState>) -> Json<Value> {
 /// latest N gets them, and a caller reading forward from a `seq` it remembers
 /// gets the continuation.
 async fn audit_log(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Json<Value> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // M9: admin only (the plan's §17.2 matrix). A denial is audited too -
+    // and it is a 403 in the response, not an error body on a 200: a handler
+    // that narrows its return type to Json would answer 200-with-error, which
+    // is the exact status a client cannot act on.
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
     let limit = q
         .get("limit")
         .and_then(|v| v.parse::<usize>().ok())
@@ -478,6 +498,7 @@ async fn audit_log(
         "limit": limit,
         "since": since,
     }))
+    .into_response()
 }
 
 /// `GET /healthz` - is this process alive. Answers while the ZMQ feed is
@@ -615,6 +636,319 @@ fn snapshot_text(st: &SharedState) -> String {
     json!({ "t": "snapshot", "data": body }).to_string()
 }
 
+//--- ------------------------------------------------------------------ auth (M9)
+//
+// Everything under /api/v1 requires a session except the three auth
+// endpoints and the page itself. A 401 from anywhere is the dashboard's cue
+// to raise the login overlay - the page is one file and the login is part of
+// it, so there is no second origin and no redirect dance.
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn cookie_token(cookies: &str) -> Option<String> {
+    for part in cookies.split(';') {
+        if let Some(v) = part.trim().strip_prefix("mtc_session=") {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn require_session(
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = req.uri().path().to_string();
+    if path == "/"
+        || path == "/api/v1/login"
+        || path == "/api/v1/logout"
+        || path == "/api/v1/whoami"
+        || path == "/favicon.ico"
+    {
+        return next.run(req).await;
+    }
+    //--- --users none: no login exists, so demanding one would make the HTTP
+    //--- face unusable. Answer as an anonymous viewer instead - the role gate
+    //--- in every write handler still runs, so this remains read-only by
+    //--- construction, and a denied write is still audited (actor "anonymous").
+    if !st.lock().unwrap().auth_enabled {
+        req.extensions_mut().insert(Session {
+            user_id: "anonymous".to_string(),
+            role: UserRole::Viewer,
+            seen: unix_secs(),
+        });
+        return next.run(req).await;
+    }
+    let token = req
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(cookie_token)
+        .or_else(|| {
+            req.headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
+        });
+    if let Some(t) = token {
+        let sess = st.lock().unwrap().users.session(&t, unix_secs());
+        if let Some(sess) = sess {
+            req.extensions_mut().insert(sess);
+            return next.run(req).await;
+        }
+    }
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "not authenticated", "login_at": "/api/v1/login" })),
+    )
+        .into_response()
+}
+
+/// The role gate for the handler-level checks. A 403 is audited, because a
+/// denied action is exactly what an operator later asks the log about.
+fn deny(st: &SharedState, sess: &Session, need: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    st.lock().unwrap().audit.record(
+        &sess.user_id,
+        "",
+        "auth.denied",
+        "",
+        None,
+        Some(json!({ "need": need, "have": sess.role.as_str() })),
+        "rejected",
+    );
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        Json(json!({ "error": format!("{} only", need), "your_role": sess.role.as_str() })),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct LoginBody {
+    id: String,
+    password: String,
+}
+
+async fn login(
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    Json(b): Json<LoginBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let now = unix_secs();
+    let r = {
+        let mut s = st.lock().unwrap();
+        s.users.login(&b.id, &b.password, now)
+    };
+    match r {
+        Ok((token, sess)) => {
+            st.lock().unwrap().audit.record(
+                &sess.user_id,
+                "",
+                "auth.login",
+                &b.id,
+                None,
+                Some(json!({ "role": sess.role.as_str() })),
+                "ok",
+            );
+            (
+                axum::http::StatusCode::OK,
+                [(
+                    axum::http::header::SET_COOKIE,
+                    format!(
+                        "mtc_session={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
+                        token, SESSION_IDLE_SECS
+                    ),
+                )],
+                Json(json!({ "user": sess.user_id, "role": sess.role.as_str() })),
+            )
+                .into_response()
+        }
+        // Deliberately does NOT say whether the id exists.
+        Err(_) => {
+            st.lock().unwrap().audit.record(
+                &b.id, "", "auth.login", &b.id, None,
+                Some(json!({ "why": "invalid credentials" })), "rejected",
+            );
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid credentials" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn logout(
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let tok = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(cookie_token);
+    let mut who = String::new();
+    if let Some(t) = &tok {
+        let mut s = st.lock().unwrap();
+        if let Some(sess) = s.users.session(t, unix_secs()) {
+            who = sess.user_id.clone();
+        }
+        s.users.logout(t);
+    }
+    st.lock()
+        .unwrap()
+        .audit
+        .record(&who, "", "auth.logout", &who, None, None, "ok");
+    (
+        axum::http::StatusCode::OK,
+        [(
+            axum::http::header::SET_COOKIE,
+            "mtc_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0".to_string(),
+        )],
+        Json(json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+/// Exempt from the middleware, so it reads the cookie itself and answers 401
+/// without one - which is the dashboard's "who am I, or login?" call.
+async fn whoami(
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    //--- --users none: tell the dashboard it is already "in", or its overlay
+    //--- would demand a login the hub has no door for.
+    let disabled = st.lock().unwrap().auth_enabled == false;
+    if disabled {
+        return Json(json!({ "user": "anonymous", "role": "viewer",
+                            "note": "login disabled (--users none)" }))
+        .into_response();
+    }
+    let tok = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(cookie_token);
+    if let Some(t) = tok {
+        if let Some(s) = st.lock().unwrap().users.session(&t, unix_secs()) {
+            return Json(json!({ "user": s.user_id, "role": s.role.as_str() })).into_response();
+        }
+    }
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "not authenticated" })),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct UserBody {
+    id: String,
+    password: String,
+    role: String,
+    #[serde(default)]
+    disabled: bool,
+}
+
+async fn users_list(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    axum::extract::State(st): axum::extract::State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let s = st.lock().unwrap();
+    let list: Vec<Value> = s
+        .users
+        .users()
+        .iter()
+        .map(|u| json!({ "id": u.id, "role": u.role.as_str(), "disabled": u.disabled }))
+        .collect();
+    Json(json!({ "users": list, "sessions": s.users.session_count() })).into_response()
+}
+
+async fn users_upsert(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    axum::extract::State(st): axum::extract::State<SharedState>,
+    Json(b): Json<UserBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let role = match UserRole::parse(&b.role) {
+        Some(r) => r,
+        None => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "role is one of viewer, operator, admin" })),
+            )
+                .into_response()
+        }
+    };
+    let salt = crate::users::random_token()[..16].to_string();
+    let u = User {
+        id: b.id.clone(),
+        pass: hash_password(&b.password, &salt),
+        role,
+        disabled: b.disabled,
+    };
+    let mut s = st.lock().unwrap();
+    if let Err(e) = s.users.upsert(u) {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": e })),
+        )
+            .into_response();
+    }
+    let _ = s.users.save();
+    s.audit.record(
+        &sess.user_id,
+        "",
+        "user.upsert",
+        &b.id,
+        None,
+        Some(json!({ "role": b.role, "disabled": b.disabled })),
+        "ok",
+    );
+    Json(json!({ "ok": true, "id": b.id })).into_response()
+}
+
+async fn users_delete(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::State(st): axum::extract::State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let mut s = st.lock().unwrap();
+    match s.users.remove(&id) {
+        Ok(()) => {
+            let _ = s.users.save();
+            s.audit.record(&sess.user_id, "", "user.delete", &id, None, None, "ok");
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 /// The router. Versioned under `/api/v1`, because the plan's §16 says a
 /// breaking change goes to v2 rather than editing v1 under a deployed
 /// dashboard.
@@ -645,7 +979,13 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
             axum::routing::post(post_command),
         )
         .route("/api/v1/stream", get(ws_handler))
+        .route("/api/v1/login", axum::routing::post(login))
+        .route("/api/v1/logout", axum::routing::post(logout))
+        .route("/api/v1/whoami", get(whoami))
+        .route("/api/v1/users", get(users_list).post(users_upsert))
+        .route("/api/v1/users/:id", axum::routing::delete(users_delete))
         .layer(axum::extract::Extension(tx))
+        .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))
         .with_state(st)
 }
 
@@ -758,11 +1098,16 @@ async fn node_config(State(st): State<SharedState>, Path(id): Path<String>) -> J
 /// reaches the node asynchronously and its result arrives as an `ACK`, which is
 /// why the plan's §16 says every write answers with a `command_id`.
 async fn put_node_config(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
     Path(id): Path<String>,
     body: String,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // M9: operator or admin (the plan's §17.2 matrix).
+    if sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
 
     let id = normalise_node(&id);
     let (writes, node_rev, actor) = {
@@ -784,8 +1129,8 @@ async fn put_node_config(
                 "error": "writes are disabled",
                 "detail": "this hub was started with --writes off (the default). \
                            Restart it with --writes on to allow config changes.",
-                "why": "the plan's §19 requires role checks on the write path and \
-                        M9 (users and roles) does not exist yet",
+                "why": "the hub-side write gate. The role check (operator or \
+                        admin, M9) is the front door; this is the back one",
             })),
         )
             .into_response();
@@ -864,10 +1209,15 @@ async fn put_node_config(
 /// says both numbers, because "rolled back to 3" and "now at 9" are different
 /// facts and an operator needs both.
 async fn rollback_node_config(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
     Path((id, to_rev)): Path<(String, u64)>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // M9: operator or admin (the plan's §17.2 matrix).
+    if sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
 
     let id = normalise_node(&id);
     let writes = st.lock().unwrap().writes;
@@ -981,11 +1331,16 @@ async fn config_list(State(st): State<SharedState>) -> Json<Value> {
 /// the ladder for 82 seconds before being reported `unknown` - which reads like
 /// "the node did not answer" instead of "you mistyped the role").
 async fn post_command(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
     Path(id): Path<String>,
     body: String,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // M9: operator or admin (the plan's §17.2 matrix).
+    if sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
 
     let id = normalise_node(&id);
     let (writes, known) = {
@@ -1004,8 +1359,8 @@ async fn post_command(
                 "error": "writes are disabled",
                 "detail": "this hub was started with --writes off (the default). \
                            Restart it with --writes on to allow commands.",
-                "why": "the plan's §19 requires role checks on the write path and \
-                        M9 (users and roles) does not exist yet",
+                "why": "the hub-side write gate. The role check (operator or \
+                        admin, M9) is the front door; this is the back one",
             })),
         )
             .into_response();
@@ -1091,10 +1446,15 @@ async fn post_command(
 /// was nothing to refuse, and the operator should see that plainly rather
 /// than have a missing node look like an error.
 async fn commands_global(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
     body: String,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // M9: operator or admin (the plan's §17.2 matrix).
+    if sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
 
     //--- THE GATE, identical to the per-node endpoint's.
     let writes = st.lock().unwrap().writes;
@@ -1105,8 +1465,7 @@ async fn commands_global(
                 "error": "writes are disabled",
                 "detail": "this hub was started with --writes off. \
                            Restart it with --writes on to allow commands.",
-                "why": "the plan's §19 requires role checks on the write path and \
-                        M9 (users and roles) does not exist yet",
+                "why": "the hub-side write gate; the role check (M9) is the front door",
             })),
         )
             .into_response();

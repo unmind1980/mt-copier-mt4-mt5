@@ -76,6 +76,11 @@ tools/                  copier.bat   <- the Windows entry point for all of these
                                                       write gate, CFG/ACK/CFGR
                         hub_commands_test.py       <- M5a: the command engine,
                                                       CMD wire frame, op validation
+                        hub_alerts_test.py         <- M6: the alert engine (drift
+                                                      jump, risk, offline, silence)
+                        hub_users_test.py          <- M9: the auth + role matrix,
+                                                      the last-admin rule, and
+                                                      --users none
                         hub_proto.py, hub_proto_test.py, hub.sh, hub.bat,
                         hubrs.bat    <- run the RUST hub (see hub/)
                         hublog.bat   <- run the hub with stdout also going to
@@ -84,7 +89,8 @@ tools/                  copier.bat   <- the Windows entry point for all of these
                                           run by build.sh before deploying
 hub/                    the Rust hub (Phase 1 routing + Phase 2 registry +
                         M3 read-only position view + M7 audit + M8/M10
-                        REST/WS API and its self-contained dashboard)
+                        REST/WS API and its self-contained dashboard +
+                        M9 users/roles/sessions)
                         Cargo.toml, src/, build.sh, README.md
 third_party/zmq-prefix/ the EAs' own libzmq 4.3.5, prepared for Rust linking
                         (include/zmq.h, lib/libzmq.a, lib/libzmq.dll)
@@ -409,15 +415,29 @@ which the hub learns as a by-product of relaying snapshot receipts.
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/` | the dashboard — one self-contained HTML file, compiled into the binary |
+| POST | `/api/v1/login` · `/logout` | M9: session cookie in, session out |
+| GET | `/api/v1/whoami` | the caller's id and role (the dashboard's login probe) |
 | GET | `/api/v1/nodes` · `/nodes/{id}` | nodes, and one node with its positions |
 | GET | `/api/v1/topology` | senders, receivers, and the edges between them |
 | GET | `/api/v1/positions` | the M3 position view as data |
-| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`) |
-| GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **PUT is 403 with `--writes off`** |
+| GET | `/api/v1/alerts` | the M6 alert ring |
+| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only** |
+| GET · POST · DELETE | `/api/v1/users` | M9 user management; **admin only** |
+| GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **403 with `--writes off`** |
 | POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
 | POST | `/api/v1/commands` | G10 global: one command per known receiver → **202** + counts + per-command ids; **403 with `--writes off`**, same **400** door |
 | GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
-| WS | `/api/v1/stream` | a full snapshot on connect, and one per change |
+| WS | `/api/v1/stream` | a full snapshot on connect, and one per change (session cookie required) |
+
+**M9 puts a login in front of everything but `/`, the health probes and
+`/login`.** A missing session answers **401**; a session whose role is below
+the endpoint's bar answers **403** and is audited. The matrix is the plan's
+§17.2 — `viewer` reads, `operator` may command and configure, `admin` manages
+users and reads the audit log — so the write path now has *two* gates
+(`--writes` **and** a role). The first start with an empty user table
+bootstraps user `admin` and prints its password **once**; it is stored only as
+a salted hash. `--users none` skips the login entirely for throwaway local
+runs: every request is an anonymous viewer, and writes still 403.
 
 **The audit log is `audit.jsonl`** — one JSON object per line, in the plan's §15
 `audit` shape (`seq, ts, actor, ip, action, node, before, after, result`).
@@ -450,7 +470,7 @@ pushes it as `CMD`. Both share one command engine (issue → retry → ack, same
 
 A receiver gets two gates rather than one, because a `CMD` can pause a receiver
 and close every mirror it holds — more invasive than a file rewrite — and §19.1
-makes the firewall the *only* trust boundary on the hub port, with no token. All
+leaves the ZMQ port firewall-only, with no token on the wire. All
 three shipped defaulting to OFF as *inputs*; on 2026-10-14 the owner flipped them
 ON for the test campaign and then removed the two receiver ones from the inputs
 dialog entirely — MQL charts remember per-chart input values, so the old false
@@ -459,10 +479,12 @@ did not change". The gates are plain globals now (`AcceptConfigPush` /
 `AcceptCommands` in `CopierReceiver.mq4`): set false there, plus `--writes` in
 `hub/src/main.rs` and the default assertions in `tools/hub_config_test.py` /
 `tools/hub_commands_test.py`, before the hub faces anything but the owner's own
-test bench. M5 is complete on both sides: the receiver acts on `OP=`
-(`pause` / `resume` / `closeall` / `reload`; `closeall` implies `pause` —
-converge would otherwise re-open the flatten within seconds — and the pause
-survives a receiver restart).
+test bench. **M9 (2026-10-14) adds the second half of the write gate** — a login
+and the §17.2 role matrix on the HTTP API, so a write now needs `--writes`
+*and* an `operator`/`admin` session. M5 is complete on both sides: the receiver
+acts on `OP=` (`pause` / `resume` / `closeall` / `reload`; `closeall` implies
+`pause` — converge would otherwise re-open the flatten within seconds — and the
+pause survives a receiver restart).
 
 **These are the only write endpoints, deliberately.** Config push and commands are
 M4/M5, with their `202` + `command_id` semantics and their audit trail; the
@@ -909,7 +931,7 @@ a burst of routine `STAT` must write **zero** lines, and an unrecognised
 control type must still write one, so widening the suppression list can never
 silently become a mode. Run it after any change to the hub's logging rule.
 
-`bash hub/build.sh --test` runs the 67 hub unit tests. Not `cargo test` — Rust
+`bash hub/build.sh --test` runs the 84 hub unit tests. Not `cargo test` — Rust
 lives in an **isolated** toolchain and is not on `PATH`, so a bare `cargo` is
 just `command not found`; `hub/build.sh` sets `RUSTUP_HOME` / `CARGO_HOME` /
 `LIBZMQ_PREFIX` / `PATH` in one place. Its header explains why that is

@@ -66,6 +66,21 @@
              border-radius:6px;border:1px solid}
   #alerts .a.crit{background:#fdecea;border-color:#f0b8b0;color:#8a1c10}
   #alerts .a.warn{background:#fff7e0;border-color:#ecd9a0;color:#7a5a00}
+  /* M9: the login overlay. The page is one file by design (same-origin, no
+     bundler), so the login is part of it: a 401 anywhere raises the overlay,
+     a successful login dismisses it and the real page boots. */
+  #login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;
+         justify-content:center;z-index:10}
+  #login.hidden{display:none}
+  #login form{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+              padding:24px;width:280px;display:flex;flex-direction:column;gap:10px}
+  #login h2{margin:0 0 6px;font-size:14px}
+  #login input{padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+               font:13px/1.4 system-ui,sans-serif;color:var(--ink)}
+  #login button{padding:8px;border:1px solid var(--line);border-radius:6px;
+                background:var(--bg);cursor:pointer;font:13px system-ui,sans-serif;color:var(--ink)}
+  #login button:hover{border-color:#b9c0c8}
+  #loginerr{color:var(--bad);font-size:12px;min-height:1em}
   .ops{white-space:nowrap}
   .opbtn{font:11px/1 var(--mono);padding:3px 6px;margin:0 2px 2px 0;border:1px solid var(--line);
          background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer}
@@ -87,6 +102,7 @@
 <header>
   <h1>mt-copier hub</h1>
   <span class="pill" id="mode">connecting</span>
+  <span class="pill" id="who"></span>
   <span class="pill" id="counts">-</span>
   <span class="pill" id="up">-</span>
   <span class="pill" id="age">-</span>
@@ -120,7 +136,17 @@
   </section>
 </main>
 
-<footer id="foot">loading command state…</footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+
+<div id="login" class="hidden">
+  <form id="loginform">
+    <h2>mt-copier hub — sign in</h2>
+    <input id="user" placeholder="user id" autocomplete="username" autocapitalize="off">
+    <input id="pass" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">sign in</button>
+    <div id="loginerr"></div>
+  </form>
+</div>
 
 <script>
 "use strict";
@@ -441,7 +467,11 @@ function refresh(){
       hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0,
       alerts: t.alerts || []
     });
-  }).catch(function(){});
+  }).catch(function(){
+    // A 401 here means the session died between heartbeats - go back to the
+    // login overlay rather than spinning on a page that can never fill.
+    showLogin();
+  });
 }
 
 function startPolling(){
@@ -616,7 +646,8 @@ function onGlobalClick(ev){
 function refreshWritesState(){
   api("/api/v1/commands").then(function(j){
     s.writes = !!j.writes_enabled;
-    var f = $("foot");
+    var f = $("writes-state");
+    if(!f) return;
     if(!s.writes){
       f.textContent = "commands are OFF: this hub started with --writes off (the default). " +
         "Restart with --writes on to issue operational commands (pause / resume / close-all / reload).";
@@ -625,17 +656,58 @@ function refreshWritesState(){
         "Each click issues a command via the M5a hub endpoint and shows its command_id.";
     }
   }).catch(function(){
-    $("foot").textContent = "could not read command state from the hub.";
+    var f = $("writes-state");
+    if(f) f.textContent = "could not read command state from the hub.";
   });
 }
 
-// ---------------------------------------------------------------- boot
-refresh();
-if(window.WebSocket){ startWS(); } else { startPolling(); }
-setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
-$("nodes").addEventListener("click", onOpClick);
-$("globalops").addEventListener("click", onGlobalClick);
-refreshWritesState();
+//--- M9: identity first, dashboard second. whoami answers with the session
+//--- cookie the browser already holds; a 401 is not an error, it is the
+//--- invitation to the overlay. Every later 401 (an expired session, say)
+//--- comes back here through api()'s rejection path.
+function showLogin(){
+  $("login").classList.remove("hidden");
+  $("loginerr").textContent = "";
+}
+function startDashboard(){
+  refresh();
+  if(window.WebSocket){ startWS(); } else { startPolling(); }
+  setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
+  $("nodes").addEventListener("click", onOpClick);
+  $("globalops").addEventListener("click", onGlobalClick);
+  refreshWritesState();
+}
+api("/api/v1/whoami").then(function(j){
+  $("login").classList.add("hidden");
+  $("who").textContent = j.user + " · " + j.role;
+  startDashboard();
+}).catch(function(){
+  showLogin();
+});
+$("loginform").addEventListener("submit", function(ev){
+  ev.preventDefault();
+  $("loginerr").textContent = "";
+  fetch("/api/v1/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: $("user").value, password: $("pass").value })
+  }).then(function(r){
+    if(!r.ok) throw new Error("invalid credentials");
+    return r.json();
+  }).then(function(){
+    $("login").classList.add("hidden");
+    startDashboard();
+  }).catch(function(){
+    $("loginerr").textContent = "sign-in failed - check the id and password";
+  });
+});
+$("logout").addEventListener("click", function(ev){
+  ev.preventDefault();
+  fetch("/api/v1/logout", { method: "POST" }).then(function(){
+    // Drop the in-page state so the next login re-primes it.
+    location.reload();
+  });
+});
 </script>
 </body>
 </html>

@@ -53,6 +53,10 @@ ACC_R = "252034803"
 
 CHECKS = []
 
+#--- M9: the session cookie the API returns; get() attaches it.
+os.environ.setdefault("MTC_ADMIN_PASSWORD", "hub-test-pass")
+COOKIE = {"v": None}
+
 
 def check(name, ok, detail=""):
     CHECKS.append((name, ok, detail))
@@ -79,12 +83,13 @@ def rec(uid, sym, side, lots):
     return f"{uid},1,{sym},{side},{lots},1.08450000,1.08000000,1.09000000,0,1780000000"
 
 
-def ws_get_frame(host, port, path, timeout=6.0):
+def ws_get_frame(host, port, path, timeout=6.0, cookie=None):
     """Handshake, then read the first TEXT frame. Returns (headers, text)."""
     s = socket.create_connection((host, port), timeout=timeout)
     try:
         s.settimeout(timeout)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
+        cookie_hdr = f"Cookie: mtc_session={cookie}\r\n" if cookie else ""
         req = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {host}:{port}\r\n"
@@ -92,6 +97,7 @@ def ws_get_frame(host, port, path, timeout=6.0):
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n"
+            f"{cookie_hdr}"
             "\r\n"
         )
         s.sendall(req.encode("ascii"))
@@ -151,12 +157,20 @@ def ws_get_frame(host, port, path, timeout=6.0):
         s.close()
 
 
+def _tok():
+    """The bare session token, for the WS handshake that builds its own
+    Cookie header."""
+    return COOKIE["v"].split("=", 1)[1] if COOKIE["v"] else None
+
+
 def get(path, port=HTTP_PORT):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=6)
     try:
-        c.request("GET", path)
+        headers = {"Cookie": COOKIE["v"]} if COOKIE["v"] else {}
+        c.request("GET", path, headers=headers)
         r = c.getresponse()
-        return r.status, r.read()
+        out = r.read()
+        return r.status, out
     finally:
         c.close()
 
@@ -175,13 +189,38 @@ def main():
         except OSError:
             pass
     out = open(out_path, "wb")
+    users_path = os.path.join(HERE, "_hub_api_users.json")
+    try:
+        os.remove(users_path)
+    except OSError:
+        pass
     hub = subprocess.Popen(
         [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
-         "--audit", audit_path, "--stats-every", "30", "--duration", "40"],
+         "--audit", audit_path, "--users", users_path,
+         "--stats-every", "30", "--duration", "40"],
         stdout=out, stderr=subprocess.STDOUT,
     )
     try:
         time.sleep(2.0)                     # bind + API thread
+        #--- M9: the API is closed without a session - sign in like the
+        #--- dashboard does, and keep the cookie in get().
+        os.environ.setdefault("MTC_ADMIN_PASSWORD", "hub-test-pass")
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=5)
+        c.request("POST", "/api/v1/login",
+                  body=json.dumps({"id": "admin", "password": "hub-test-pass"}),
+                  headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        sc = r.getheader("Set-Cookie") or ""
+        raw = r.read()
+        c.close()
+        if r.status != 200:
+            print("could not log in to the test hub - M9 bootstrap failed?")
+            return 2
+        for part in sc.split(";"):
+            part = part.strip()
+            if part.startswith("mtc_session="):
+                COOKIE["v"] = "mtc_session=" + part[len("mtc_session="):]
+        
         ctx = zmq.Context()
 
         # Two real senders and one receiver, in central mode.
@@ -294,7 +333,7 @@ def main():
               json.dumps(ts[0].get("positions"))[:70] if ts else "no such sender")
 
         # And the WebSocket, which is the path the page actually reads.
-        _, wtext = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream")
+        _, wtext = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
         if wtext:
             wn = {n["key"]: n for n in json.loads(wtext)["data"]["nodes"]}
             check("WS snapshot: a sender carries its positions too",
@@ -325,7 +364,7 @@ def main():
 
         print()
         print("== 3. the WebSocket, hand-verified ==")
-        status, text = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream")
+        status, text = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
         check("WS handshake -> 101 with the right accept key",
               status is not None and "101" in status, str(status))
         if text:
@@ -392,9 +431,9 @@ def main():
         # The one that actually broke: the WEBSOCKET push. Two frames must
         # carry the same order, and it must be the account order - not the
         # recency order that made the page reshuffle.
-        _, t1 = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream")
+        _, t1 = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
         time.sleep(0.4)
-        _, t2 = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream")
+        _, t2 = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
         if t1 and t2:
             k1 = [n["key"] for n in json.loads(t1)["data"]["nodes"]]
             k2 = [n["key"] for n in json.loads(t2)["data"]["nodes"]]
@@ -436,7 +475,7 @@ def main():
               d.get("name") not in (None, "", "-"), str(d.get("name")))
 
         # And the WS push carries it too, since that is what the page reads.
-        _, wtext = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream")
+        _, wtext = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
         if wtext:
             names = {n["key"]: n.get("name") for n in json.loads(wtext)["data"]["nodes"]}
             check("the WS snapshot carries the name too",
@@ -596,7 +635,7 @@ def main():
 
     out2 = open(os.path.join(HERE, "_hub_api2.out"), "wb")
     hub2 = subprocess.Popen(
-        [HUB, "--port", "6182", "--http", "none",
+        [HUB, "--port", "6182", "--http", "none", "--users", users_path,
          "--stats-every", "0", "--duration", "6"],
         stdout=out2, stderr=subprocess.STDOUT,
     )
@@ -629,7 +668,8 @@ def main():
     # is on the external interface is out of scope for this machine.
     out3 = open(os.path.join(HERE, "_hub_api3.out"), "wb")
     hub3 = subprocess.Popen(
-        [HUB, "--port", "6183", "--stats-every", "0", "--duration", "6"],
+        [HUB, "--port", "6183", "--users", users_path,
+         "--stats-every", "0", "--duration", "6"],
         stdout=out3, stderr=subprocess.STDOUT,
     )
     try:

@@ -258,9 +258,11 @@ involved.
 --config PATH       config revision log (default config_revisions.jsonl)
 --commands PATH     command journal — in-flight CFG/CMD commands (default commands.jsonl; `none` = off, commands forgotten on restart)
 --writes on|off     may this hub change a node's config? (default ON since
-                    2026-10-14, the owner's test-period setting - the plan's
-                    long-term stance is OFF until M9; `off` refuses PUT/POST
-                    with 403 and never emits a CFG/CMD)
+                    2026-10-14, the owner's test-period setting; `off` refuses
+                    PUT/POST with 403 and never emits a CFG/CMD)
+--users PATH        user table (default users.json; `none` disables the login
+                    entirely - every request is treated as an anonymous
+                    viewer, for throwaway local runs only)
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
@@ -398,12 +400,22 @@ that never offered.
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/` | the dashboard (one HTML file, compiled in) |
+| POST | `/api/v1/login` | `{id, password}` → session cookie; the ONLY unauthenticated endpoint besides the health probes |
+| POST | `/api/v1/logout` | kills the caller's session |
+| GET | `/api/v1/whoami` | the caller's id and role |
 | GET | `/api/v1/nodes` | every node, with liveness derived from the registry's own rules |
 | GET | `/api/v1/nodes/{id}` | one node (`ROLE:ACC`), plus its positions if a sender |
 | GET | `/api/v1/topology` | senders, receivers, **and the edges** |
 | GET | `/api/v1/positions` | the M3 view as data |
+| GET | `/api/v1/alerts` | the M6 alert ring |
 | GET | `/healthz` `/readyz` | liveness, and "is there anyone here yet" |
-| WS | `/api/v1/stream` | a full snapshot on connect and on every change |
+| WS | `/api/v1/stream` | a full snapshot on connect and on every change (session cookie required) |
+
+**Everything except `/`, the health probes and `/login` requires a session**
+(M9). A missing or expired one answers **401**; a logged-in role below the
+endpoint's requirement answers **403** and the denial is audited. The first
+hub start with an empty user table bootstraps user `admin` and prints its
+password **once** — it is stored only as a salted hash; log in and change it.
 
 **The edges in `/topology` are not free, and they are the interesting part.**
 The hub only knows "this receiver mirrors this sender" because relaying a
@@ -472,12 +484,15 @@ the owner's own test bench.
 
 ### The write gate
 
-`--writes off` refuses: PUT answers **403** and no `CFG` is ever emitted. That
-is not timidity: the plan's §19 requires role checks on the write path and
-**M9 (users and roles) does not exist yet**. The default is currently ON (the
-owner's call, 2026-10-14 — every session from here on is a test session), so
-the honest framing is: the hub *can* do this, the firewall is the only
-boundary, and every change is audited.
+`--writes off` refuses: PUT answers **403** and no `CFG` is ever emitted. The
+plan's §19 asks for role checks on the write path, and **M9 now provides
+them** (2026-10-14): on top of the flag there is the §17.2 role matrix —
+401 without a session, 403 with one that is too junior (`viewer` is
+read-only, `operator` may command and configure, `admin` manages users and
+reads the audit log). The default is currently ON (the owner's call,
+2026-10-14 — every session from here on is a test session), so the honest
+framing is: the hub *can* do this, the login now sits between the network
+and the buttons, and every change and every denial is audited.
 
 `tools/hub_config_test.py` asserts BOTH ends of that: the **default** (a hub
 started with no `--writes` argument reports writes enabled) and the
@@ -783,7 +798,11 @@ so `config.changed`, `config.rolled_back`, `config.acked`, `config.rejected`,
 `config.unknown_ack`, `config.drift`, `config.timeout`, and the `command.*`
 equivalents (`command.issued/acked/rejected/unknown_ack/timeout`) are written into
 the same log. The schema was the plan's §15 row precisely so those could land in
-the same file rather than starting a second one.
+the same file rather than starting a second one. **M9 adds its own families**:
+`user.bootstrap` (first admin), `user.upsert`, `user.delete`, `auth.login`,
+`auth.logout`, `auth.denied` (a logged-in role below the endpoint's bar —
+the 401s are not audited: an unauthenticated hit is noise, an authenticated
+denial is intent), and `alert.*` from M6.
 
 Only *transitions* are recorded, never states — `node.offline` fires once when
 a node goes down, not every two seconds while it stays down. A log that repeats
@@ -791,20 +810,17 @@ itself is a log nobody reads, and then a log nobody checks.
 
 ## Not yet
 
-- **No users or roles (M9).** M5 is now complete on both sides: the hub issues
-  and audits `CMD`s, and the receiver acts on them (M5b: pause / resume /
-  closeall / reload, behind the receiver's `AcceptCommands` switch, the twin of
-  `AcceptConfigPush`). Until M9 the write path has no role checks — the
-  defaults are ON for the owner's test campaign (2026-10-14) and are meant to
-  go back to OFF before real deployment.
+- **No CURVE on the hub link.** §19.1's firewall is the ZMQ port's only trust
+  boundary — M9's login covers the HTTP API, not the wire protocol, which is
+  why the two write gates on the receivers remain hard-wired decisions rather
+  than network-facing defaults.
 - **No orphan-position alert from the hub (the rest of M6 is done).** The
   receiver's panel owns that view (§10 layer 2); the hub cannot see a
   receiver's mirror table. Offline / clock drift / risk / command-unknown all
   fire — see Alerts (M6) above.
-- **No CURVE on the hub link.** §19.1's firewall is the only trust boundary,
-  which is why the two write gates above exist.
-- **No SQLite.** Nothing is persisted yet, and for the registry that is correct
-  rather than unfinished — see above.
+- **No SQLite.** The operational state (registry, positions) is deliberately
+  in-memory; the audit, config revisions, command journal and now the user
+  table are JSON/JSONL files, which §15 calls the Phase-1 shape. SQLite is M11.
 - **No CURVE.** The EAs open the central channel with CURVE off (Phase 1). A
   hub link across a public network is therefore plaintext — put it on a private
   network or a VPN.
