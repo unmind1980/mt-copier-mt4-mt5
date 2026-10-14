@@ -824,7 +824,7 @@ master 挂
 | M3 监控  | last-seen、RTT、断线判定、持仓视图（只读解析副本）—— **✅ 已完成**（2026-10-13） |
 | M4 配置  | 版本库、下发、重试、`ACK` 跟踪、漂移检测 —— **✅ 两侧均已实现**（2026-10-14，M4a 中枢 + M4b EA）；主备复制未做 |
 | M5 命令  | 暂停/恢复/紧急停止/reload —— **✅ 两侧均已实现**（2026-10-14，M5a 中枢 + M5b EA）：复用 M4 的命令引擎（`commands.rs`），同一套 `ID` 幂等 + 退避阶梯 + `ACK` 处理；EA 侧 `HandleCmd` 执行 `OP=`（`closeall` 先自暂停再平仓，`pause` 状态与最后命令 id/ACK 跨重启持久化）；两侧闸门默认 ON（同日 owner 改，测试期设置，长期立场是 M9 前恢复 OFF） |
-| M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口                |
+| M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口 —— **✅ 中枢侧已实现**（2026-10-14）：`hub/src/alerts.rs` 5 秒评估一次，规则含 `node.offline`（60s 静默，恢复后再掉线即重新告警）、`node.clock.drift`（≥300s）、`risk.blocked`/`risk.tripped`（来自 receiver STAT 的 `BLOCKED=`/`RISK=`）、`command.unknown`（阶梯耗尽，重启后从 journal 重放）；双落点：M7 审计（`alert.*`）+ 内存环（`/api/v1/alerts`、WS 快照、dashboard 红色横幅）。孤儿持仓仍属 receiver 面板职责（§10 layer 2）
 | M7 审计  | append-only —— **✅ 已实现**（2026-10-14，落在 `audit.jsonl`；SQLite 属 M11） |
 | M8 API | REST + WebSocket —— **✅ 读的一半已完成**（2026-10-13）｜
 | M9 认证  | 用户、角色（viewer/operator/admin）             |

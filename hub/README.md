@@ -492,6 +492,7 @@ silently.
 | PUT | `/api/v1/nodes/{id}/config` | body = the whole ini → **202** + `command_id` |
 | POST | `/api/v1/nodes/{id}/config/rollback/{rev}` | → **202** + `command_id` |
 | GET | `/api/v1/commands` · `/commands/{id}` | the polling fallback §16 asks for |
+| GET | `/api/v1/alerts` | **M6 — the alert ring**: the engine's recent fired alerts, newest first, bounded in memory; the durable record is the `alert.*` entries in the audit log |
 
 ### Five decisions worth knowing
 
@@ -691,11 +692,39 @@ response lists every minted command; the dashboard confirms `closeall` before
 sending, because that one queues a close for every mirrored position on every
 receiver.
 
+## Alerts (M6)
+
+`hub/src/alerts.rs` evaluates five rules every **5 s** — a cadence of its own,
+not `--stats-every`, because a dead node is worth noticing in five seconds
+rather than thirty. Each rule fires an alert that is written to BOTH surfaces:
+
+* the M7 audit log, as `alert.<kind>` with actor `hub` — durable, greppable;
+* a bounded in-memory ring, read by `GET /api/v1/alerts`, pushed in every
+  WebSocket snapshot, and drawn as a red bar at the top of the dashboard.
+
+| kind | fires when | severity |
+|---|---|---|
+| `node.offline` | a node has been quiet for 60 s (the registry's offline threshold) | critical |
+| `node.clock.drift` | the node's own `TS` sits ≥300 s from the hub's clock | warning |
+| `risk.blocked` | the receiver's STAT reports `BLOCKED>`0 — entries its risk gates are holding | warning |
+| `risk.tripped` | the receiver's STAT reports `RISK=<trip key>` — a limit tripped | critical |
+| `command.unknown` | a command exhausted the 2/5/15/60 ladder unanswered (including journalled ones re-seen after a hub restart) | warning |
+
+The two rules that make it usable: **dedup with a silence window** (one
+`node.offline` per incident, not per evaluation) and **re-arm** (a node that
+comes back and dies AGAIN is a second incident and fires immediately — the
+window covers repetition during one outage, never across outages). Orphan
+positions stay the receiver panel's job (§10 layer 2): the hub cannot see a
+receiver's mirror table, and pretending otherwise would be the kind of
+confident wrongness this project keeps un-learning.
+
+`tools/hub_alerts_test.py` fires drift, blocked, tripped, offline and the
+silence window against the real binary.
+
 ## The audit log (M7)
 
 `copier-hub` appends to **`audit.jsonl`** — one JSON object per line, in the
-plan's §15 `audit` shape (`seq, ts, actor, ip, action, node, before, after,
-result`). `GET /api/v1/audit?limit=&since=` reads it, bounded.
+plan's §15 `audit` shape (`seq, ts, actor, ip, action, node, before, after,result`). `GET /api/v1/audit?limit=&since=` reads it, bounded.
 
 **A file, not SQLite, and the reason was measured.** The plan's §15 puts
 `audit` in SQLite and that is still where it should end up. It is not what it
@@ -762,12 +791,16 @@ itself is a log nobody reads, and then a log nobody checks.
 
 ## Not yet
 
-- **No alerts (M6), no users or roles (M9).** M5 is now complete on both sides:
-  the hub issues and audits `CMD`s, and the receiver acts on them (M5b:
-  pause / resume / closeall / reload, behind the receiver's `AcceptCommands`
-  switch, the twin of `AcceptConfigPush`). Until M9 the write path has no role
-  checks — the defaults are ON for the owner's test campaign (2026-10-14) and
-  are meant to go back to OFF before real deployment.
+- **No users or roles (M9).** M5 is now complete on both sides: the hub issues
+  and audits `CMD`s, and the receiver acts on them (M5b: pause / resume /
+  closeall / reload, behind the receiver's `AcceptCommands` switch, the twin of
+  `AcceptConfigPush`). Until M9 the write path has no role checks — the
+  defaults are ON for the owner's test campaign (2026-10-14) and are meant to
+  go back to OFF before real deployment.
+- **No orphan-position alert from the hub (the rest of M6 is done).** The
+  receiver's panel owns that view (§10 layer 2); the hub cannot see a
+  receiver's mirror table. Offline / clock drift / risk / command-unknown all
+  fire — see Alerts (M6) above.
 - **No CURVE on the hub link.** §19.1's firewall is the only trust boundary,
   which is why the two write gates above exist.
 - **No SQLite.** Nothing is persisted yet, and for the registry that is correct

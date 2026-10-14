@@ -67,6 +67,7 @@
 //! order - which is why the write path (`CFG`/`ACK`/`CFGR`) is Phase 3, the
 //! highest-risk step, and is not in this file.
 
+mod alerts;
 mod api;
 mod audit;
 mod commands;
@@ -870,6 +871,7 @@ fn main() {
     let mut poke_tx: Option<tokio::sync::broadcast::Sender<()>> = None;
     let started = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_alerts = Instant::now();
     let mut last_who = Instant::now();
     let mut last_registry = Instant::now();
     let mut who_nonce: u64 = 0;
@@ -1076,6 +1078,15 @@ fn main() {
                                     let mut s = shared.lock().unwrap();
                                     s.node_rev
                                         .insert(format!("{}:{}", role, acc), node_rev);
+                                }
+                                //--- M6: the node's own clock, for drift
+                                //--- detection. REG and HBT2 both carry TS;
+                                //--- the STAT branch feeds the risk side.
+                                let node_ts: i64 =
+                                    envelope_hdr(&payload, "TS").parse().unwrap_or(0);
+                                if node_ts > 0 {
+                                    let mut s = shared.lock().unwrap();
+                                    s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
                                 }
                                 if ty == "REG" {
                                     let name = envelope_kv(&payload, "NAME");
@@ -1392,6 +1403,19 @@ fn main() {
                             if !sid.is_empty() {
                                 let login = envelope_kv(&payload, "LOGIN");
                                 let h = envelope_kv(&payload, "H");
+                                //--- M6: the risk state rides the SAME STAT the
+                                //--- receipt does. BLOCKED counts entries the
+                                //--- receiver's risk gate is holding back;
+                                //--- RISK names the limit when one tripped.
+                                //--- The node is LOGIN, and a sender's STAT is
+                                //--- not relayed here - receivers only.
+                                let blocked: u32 =
+                                    envelope_kv(&payload, "BLOCKED").parse().unwrap_or(0);
+                                let risk = envelope_kv(&payload, "RISK");
+                                if !login.is_empty() && !risk.is_empty() {
+                                    let mut s = shared.lock().unwrap();
+                                    s.reg.note_stat("receiver", &login, blocked, &risk);
+                                }
                                 //--- The edge, learned as a by-product. The
                                 //--- hub has to read SID to know where to send
                                 //--- the receipt and LOGIN to say who it is
@@ -1503,6 +1527,31 @@ fn main() {
             st.print_and_reset();
             let snap = { let s = shared.lock().unwrap(); s.clone_view() };
             print_positions(&snap);
+        }
+
+        //--- M6: the alert tick. Separate from --stats-every ON PURPOSE:
+        //--- alerts are an operational signal, not a console summary, and a
+        //--- 30 s cadence is too slow to notice a dead node in. The engine
+        //--- dedups and silences, so a 5 s tick does not mean a line every
+        //--- 5 s - it means a missed event is under 5 s old.
+        if last_alerts.elapsed().as_secs_f64() >= alerts::EVERY_SECS {
+            last_alerts = Instant::now();
+            let fired = {
+                let mut s = shared.lock().unwrap();
+                alerts::evaluate(&mut s, unix_secs())
+            };
+            for a in fired {
+                println!(
+                    "[hub] ALERT {:<20} {:<22} {}",
+                    a.kind,
+                    if a.node.is_empty() { "-" } else { a.node.as_str() },
+                    a.detail
+                );
+                audit.record("hub", "", &a.action(), &a.node, None, Some(a.detail), "firing");
+                //--- Wake the dashboards: an alert is exactly the state
+                //--- change the WebSocket exists for.
+                poke();
+            }
         }
 
         //--- Ask for registrations. Fast while nobody has answered - the first

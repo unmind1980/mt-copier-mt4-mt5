@@ -81,6 +81,22 @@ pub struct Node {
     pub last_seen: Instant,
     pub regs: u64,
     pub hbts: u64,
+    /// M6: the node's own clock as its latest message reported it (the
+    /// envelope's `TS`, unix seconds), and the drift that implies against
+    /// the hub's clock at receipt. `None` until a message with a parsable
+    /// TS is seen - never 0, which would read as "drifts by the epoch".
+    /// The PREVIOUS drift is kept beside it: a stable offset is a deployment
+    /// fact (brokers in another timezone), a CHANGE in the offset is a
+    /// broken clock, and only the second is alertable.
+    pub node_ts: Option<i64>,
+    pub drift_secs: Option<i64>,
+    pub drift_prev_secs: Option<i64>,
+    /// M6: the risk state the node reported in its STAT: how many entries
+    /// its gate is blocking right now, and the trip key when a limit
+    /// tripped ("ok" when not, "" until the first STAT). A receiver that
+    /// is blocking or flattening is the other side of M6.
+    pub blocked: u32,
+    pub risk: String,
 }
 
 impl Node {
@@ -92,6 +108,16 @@ impl Node {
             Liveness::Stale
         } else {
             Liveness::Online
+        }
+    }
+
+    /// The role as the wire spells it, for alerts and logs that talk about
+    /// nodes rather than about this enum.
+    pub fn role_str(&self) -> &'static str {
+        match self.role {
+            Role::Sender => "sender",
+            Role::Receiver => "receiver",
+            Role::Unknown => "unknown",
         }
     }
 }
@@ -195,6 +221,28 @@ impl Registry {
         is_new
     }
 
+    /// M6: record the node's own reported clock (the `TS` field of its
+    /// envelope) and the drift against ours at receipt. Sent alongside a
+    /// REG/HBT2, so `last_seen` is theirs to set - this only reads the
+    /// clock and stores the difference. The previous drift is kept: what
+    /// matters is not the offset (a stable one is a timezone fact) but a
+    /// CHANGE in it.
+    pub fn note_ts(&mut self, role: &str, acc: &str, node_ts: i64, hub_now: i64) {
+        let e = self.entry(role, acc, std::time::Instant::now());
+        e.drift_prev_secs = e.drift_secs;
+        e.node_ts = Some(node_ts);
+        e.drift_secs = Some(node_ts - hub_now);
+    }
+
+    /// M6: record the risk state from the node's STAT - how many entries it
+    /// is blocking and which limit (if any) tripped. The node is the
+    /// RECEIVER (`receiver:<acc>`); a sender's STAT is not relayed here.
+    pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str) {
+        let e = self.entry(role, acc, std::time::Instant::now());
+        e.blocked = blocked;
+        e.risk = if risk.is_empty() { "ok".to_string() } else { risk.to_string() };
+    }
+
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {
         let key = key_of(role, acc);
         self.nodes.entry(key.clone()).or_insert_with(|| Node {
@@ -208,6 +256,11 @@ impl Registry {
             last_seen: now,
             regs: 0,
             hbts: 0,
+            node_ts: None,
+            drift_secs: None,
+            drift_prev_secs: None,
+            blocked: 0,
+            risk: String::new(),
         })
     }
 

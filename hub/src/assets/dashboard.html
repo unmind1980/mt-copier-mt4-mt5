@@ -58,6 +58,14 @@
   text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
   .lbl{fill:var(--dim);font-size:9.5px}
   footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
+  /* M6 alert bar. Hidden when there is nothing to say - an alert that is
+     always visible stops being one. */
+  #alerts{display:none;padding:0 20px 0}
+  #alerts.on{display:block;border-bottom:1px solid var(--line);padding-bottom:8px}
+  #alerts .a{font-family:var(--mono);font-size:12px;padding:6px 10px;margin-top:8px;
+             border-radius:6px;border:1px solid}
+  #alerts .a.crit{background:#fdecea;border-color:#f0b8b0;color:#8a1c10}
+  #alerts .a.warn{background:#fff7e0;border-color:#ecd9a0;color:#7a5a00}
   .ops{white-space:nowrap}
   .opbtn{font:11px/1 var(--mono);padding:3px 6px;margin:0 2px 2px 0;border:1px solid var(--line);
          background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer}
@@ -83,6 +91,7 @@
   <span class="pill" id="up">-</span>
   <span class="pill" id="age">-</span>
 </header>
+<div id="alerts"></div>
 
 <main>
   <section id="globalops" style="grid-column:1/-1">
@@ -197,9 +206,30 @@ function render(){
   $("ncount").textContent = nodes.length + " node(s)";
   $("pcount").textContent = pos.length + " sender(s)";
 
+  renderAlerts(d.alerts || []);
   renderNodes(nodes);
   renderPositions(pos);
   drawTopology(nodes);
+}
+
+//--- M6: the alert bar. The hub's WebSocket (and the polling fallback) put
+//--- the engine's recent ring in every snapshot, so this is a pure render.
+//--- Hidden when empty: an alert that is always visible stops being one.
+function renderAlerts(alerts){
+  var bar = $("alerts");
+  if(!alerts || !alerts.length){
+    bar.className = "";
+    bar.innerHTML = "";
+    return;
+  }
+  bar.className = "on";
+  // Newest first, capped at five; the rest live on /api/v1/alerts.
+  bar.innerHTML = alerts.slice(0, 5).map(function(a){
+    var when = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
+    return '<div class="a ' + (a.severity === "critical" ? "crit" : "warn") + '">' +
+           esc(when) + " · " + esc(a.kind) + " · " + esc(a.node || "-") +
+           " · " + esc(JSON.stringify(a.detail)) + "</div>";
+  }).join("");
 }
 
 // --- NODES ---------------------------------------------------------------
@@ -408,7 +438,8 @@ function refresh(){
     accept({
       nodes: (t.senders || []).concat(t.receivers || []),
       positions: [],
-      hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0
+      hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0,
+      alerts: t.alerts || []
     });
   }).catch(function(){});
 }

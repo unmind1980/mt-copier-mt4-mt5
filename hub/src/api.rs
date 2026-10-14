@@ -50,6 +50,7 @@ use serde_json::{json, Value};
 
 use crate::audit::Audit;
 use crate::commands::CommandStore;
+use crate::alerts::AlertEngine;
 use crate::config::ConfigStore;
 use crate::positions::{Positions, SenderView};
 use crate::registry::{Liveness, Node, Registry, Role};
@@ -108,6 +109,10 @@ pub struct Shared {
     /// persisted: it is only used to decide whether to push, and a hub restart
     /// gets a fresh answer from the next REG.
     pub node_rev: std::collections::HashMap<String, u64>,
+    /// M6. The alert engine: the recent ring the API and the dashboard read,
+    /// and the dedup/re-arm state the rules consult. The audit log holds the
+    /// durable record; this holds the cheap one.
+    pub alerts: AlertEngine,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -131,6 +136,7 @@ impl Shared {
             cmds,
             writes,
             node_rev: std::collections::HashMap::new(),
+            alerts: AlertEngine::new(),
         }
     }
 
@@ -394,6 +400,7 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
             "senders": Value::Array(senders),
             "receivers": Value::Array(receivers),
             "edges": Value::Array(edges),
+            "alerts": Value::Array(s.alerts.recent_json(20)),
             "counts": {
                 "senders": s.reg.count_by_role(Role::Sender),
                 "receivers": s.reg.count_by_role(Role::Receiver),
@@ -602,6 +609,7 @@ fn snapshot_text(st: &SharedState) -> String {
             "nodes": Value::Array(nodes_json_list(&s.reg, &s.pos, now)),
             "positions": Value::Array(positions_json_list(&s.pos)),
             "mismatched": s.pos.mismatched,
+            "alerts": Value::Array(s.alerts.recent_json(20)),
         })
     };
     json!({ "t": "snapshot", "data": body }).to_string()
@@ -630,6 +638,7 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
         )
         .route("/api/v1/config", get(config_list))
         .route("/api/v1/commands", get(commands_list).post(commands_global))
+        .route("/api/v1/alerts", get(alerts_list))
         .route("/api/v1/commands/:id", get(command_one))
         .route(
             "/api/v1/nodes/:id/commands",
@@ -1217,6 +1226,17 @@ fn command_json(c: crate::commands::Command) -> Value {
         "ack_at": c.ack_at,
         "err": c.err,
     })
+}
+
+/// `GET /api/v1/alerts` - the M6 ring, newest first.
+///
+/// Cheap by construction (a bounded in-memory deque, not the append-only
+/// audit file), so a dashboard may poll it as often as it likes. The audit
+/// file remains the durable record; `?limit=` bounds the answer, not the
+/// store.
+async fn alerts_list(State(st): State<SharedState>) -> Json<Value> {
+    let s = st.lock().unwrap();
+    Json(json!({ "alerts": Value::Array(s.alerts.recent_json(200)) }))
 }
 
 /// A path segment arrives percent-decoded, but a `ROLE:ACC` key is often typed
