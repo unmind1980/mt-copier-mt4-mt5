@@ -62,10 +62,18 @@
      always visible stops being one. */
   #alerts{display:none;padding:0 20px 0}
   #alerts.on{display:block;border-bottom:1px solid var(--line);padding-bottom:8px}
-  #alerts .a{font-family:var(--mono);font-size:12px;padding:6px 10px;margin-top:8px;
-             border-radius:6px;border:1px solid}
+  #alerts .ahead{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+  #alerts .ahead span{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  #alerts .ahead button{background:none;border:none;font:11px var(--mono);color:var(--dim);cursor:pointer;text-decoration:underline;padding:0}
+  #alerts .ahead button:hover{color:var(--ink)}
+  #alerts .a{font-family:var(--mono);font-size:12px;padding:6px 10px;margin-top:6px;
+             border-radius:6px;border:1px solid;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  #alerts .a .atxt{flex:1;overflow-wrap:anywhere}
+  #alerts .a .ax{background:none;border:none;cursor:pointer;color:inherit;opacity:.65;font-size:15px;padding:0 4px;line-height:1}
+  #alerts .a .ax:hover{opacity:1}
   #alerts .a.crit{background:#fdecea;border-color:#f0b8b0;color:#8a1c10}
   #alerts .a.warn{background:#fff7e0;border-color:#ecd9a0;color:#7a5a00}
+  #alerts .ares{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:bold;background:#d8eedf;color:#1e5e34;margin-left:6px;vertical-align:1px}
   /* M9: the login overlay. The page is one file by design (same-origin, no
      bundler), so the login is part of it: a 401 anywhere raises the overlay,
      a successful login dismisses it and the real page boots. */
@@ -218,13 +226,17 @@
 
 <div id="pwdlg" class="hidden">
   <form id="pwdform">
-    <h2>change your password</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 style="margin:0">change your password</h2>
+      <button type="button" id="pwdclose_x" style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 4px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
     <input id="pwdold" type="password" placeholder="current password" autocomplete="current-password">
     <input id="pwdnew" type="password" placeholder="new password (at least 8 characters)" autocomplete="new-password">
     <input id="pwdnew2" type="password" placeholder="repeat the new password" autocomplete="new-password">
     <div class="row">
-      <button type="submit">change</button>
+      <button id="pwdsubmit" type="submit">change</button>
       <button type="button" id="pwdcancel">cancel</button>
+      <button type="button" id="pwdclose" class="hidden">close</button>
     </div>
     <div id="pwderr"></div>
     <div id="pwdok"></div>
@@ -233,12 +245,16 @@
 
 <div id="adminpwdlg" class="hidden" role="dialog" aria-modal="true" aria-labelledby="adminpwtitle">
   <form id="adminpwform">
-    <h2 id="adminpwtitle">reset user password</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <h2 id="adminpwtitle" style="margin:0">reset user password</h2>
+      <button type="button" id="adminpwclose_x" style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 4px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
     <input id="adminpw1" type="password" placeholder="new password (at least 8 characters)" autocomplete="new-password">
     <input id="adminpw2" type="password" placeholder="repeat new password" autocomplete="new-password">
     <div class="row">
       <button id="adminpwsave" type="submit">set password</button>
       <button type="button" id="adminpwc">cancel</button>
+      <button type="button" id="adminpwclose" class="hidden">close</button>
     </div>
     <div id="adminpwerr" role="alert" aria-live="polite"></div>
     <div id="adminpwok" role="status" aria-live="polite"></div>
@@ -260,6 +276,7 @@
 // ---------------------------------------------------------------- state
 var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           users:{ rows:[] },
+          dismissedAlerts:{},
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
@@ -370,14 +387,38 @@ function renderAlerts(alerts){
     bar.innerHTML = "";
     return;
   }
+  var visible = alerts.filter(function(a){
+    var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
+    return !s.dismissedAlerts[k];
+  });
+  if(!visible.length){
+    bar.className = "";
+    bar.innerHTML = "";
+    return;
+  }
   bar.className = "on";
-  // Newest first, capped at five; the rest live on /api/v1/alerts.
-  bar.innerHTML = alerts.slice(0, 5).map(function(a){
+  var nodeLiveness = {};
+  if(s.data && s.data.nodes){
+    s.data.nodes.forEach(function(n){ nodeLiveness[n.key] = n.liveness; });
+  }
+  var items = visible.slice(0, 5).map(function(a){
     var when = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
-    return '<div class="a ' + (a.severity === "critical" ? "crit" : "warn") + '">' +
-           esc(when) + " · " + esc(a.kind) + " · " + esc(a.node || "-") +
-           " · " + esc(JSON.stringify(a.detail)) + "</div>";
+    var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
+    var isRecovered = (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online");
+    var sevClass = isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn");
+    var statusBadge = isRecovered ? ' <span class="ares">RESOLVED \u00b7 NODE IS ONLINE</span>' : '';
+    return '<div class="a ' + sevClass + '">' +
+           '<div class="atxt">' + esc(when) + " \u00b7 " + esc(a.kind) + " \u00b7 " + esc(a.node || "-") +
+           statusBadge + " \u00b7 " + esc(JSON.stringify(a.detail)) + '</div>' +
+           '<button type="button" class="ax" data-ak="' + esc(k) + '" title="dismiss this alert">&times;</button>' +
+           '</div>';
   }).join("");
+
+  bar.innerHTML =
+    '<div class="ahead">' +
+    '<span>Recent alerts</span>' +
+    '<button type="button" data-act="dismiss-all">dismiss all</button>' +
+    '</div>' + items;
 }
 
 // --- NODES ---------------------------------------------------------------
@@ -447,13 +488,19 @@ function renderNodes(nodes){
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
     // The receiver reports orphan-tagged positions separately; they are not
     // in its managed HELD count. Show both figures without conflating them.
+    // Senders do not have orphan positions; only receivers do.
     if(n.positions && n.positions.count !== undefined){
-      var orphaned = n.positions.orphaned;
-      r.ps.textContent = n.positions.count +
-        (typeof orphaned === "number" ? " (+" + orphaned + " orphan)" : " (+? orphan)");
-      r.ps.title = typeof orphaned === "number"
-        ? "Managed positions; " + orphaned + " orphaned copier position(s)"
-        : "Managed positions; orphan count not reported by this receiver";
+      if(n.role === "receiver"){
+        var orphaned = n.positions.orphaned;
+        r.ps.textContent = n.positions.count +
+          (typeof orphaned === "number" ? " (+" + orphaned + " orphan)" : " (+? orphan)");
+        r.ps.title = typeof orphaned === "number"
+          ? "Managed positions; " + orphaned + " orphaned copier position(s)"
+          : "Managed positions; orphan count not reported by this receiver";
+      } else {
+        r.ps.textContent = n.positions.count;
+        r.ps.title = "Open positions on sender: " + n.positions.count;
+      }
     } else {
       r.ps.textContent = "-";
       r.ps.title = "Position count not reported yet";
@@ -811,6 +858,23 @@ function startDashboard(){
   setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
   $("nodes").addEventListener("click", onOpClick);
   $("globalops").addEventListener("click", onGlobalClick);
+  $("alerts").addEventListener("click", function(ev){
+    var btn = ev.target.closest("button");
+    if(!btn) return;
+    if(btn.getAttribute("data-act") === "dismiss-all"){
+      (s.data && s.data.alerts || []).forEach(function(a){
+        var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
+        s.dismissedAlerts[k] = true;
+      });
+      renderAlerts(s.data && s.data.alerts || []);
+      return;
+    }
+    var ak = btn.getAttribute("data-ak");
+    if(ak){
+      s.dismissedAlerts[ak] = true;
+      renderAlerts(s.data && s.data.alerts || []);
+    }
+  });
   refreshWritesState();
 }
 
@@ -853,8 +917,11 @@ function openAdminPasswordReset(user){
   $("adminpwtitle").textContent = "Set password for " + user.id;
   $("adminpw1").value = $("adminpw2").value = "";
   $("adminpwerr").textContent = $("adminpwok").textContent = "";
+  $("adminpwsave").classList.remove("hidden");
   $("adminpwsave").disabled = false;
+  $("adminpwc").classList.remove("hidden");
   $("adminpwc").disabled = false;
+  $("adminpwclose").classList.add("hidden");
   $("adminpwdlg").classList.remove("hidden");
   $("adminpw1").focus();
 }
@@ -887,6 +954,8 @@ function userAction(act, id, ev){
   }
 }
 $("adminpwc").addEventListener("click", closeAdminPasswordReset);
+$("adminpwclose").addEventListener("click", closeAdminPasswordReset);
+$("adminpwclose_x").addEventListener("click", closeAdminPasswordReset);
 $("adminpwform").addEventListener("submit", function(ev){
   ev.preventDefault();
   var id = adminPasswordTarget;
@@ -918,6 +987,10 @@ $("adminpwform").addEventListener("submit", function(ev){
     //--- password fields until the admin closes this overlay.
     ok.textContent = "SUCCESS: password reset for " + id + ". The user can sign in with the new password.";
     $("adminpw1").value = $("adminpw2").value = "";
+    $("adminpwsave").classList.add("hidden");
+    $("adminpwc").classList.add("hidden");
+    $("adminpwclose").classList.remove("hidden");
+    $("adminpwclose").focus();
     loadUsers();
   }).catch(function(e){
     ok.textContent = "";
@@ -1024,10 +1097,16 @@ $("pwdlink").addEventListener("click", function(ev){
   ev.preventDefault();
   $("pwdold").value = $("pwdnew").value = $("pwdnew2").value = "";
   $("pwderr").textContent = ""; $("pwdok").textContent = "";
+  $("pwdsubmit").classList.remove("hidden");
+  $("pwdcancel").classList.remove("hidden");
+  $("pwdclose").classList.add("hidden");
   $("pwdlg").classList.remove("hidden");
   $("pwdold").focus();
 });
-$("pwdcancel").addEventListener("click", function(){ $("pwdlg").classList.add("hidden"); });
+function closeOwnPassword(){ $("pwdlg").classList.add("hidden"); }
+$("pwdcancel").addEventListener("click", closeOwnPassword);
+$("pwdclose").addEventListener("click", closeOwnPassword);
+$("pwdclose_x").addEventListener("click", closeOwnPassword);
 $("pwdform").addEventListener("submit", function(ev){
   ev.preventDefault();
   var o = $("pwdold").value, n = $("pwdnew").value, n2 = $("pwdnew2").value;
@@ -1048,6 +1127,10 @@ $("pwdform").addEventListener("submit", function(ev){
       ok.textContent = "password changed" +
         (res.j.other_sessions_ended ? " — other sessions were signed out" : "") + ".";
       $("pwdold").value = $("pwdnew").value = $("pwdnew2").value = "";
+      $("pwdsubmit").classList.add("hidden");
+      $("pwdcancel").classList.add("hidden");
+      $("pwdclose").classList.remove("hidden");
+      $("pwdclose").focus();
     } else {
       err.textContent = (res.j && res.j.error) || ("failed (HTTP " + res.status + ")");
     }
