@@ -91,6 +91,11 @@ pub struct Node {
     pub node_ts: Option<i64>,
     pub drift_secs: Option<i64>,
     pub drift_prev_secs: Option<i64>,
+    /// M5b on the dashboard: the node's own report of hub-pause (PAUSED= on
+    /// its REG/HBT2). A receiver sets it when `closeall` paused it or a
+    /// `pause` landed; the operator should be able to SEE that a node is
+    /// paused without grepping a log. A sender never sets it.
+    pub paused: bool,
     /// M6: the risk state the node reported in its STAT: how many entries
     /// its gate is blocking right now, and the trip key when a limit
     /// tripped ("ok" when not, "" until the first STAT). A receiver that
@@ -252,6 +257,15 @@ impl Registry {
         }
     }
 
+    /// M5b on the dashboard: record the node's own hub-pause report (the
+    /// `PAUSED=` field of its REG/HBT2). Update-only like note_ts/note_stat:
+    /// the flag is a property of a node the hub already knows.
+    pub fn note_paused(&mut self, role: &str, acc: &str, paused: bool) {
+        if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.paused = paused;
+        }
+    }
+
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {
         let key = key_of(role, acc);
         self.nodes.entry(key.clone()).or_insert_with(|| Node {
@@ -268,6 +282,7 @@ impl Registry {
             node_ts: None,
             drift_secs: None,
             drift_prev_secs: None,
+            paused: false,
             blocked: 0,
             risk: String::new(),
         })

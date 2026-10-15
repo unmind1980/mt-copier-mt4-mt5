@@ -1587,6 +1587,18 @@ fn main() {
                                     let mut s = shared.lock().unwrap();
                                     s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
                                 }
+                                //--- M5b on the dashboard: the node's own
+                                //--- hub-pause report (PAUSED= on REG/HBT2).
+                                //--- A sender never sends it, and a missing
+                                //--- field means "not paused" - an old EA
+                                //--- simply predates the flag.
+                                {
+                                    let paused = envelope_kv(&payload, "PAUSED");
+                                    if !paused.is_empty() {
+                                        let mut s = shared.lock().unwrap();
+                                        s.reg.note_paused(&role, &acc, paused == "1");
+                                    }
+                                }
 
                                 //--- THE CONFIG COMPARISON (§7.3). Only for a
                                 //--- receiver: a sender has no ini to manage.

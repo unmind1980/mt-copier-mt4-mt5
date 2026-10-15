@@ -109,6 +109,12 @@
   #users-sec td button{padding:3px 8px;font-size:12px}
   #uerr{color:var(--bad);font-size:12px}
   #usersbody td .ops{white-space:nowrap}
+  /* M5b: a node's own report that the hub has it paused. A chip, not a
+     liveness change - the node is online and healthy, it just will not open
+     new mirrors until the hub says resume. */
+  .pzchip{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;
+          font-weight:600;letter-spacing:.4px;background:#fff3cd;
+          border:1px solid #e6d28a;color:#7a5a00;vertical-align:1px}
   /* The hub's CURVE public key: public by definition, shown where it can be
      copied (it is what every node's HubPublicKey input needs). */
   #curvekey{color:var(--ink)}
@@ -370,7 +376,8 @@ function renderNodes(nodes){
         : "<span class='opmsg'>-</span>";
       return "<tr data-k=\"" + esc(n.key) + "\">" +
              "<td><span class='dot'></span><span class='k'></span></td>" +
-             "<td class='nm'></td>" +
+             "<td class='nm'><span class='nmv'></span> <span class='pzchip' style='display:none'" +
+             " title='hub pause: no new mirrors until the hub sends resume'>PAUSED</span></td>" +
              "<td class='num ps'></td>" +
              "<td class='st'></td>" +
              "<td class='ops'>" + ops + "</td></tr>";
@@ -387,7 +394,8 @@ function renderNodes(nodes){
       s.nodeRows[k] = {
         dot: trs[i].getElementsByClassName("dot")[0],
         k:   trs[i].getElementsByClassName("k")[0],
-        nm:  trs[i].getElementsByClassName("nm")[0],
+        nm:  trs[i].getElementsByClassName("nmv")[0],
+        pz:  trs[i].getElementsByClassName("pzchip")[0],
         ps:  trs[i].getElementsByClassName("ps")[0],
         st:  trs[i].getElementsByClassName("st")[0]
       };
@@ -399,6 +407,9 @@ function renderNodes(nodes){
     r.dot.className = "dot " + n.liveness;
     r.k.textContent = n.key;
     r.nm.textContent = n.name || "-";
+    // M5b: the node's own hub-pause report. A chip rather than a state change:
+    // the node is online and healthy, it is just not opening new mirrors.
+    if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
     // The POS column. `positions` is the join the server now puts on every
     // sender node - null for a receiver, and null for a sender whose first
     // SNAP has not arrived yet, which is "nothing to report yet" rather than
@@ -787,7 +798,8 @@ function renderUsers(users){
              "<td class='k'>" + esc(u.id) + "</td>" +
              "<td>" + esc(u.role) + "</td>" +
              "<td>" + (u.disabled ? "disabled" : "active") + "</td>" +
-             "<td class='ops'><button data-act='toggle'>" + (u.disabled ? "enable" : "disable") +
+             "<td class='ops'><button data-act='pwd'>password</button> " +
+             "<button data-act='toggle'>" + (u.disabled ? "enable" : "disable") +
              "</button> <button data-act='del'>delete</button></td></tr>";
     }).join("") +
     "</tbody></table>" +
@@ -803,6 +815,17 @@ function userAction(act, id, ev){
     api("/api/v1/users/" + encodeURIComponent(id), { method: "DELETE" })
       .then(function(){ loadUsers(); })
       .catch(function(e){ $("uerr").textContent = "delete failed: " + e.message; });
+  } else if(act === "pwd" && u){
+    //--- Admin resetting a user's credential. prompt() rather than a dialog
+    //--- because it is one field; the server re-hashes, so the clear text
+    //--- exists only in this tab and in one request body.
+    var np = prompt("New password for " + id + " (at least 8 characters):");
+    if(np === null) return;
+    if(np.length < 8){ $("uerr").textContent = "password must be at least 8 characters"; return; }
+    api("/api/v1/users", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: u.id, password: np, role: u.role, disabled: u.disabled }) })
+      .then(function(){ $("uerr").textContent = ""; loadUsers(); })
+      .catch(function(e){ $("uerr").textContent = "password change failed: " + e.message; });
   } else if(act === "toggle" && u){
     // Empty password = keep the existing credential (the API refuses a NEW
     // user without one, and keeps an existing one - so a toggle cannot
@@ -852,10 +875,23 @@ $("ckeycopy").addEventListener("click", function(ev){
     navigator.clipboard.writeText(key).then(done, done);
   } else { done(); }
 });
+//--- Identity is applied through ONE function, from BOTH paths that learn it
+//--- (the whoami probe on page load, and the sign-in form). The bug this
+//--- replaces: the who pill was only set by the probe, so a FIRST sign-in
+//--- through the form left it empty until a reload - and the Users panel's
+//--- visibility lived in two places, which is how it drifts.
+function setRole(user, role){
+  $("who").textContent = user + " · " + role;
+  //--- Admin-only chrome. The server is the gate (every /users endpoint 403s
+  //--- a non-admin); this just stops a viewer or operator looking at controls
+  //--- that cannot work.
+  var admin = (role === "admin");
+  $("users-sec").classList.toggle("hidden", !admin);
+  if(admin) loadUsers();
+}
 api("/api/v1/whoami").then(function(j){
   $("login").classList.add("hidden");
-  $("who").textContent = j.user + " · " + j.role;
-  if(j.role === "admin") loadUsers();
+  setRole(j.user, j.role);
   startDashboard();
 }).catch(function(){
   showLogin();
@@ -872,7 +908,7 @@ $("loginform").addEventListener("submit", function(ev){
     return r.json();
   }).then(function(j){
     $("login").classList.add("hidden");
-    if(j.role === "admin") loadUsers();
+    setRole(j.user, j.role);
     startDashboard();
   }).catch(function(){
     $("loginerr").textContent = "sign-in failed - check the id and password";

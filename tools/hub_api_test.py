@@ -349,6 +349,19 @@ def main():
 
         st, _ = get("/healthz")
         check("/healthz -> 200", st == 200, f"status {st}")
+        # The probes must be open to a caller with NO session at all: a load
+        # balancer or a monitoring cron cannot log in. A health check that
+        # needs a session is not a health check. (This was a real gap - the
+        # middleware initially required a session here, and every suite passed
+        # because their helpers all carried the admin cookie.)
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=6)
+        try:
+            c.request("GET", "/healthz")
+            st_nocookie = c.getresponse().status
+        finally:
+            c.close()
+        check("/healthz -> 200 with NO session (a monitor cannot log in)",
+              st_nocookie == 200, f"status {st_nocookie}")
 
         st, body = get("/readyz")
         d = json.loads(body) if st == 200 else {}

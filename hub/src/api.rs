@@ -199,6 +199,11 @@ fn node_json(n: &Node, now: Instant) -> Value {
         "quiet_secs": (quiet * 10.0).round() / 10.0,
         "regs": n.regs,
         "hbts": n.hbts,
+        //--- M5b follow-through: whether the node reports itself hub-paused
+        //--- (rides HBT2/REG as PAUSED=). False for a sender, which has no
+        //--- hub pause - the flag exists so the dashboard can badge the row
+        //--- without the operator reading the hub log.
+        "paused": n.paused,
     })
 }
 
@@ -700,6 +705,13 @@ async fn require_session(
         || path == "/api/v1/logout"
         || path == "/api/v1/whoami"
         || path == "/favicon.ico"
+        //--- The health probes MUST be open: a load balancer or a monitoring
+        //--- cron cannot log in, and a health check that needs a session is
+        //--- not a health check. They answer liveness and nothing else -
+        //--- no positions, no keys, no state - so there is nothing here for
+        //--- an unauthenticated caller to learn.
+        || path == "/healthz"
+        || path == "/readyz"
     {
         return next.run(req).await;
     }

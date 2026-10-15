@@ -4011,6 +4011,14 @@ void HubAnnounce(const bool isReg)
    //--- restarted and claimed 0 would be pushed a config it already has,
    //--- every time it restarted.
    e.payload+=CP_SEP_KV+"REV="+(string)g_cfgRev;
+   //--- M5b on the dashboard: report the hub-pause state so the operator can
+   //--- SEE a paused node without grepping the hub log. Carried on REG and
+   //--- HBT2 alike (a REG right after a closeall must not look un-paused),
+   //--- and the hub's list refreshes every heartbeat, so a pause/resume
+   //--- shows up on the dashboard within one cadence.
+   //--- The hub ignores the field from a sender, and an OLD hub ignores it
+   //--- entirely - unknown payload fields are skipped by design.
+   e.payload+=CP_SEP_KV+"PAUSED="+(g_cmdPaused?"1":"0");
    //--- Dropped silently on purpose: one lost heartbeat is nothing, and a log
    //--- line per failure would be a line per five seconds on a hub that is
    //--- simply not running yet. The hub's WHO sweep is the recovery path.
