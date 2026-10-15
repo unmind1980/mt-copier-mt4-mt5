@@ -259,7 +259,7 @@ def main():
         # message that gives /topology an edge - the hub has to read SID out of
         # it to know where to relay.
         recv_up.send_multipart([b"@hub", env("receiver", "STAT",
-            f"LOGIN={ACC_R};SID={NID_S};H=a1b2c3d4;RISK=ok;HELD=3;LOTS=0.62")])
+            f"LOGIN={ACC_R};SID={NID_S};H=a1b2c3d4;RISK=ok;HELD=3;LOTS=0.62;ORPHAN=2")])
         time.sleep(1.2)
 
         st, body = get("/api/v1/nodes")
@@ -326,9 +326,25 @@ def main():
               bool(sm) and (sm[0].get("positions") or {}).get("count") == 3,
               json.dumps(sm[0].get("positions"))[:70] if sm else "no such node")
         rc = [n for n in d.get("nodes", []) if n.get("key") == f"receiver:{ACC_R}"]
-        check("...and a receiver carries its HELD/LOTS figures from STAT",
+        check("...and a receiver carries its HELD/LOTS/ORPHAN figures from STAT",
               bool(rc) and (rc[0].get("positions") or {}).get("count") == 3
-              and (rc[0].get("positions") or {}).get("lots") == 0.62,
+              and (rc[0].get("positions") or {}).get("lots") == 0.62
+              and (rc[0].get("positions") or {}).get("orphaned") == 2,
+              json.dumps(rc[0].get("positions")) if rc else "no such node")
+
+        # Receipt heartbeats carry the position summary more often than the
+        # minute monitoring report. They intentionally omit RISK/BLOCKED, so
+        # the hub must refresh counts without resetting the risk state.
+        recv_up.send_multipart([b"@hub", env("receiver", "STAT",
+            f"LOGIN={ACC_R};SID={NID_S};H=next;HELD=4;LOTS=0.87;ORPHAN=3")])
+        time.sleep(0.2)
+        st, body = get("/api/v1/nodes")
+        d = json.loads(body) if st == 200 else {}
+        rc = [n for n in d.get("nodes", []) if n.get("key") == f"receiver:{ACC_R}"]
+        check("position-only heartbeat refreshes receiver and orphan counts",
+              bool(rc) and (rc[0].get("positions") or {}).get("count") == 4
+              and (rc[0].get("positions") or {}).get("lots") == 0.87
+              and (rc[0].get("positions") or {}).get("orphaned") == 3,
               json.dumps(rc[0].get("positions")) if rc else "no such node")
 
         st, body = get("/api/v1/topology")
@@ -339,7 +355,8 @@ def main():
               json.dumps(ts[0].get("positions"))[:70] if ts else "no such sender")
         tr = [x for x in d.get("receivers", []) if x.get("key") == f"receiver:{ACC_R}"]
         check("/api/v1/topology: receiver figures appear too",
-              bool(tr) and (tr[0].get("positions") or {}).get("count") == 3,
+              bool(tr) and (tr[0].get("positions") or {}).get("count") == 4
+              and (tr[0].get("positions") or {}).get("orphaned") == 3,
               json.dumps(tr[0].get("positions"))[:70] if tr else "no such receiver")
 
         # And the WebSocket, which is the path the page actually reads.
@@ -350,7 +367,8 @@ def main():
                   (wn.get(f"sender:{NID_S}", {}).get("positions") or {}).get("count") == 3,
                   json.dumps(wn.get(f"sender:{NID_S}", {}).get("positions")))
             check("WS snapshot: a receiver carries its STAT figures too",
-                  (wn.get(f"receiver:{ACC_R}", {}).get("positions") or {}).get("count") == 3,
+                  (wn.get(f"receiver:{ACC_R}", {}).get("positions") or {}).get("count") == 4
+                  and (wn.get(f"receiver:{ACC_R}", {}).get("positions") or {}).get("orphaned") == 3,
                   json.dumps(wn.get(f"receiver:{ACC_R}", {}).get("positions")))
         else:
             check("WS snapshot: a sender carries its positions too", False, "no frame")
@@ -379,14 +397,28 @@ def main():
 
         print()
         print("== 2. the dashboard, served from inside the binary ==")
-        st, body = get("/")
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=6)
+        c.request("GET", "/", headers={"Cookie": COOKIE["v"]} if COOKIE["v"] else {})
+        page = c.getresponse()
+        st, cache_control, body = page.status, page.getheader("Cache-Control", ""), page.read()
+        c.close()
         check("GET / -> 200 html", st == 200 and b"<html" in body.lower(),
               f"status {st}, {len(body)} bytes")
+        check("dashboard HTML is never cached between hub versions",
+              "no-store" in cache_control.lower(), cache_control or "missing Cache-Control")
         check("...is the file that was compiled in",
               b"mt-copier hub" in body and b"/api/v1/stream" in body,
               "expected title and the WS path")
         check("...has no second origin to get wrong",
               b"fetch(" in body and b"api/" in body, "calls its own API")
+        check("...admin password reset stays open with visible result feedback",
+              b"adminpwform" in body and b"SUCCESS: password reset for" in body
+              and b"FAILED: password was not changed for" in body
+              and b"prompt(" not in body,
+              "in-page password reset dialog with explicit persistent outcomes")
+        check("...receiver Pos labels orphan counts distinctly",
+              b"orphan" in body and b"n.positions.orphaned" in body,
+              "orphan count is shown separately from managed positions")
 
         print()
         print("== 3. the WebSocket, hand-verified ==")

@@ -43,7 +43,7 @@ use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::response::Html;
+use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -262,10 +262,10 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
             //--- included).
             //---
             //--- A receiver carries what IT reports holding in its STAT
-            //--- (HELD=/LOTS=). The hub is a transparent proxy and never sees
-            //--- transparent proxy and never sees a receiver's account, so
-            //--- this is the honest version of the same number: the receiver
-            //--- counts its own mirrors and says so.
+            //--- (HELD=/LOTS=/ORPHAN=). The hub is a transparent proxy and
+            //--- never sees a receiver's account, so this is the honest
+            //--- account-local report: held mirrors plus unmatched tagged
+            //--- positions the receiver detected itself.
             //---
             //--- `null` for either role means "nothing to report yet", which
             //--- is not an error, and is shown as a dash rather than a 0.
@@ -278,6 +278,7 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
                             "count": v.count,
                             "lots": trim_lots(v.lots),
                             "receipt": v.receipt,
+                            "orphaned": Value::Null,
                         })
                     })
             } else {
@@ -286,6 +287,7 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
                         "count": count,
                         "lots": (n.held_lots * 100.0).round() / 100.0,
                         "receipt": Value::Null,
+                        "orphaned": n.orphaned,
                     })
                 })
             };
@@ -580,8 +582,15 @@ async fn readyz(State(st): State<SharedState>) -> Json<Value> {
 }
 
 /// The dashboard. One route, one const, no file serving, no MIME guessing.
-async fn dashboard() -> Html<&'static str> {
-    Html(DASHBOARD)
+/// Never let a browser keep an older embedded page: the admin reset outcome
+/// and role-gated controls must correspond to the hub binary currently served.
+async fn dashboard() -> axum::response::Response {
+    let mut response = Html(DASHBOARD).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response
 }
 
 /// `WS /api/v1/stream`

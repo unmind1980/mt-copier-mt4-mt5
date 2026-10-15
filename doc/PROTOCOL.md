@@ -46,7 +46,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|T=<TYPE>|P=<pay
 | `HBT`     | every `HeartbeatSeconds` (default 1)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..`                                                                        |
 | `PARTIAL` | reserved (P4)                                                                             |                                                                                                             |
 | `MODIFY`  | event, immediate — a stop moved                                                           | `UID=..;OPN=..;SL=..;TP=..`                                                                                 |
-| `STAT`    | once a minute; the receipt on every `SyncHeartbeatSeconds` (default 1)                    | `LOGIN=..;SID=..;H=..` always, plus `EQ=..;BL=..;HELD=..;LOTS=..;NSEND=..;BLOCKED=..;RISK=..` once a minute |
+| `STAT`    | Position summary on every `SyncHeartbeatSeconds` (default 1); monitoring once a minute | `LOGIN=..;SID=..;H=..` always, plus `HELD=..;LOTS=..;ORPHAN=..` on the sync cadence and `EQ=..;BL=..;NSEND=..;BLOCKED=..;RISK=..` once a minute |
 | `RCPT`    | hub → sender, on every receipt a receiver reports                                         | `LOGIN=..;SID=..;H=..`                                                                                      |
 | `CFG`     | hub → node, on a config change and on the retry ladder                                    | `ID=..;REV=..;INI=<escaped ini>`                                                                            |
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
@@ -199,25 +199,30 @@ put on the wire.
 
 `STAT` therefore has **two independent cadences sharing one message**:
 
-- the monitoring figures (`EQ`, `BL`, `HELD`, …) — once a minute, only when  
-  `StatusEnabled`. Nothing acts on them.
-- the snapshot receipt (`SID`, `H`) — every `SyncHeartbeatSeconds`, and  
-  **deliberately not gated by `StatusEnabled`**, because it is part of the  
-  delivery path rather than a report about it. Turning monitoring off must  
+- the position summary (`HELD`, `LOTS`, `ORPHAN`) — every
+  `SyncHeartbeatSeconds`, even when `StatusEnabled` is false. This keeps the
+  receiver Pos column responsive; these fields are sent only once per batch.
+- the monitoring figures (`EQ`, `BL`, `NSEND`, `BLOCKED`, `RISK`) — once a
+  minute, only when `StatusEnabled`. Nothing acts on them.
+- the snapshot receipt (`SID`, `H`) — every `SyncHeartbeatSeconds`, and
+  **deliberately not gated by `StatusEnabled`**, because it is part of the
+  delivery path rather than a report about it. Turning monitoring off must
   not disable delivery.
 
-**These two cadences produce two different SHAPES, and a reader must tell them  
-apart by CONTENT, not by type** — both are `T=STAT`:
+**These cadences produce different STAT payload shapes, which a reader must tell
+apart by CONTENT, not by type** — all are `T=STAT`:
 
 ```
-receipt only   LOGIN=..;SID=..;H=..                       every SyncHeartbeatSeconds
-full report    LOGIN=..;SID=..;H=..;EQ=..;BL=..;HELD=..;LOTS=..;NSEND=..;BLOCKED=..;RISK=..   once a minute
+receipt + positions   LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..                       every SyncHeartbeatSeconds
+full report           LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;EQ=..;BL=..;NSEND=..;BLOCKED=..;RISK=..   once a minute (StatusEnabled)
 ```
 
-The receiver appends the whole figure block together or not at all, so the  
-presence of **`EQ`** (or any one of them) identifies a full report. A sender  
-must **not** treat a receipt-only `STAT` as a status report: it has no figures,  
-and logging it as one produces
+The receiver appends the position-summary block together or not at all, and
+appends the monitoring block together or not at all. The presence of **`EQ`**
+identifies the full minute monitoring report; `HELD`/`LOTS`/`ORPHAN` alone are
+the frequent position summary. A sender must **not** treat a STAT without `EQ`
+as a monitoring report: it has no equity/balance/risk figures, and logging it
+as one produces
 
 ```
 receiver X status: equity= balance= held= position(s) lots= senders= risk= blocked=
@@ -352,7 +357,7 @@ is the **same** number for every receiver of that snapshot.
 A `STAT` receipt for the same snapshot, sent back upwards:
 
 ```
-V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=13b2bc5c;EQ=10042.11;BL=10000.00;HELD=2;LOTS=0.60;NSEND=1;BLOCKED=0;RISK=ok
+V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=13b2bc5c;HELD=2;LOTS=0.60;ORPHAN=0;EQ=10042.11;BL=10000.00;NSEND=1;BLOCKED=0;RISK=ok
 ```
 
 ## Socket topology

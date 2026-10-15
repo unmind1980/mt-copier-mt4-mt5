@@ -104,10 +104,13 @@ pub struct Node {
     /// account, but the receiver counts its own mirrors and says so.
     pub held: Option<u32>,
     pub held_lots: f64,
-    /// M6: the risk state the node reported in its STAT: how many entries
-    /// its gate is blocking right now, and the trip key when a limit
-    /// tripped ("ok" when not, "" until the first STAT). A receiver that
-    /// is blocking or flattening is the other side of M6.
+    /// The count of copier-tagged positions under an unconfigured magic,
+    /// reported with HELD in a receiver's full STAT. None until reported.
+    pub orphaned: Option<u32>,
+    /// M6: record the risk state from the node's STAT - how many entries it
+    /// is blocking and which limit (if any) tripped. Position summary keys
+    /// may arrive more often on receipt heartbeats, so an empty risk string
+    /// means this frame carries positions only and must preserve risk state.
     pub blocked: u32,
     pub risk: String,
 }
@@ -259,16 +262,19 @@ impl Registry {
     /// same reason as note_ts: a STAT is not a registration, and a hub that
     /// learned nodes from STATs would be a hub that trusts the wire.
     pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str,
-                     held: Option<u32>, held_lots: f64) {
+                     held: Option<u32>, held_lots: f64, orphaned: Option<u32>) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
-            e.blocked = blocked;
-            e.risk = if risk.is_empty() { "ok".to_string() } else { risk.to_string() };
-            //--- HELD/LOTS ride only the FIRST STAT of a batch (putFigures),
-            //--- so an absent value here means "this frame had no figures",
-            //--- never "the receiver holds nothing" - hence Option.
+            if !risk.is_empty() {
+                e.blocked = blocked;
+                e.risk = risk.to_string();
+            }
+            //--- HELD/LOTS/ORPHAN arrive on receipt heartbeats as well as the
+            //--- full status report. Missing fields mean "no figures in THIS
+            //--- frame", never "zero" - hence Option.
             if let Some(h) = held {
                 e.held = Some(h);
                 e.held_lots = held_lots;
+                e.orphaned = orphaned;
             }
         }
     }
@@ -301,6 +307,7 @@ impl Registry {
             paused: false,
             held: None,
             held_lots: 0.0,
+            orphaned: None,
             blocked: 0,
             risk: String::new(),
         })
@@ -397,6 +404,25 @@ mod tests {
 
     fn t0() -> Instant {
         Instant::now()
+    }
+
+    #[test]
+    fn receiver_position_heartbeat_updates_counts_without_erasing_risk_state() {
+        let mut r = Registry::new();
+        let now = t0();
+        r.on_reg("receiver", "777777", "2.0", "MT5-B", 1, now);
+
+        // Full minute report sets risk + counts.
+        r.note_stat("receiver", "777777", 2, "daily-loss", Some(4), 0.87, Some(1));
+        // More frequent sync heartbeat carries only counts and no RISK/BLOCKED.
+        r.note_stat("receiver", "777777", 0, "", Some(5), 1.12, Some(2));
+
+        let n = &r.nodes()[0];
+        assert_eq!(n.blocked, 2);
+        assert_eq!(n.risk, "daily-loss");
+        assert_eq!(n.held, Some(5));
+        assert_eq!(n.held_lots, 1.12);
+        assert_eq!(n.orphaned, Some(2));
     }
 
     #[test]

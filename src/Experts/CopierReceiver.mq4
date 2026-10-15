@@ -777,6 +777,10 @@ CopierRisk      g_risk;      // circuit breakers (all off unless configured)
 //--- two senders each see room that only exists once.
 int             g_ourCount=0;
 double          g_ourLots=0.0;
+//--- Number of copier-tagged positions whose magic belongs to no configured
+//--- sender. Computed during the same per-timer account scan as our exposure;
+//--- shipped as ORPHAN with HELD/LOTS on each SyncHeartbeatSeconds receipt.
+int             g_orphanCount=0;
 //--- The BROKER's caps, discovered once at startup. -1 = UNKNOWN, which
 //--- must never be read as "unlimited": on MT4 there is no way to ask, so
 //--- unknown is the normal case there, and assuming unlimited is exactly
@@ -2469,6 +2473,7 @@ void RefreshRisk()
    CopierPos all[];
    int an=CopierReadPositions(all,CP_MAX_POSITIONS);
    int cnt=0;
+   int orphan=0;
    double lots=0.0;
    int nPos=0,nOrd=0;
    for(int i=0;i<an;i++)
@@ -2481,7 +2486,13 @@ void RefreshRisk()
         {
          if(all[i].magic==g_magic[k]) { ours=true; break; }
         }
-      if(!ours) continue;
+      if(!ours)
+        {
+         //--- Match the dashboard panel's orphan definition: only positions
+         //--- carrying our copier UID comment count, never another EA's trades.
+         if(StringLen(CopierUidFromComment(all[i].cmt))>0) orphan++;
+         continue;
+        }
       cnt++;
       lots+=all[i].lots;
      }
@@ -2489,6 +2500,7 @@ void RefreshRisk()
    g_acctOrders=nOrd;
    g_ourCount=cnt;
    g_ourLots=lots;
+   g_orphanCount=orphan;
 
    long now=CopierNowMs();
    long dayStart=CopierServerDayStart();
@@ -5159,9 +5171,15 @@ void OnTimer()
    //--- is about IT. The SID field carries that, and a sender ignores a
    //--- receipt that is not addressed to its own id.
    //---
-   //--- The monitoring figures go out ONCE, with the first receipt of the
-   //--- batch, so turning on SyncHeartbeatSeconds does not multiply the
-   //--- minute-report into N copies.
+   //--- The position summary (HELD/LOTS/ORPHAN) shares the SyncHeartbeatSeconds
+   //--- cadence - default 1s - so the dashboard can show fresh receiver counts
+   //--- without waiting for the slower monitoring report. It is included only
+   //--- once per batch, regardless of how many senders are configured.
+   //---
+   //--- The other monitoring figures (equity/balance/risk) still go out once a
+   //--- minute, and only when StatusEnabled. Nothing acts on them, so they can
+   //--- be late or lost.
+   //---
    //--- The stop-override table is pruned on the same slow cadence as the
    //--- status report: often enough that it never grows past the positions
    //--- actually in play, rarely enough that the sweep costs nothing.
@@ -5180,6 +5198,7 @@ void OnTimer()
       if(dueStatus) g_lastStatusMs=now;
       if(dueSync)   g_lastSyncMs=now;
 
+      bool putPositionSummary=(dueSync || dueStatus);
       bool putFigures=dueStatus;
       for(int i=0;i<g_nSenders;i++)
         {
@@ -5189,12 +5208,17 @@ void OnTimer()
          string st="LOGIN="+(string)CopierAccountLogin()
                    +CP_SEP_KV+"SID="+g_sid[i]
                    +CP_SEP_KV+"H="+g_snapHash[i];
+         if(putPositionSummary)
+           {
+            st+=CP_SEP_KV+"HELD="+(string)g_ourCount
+               +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
+               +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount;
+            putPositionSummary=false;  // once per batch, not per sender
+           }
          if(putFigures)
            {
             st+=CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2)
-               +CP_SEP_KV+"HELD="+(string)g_ourCount
-               +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
                +CP_SEP_KV+"NSEND="+(string)g_nSenders
                +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
                +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
