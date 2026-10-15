@@ -72,6 +72,12 @@
   #login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;
          justify-content:center;z-index:10}
   #login.hidden{display:none}
+  /* Generic hide. It had to exist as a RULE of its own: the users panel was
+     toggled with classList 'hidden' while only #login.hidden and #pwdlg.hidden
+     had rules - so a viewer or operator still saw the panel's frame with
+     "loading" inside, which is exactly the kind of half-state that reads as
+     a bug (it was). */
+  .hidden{display:none !important}
   #login form{background:var(--panel);border:1px solid var(--line);border-radius:8px;
               padding:24px;width:280px;display:flex;flex-direction:column;gap:10px}
   #login h2{margin:0 0 6px;font-size:14px}
@@ -108,6 +114,7 @@
   #users-sec button:hover{border-color:#b9c0c8}
   #users-sec td button{padding:3px 8px;font-size:12px}
   #uerr{color:var(--bad);font-size:12px}
+  #uok{color:var(--ok);font-size:12px}
   #usersbody td .ops{white-space:nowrap}
   /* M5b: a node's own report that the hub has it paused. A chip, not a
      liveness change - the node is online and healthy, it just will not open
@@ -188,7 +195,7 @@
         <option value="admin">admin</option>
       </select>
       <button type="submit">add / update</button>
-      <span id="uerr"></span>
+      <span id="uerr"></span><span id="uok"></span>
     </form>
   </section>
 </main>
@@ -809,6 +816,10 @@ function renderUsers(users){
 }
 function userAction(act, id, ev){
   ev.preventDefault();
+  //--- Every action clears the other one's status: a red "delete failed"
+  //--- left over from the previous click must not sit next to a green
+  //--- "password changed" from this one.
+  $("uerr").textContent = ""; $("uok").textContent = "";
   var u = s.users.rows.filter(function(x){ return x.id === id; })[0];
   if(act === "del"){
     if(!confirm("Delete user " + id + "?")) return;
@@ -824,7 +835,7 @@ function userAction(act, id, ev){
     if(np.length < 8){ $("uerr").textContent = "password must be at least 8 characters"; return; }
     api("/api/v1/users", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: u.id, password: np, role: u.role, disabled: u.disabled }) })
-      .then(function(){ $("uerr").textContent = ""; loadUsers(); })
+      .then(function(){ $("uok").textContent = "password changed for " + id + "."; loadUsers(); })
       .catch(function(e){ $("uerr").textContent = "password change failed: " + e.message; });
   } else if(act === "toggle" && u){
     // Empty password = keep the existing credential (the API refuses a NEW
@@ -907,9 +918,13 @@ $("loginform").addEventListener("submit", function(ev){
     if(!r.ok) throw new Error("invalid credentials");
     return r.json();
   }).then(function(j){
-    $("login").classList.add("hidden");
-    setRole(j.user, j.role);
-    startDashboard();
+    //--- Reload, deliberately - the same thing logout does. Identity is
+    //--- cheaper to RE-DERIVE than to reconcile: a fresh page runs whoami
+    //--- with the new cookie and every derived state (the who pill, the
+    //--- Users panel, the ops chrome) is consistent with it. The old way
+    //--- patched the pill in place and still showed the previous user when
+    //--- a stale whoami response landed after the login.
+    location.reload();
   }).catch(function(){
     $("loginerr").textContent = "sign-in failed - check the id and password";
   });

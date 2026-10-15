@@ -259,7 +259,7 @@ def main():
         # message that gives /topology an edge - the hub has to read SID out of
         # it to know where to relay.
         recv_up.send_multipart([b"@hub", env("receiver", "STAT",
-            f"LOGIN={ACC_R};SID={NID_S};H=a1b2c3d4")])
+            f"LOGIN={ACC_R};SID={NID_S};H=a1b2c3d4;RISK=ok;HELD=3;LOTS=0.62")])
         time.sleep(1.2)
 
         st, body = get("/api/v1/nodes")
@@ -326,8 +326,9 @@ def main():
               bool(sm) and (sm[0].get("positions") or {}).get("count") == 3,
               json.dumps(sm[0].get("positions"))[:70] if sm else "no such node")
         rc = [n for n in d.get("nodes", []) if n.get("key") == f"receiver:{ACC_R}"]
-        check("...and a receiver's is null, not 0",
-              bool(rc) and rc[0].get("positions") is None,
+        check("...and a receiver carries its HELD/LOTS figures from STAT",
+              bool(rc) and (rc[0].get("positions") or {}).get("count") == 3
+              and (rc[0].get("positions") or {}).get("lots") == 0.62,
               json.dumps(rc[0].get("positions")) if rc else "no such node")
 
         st, body = get("/api/v1/topology")
@@ -336,6 +337,10 @@ def main():
         check("/api/v1/topology: the SAME field, from the same join",
               bool(ts) and (ts[0].get("positions") or {}).get("count") == 3,
               json.dumps(ts[0].get("positions"))[:70] if ts else "no such sender")
+        tr = [x for x in d.get("receivers", []) if x.get("key") == f"receiver:{ACC_R}"]
+        check("/api/v1/topology: receiver figures appear too",
+              bool(tr) and (tr[0].get("positions") or {}).get("count") == 3,
+              json.dumps(tr[0].get("positions"))[:70] if tr else "no such receiver")
 
         # And the WebSocket, which is the path the page actually reads.
         _, wtext = ws_get_frame("127.0.0.1", HTTP_PORT, "/api/v1/stream", cookie=_tok())
@@ -344,6 +349,9 @@ def main():
             check("WS snapshot: a sender carries its positions too",
                   (wn.get(f"sender:{NID_S}", {}).get("positions") or {}).get("count") == 3,
                   json.dumps(wn.get(f"sender:{NID_S}", {}).get("positions")))
+            check("WS snapshot: a receiver carries its STAT figures too",
+                  (wn.get(f"receiver:{ACC_R}", {}).get("positions") or {}).get("count") == 3,
+                  json.dumps(wn.get(f"receiver:{ACC_R}", {}).get("positions")))
         else:
             check("WS snapshot: a sender carries its positions too", False, "no frame")
 

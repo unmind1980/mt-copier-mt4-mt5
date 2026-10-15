@@ -70,7 +70,12 @@ def main():
 
     out_path = os.path.join(HERE, "_hub_positions.out")
     out = open(out_path, "wb")
-    hub = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "1"],
+    # --curve off: the suite speaks PLAINTEXT ZMQ to fake nodes, and --curve
+    # now defaults ON (the 1380af1 flip) - without the flag the ZAP handler
+    # refuses every fake client at the handshake and the whole suite "fails"
+    # for a reason that has nothing to do with positions.
+    hub = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "1",
+                            "--curve", "off"],
                            stdout=out, stderr=subprocess.STDOUT)
     time.sleep(1.5)
 
@@ -168,7 +173,8 @@ def main():
     print()
     print("== 4. hostile input does not take the hub down ==")
     out2 = open(out_path, "wb")
-    hub2 = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "1"],
+    hub2 = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "1",
+                             "--curve", "off"],
                             stdout=out2, stderr=subprocess.STDOUT)
     time.sleep(1.5)
     sender2 = ctx.socket(zmq.XSUB)

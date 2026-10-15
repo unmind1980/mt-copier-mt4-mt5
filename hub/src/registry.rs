@@ -96,6 +96,14 @@ pub struct Node {
     /// `pause` landed; the operator should be able to SEE that a node is
     /// paused without grepping a log. A sender never sets it.
     pub paused: bool,
+    /// The receiver's own held-mirror count, from the `HELD=`/`LOTS=` fields
+    /// of its STAT. `None` until the first STAT with figures arrives - which
+    /// is "nothing to report yet", not zero, exactly like a sender whose
+    /// first SNAP has not landed. This is what gives a RECEIVER a Pos column:
+    /// the hub is a transparent proxy (§10) and never sees the receiver's
+    /// account, but the receiver counts its own mirrors and says so.
+    pub held: Option<u32>,
+    pub held_lots: f64,
     /// M6: the risk state the node reported in its STAT: how many entries
     /// its gate is blocking right now, and the trip key when a limit
     /// tripped ("ok" when not, "" until the first STAT). A receiver that
@@ -250,10 +258,18 @@ impl Registry {
     /// is blocking and which limit (if any) tripped. Update-only, for the
     /// same reason as note_ts: a STAT is not a registration, and a hub that
     /// learned nodes from STATs would be a hub that trusts the wire.
-    pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str) {
+    pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str,
+                     held: Option<u32>, held_lots: f64) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
             e.blocked = blocked;
             e.risk = if risk.is_empty() { "ok".to_string() } else { risk.to_string() };
+            //--- HELD/LOTS ride only the FIRST STAT of a batch (putFigures),
+            //--- so an absent value here means "this frame had no figures",
+            //--- never "the receiver holds nothing" - hence Option.
+            if let Some(h) = held {
+                e.held = Some(h);
+                e.held_lots = held_lots;
+            }
         }
     }
 
@@ -283,6 +299,8 @@ impl Registry {
             drift_secs: None,
             drift_prev_secs: None,
             paused: false,
+            held: None,
+            held_lots: 0.0,
             blocked: 0,
             risk: String::new(),
         })

@@ -93,7 +93,10 @@ def main():
     print("== start a hub on a spare port, with its output captured ==")
     out_path = os.path.join(HERE, "_hub_stat_path.out")
     out = open(out_path, "wb")
-    hub = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "2"],
+    # --curve off: the suite speaks PLAINTEXT ZMQ to fake nodes (see
+    # hub_positions_test) - without it the ZAP handler refuses every client.
+    hub = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "2",
+                            "--curve", "off"],
                            stdout=out, stderr=subprocess.STDOUT)
     time.sleep(1.5)               # let it bind
 

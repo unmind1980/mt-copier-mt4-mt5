@@ -97,6 +97,9 @@ def main():
     hub = subprocess.Popen(
         #--- --stats-every 2, not 0: the stats line is the only place some
         #--- diagnostics appear, and a test that never prints it cannot see them.
+        #--- (No --curve here: the default target is the Python prototype, which
+        #--- has no --curve flag. Point --hub at the Rust exe to test it, and
+        #--- pass --curve off in the --hub string yourself - see tests.bat.)
         cmd + ["--bind", "127.0.0.1", "--port", str(port), "--stats-every", "2"],
         stdout=log, stderr=subprocess.STDOUT)
 

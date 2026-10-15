@@ -207,6 +207,14 @@ fn node_json(n: &Node, now: Instant) -> Value {
     })
 }
 
+/// A RECEIVER's Pos column: the mirror count IT reports in its STAT
+/// (`HELD=`/`LOTS=`). The hub never sees a receiver's account (§10 - it is a
+/// transparent proxy), but the receiver counts its own mirrors and says so,
+/// which is the honest version of the same number a sender's row shows from
+/// its SNAP. `None` until the first STAT with figures - "not yet", not zero.
+/// (The value itself is built inline in nodes_json_list; this comment is the
+/// explanation of why a receiver has a Pos column at all.)
+
 fn symbols_json(v: &SenderView) -> Value {
     Value::Array(
         v.symbols
@@ -246,14 +254,21 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
         .iter()
         .map(|n| {
             let mut j = node_json(n, now);
-            //--- A sender ALSO carries what the hub has seen it hold. This is
-            //--- the join that makes the NODES table's POS column real: the
-            //--- data has been in the hub since M3 and the column was reading
-            //--- a field no node list ever included.
+            //--- The NODES table's POS column, for BOTH roles:
             //---
-            //--- `null` for a receiver, and for a sender that has registered
-            //--- but whose first SNAP has not arrived yet - which is not an
-            //--- error, it is "nothing to report yet".
+            //--- A sender carries what the hub has seen it hold (the join that
+            //--- makes the column real: the data has been in the hub since M3
+            //--- and the column was reading a field no node list ever
+            //--- included).
+            //---
+            //--- A receiver carries what IT reports holding in its STAT
+            //--- (HELD=/LOTS=). The hub is a transparent proxy and never sees
+            //--- transparent proxy and never sees a receiver's account, so
+            //--- this is the honest version of the same number: the receiver
+            //--- counts its own mirrors and says so.
+            //---
+            //--- `null` for either role means "nothing to report yet", which
+            //--- is not an error, and is shown as a dash rather than a 0.
             let pv = if n.role == Role::Sender {
                 pos.sorted()
                     .iter()
@@ -266,7 +281,13 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
                         })
                     })
             } else {
-                None
+                n.held.map(|count| {
+                    json!({
+                        "count": count,
+                        "lots": (n.held_lots * 100.0).round() / 100.0,
+                        "receipt": Value::Null,
+                    })
+                })
             };
             j.as_object_mut()
                 .unwrap()

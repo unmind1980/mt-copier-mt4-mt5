@@ -1806,9 +1806,18 @@ fn main() {
                                 let blocked: u32 =
                                     envelope_kv(&payload, "BLOCKED").parse().unwrap_or(0);
                                 let risk = envelope_kv(&payload, "RISK");
+                                //--- The receiver's own held-mirror count, from
+                                //--- the same STAT: HELD/LOTS ride only the
+                                //--- first frame of a batch, and a missing field
+                                //--- means "no figures in THIS frame", not zero.
+                                let held: Option<u32> =
+                                    envelope_kv(&payload, "HELD").parse().ok();
+                                let held_lots: f64 =
+                                    envelope_kv(&payload, "LOTS").parse().unwrap_or(0.0);
                                 if !login.is_empty() && !risk.is_empty() {
                                     let mut s = shared.lock().unwrap();
-                                    s.reg.note_stat("receiver", &login, blocked, &risk);
+                                    s.reg.note_stat("receiver", &login, blocked, &risk,
+                                                    held, held_lots);
                                 }
                                 //--- The edge, learned as a by-product. The
                                 //--- hub has to read SID to know where to send
