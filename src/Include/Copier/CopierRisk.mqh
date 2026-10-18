@@ -188,11 +188,19 @@ public:
          m_armed=true;
          m_day=serverDay;
          m_dayStartEquity=dayStartEquity;
-         m_peakEquity=equity;
-         return;
+         //--- RAISE, never lower. `m_peakEquity` may already hold a value
+         //--- restored from disk (see SeedPeak), and assigning `equity` here
+         //--- would throw it away - which is exactly the restart-forgives-the-
+         //--- drawdown hole this seeding exists to close.
+         if(equity>m_peakEquity) m_peakEquity=equity;
+         //--- NOTE: no early return. The first observation after a restart
+         //--- must be able to TRIP, or a receiver that comes back up while
+         //--- still below the drawdown line would sit there armed-but-quiet
+         //--- until the next tick - and on a quiet market there may not be
+         //--- one for a long time. With peak == equity (a fresh start) the
+         //--- comparison cannot trip, so nothing changes for the normal case.
         }
-
-      if(serverDay!=m_day)
+      else if(serverDay!=m_day)
         {
          m_day=serverDay;
          m_dayStartEquity=dayStartEquity;
@@ -231,6 +239,24 @@ public:
    bool              DailyTripped() const { return m_dailyTripped; }
    bool              DrawdownTripped() const { return m_ddTripped; }
    bool              AnyTripped() const { return (m_dailyTripped||m_ddTripped); }
+
+   //--- Restore a peak measured in an EARLIER run.
+   //---
+   //--- WHY THIS EXISTS
+   //--- ===============
+   //--- The peak is the baseline the drawdown switch is measured from, and it
+   //--- lived only in memory. Every terminal restart therefore re-based it to
+   //--- the equity of the moment - so the one switch whose whole job is
+   //--- "stop and look at this" was silently forgiven by the very event most
+   //--- likely to follow a bad day. The receiver persists it beside the
+   //--- position state and calls this before the first observation.
+   //---
+   //--- Only ever RAISES: a stored peak lower than the current one is
+   //--- history that the live curve has already surpassed.
+   void              SeedPeak(const double peak)
+     {
+      if(peak>m_peakEquity) m_peakEquity=peak;
+     }
 
    double            DayStartEquity() const { return m_dayStartEquity; }
    double            PeakEquity() const { return m_peakEquity; }

@@ -77,6 +77,7 @@ int CopierLotModeInternal(const int mode)
 int CopierLotModeFromText(const string raw,bool &recognised)
   {
    string m=CopierTrim(raw);
+   //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
    StringToLower(m);
 
    if(m=="off")        { recognised=true; return CP_SIZE_OFF; }

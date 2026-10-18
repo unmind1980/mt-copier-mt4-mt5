@@ -42,16 +42,25 @@
 //!    recording an hour ago is worse than no audit log, because it looks like
 //!    proof that nothing happened.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde_json::{json, Value};
 
 /// Record format version. Present so a future change to the shape is
 /// detectable in old records rather than guessed at.
-const AUDIT_V: u64 = 1;
+pub const AUDIT_V: u64 = 1;
+
+/// Default threshold for audit log rotation: 10 MB.
+pub const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Default maximum number of compressed archives (.jsonl.gz) to retain: 10 copies.
+pub const DEFAULT_MAX_BACKUPS: usize = 10;
 
 /// How much of the tail to read when finding the last `seq`. One record is a
 /// few hundred bytes, so this is thousands of records - and if it is somehow
@@ -60,17 +69,122 @@ const TAIL_CHUNK: u64 = 256 * 1024;
 
 struct Inner {
     file: Option<File>,
+    current_size: u64,
     seq: u64,
     /// Records written, and writes that failed. Both are reported, because the
     /// second is the one that would otherwise be invisible.
     wrote: u64,
     failed: u64,
+    rotations: u64,
 }
 
 pub struct Audit {
     inner: Mutex<Inner>,
+    /// The slow half of a rotation (gzip + archive shift). Kept here, not in
+    /// `Inner`, so a background thread can clone it and run outside the
+    /// writer lock — see `ArchiveShift`.
+    shifter: ArchiveShift,
     path: PathBuf,
+    max_bytes: u64,
+    max_backups: usize,
     enabled: bool,
+}
+
+/// The slow half of a rotation: gzip the just-renamed file and shift the
+/// numbered archives.
+///
+/// This is a struct of its own, separate from the writer state, because the
+/// split IS the design: `record()` releases the writer lock the moment the
+/// swap (rename + reopen, microseconds) completes, and gzipping 10 MB of
+/// audit while holding that lock would stall every `record()` — including the
+/// ones the hub's ZMQ thread makes — for hundreds of milliseconds.
+///
+/// The internal `lock` serializes shifts against each other: a manual
+/// `rotate()` completing in one thread and a background completion in another
+/// would otherwise interleave their renames of `.1.gz`/`.2.gz`. It is a
+/// different mutex from the writer's, and never held by the fast path.
+#[derive(Clone)]
+struct ArchiveShift {
+    path: PathBuf,
+    max_backups: usize,
+    lock: Arc<Mutex<()>>,
+    active_worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+}
+
+impl ArchiveShift {
+    /// Path to a numbered compressed archive, e.g. `audit.jsonl.1.gz`.
+    fn archive_path(&self, idx: usize) -> PathBuf {
+        PathBuf::from(format!("{}.{}.gz", self.path.display(), idx))
+    }
+
+    /// gzip `rotating` into place as `.1.gz`, shifting older archives up one
+    /// and pruning past `max_backups`. Deletes the uncompressed scratch file
+    /// either way. The writer's active file is untouched by all of this.
+    fn finish(&self, rotating: &Path, file_len: u64) -> io::Result<()> {
+        let _serial = self.lock.lock().unwrap();
+
+        // 4. Compress the scratch file into a temporary .gz
+        let gz_tmp = PathBuf::from(format!(
+            "{}.gz.tmp.{}",
+            rotating.display(),
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&gz_tmp);
+
+        let compress_res = (|| -> io::Result<()> {
+            let src = File::open(rotating)?;
+            let mut reader = BufReader::new(src);
+            let dst = File::create(&gz_tmp)?;
+            let writer = BufWriter::new(dst);
+            let mut encoder = GzEncoder::new(writer, Compression::default());
+            io::copy(&mut reader, &mut encoder)?;
+            encoder.finish()?;
+            Ok(())
+        })();
+
+        if let Err(e) = compress_res {
+            eprintln!("[hub] AUDIT ROTATE: compression failed: {}", e);
+            let _ = fs::remove_file(&gz_tmp);
+            // The scratch file stays: its records are still on disk and the
+            // next start-up finishes the shift (see open_with_rotation).
+            return Err(e);
+        }
+
+        // The uncompressed scratch has been safely copied into the .gz tmp.
+        let _ = fs::remove_file(rotating);
+
+        // 5. Shift existing archives up (.9.gz -> .10.gz), prune, then land
+        // the new one at .1.gz.
+        if self.max_backups > 0 {
+            let oldest = self.archive_path(self.max_backups);
+            let _ = fs::remove_file(&oldest);
+
+            for extra in (self.max_backups + 1)..=(self.max_backups + 5) {
+                let _ = fs::remove_file(self.archive_path(extra));
+            }
+
+            for idx in (1..self.max_backups).rev() {
+                let from = self.archive_path(idx);
+                let to = self.archive_path(idx + 1);
+                if from.exists() {
+                    let _ = fs::rename(&from, &to);
+                }
+            }
+
+            let target = self.archive_path(1);
+            let _ = fs::rename(&gz_tmp, &target);
+        } else {
+            let _ = fs::remove_file(&gz_tmp);
+        }
+
+        println!(
+            "[hub] audit log rotated: {} bytes archived to {}",
+            file_len,
+            self.archive_path(1).display()
+        );
+
+        Ok(())
+    }
 }
 
 /// What a read found. `torn` is not an error: it is a crash mid-append, which
@@ -89,20 +203,64 @@ impl Audit {
     /// starts empty on every hub restart would be worse than useless, and that
     /// is the default behaviour of `File::create`.
     pub fn open(path: &Path) -> std::io::Result<Audit> {
+        Self::open_with_rotation(path, DEFAULT_MAX_BYTES, DEFAULT_MAX_BACKUPS)
+    }
+
+    /// Open with custom size rotation threshold and max compressed archive count.
+    pub fn open_with_rotation(
+        path: &Path,
+        max_bytes: u64,
+        max_backups: usize,
+    ) -> std::io::Result<Audit> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .read(true)
             .open(path)?;
-        let seq = last_seq(path).unwrap_or(0);
+        let current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let shifter = ArchiveShift {
+            path: path.to_path_buf(),
+            max_backups,
+            lock: Arc::new(Mutex::new(())),
+            active_worker: Arc::new(Mutex::new(None)),
+        };
+
+        // A hub that died between the swap and the archive leaves a
+        // `<name>.rotating.<oldpid>` scratch file behind. Finish that
+        // rotation NOW: gzip it into `.1.gz` and the `last_seq` below
+        // recovers the sequence from the archive. Without this, a crash in
+        // that window would restart the log at an OLD sequence — later
+        // records reusing numbers the log already spent, which is exactly the
+        // gap-masking this module exists to prevent.
+        for leftover in leftover_rotations(path) {
+            let len = fs::metadata(&leftover).map(|m| m.len()).unwrap_or(0);
+            if len > 0 {
+                if let Err(e) = shifter.finish(&leftover, len) {
+                    eprintln!(
+                        "[hub] AUDIT: could not archive a leftover rotation {}: {}",
+                        leftover.display(),
+                        e
+                    );
+                }
+            } else {
+                let _ = fs::remove_file(&leftover);
+            }
+        }
+
+        let seq = last_seq(path, max_backups).unwrap_or(0);
         Ok(Audit {
             inner: Mutex::new(Inner {
                 file: Some(file),
+                current_size,
                 seq,
                 wrote: 0,
                 failed: 0,
+                rotations: 0,
             }),
+            shifter,
             path: path.to_path_buf(),
+            max_bytes,
+            max_backups,
             enabled: true,
         })
     }
@@ -117,11 +275,21 @@ impl Audit {
         Audit {
             inner: Mutex::new(Inner {
                 file: None,
+                current_size: 0,
                 seq: 0,
                 wrote: 0,
                 failed: 0,
+                rotations: 0,
             }),
+            shifter: ArchiveShift {
+                path: PathBuf::new(),
+                max_backups: DEFAULT_MAX_BACKUPS,
+                lock: Arc::new(Mutex::new(())),
+                active_worker: Arc::new(Mutex::new(None)),
+            },
             path: PathBuf::new(),
+            max_bytes: DEFAULT_MAX_BYTES,
+            max_backups: DEFAULT_MAX_BACKUPS,
             enabled: false,
         }
     }
@@ -137,6 +305,131 @@ impl Audit {
     pub fn counts(&self) -> (u64, u64, u64) {
         let i = self.inner.lock().unwrap();
         (i.seq, i.wrote, i.failed)
+    }
+
+    pub fn rotations(&self) -> u64 {
+        self.inner.lock().unwrap().rotations
+    }
+
+    #[allow(dead_code)]
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
+    #[allow(dead_code)]
+    pub fn max_backups(&self) -> usize {
+        self.max_backups
+    }
+
+    /// Wait for any in-flight background rotation/compression to finish.
+    #[allow(dead_code)]
+    pub fn wait_for_rotation(&self) {
+        let handle = {
+            let mut worker = self.shifter.active_worker.lock().unwrap();
+            worker.take()
+        };
+        if let Some(h) = handle {
+            let _ = h.join();
+        }
+    }
+
+    /// Path to a numbered compressed archive: e.g. `audit.jsonl.1.gz`
+    pub fn archive_path(&self, idx: usize) -> PathBuf {
+        PathBuf::from(format!("{}.{}.gz", self.path.display(), idx))
+    }
+
+    /// Manually trigger a rotation and gzip compression of the active log.
+    ///
+    /// Synchronous on purpose: tests and operators expect `.1.gz` to exist
+    /// when the call returns, and this path is never on the router thread.
+    /// The automatic rotation in `record()` uses the same swap but finishes
+    /// the archive on a background thread instead.
+    #[allow(dead_code)]
+    pub fn rotate(&self) -> std::io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some((rotating, len)) = self.swap_locked(&mut inner)? {
+            // Drop the writer lock before the slow half: the swap already
+            // made the log writable again, so there is no reason to hold it.
+            drop(inner);
+            return self.shifter.finish(&rotating, len);
+        }
+        Ok(())
+    }
+
+    /// The FAST half of a rotation, safe under the writer lock: flush, rename
+    /// the active file to a `.rotating.<pid>` scratch name, reopen a fresh
+    /// active file in its place, reset the size. Rename + reopen are
+    /// microseconds; the multi-hundred-millisecond gzip lives in
+    /// `ArchiveShift::finish`, which the caller runs OUTSIDE this lock.
+    ///
+    /// Returns the scratch path (and its size) when there is something to
+    /// archive, or `None` when the log was empty and no archive is needed.
+    /// `rotations` counts SWAPS: the active file was replaced, and whether
+    /// the archive lands now or in a moment does not change that fact.
+    fn swap_locked(&self, inner: &mut Inner) -> std::io::Result<Option<(PathBuf, u64)>> {
+        if !self.enabled || self.path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+
+        // 1. Sync and close active file descriptor
+        if let Some(mut f) = inner.file.take() {
+            let _ = f.flush();
+            let _ = f.sync_data();
+        }
+
+        let file_len = match fs::metadata(&self.path) {
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        };
+
+        if file_len == 0 {
+            let fresh = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .read(true)
+                .open(&self.path)?;
+            inner.file = Some(fresh);
+            inner.current_size = 0;
+            return Ok(None);
+        }
+
+        // 2. Rename active file to a scratch name. From this moment the
+        // active path no longer exists — step 3 must succeed or the log is
+        // unwritable, which is why it comes immediately after.
+        let rotating_path = PathBuf::from(format!(
+            "{}.rotating.{}",
+            self.path.display(),
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&rotating_path);
+
+        if let Err(e) = fs::rename(&self.path, &rotating_path) {
+            eprintln!(
+                "[hub] AUDIT ROTATE: cannot rename {} to {}: {}",
+                self.path.display(),
+                rotating_path.display(),
+                e
+            );
+            let fresh = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .read(true)
+                .open(&self.path)?;
+            inner.current_size = file_len;
+            inner.file = Some(fresh);
+            return Err(e);
+        }
+
+        // 3. Immediately re-open a fresh empty active file so appends proceed
+        inner.file = Some(OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(&self.path)?);
+        inner.current_size = 0;
+        inner.rotations += 1;
+
+        Ok(Some((rotating_path, file_len)))
     }
 
     /// Append one record. Returns the `seq` it was written with.
@@ -156,6 +449,34 @@ impl Audit {
         result: &str,
     ) -> u64 {
         let mut inner = self.inner.lock().unwrap();
+
+        // Check if rotation is needed before appending.
+        // Fast swap runs under this writer lock (microseconds); the slow
+        // gzip compression + archive shifting runs on a background thread so
+        // the router thread resumes appending immediately.
+        if self.enabled && inner.file.is_some() && inner.current_size >= self.max_bytes {
+            if let Ok(Some((rotating_path, file_len))) = self.swap_locked(&mut inner) {
+                let shifter = self.shifter.clone();
+                let worker_slot = Arc::clone(&self.shifter.active_worker);
+                let rotating_bg = rotating_path.clone();
+                let spawn_res = std::thread::Builder::new()
+                    .name("audit-rotate".to_string())
+                    .spawn(move || {
+                        let _ = shifter.finish(&rotating_bg, file_len);
+                    });
+                match spawn_res {
+                    Ok(handle) => {
+                        let mut slot = worker_slot.lock().unwrap();
+                        *slot = Some(handle);
+                    }
+                    Err(e) => {
+                        eprintln!("[hub] AUDIT: cannot spawn background rotate thread, running synchronously: {}", e);
+                        let _ = self.shifter.finish(&rotating_path, file_len);
+                    }
+                }
+            }
+        }
+
         let seq = inner.seq + 1;
         let rec = json!({
             "v": AUDIT_V,
@@ -182,10 +503,12 @@ impl Audit {
             return seq;
         };
 
-        match f.write_all(line.as_bytes()).and_then(|_| f.sync_data()) {
+        let bytes = line.as_bytes();
+        match f.write_all(bytes).and_then(|_| f.sync_data()) {
             Ok(()) => {
                 inner.seq = seq;
                 inner.wrote += 1;
+                inner.current_size += bytes.len() as u64;
             }
             Err(e) => {
                 // NOT swallowed. The record is gone, and the only thing worse
@@ -212,10 +535,11 @@ impl Audit {
         if !self.enabled {
             return (out, stats);
         }
+
+        // 1. Read active file
         let mut text = String::new();
-        match File::open(&self.path).and_then(|mut f| f.read_to_string(&mut text)) {
-            Ok(_) => {}
-            Err(_) => return (out, stats),
+        if let Ok(mut f) = File::open(&self.path) {
+            let _ = f.read_to_string(&mut text);
         }
 
         // A torn last line is skipped, not fatal - and counted, because it is
@@ -244,6 +568,46 @@ impl Audit {
                 }
             }
         }
+
+        // 2. If active file records alone do not satisfy `limit`, inspect recent
+        // compressed archives so a recent rotation does not leave the dashboard empty.
+        if out.len() < limit {
+            self.wait_for_rotation();
+            let oldest_active_seq = out.first().and_then(|r| r["seq"].as_u64()).unwrap_or(u64::MAX);
+            if oldest_active_seq > since + 1 {
+                for idx in 1..=self.max_backups {
+                    if out.len() >= limit {
+                        break;
+                    }
+                    let archive_p = self.archive_path(idx);
+                    if !archive_p.exists() {
+                        break;
+                    }
+                    if let Ok(f) = File::open(&archive_p) {
+                        let mut decoder = GzDecoder::new(f);
+                        let mut gz_text = String::new();
+                        if decoder.read_to_string(&mut gz_text).is_ok() {
+                            let mut archive_recs: Vec<Value> = Vec::new();
+                            for line in gz_text.lines() {
+                                if line.trim().is_empty() {
+                                    continue;
+                                }
+                                if let Ok(v) = serde_json::from_str::<Value>(line) {
+                                    stats.lines += 1;
+                                    let s = v["seq"].as_u64().unwrap_or(0);
+                                    if s > since && s < oldest_active_seq {
+                                        archive_recs.push(v);
+                                    }
+                                }
+                            }
+                            archive_recs.extend(out);
+                            out = archive_recs;
+                        }
+                    }
+                }
+            }
+        }
+
         // Newest last, then keep the newest `limit`. Truncating from the front
         // means a caller that asks for 200 always gets the most recent 200,
         // which is the only useful end of a permanent log.
@@ -261,17 +625,93 @@ fn unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// The highest `seq` in the file, or None if there is none to be found.
-///
-/// Reads backwards in chunks. Reading the whole file would be O(history) on
-/// every hub start, which is exactly the thing that gets slower forever while
-/// nobody notices.
-fn last_seq(path: &Path) -> Option<u64> {
-    let mut f = File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
-    if len == 0 {
-        return None;
+/// Discover any leftover uncompressed scratch files from a previous hub run
+/// that was killed between the swap and the archive completion.
+fn leftover_rotations(path: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let file_name = match path.file_name().and_then(|f| f.to_str()) {
+        Some(n) => n,
+        None => return out,
+    };
+    let prefix = format!("{}.rotating.", file_name);
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(name) = p.file_name().and_then(|f| f.to_str()) {
+                if name.starts_with(&prefix) {
+                    out.push(p);
+                }
+            }
+        }
     }
+    out
+}
+
+/// The highest `seq` in the file, or None if there is none to be found.
+/// If the active file has no records (e.g. freshly rotated), walks the
+/// compressed archives (`audit.jsonl.1.gz` .. `max_backups`) and keeps the
+/// highest seq any of them yields, to preserve sequence monotonicity across
+/// restarts.
+///
+/// WHY EVERY ARCHIVE, NOT JUST `.1.gz`: the fallback exists for the restart
+/// that lands right after a rotation, and it used to read exactly one
+/// archive. If THAT archive was unreadable - a truncated gz from the crash
+/// the rotation itself was surviving, a permissions error - the function
+/// returned None and the hub renumbered from 1, silently re-using seqs the
+/// archives still hold. A gap detector that depends on monotonicity then
+/// sees the same seq twice and the log's one integrity property is gone.
+/// Walking all of them and taking the max costs a few hundred ms at STARTUP
+/// only, which is the cheapest possible price for "seq never repeats".
+fn last_seq(path: &Path, max_backups: usize) -> Option<u64> {
+    if let Ok(mut f) = File::open(path) {
+        if let Ok(m) = f.metadata() {
+            let len = m.len();
+            if len > 0 {
+                if let Some(s) = last_seq_from_file(&mut f, len) {
+                    return Some(s);
+                }
+            }
+        }
+    }
+
+    // Active file is empty or unreadable - fall back to the archives.
+    let mut best: Option<u64> = None;
+    for idx in 1..=max_backups {
+        let arc = PathBuf::from(format!("{}.{}.gz", path.display(), idx));
+        if !arc.exists() {
+            continue;
+        }
+        if let Some(s) = last_seq_from_gz(&arc) {
+            best = Some(best.map_or(s, |b| b.max(s)));
+        }
+    }
+    best
+}
+
+fn last_seq_from_gz(path: &Path) -> Option<u64> {
+    let f = File::open(path).ok()?;
+    let mut decoder = GzDecoder::new(f);
+    let mut text = String::new();
+    decoder.read_to_string(&mut text).ok()?;
+    for line in text.lines().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(s) = v["seq"].as_u64() {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+fn last_seq_from_file(f: &mut File, len: u64) -> Option<u64> {
     let mut end = len;
     let mut carry: Vec<u8> = Vec::new();
     while end > 0 {
@@ -483,5 +923,127 @@ mod tests {
         assert_eq!(r["after"]["lots"], "0.20");
         assert_eq!(r["result"], "ok");
         let _ = std::fs::remove_file(&p);
+    }
+
+    fn cleanup(p: &Path) {
+        let _ = std::fs::remove_file(p);
+        for idx in 1..=15 {
+            let _ = std::fs::remove_file(format!("{}.{}.gz", p.display(), idx));
+        }
+        let _ = std::fs::remove_file(format!("{}.rotating.{}", p.display(), std::process::id()));
+    }
+
+    #[test]
+    fn rotation_triggers_at_threshold_and_compresses_to_gz() {
+        let p = tmp("rot_thresh");
+        cleanup(&p);
+        {
+            let a = Audit::open_with_rotation(&p, 300, 5).unwrap();
+            for i in 0..5 {
+                a.record("admin", "127.0.0.1", "test.event", &format!("node:{}", i), None, None, "ok");
+            }
+            assert!(a.rotations() >= 1, "expected at least one rotation to have occurred");
+            a.wait_for_rotation();
+            let arc1 = a.archive_path(1);
+            assert!(arc1.exists(), "archive 1 must exist");
+            assert!(std::fs::metadata(&arc1).unwrap().len() > 0);
+
+            // Read back across both the compressed archive and active file
+            let (recs, stats) = a.read(100, 0);
+            assert_eq!(recs.len(), 5, "all 5 records must be returned across rotation");
+            assert_eq!(stats.lines, 5);
+            let seqs: Vec<u64> = recs.iter().map(|r| r["seq"].as_u64().unwrap()).collect();
+            assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+
+            // Active file must be smaller than threshold after rotation
+            let active_len = std::fs::metadata(&p).unwrap().len();
+            assert!(active_len < 300, "active file should have been reset and small");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn max_backups_retention_and_oldest_pruned() {
+        let p = tmp("max_backups");
+        cleanup(&p);
+        {
+            let a = Audit::open_with_rotation(&p, 50, 3).unwrap();
+            for i in 0..6 {
+                a.record("operator", "", "action", &format!("n{}", i), None, None, "ok");
+                a.rotate().unwrap();
+            }
+
+            assert!(a.archive_path(1).exists(), "archive 1 must exist");
+            assert!(a.archive_path(2).exists(), "archive 2 must exist");
+            assert!(a.archive_path(3).exists(), "archive 3 must exist");
+            assert!(!a.archive_path(4).exists(), "archive 4 must be pruned");
+            assert!(!a.archive_path(5).exists(), "archive 5 must be pruned");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn restart_after_rotation_preserves_monotonic_seq() {
+        let p = tmp("restart_rot");
+        cleanup(&p);
+        {
+            let a = Audit::open_with_rotation(&p, 500, 3).unwrap();
+            a.record("", "", "ev1", "", None, None, "ok");
+            a.record("", "", "ev2", "", None, None, "ok");
+            a.rotate().unwrap();
+            // Active file p is now freshly opened and empty
+            assert_eq!(std::fs::metadata(&p).unwrap().len(), 0);
+        }
+        {
+            let b = Audit::open_with_rotation(&p, 500, 3).unwrap();
+            let (seq, _, _) = b.counts();
+            assert_eq!(seq, 2, "must recover seq from archive 1 when active file is empty");
+            let s3 = b.record("", "", "ev3", "", None, None, "ok");
+            assert_eq!(s3, 3);
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn manual_rotate_works_on_demand() {
+        let p = tmp("manual_rot");
+        cleanup(&p);
+        {
+            let a = Audit::open_with_rotation(&p, 100_000, 5).unwrap();
+            a.record("", "", "manual1", "", None, None, "ok");
+            a.rotate().unwrap();
+            assert!(a.archive_path(1).exists());
+
+            a.record("", "", "manual2", "", None, None, "ok");
+            let (recs, _) = a.read(10, 0);
+            assert_eq!(recs.len(), 2);
+            assert_eq!(recs[0]["action"], "manual1");
+            assert_eq!(recs[1]["action"], "manual2");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn restart_recovers_leftover_scratch_rotation() {
+        let p = tmp("scratch_recovery");
+        cleanup(&p);
+        let scratch = PathBuf::from(format!("{}.rotating.99999", p.display()));
+        {
+            // Simulate crash: active file empty, but scratch file has records
+            let a = Audit::open_with_rotation(&scratch, 500, 3).unwrap();
+            a.record("", "", "crash1", "", None, None, "ok");
+            a.record("", "", "crash2", "", None, None, "ok");
+        }
+        assert!(scratch.exists());
+        {
+            let b = Audit::open_with_rotation(&p, 500, 3).unwrap();
+            assert!(!scratch.exists(), "scratch should be archived");
+            assert!(b.archive_path(1).exists());
+            let (seq, _, _) = b.counts();
+            assert_eq!(seq, 2);
+            let s3 = b.record("", "", "after_crash", "", None, None, "ok");
+            assert_eq!(s3, 3);
+        }
+        cleanup(&p);
     }
 }

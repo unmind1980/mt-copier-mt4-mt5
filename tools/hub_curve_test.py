@@ -238,6 +238,26 @@ def main():
         hub_pub = read_public_key(keys)
         tok = api_login()
 
+        # Check /api/v1/curve/hub_key download
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=5)
+        c.request("GET", "/api/v1/curve/hub_key", headers={"Cookie": "mtc_session=" + tok})
+        r = c.getresponse()
+        body = r.read().decode("utf-8")
+        cd = r.getheader("Content-Disposition") or ""
+        check("GET /api/v1/curve/hub_key answers 200", r.status == 200, f"status={r.status}")
+        check("Content-Disposition is attachment copier_hub.key", 'filename="copier_hub.key"' in cd, cd)
+        check("key file body contains magic header", "copier-hub-key v1" in body, body[:40])
+        check("key file body has PUBLIC matching hub pubkey", f"PUBLIC={hub_pub}" in body, body)
+        c.close()
+
+        # Check unauthenticated download is rejected
+        c = http.client.HTTPConnection("127.0.0.1", HTTP_PORT, timeout=5)
+        c.request("GET", "/api/v1/curve/hub_key")
+        r = c.getresponse()
+        r.read()
+        check("GET /api/v1/curve/hub_key requires auth", r.status == 401, f"status={r.status}")
+        c.close()
+
         ctx = zmq.Context()
         s_ok = curve_client(ctx, hub_pub, allowed_pub, allowed_sec)
         s_no = curve_client(ctx, hub_pub, other_pub, other_sec)

@@ -76,6 +76,8 @@ hub_commands_test.py
 hub_alerts_test.py
 hub_users_test.py
 hub_curve_test.py
+hub_notifications_test.py
+hub_audit_rotation_test.py
 "
 
 echo "== Python contract tests =="

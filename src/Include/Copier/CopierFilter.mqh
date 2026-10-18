@@ -139,6 +139,7 @@ long CopierParseHhMm(const string s)
 int CopierDayIndex(const string name)
   {
    string s=name;
+   //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
    StringToLower(s);
    if(s=="sun") return 0;
    if(s=="mon") return 1;

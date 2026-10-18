@@ -97,9 +97,103 @@ pub struct Session {
 pub struct UserStore {
     users: Vec<User>,
     sessions: HashMap<String, Session>,
+    /// In-memory nonces for login challenges: nonce -> (user_id, expire_at)
+    auth_nonces: HashMap<String, (String, u64)>,
+    /// Failed-login bookkeeping. In memory like the sessions, and for the
+    /// same reason: a restart should not be able to LOCK an operator out,
+    /// and a persisted counter is a weapon an attacker can aim at a name.
+    guard: LoginGuard,
     /// Where the users live. The hub passes --users; the tests pass their own
     /// so a test hub never writes (or misses) the real one.
     path: std::path::PathBuf,
+}
+
+/// How many unexpired challenges the hub will hold at once.
+///
+/// `/api/v1/auth/nonce` is UNAUTHENTICATED by necessity - the caller has no
+/// session yet - and each call inserted a map entry that only a 10-second
+/// expiry ever removed. A loop could therefore add entries faster than they
+/// aged out: a few hundred thousand requests is tens of megabytes of hub
+/// memory, from a request that costs the caller nothing. The cap turns that
+/// into a refusal.
+const MAX_PENDING_NONCES: usize = 512;
+
+/// Failed-login throttling.
+///
+/// WHY A DELAY PER NAME AND A HARD LIMIT ONLY GLOBALLY
+/// ==================================================
+/// A per-name hard lockout is the obvious design and the wrong one here: any
+/// caller who knows the admin's user id could lock the operator out of their
+/// own hub for as long as they kept trying. So a name that keeps failing gets
+/// a growing DELAY (which costs an attacker real time and costs the operator
+/// one wait), while only the GLOBAL rate is hard-refused - and that refusal
+/// exists to protect the CPU from a hash-flood, not to punish a person.
+const FAIL_WINDOW_SECS: u64 = 60;
+const FAILS_PER_NAME_BEFORE_DELAY: u32 = 3;
+const FAIL_DELAY_STEP_MS: u64 = 250;
+const FAIL_DELAY_MAX_MS: u64 = 4000;
+const FAILS_GLOBAL_MAX: u32 = 40;
+const GLOBAL_BLOCK_SECS: u64 = 10;
+
+#[derive(Default)]
+struct LoginGuard {
+    /// user id -> (failures in the current window, window start)
+    per_name: HashMap<String, (u32, u64)>,
+    /// (failures in the current window, window start)
+    global: (u32, u64),
+    /// Set while the global window is over budget.
+    blocked_until: u64,
+}
+
+impl LoginGuard {
+    /// May this attempt proceed? `Some(retry_after)` means no.
+    fn blocked_for(&mut self, now: u64) -> Option<u64> {
+        if self.blocked_until > now {
+            return Some(self.blocked_until - now);
+        }
+        None
+    }
+
+    /// Record a failure and return how long the caller should wait before
+    /// answering. The wait is applied OUTSIDE any lock (it is an async sleep).
+    fn note_failure(&mut self, id: &str, now: u64) -> u64 {
+        if now.saturating_sub(self.global.1) > FAIL_WINDOW_SECS {
+            self.global = (0, now);
+        }
+        self.global.0 = self.global.0.saturating_add(1);
+        if self.global.0 >= FAILS_GLOBAL_MAX {
+            self.blocked_until = now + GLOBAL_BLOCK_SECS;
+            self.global = (0, now);
+        }
+
+        let e = self
+            .per_name
+            .entry(id.to_string())
+            .or_insert((0, now));
+        if now.saturating_sub(e.1) > FAIL_WINDOW_SECS {
+            *e = (0, now);
+        }
+        e.0 = e.0.saturating_add(1);
+        if e.0 <= FAILS_PER_NAME_BEFORE_DELAY {
+            return 0;
+        }
+        let extra = (e.0 - FAILS_PER_NAME_BEFORE_DELAY) as u64;
+        (extra * FAIL_DELAY_STEP_MS).min(FAIL_DELAY_MAX_MS)
+    }
+
+    fn note_success(&mut self, id: &str) {
+        self.per_name.remove(id);
+    }
+
+    /// Drop bookkeeping that can no longer affect a decision, so a hub that
+    /// runs for months does not keep a row per name ever tried.
+    fn prune(&mut self, now: u64) {
+        self.per_name
+            .retain(|_, (_, start)| now.saturating_sub(*start) <= FAIL_WINDOW_SECS);
+        if self.blocked_until <= now {
+            self.blocked_until = 0;
+        }
+    }
 }
 
 impl Default for UserStore {
@@ -113,6 +207,8 @@ impl UserStore {
         UserStore {
             users: Vec::new(),
             sessions: HashMap::new(),
+            auth_nonces: HashMap::new(),
+            guard: LoginGuard::default(),
             path: std::path::PathBuf::from(USERS_PATH),
         }
     }
@@ -128,6 +224,8 @@ impl UserStore {
                     return Ok(UserStore {
                         users: Vec::new(),
                         sessions: HashMap::new(),
+                        auth_nonces: HashMap::new(),
+                        guard: LoginGuard::default(),
                         path: path.to_path_buf(),
                     });
                 }
@@ -136,12 +234,16 @@ impl UserStore {
                 Ok(UserStore {
                     users,
                     sessions: HashMap::new(),
+                    auth_nonces: HashMap::new(),
+                    guard: LoginGuard::default(),
                     path: path.to_path_buf(),
                 })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(UserStore {
                 users: Vec::new(),
                 sessions: HashMap::new(),
+                auth_nonces: HashMap::new(),
+                guard: LoginGuard::default(),
                 path: path.to_path_buf(),
             }),
             Err(e) => Err(format!("{}: {}", path.display(), e)),
@@ -154,7 +256,22 @@ impl UserStore {
         let tmp = self.path.with_extension("json.tmp");
         let text = serde_json::to_string_pretty(&self.users)
             .map_err(|e| format!("serialise users: {}", e))?;
-        std::fs::write(&tmp, text).map_err(|e| format!("{}: {}", tmp.display(), e))?;
+        //--- fsync the temp before the rename. `write_all` returns once the
+        //--- bytes are in the page cache; the rename - like every other
+        //--- metadata operation - survives even if the data never reaches
+        //--- the platter. After a power cut the new name then points at a
+        //--- file whose contents are gone or torn, and the hub refuses to
+        //--- start on an unreadable user table. The cost is one flush per
+        //--- administrative change, which is not a hot path.
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)
+                .map_err(|e| format!("{}: {}", tmp.display(), e))?;
+            f.write_all(text.as_bytes())
+                .map_err(|e| format!("{}: {}", tmp.display(), e))?;
+            f.sync_all()
+                .map_err(|e| format!("{} (fsync): {}", tmp.display(), e))?;
+        }
         std::fs::rename(&tmp, &self.path).map_err(|e| format!("{}: {}", self.path.display(), e))
     }
 
@@ -174,6 +291,14 @@ impl UserStore {
     pub fn set_password(&mut self, id: &str, new_password: &str) -> Result<(), String> {
         let salt = random_token()[..16].to_string();
         let hashed = hash_password(new_password, &salt);
+        self.set_password_hashed(id, hashed)
+    }
+
+    /// Apply an ALREADY-HASHED password. Split out so a caller can do the
+    /// expensive half (4096 SHA-256 rounds to verify the old one and to hash
+    /// the new) with NO lock held and keep only this - a one-field memory
+    /// write - inside it. See `stored_hash`.
+    pub fn set_password_hashed(&mut self, id: &str, hashed: String) -> Result<(), String> {
         let u = self
             .users
             .iter_mut()
@@ -181,6 +306,38 @@ impl UserStore {
             .ok_or_else(|| format!("no such user: {}", id))?;
         u.pass = hashed;
         Ok(())
+    }
+
+    /// The stored hash for `id`, or None when the user does not exist or is
+    /// disabled. Read-only on purpose: the caller runs the expensive
+    /// verification (4096 SHA-256 rounds) with NO shared-state lock held,
+    /// then calls `mint_session` - which re-reads the user under the lock,
+    /// so a disable that lands during the hash still wins.
+    pub fn stored_hash(&self, id: &str) -> Option<String> {
+        self.users
+            .iter()
+            .find(|u| u.id == id && !u.disabled)
+            .map(|u| u.pass.clone())
+    }
+
+    /// Mint a session for an id whose password was ALREADY verified outside
+    /// the lock. Re-reads the user here (the world may have changed during
+    /// the hashing) and refuses when the user is gone or now disabled - a
+    /// session is never minted for someone who may no longer have one.
+    pub fn mint_session(&mut self, id: &str, now: u64) -> Result<(String, Session), String> {
+        let u = self
+            .users
+            .iter()
+            .find(|u| u.id == id && !u.disabled)
+            .ok_or_else(|| "invalid credentials".to_string())?;
+        let token = random_token();
+        let s = Session {
+            user_id: u.id.clone(),
+            role: u.role,
+            seen: now,
+        };
+        self.sessions.insert(token.clone(), s.clone());
+        Ok((token, s))
     }
 
     /// Drop every session for `id` except `keep`. Called when a password
@@ -206,7 +363,24 @@ impl UserStore {
             return Err("that is the last admin".to_string());
         }
         if let Some(slot) = self.users.iter_mut().find(|x| x.id == u.id) {
+            //--- A ROLE CHANGE or a DISABLE must take effect NOW, and a
+            //--- session carries the role it was minted with - so leaving an
+            //--- existing session alive would keep honouring a privilege that
+            //--- was just revoked for up to SESSION_IDLE_SECS (12h): a user
+            //--- demoted to viewer could still read the audit log and change
+            //--- configuration all afternoon. This is the revocation half of
+            //--- the role model; without it the roles are advisory.
+            //---
+            //--- A no-op upsert (same role, still enabled) deliberately keeps
+            //--- sessions: an admin saving the user table for any other
+            //--- reason must not sign everybody out.
+            let id = slot.id.clone();
+            let role_changed = slot.role != u.role;
+            let was_enabled = !slot.disabled;
             *slot = u;
+            if role_changed || (slot.disabled && was_enabled) {
+                self.sessions.retain(|_, s| s.user_id != id);
+            }
         } else {
             self.users.push(u);
         }
@@ -259,6 +433,7 @@ impl UserStore {
     /// whole difference between a login and an account enumeration.
     /// Returns the token (the caller sets it as the HttpOnly cookie) and
     /// the session itself.
+    #[allow(dead_code)]
     pub fn login(&mut self, id: &str, password: &str, now: u64) -> Result<(String, Session), String> {
         let u = self
             .users
@@ -268,6 +443,123 @@ impl UserStore {
         if !verify_password(password, &u.pass) {
             return Err("invalid credentials".to_string());
         }
+        let token = random_token();
+        let s = Session {
+            user_id: u.id.clone(),
+            role: u.role,
+            seen: now,
+        };
+        self.sessions.insert(token.clone(), s.clone());
+        Ok((token, s))
+    }
+
+    /// Generate a short-lived nonce for challenge-response login.
+    /// Returns (nonce, salt, rounds), or None when the hub is holding as many
+    /// live challenges as it will (`MAX_PENDING_NONCES`).
+    ///
+    /// The cap is the whole point of the Option: this endpoint is
+    /// unauthenticated, so without it a loop of requests grows the map faster
+    /// than the 10-second expiry drains it.
+    pub fn create_nonce(
+        &mut self,
+        user_id: &str,
+        now: u64,
+        ttl_secs: u64,
+    ) -> Option<(String, String, u32)> {
+        // Prune expired nonces
+        self.auth_nonces.retain(|_, (_, exp)| *exp > now);
+        if self.auth_nonces.len() >= MAX_PENDING_NONCES {
+            return None;
+        }
+        self.guard.prune(now);
+
+        let (salt, rounds) = if let Some(u) = self.users.iter().find(|u| u.id == user_id && !u.disabled) {
+            let parts: Vec<&str> = u.pass.split('$').collect();
+            if parts.len() == 3 {
+                let r = parts[1].parse::<u32>().unwrap_or(HASH_ROUNDS);
+                (parts[0].to_string(), r)
+            } else {
+                (random_token()[..16].to_string(), HASH_ROUNDS)
+            }
+        } else {
+            // Fake salt derived deterministically from user_id to prevent account enumeration timing attacks
+            let dummy = sha256(format!("fake_salt:{}", user_id).as_bytes());
+            (hex(&dummy)[..16].to_string(), HASH_ROUNDS)
+        };
+
+        let nonce = random_token();
+        self.auth_nonces.insert(nonce.clone(), (user_id.to_string(), now + ttl_secs));
+        Some((nonce, salt, rounds))
+    }
+
+    /// Is login currently refused outright? `Some(seconds)` means yes, and
+    /// how long until it is worth trying again.
+    pub fn login_blocked(&mut self, now: u64) -> Option<u64> {
+        self.guard.blocked_for(now)
+    }
+
+    /// Record a failed login. Returns how long the caller should wait before
+    /// answering - a delay, not a lockout, for the reasons on `LoginGuard`.
+    pub fn note_login_failure(&mut self, id: &str, now: u64) -> u64 {
+        self.guard.note_failure(id, now)
+    }
+
+    /// Record a successful login: the name's counter goes back to zero.
+    pub fn note_login_success(&mut self, id: &str) {
+        self.guard.note_success(id);
+    }
+
+    /// Authenticate via challenge-response proof:
+    /// proof = SHA256(stored_digest + ":" + nonce)
+    /// The nonce is IMMEDIATELY destroyed upon first use (single-use token, replay proof).
+    pub fn login_with_proof(
+        &mut self,
+        id: &str,
+        nonce: &str,
+        proof: &str,
+        now: u64,
+    ) -> Result<(String, Session), String> {
+        // 1. Consume nonce immediately (must exist, match user, and not expired)
+        let (nonce_user, expire_at) = self
+            .auth_nonces
+            .remove(nonce)
+            .ok_or_else(|| "invalid credentials".to_string())?;
+
+        if now > expire_at || nonce_user != id {
+            return Err("invalid credentials".to_string());
+        }
+
+        // 2. Lookup user
+        let u = self
+            .users
+            .iter()
+            .find(|u| u.id == id && !u.disabled)
+            .ok_or_else(|| "invalid credentials".to_string())?;
+
+        let parts: Vec<&str> = u.pass.split('$').collect();
+        if parts.len() != 3 {
+            return Err("invalid credentials".to_string());
+        }
+        let stored_digest = parts[2];
+
+        // 3. Expected proof = hex(sha256(stored_digest + ":" + nonce))
+        let expected_proof = hex(&sha256(format!("{}:{}", stored_digest, nonce).as_bytes()));
+
+        // Constant-time compare
+        let a = expected_proof.as_bytes();
+        let b = proof.as_bytes();
+        if a.len() != b.len() {
+            return Err("invalid credentials".to_string());
+        }
+        let mut diff = 0u8;
+        for i in 0..a.len() {
+            diff |= a[i] ^ b[i];
+        }
+        if diff != 0 {
+            return Err("invalid credentials".to_string());
+        }
+
+        // 4. Issue session
         let token = random_token();
         let s = Session {
             user_id: u.id.clone(),
@@ -390,11 +682,20 @@ pub fn sha256(msg: &[u8]) -> [u8; 32] {
 
 /// `salt$rounds$hexdigest`. The salt is 16 random hex chars.
 pub fn hash_password(password: &str, salt: &str) -> String {
+    hash_password_rounds(password, salt, HASH_ROUNDS)
+}
+
+/// The workhorse: `rounds` total iterations of SHA-256 over
+/// `salt:password`, then each digest. Exposed separately so `verify` can
+/// honour the round count stored WITH the hash instead of the binary's
+/// current constant - see verify_password.
+pub fn hash_password_rounds(password: &str, salt: &str, rounds: u32) -> String {
+    let rounds = rounds.max(1);
     let mut acc = sha256(format!("{}:{}", salt, password).as_bytes());
-    for _ in 1..HASH_ROUNDS {
+    for _ in 1..rounds {
         acc = sha256(&acc);
     }
-    format!("{}${}${}", salt, HASH_ROUNDS, hex(&acc))
+    format!("{}${}${}", salt, rounds, hex(&acc))
 }
 
 pub fn verify_password(password: &str, stored: &str) -> bool {
@@ -402,7 +703,21 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     if parts.len() != 3 {
         return false;
     }
-    let candidate = hash_password(password, parts[0]);
+    //--- The rounds are part of the STORED hash's contract, not a property
+    //--- of this binary. A hash written by a future build with a different
+    //--- HASH_ROUNDS must verify with ITS rounds; hashing with today's
+    //--- constant instead means every existing user gets "invalid
+    //--- credentials" the day the constant is raised - a lockout that
+    //--- nothing anywhere explains. An unparseable count falls back to the
+    //--- current constant (a hand-edited hash is the only way to get here,
+    //--- and it was already broken).
+    //---
+    //--- The rounds also ride the nonce challenge (/api/v1/auth/nonce
+    //--- returns them), so the CLIENT computes the same digest with the
+    //--- same count - this parse and that endpoint are the two ends of the
+    //--- same string.
+    let rounds: u32 = parts[1].parse().unwrap_or(HASH_ROUNDS);
+    let candidate = hash_password_rounds(password, parts[0], rounds);
     // Constant-time compare, byte by byte, both digests always the same
     // length - a mismatch is a mismatch without saying WHERE.
     let a = candidate.as_bytes();
@@ -524,6 +839,48 @@ mod tests {
     }
 
     #[test]
+    fn a_hash_written_with_different_rounds_still_verifies() {
+        //--- Raising HASH_ROUNDS used to lock out every existing user: verify
+        //--- hashed with the binary's constant while the stored hash carried
+        //--- its own. The rounds are data, and data wins over code.
+        let h = hash_password_rounds("correct horse battery staple", "0123456789abcdef", 8);
+        assert!(h.starts_with("0123456789abcdef$8$"));
+        assert!(verify_password("correct horse battery staple", &h));
+        assert!(!verify_password("wrong", &h));
+    }
+
+    #[test]
+    fn a_role_change_drops_the_users_sessions_immediately() {
+        //--- The revocation half of the role model: a demoted user's live
+        //--- session carried the old role and kept it for up to 12h.
+        let mut s = UserStore::new();
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Operator, disabled: false }).unwrap();
+        let (tok, _) = s.login("op", "p", 100).unwrap();
+        //--- demote to viewer
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Viewer, disabled: false }).unwrap();
+        assert!(s.session(&tok, 100).is_none(), "the old-role session must die");
+        //--- and the user can still log back in, with the NEW role
+        let (tok2, sess2) = s.login("op", "p", 101).unwrap();
+        assert_eq!(sess2.role, Role::Viewer);
+        assert!(s.session(&tok2, 100).is_some());
+    }
+
+    #[test]
+    fn a_disable_drops_sessions_and_a_noop_upsert_keeps_them() {
+        let mut s = UserStore::new();
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Operator, disabled: false }).unwrap();
+        let (tok, _) = s.login("op", "p", 100).unwrap();
+        //--- disabling takes effect at once
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Operator, disabled: true }).unwrap();
+        assert!(s.session(&tok, 100).is_none());
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Operator, disabled: false }).unwrap();
+        let (tok2, _) = s.login("op", "p", 100).unwrap();
+        //--- an unrelated save (same role, still enabled) must NOT log anybody out
+        s.upsert(User { id: "op".into(), pass: hash_password("p", "s"), role: Role::Operator, disabled: false }).unwrap();
+        assert!(s.session(&tok2, 100).is_some());
+    }
+
+    #[test]
     fn roles_order_viewer_below_operator_below_admin() {
         assert!(Role::Viewer < Role::Operator);
         assert!(Role::Operator < Role::Admin);
@@ -637,5 +994,113 @@ mod tests {
         })
         .unwrap();
         assert!(s.login("ghost", "pw", 1).is_err());
+    }
+
+    #[test]
+    fn challenge_response_authentication_flow() {
+        let mut s = UserStore::new();
+        s.upsert(User {
+            id: "alice".into(),
+            pass: hash_password("secret123", "0123456789abcdef"),
+            role: Role::Operator,
+            disabled: false,
+        })
+        .unwrap();
+
+        let now = 1000;
+        // 1. Request nonce
+        let (nonce, salt, rounds) = s.create_nonce("alice", now, 10).expect("nonce");
+        assert_eq!(salt, "0123456789abcdef");
+        assert_eq!(rounds, HASH_ROUNDS);
+        assert!(!nonce.is_empty());
+
+        // 2. Client computes stored digest and proof
+        let stored_digest = {
+            let u = s.get("alice").unwrap();
+            u.pass.split('$').nth(2).unwrap().to_string()
+        };
+        let proof = hex(&sha256(format!("{}:{}", stored_digest, nonce).as_bytes()));
+
+        // 3. Login succeeds
+        let res = s.login_with_proof("alice", &nonce, &proof, now + 1);
+        assert!(res.is_ok());
+        let (tok, sess) = res.unwrap();
+        assert_eq!(sess.user_id, "alice");
+        assert_eq!(sess.role, Role::Operator);
+        assert!(s.session(&tok, now + 2).is_some());
+
+        // 4. Replay attack fails: nonce was consumed immediately
+        assert!(s.login_with_proof("alice", &nonce, &proof, now + 2).is_err());
+
+        // 5. Expired nonce fails
+        let (nonce2, _, _) = s.create_nonce("alice", now, 5).expect("nonce");
+        let proof2 = hex(&sha256(format!("{}:{}", stored_digest, nonce2).as_bytes()));
+        assert!(s.login_with_proof("alice", &nonce2, &proof2, now + 6).is_err());
+
+        // 6. Bad proof fails
+        let (nonce3, _, _) = s.create_nonce("alice", now, 10).expect("nonce");
+        assert!(s.login_with_proof("alice", &nonce3, "wrong_proof", now + 1).is_err());
+
+        // 7. Non-existent user returns a dummy salt and cannot authenticate
+        let (dummy_nonce, dummy_salt, _) = s.create_nonce("nonexistent", now, 10).expect("nonce");
+        assert_eq!(dummy_salt.len(), 16);
+        assert!(s.login_with_proof("nonexistent", &dummy_nonce, "any", now + 1).is_err());
+    }
+
+    /// `/api/v1/auth/nonce` is unauthenticated, so without a cap a loop grows
+    /// the map faster than the 10-second expiry drains it.
+    #[test]
+    fn pending_nonces_are_capped() {
+        let mut s = UserStore::new();
+        let now = 1_000_000u64;
+        for i in 0..MAX_PENDING_NONCES {
+            assert!(
+                s.create_nonce(&format!("u{}", i), now, 10).is_some(),
+                "the cap refused a request below it at {}",
+                i
+            );
+        }
+        assert!(
+            s.create_nonce("one-too-many", now, 10).is_none(),
+            "the cap did not refuse once full"
+        );
+        // Once the window has passed, the expired entries drain and the
+        // endpoint works again - the cap is a rate limit, not a permanent wall.
+        assert!(s.create_nonce("later", now + 11, 10).is_some());
+    }
+
+    /// Failures escalate a DELAY, and the delay resets on success. There is
+    /// deliberately no per-name lockout: that would let anyone who knows the
+    /// admin's id keep the operator out.
+    #[test]
+    fn failed_logins_escalate_a_delay_and_success_clears_it() {
+        let mut s = UserStore::new();
+        let now = 5_000_000u64;
+        // The first few failures cost nothing.
+        for i in 0..FAILS_PER_NAME_BEFORE_DELAY {
+            assert_eq!(s.note_login_failure("alice", now), 0, "failure {}", i);
+        }
+        let d1 = s.note_login_failure("alice", now);
+        let d2 = s.note_login_failure("alice", now);
+        assert!(d1 > 0 && d2 > d1, "the delay did not escalate: {} then {}", d1, d2);
+        // A different name is unaffected - the delay is per name.
+        assert_eq!(s.note_login_failure("bob", now), 0);
+
+        s.note_login_success("alice");
+        assert_eq!(s.note_login_failure("alice", now), 0, "success did not reset the count");
+    }
+
+    /// A global flood is refused outright, and the refusal expires.
+    #[test]
+    fn a_global_failure_flood_is_refused_then_lifts() {
+        let mut s = UserStore::new();
+        let now = 7_000_000u64;
+        assert_eq!(s.login_blocked(now), None);
+        for i in 0..FAILS_GLOBAL_MAX {
+            s.note_login_failure(&format!("name{}", i), now);
+        }
+        let wait = s.login_blocked(now).expect("the flood was not refused");
+        assert!(wait <= GLOBAL_BLOCK_SECS);
+        assert_eq!(s.login_blocked(now + GLOBAL_BLOCK_SECS + 1), None, "the block never lifted");
     }
 }

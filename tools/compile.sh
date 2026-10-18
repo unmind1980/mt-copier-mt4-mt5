@@ -150,7 +150,7 @@ report() {
   fi
   txt="$(log_text "$log")"
   summary="$(printf '%s\n' "$txt" | grep -a "Result:" | tail -1)"
-  if printf '%s' "$summary" | grep -aq "0 errors"; then
+  if printf '%s' "$summary" | grep -aqE "(^|[[:space:]])0 errors"; then
     echo "  ok   $name   ${summary#*Result: }"
     printf '%s\n' "$txt" | grep -ai "warning" | head -5 | sed 's/^/         /'
     return 0

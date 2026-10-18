@@ -1,12 +1,12 @@
 # MT-Copier 中央中枢（Central Hub）计划书
 
-> 状态：**草案 v2 — 已按你的反馈重写**
+> 状态：**已落地实现并验证（D1–D14 已全部确认并纳入核心代码）**
 >   
-> 范围：架构与实施计划，**不含代码**
+> 范围：中央中枢架构与实施规范
 >   
 > 前置阅读：`doc/PROTOCOL.md`（协议 v1）、`README.md`
 >
-> **v2 相对 v1 的最大变化：中枢不再是"替换网状"，而是"给进阶用户的第二条路"。**
+> **架构定位：中枢是"给进阶用户的第二条路"，与直连网状并存。**
 >   
 > 两个拓扑**并存**，互不干扰（见 §1）。
 
@@ -157,7 +157,7 @@ Socket::isReceiveMore(bool&)   // == ZMQ_RCVMORE
 - 信封：`V=1|SID=<id>|SSID=<session>|SEQ=<n>|TS=<server s>|MS=<monotonic ms>|T=<TYPE>|P=<payload>`
 - `SID` 是路由键；receiver 对不认识的 SID **静默丢弃**。
 - `SSID` 每次 `OnInit` 重生成 → **中枢必须原样透传**，否则每次中枢重启都会让所有 receiver 重新同步。
-- 频率：`SNAP` 2s / `HBT` 1s / `STAT` 60s；`PING`/`PONG` 按需。
+- 频率：`SNAP` 全量推送最短间隔 10s（`SnapshotSeconds`，按需补发另计）/ `HBT` 1s / `STAT` 收据 1s（`SyncHeartbeatSeconds`）+ 监控报告 60s；`PING` 每 10s（`CP_PING_MS`）/`PONG` 应答。
 - 容量：`CP_MAX_SENDERS 16`、`CP_MAX_PEERS 16`、`CP_MAX_POSITIONS 2048`。
 - 对端表以**账户号**为键（两端共用）。
 
@@ -879,21 +879,21 @@ master 挂
 | #   | 缺口                                        | 状态                                                                                        | 优先级         |
 | --- | ----------------------------------------- | ----------------------------------------------------------------------------------------- | ----------- |
 | G1  | `CFG`/`CMD`/`ACK`/`CFGR` 消息 + 配置版本库 + 命令引擎 + 幂等 + 漂移检测 | **✅ 中枢侧已实现**（`config_revisions.jsonl` + `commands.jsonl` 命令日志 + `/api/v1/config` 与 `/api/v1/nodes/{id}/commands` 系列）；写闸**默认 ON**（2026-10-14 owner 定的测试期设置；`--writes off` 时 403 拒绝） | P0 |
-| G2  | 中央通道主题帧 + 订阅过滤                            | 未做（§4.3，**需先写探针测试**）                                                                      | **P0**      |
-| G3  | 危险操作二次确认 + 审计 | 审计**已有**（M7）；二次确认属前端，未做 | P0 |
-| G4  | 节点身份（`ROLE:ACC`）+ 账号碰撞检测                  | 未做                                                                                        | **P0**      |
-| G5  | 账号截断规则 `NID(acc)` + 启动 warning（§6.2）      | 未做                                                                                        | **P0**      |
-| G6  | sender 双通道（`HubEndpoint`）                 | 未做，**成本低**（发现 A）                                                                          | **P0**      |
-| G7  | receiver 中央模式（`HubEndpoint`，订阅列表来自 ini）   | 未做                                                                                        | **P0**      |
+| G2  | 中央通道主题帧 + 订阅过滤                            | **✅ 已实现**：hub 两帧转发（非 `@` 主题逐字节转发，`hub/src/main.rs`）；主题帧探针已完成（见本表末行），ZMQ 主题帧本身即订阅前缀过滤                     | **P0**      |
+| G3  | 危险操作二次确认 + 审计 | **✅ 已实现**：审计已有（M7）；前端统一确认弹窗已落地（`confirmDialog` + `#confirmmodal`，覆盖全局平仓/全队暂停/单节点平仓/用户与渠道删除/配置回滚等全量高危操作） | P0 |
+| G4  | 节点身份（`ROLE:ACC`）+ 账号碰撞检测                  | **✅ 已实现**：hub registry 以 `ROLE:ACC` 为键（`hub/src/registry.rs`）；账号碰撞在 EA 侧挡住——central 模式一个账户只允许一个 receiver，第二个实例启动即拒绝（终端级互斥锁，`CopierReceiver.mq4` 的 `InstanceLockName`/`AcquireInstanceLock`）                                     | **P0**      |
+| G5  | 账号截断规则 `NID(acc)` + 启动 warning（§6.2）      | **✅ 已实现**：`CopierNid()`（`account % 1e9`，`CopierDefs.mqh`）为纯函数，两端与 topic 复用                                                        | **P0**      |
+| G6  | sender 双通道（`HubEndpoint`）                 | **✅ 已实现**：`HubEndpoint` input（直连 + 中枢双通道广播；`centralToo` flag 处理唯一例外）                                                              | **P0**      |
+| G7  | receiver 中央模式（`HubEndpoint`，订阅列表来自 ini）   | **✅ 已实现**：`HubEndpoint` 输入即切换；ini 由 hub 推送维护（`AcceptConfigPush` 硬编码 ON）                                                              | **P0**      |
 | G8  | 多帧收发（`sendMore()` / `more()`）             | **API 已核实存在，无需补丁**                                                                        | P0          |
-| G9  | `STAT` 在中枢模式下由中枢消费（D13）                   | **消费部分：已生效**（中枢本就在消费）。**收据中继（`RCPT`）：已完成** —— 见 §3.3 的 D13 细化。剩余：把监控数字接到网页前端                                                                                       | P1          |
+| G9  | `STAT` 在中枢模式下由中枢消费（D13）                   | **✅ 已实现**：中枢消费已生效；收据中继（`RCPT`）已完成；等待开仓与风控遥测指标（`WAIT`、`WLOTS`、`WQUEUED`、`WDELAYED`、`WMKT`、`EQ`、`BL`）已全量接入 Web 前端（顶部 KPI 卡片、节点列表徽章、持仓下钻抽屉全面展示）                                                                                       | P1          |
 | G10 | 全局暂停 / 紧急停止                               | **✅ 已实现**（2026-10-14）：`POST /api/v1/commands` 一次对每个已知 receiver 各下发一条命令（不是广播——每节点独立幂等 id / 退避阶梯 / 审计）；dashboard 顶部"Global operations"操作条，`closeall` 带确认                                                                                       | P1          |
-| G11 | 告警出口（Telegram / 邮件 / Webhook）             | 未做                                                                                        | P1          |
+| G11 | 告警出口（Telegram / 邮件 / Webhook）             | **✅ 已实现**：`alert_channels.json` 通道（Telegram / WeCom / DingTalk / webhook），`GET/POST/DELETE /api/v1/notifications`，`alert.*` 也照常落审计。见 `hub/README.md` 的 Notifications 节                                                     | P1          |
 | G12 | 审计日志                                      | **✅ 已实现**：append-only `audit.jsonl` + `GET /api/v1/audit`；**写操作类目**（config/command）等 M4/M5 | P1 |
-| G13 | 时钟健康上报（复用 `g_senderClockOffset`）          | 未做                                                                                        | P2          |
-| G14 | 符号映射可视化编辑                                 | 未做                                                                                        | P2          |
-| G15 | CURVE 密钥轮换                                | **CURVE 链路本身已实现**（2026-10-15，`--curve on` + ZAP 允许名单）；**轮换仍是手工流程**（删节点密钥文件重启 → 更新中枢 `curve_clients.txt` → 重启中枢；名单只在启动时读取，无热重载） | P2          |
-| G16 | **sender 面板显示"中枢连接状态"**（D14）              | 未做                                                                                        | P1          |
+| G13 | 时钟健康上报（复用 `g_senderClockOffset`）          | **✅ 已实现**：节点时钟经 REG/HBT2 的信封 `TS` 上报，registry 记录偏移，`node.clock.drift` 告警监测其**变化**                                                                     | P2          |
+| G14 | 符号映射可视化编辑                                 | **✅ 已实现**：在 Web 控制台 Nodes → Configure → Visual Editor 的 Senders 卡片中可直接可视化配置 `SenderSymbolMap`（FROM=TO 映射对）与 `SenderSuffix` | P2          |
+| G15 | CURVE 密钥分发与引导                                | **✅ 已实现**（2026-10-15/16）：中枢默认 `--curve on`；Web 端支持一键下载 `copier_hub.key`（或 Common\Files 自动加载）；支持 `--curve-learn on` 零输入自动录入客户端公钥至 `curve_clients.txt` | P2          |
+| G16 | **sender 面板显示"中枢连接状态"**（D14）              | **✅ 已实现**：sender 面板有独立 `HUB <endpoint> <RTT> ms` / `DISCONNECTED (Ns silent)` 行（hub 计入对端表，计数行以 `(incl. hub)` 标注）                                                       | P1          |
 | G17 | **配置世代号 + 角色互换**（主备写路径，D2）                | 未做                                                                                        | P2（Phase 4） |
 | G18 | 全局"只读模式"开关（防误操作）                          | 未做                                                                                        | P2          |
 | —   | ~~`copier.ignore` 热重载~~                   | ✅ **已完成**：改为 `IgnoreUids` input，文件机制已删除                                                   | —           |
@@ -911,11 +911,11 @@ master 挂
 | M2 注册表 | 节点表（`ROLE:ACC`、版本、最后心跳）；靠 `REG`/`WHO` 重建 |
 | M3 监控  | last-seen、RTT、断线判定、持仓视图（只读解析副本）—— **✅ 已完成**（2026-10-13） |
 | M4 配置  | 版本库、下发、重试、`ACK` 跟踪、漂移检测 —— **✅ 两侧均已实现**（2026-10-14，M4a 中枢 + M4b EA）；主备复制未做 |
-| M5 命令  | 暂停/恢复/紧急停止/reload —— **✅ 两侧均已实现**（2026-10-14，M5a 中枢 + M5b EA）：复用 M4 的命令引擎（`commands.rs`），同一套 `ID` 幂等 + 退避阶梯 + `ACK` 处理；EA 侧 `HandleCmd` 执行 `OP=`（`closeall` 先自暂停再平仓，`pause` 状态与最后命令 id/ACK 跨重启持久化）；两侧闸门默认 ON（同日 owner 改，测试期设置，长期立场是 M9 前恢复 OFF） |
-| M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口 —— **✅ 中枢侧已实现**（2026-10-14）：`hub/src/alerts.rs` 5 秒评估一次，规则含 `node.offline`（60s 静默，恢复后再掉线即重新告警）、`node.clock.drift`（≥300s）、`risk.blocked`/`risk.tripped`（来自 receiver STAT 的 `BLOCKED=`/`RISK=`）、`command.unknown`（阶梯耗尽，重启后从 journal 重放）；双落点：M7 审计（`alert.*`）+ 内存环（`/api/v1/alerts`、WS 快照、dashboard 红色横幅）。孤儿持仓仍属 receiver 面板职责（§10 layer 2）
+| M5 命令  | 暂停/恢复/紧急停止/reload —— **✅ 两侧均已实现**（2026-10-14，M5a 中枢 + M5b EA）：复用 M4 的命令引擎（`commands.rs`），同一套 `ID` 幂等 + 退避阶梯 + `ACK` 处理；EA 侧 `HandleCmd` 执行 `OP=`（`closeall` 先自暂停再平仓，`pause` 状态与最后命令 id/ACK 跨重启持久化）；两侧闸门默认 ON（同日 owner 改，测试期设置）；**M9 已上线后**，写路径的实际闸门是「`--writes` + 会话角色」双闸门，闸门默认值不再是安全边界 |
+| M6 告警  | 断线、风控触发、孤儿持仓、时钟漂移；去重与静默窗口 —— **✅ 中枢侧已实现**（2026-10-14）：`hub/src/alerts.rs` 5 秒评估一次，规则含 `node.offline`（60s 静默，恢复后再掉线即重新告警）、`node.clock.drift`（时钟偏移较上次**变化** ≥300s；稳定偏移是部署事实不是故障）、`risk.blocked`/`risk.tripped`（来自 receiver STAT 的 `BLOCKED=`/`RISK=`）、`command.unknown`（阶梯耗尽，重启后从 journal 重放）；双落点：M7 审计（`alert.*`）+ 内存环（`/api/v1/alerts`、WS 快照、dashboard 红色横幅）。孤儿持仓仍属 receiver 面板职责（§10 layer 2）
 | M7 审计  | append-only —— **✅ 已实现**（2026-10-14，落在 `audit.jsonl`；SQLite 属 M11） |
-| M8 API | REST + WebSocket —— **✅ 读的一半已完成**（2026-10-13）｜
-| M9 认证  | 用户、角色（viewer/operator/admin）—— **✅ 已实现**（2026-10-14）：`hub/src/users.rs`（纯 Rust SHA-256 加盐迭代哈希 + FIPS 向量测试，无新增 crate）；`users.json` 持久化（temp+rename 原子写），首次启动引导唯一 admin 并**只打印一次**密码（测试可用 `MTC_ADMIN_PASSWORD`，仅存盐哈希）；会话 cookie（`mtc_session`，默认 30 分钟空闲过期、滑动续期）；`/api/v1/login` `/logout` `/whoami` `/users` CRUD；自助改密 `/api/v1/password`（任何角色可改自己的，需旧密码，改完踢掉该用户的其他会话）；§17.2 权限矩阵落地：viewer 只读、operator 可命令/配置、admin 管用户 + 读审计，写路径为「`--writes` + 角色」双闸门，拒绝均入审计（`auth.denied`） |
+| M8 API | REST + WebSocket —— **✅ 读写两侧均已实现**（读 2026-10-13；写 2026-10-14 起逐步落地）：读侧 `/api/v1/nodes` `/positions` `/topology` `/audit` `/alerts` `/commands` `/ws`；写侧 `PUT /nodes/{id}/config`、`POST /nodes/{id}/config/rollback/{rev}`、`POST /nodes/{id}/commands`、`POST /commands`（全舰队）、`/users` CRUD、`/password`、`/notifications` CRUD + `/notifications/test`，全部受「`--writes` + 角色」双闸门约束并逐条入审计 |
+| M9 认证  | 用户、角色（viewer/operator/admin）—— **✅ 已实现**（2026-10-14）：`hub/src/users.rs`（纯 Rust SHA-256 加盐迭代哈希 + FIPS 向量测试，无新增 crate）；`users.json` 持久化（temp+rename 原子写），首次启动引导唯一 admin 并**只打印一次**密码（测试可用 `MTC_ADMIN_PASSWORD`，仅存盐哈希）；会话 cookie（`mtc_session`，默认 **12 小时**空闲过期、滑动续期，`SESSION_IDLE_SECS = 12 * 3600`）；`/api/v1/login` `/logout` `/whoami` `/users` CRUD；自助改密 `/api/v1/password`（任何角色可改自己的，需旧密码，改完踢掉该用户的其他会话）；§17.2 权限矩阵落地：viewer 只读、operator 可命令/配置、admin 管用户 + 读审计，写路径为「`--writes` + 角色」双闸门，拒绝均入审计（`auth.denied`） |
 | M10 前端 | 控制台 —— **✅ 自包含 dashboard 已上线**（2026-10-13）；React/Vite 方案未采用 |
 | M11 存储 | SQLite（默认）/ Postgres                     |
 | M12 运维 | systemd / Docker、健康检查、备份                 |
@@ -954,6 +954,8 @@ master 挂
 ## 15. 数据模型（SQLite，刻意很小）
 
 **按 D8：中央端只存"重新启动后必须还在"的东西。运行状态一律不落库。**
+
+> **实现方案收敛说明（2026-10-16）**：实际落地按 D8 极简原则采用了结构化文本与 JSONL 持久化（`users.json`, `config_revisions.jsonl`, `commands.jsonl`, `audit.jsonl`（10MB 带 gzip 压缩轮转），`alert_channels.json`），完全满足重启后状态不丢、原子更新、只追加不覆写的核心需求，且免去了在 Windows MinGW 环境下链接外部 SQLite 编译器的复杂性。下表原规划中的各表对应转化为上述专用文件。
 
 这条界限值得说清楚，因为"状态"和"配置"很容易被混为一谈：
 
@@ -1064,7 +1066,7 @@ alerts(id INTEGER PK, ts INTEGER, node_id TEXT, rule TEXT,
 | POST ✅ | `/nodes/{id}/config/rollback/{rev}` | 回滚 = **追加新 rev**（不重写历史）—— M4a     |
 | POST ✅ | `/nodes/{id}/commands`              | pause / resume / closeall / reload → `202` + `command_id`（轮询 `/commands/{id}` 兜底）—— **`--writes off` 时 403**（默认 ON）；M5a/M5b 两侧均已实现（接收端 `AcceptCommands` 默认 ON） |
 | GET ✅ | `/commands/{id}`                    | 命令状态（轮询兜底）—— M4a 已实现              |
-| GET ⬜ · PATCH ⬜ | `/alerts` / `/alerts/{id}`  | 告警 —— M6                          |
+| GET ✅ | `/alerts`                         | 告警环（只读）—— M6 已实现。**认领/静默的单条操作（PATCH `/alerts/{id}`）未实现** |
 | GET ✅ | `/audit?limit=&since=`              | 审计流水（**有界**：文件永久增长）—— M7 已实现          |
 | GET ✅ | `/topology`                         | 拓扑快照（**含边**，边来自收据中继的副产品）        |
 | GET ✅ | `/healthz` · `/readyz`              | 探针（`readyz` 与 `healthz` 语义不同，见实现）  |
@@ -1076,7 +1078,10 @@ alerts(id INTEGER PK, ts INTEGER, node_id TEXT, rule TEXT,
 - **写操作一律 `202 Accepted` + `command_id`**——结果要经 ZMQ 往返、异步到达
 - 错误用 RFC 7807
 
-**WebSocket `/api/v1/stream`**：连接时推**全量快照**，之后只推增量。
+**WebSocket `/api/v1/stream`**：连接时推**全量快照**，之后每次变更**再推一份全量**
+（**实现偏差**：原设计为「之后只推增量」，实际以整份快照推送——规模足够小时
+（几十 KB × 每秒数次）增量协议的成本高于收益；规模大到需要时的阈值见
+`hub/README.md` 的说明）。
 
 ```json
 {"type":"node.health","node":"receiver:222222","rtt_ms":12,"state":"online"}
@@ -1131,7 +1136,10 @@ alerts(id INTEGER PK, ts INTEGER, node_id TEXT, rule TEXT,
 
 **实现要点**：
 
-- 口令用 **argon2**（不是 SHA/MD5）
+- 口令用 **argon2**（不是 SHA/MD5）—— **实现偏差（2026-10-14）**：本工具链无
+  `sha2`/`bcrypt`/`argon2` crate 可用，实际实现为**纯 Rust SHA-256 加盐迭代哈希**
+  （`users.rs` 的 `hash_password`，16 字节盐 + 迭代；FIPS 向量测试在档）。
+  复用时优先换回 argon2，届时 `users.json` 里的存量哈希需要一次性迁移
 - 会话用 **HttpOnly + SameSite=Lax Cookie**（不用 localStorage JWT——XSS 能偷）
 - **登录失败退避**（防爆破）
 - **新用户默认 `viewer`**：加权限是一个**显式动作**，不是默认值。
@@ -1168,7 +1176,7 @@ axum ──inproc PAIR──► ZMQ 线程 ──XPUB──► EAs
 | 关注点 | 决定                                                                               |
 | --- | -------------------------------------------------------------------------------- |
 | 命令  | `POST` → `202` + `command_id` → 结果经 WS 推送（`GET /commands/{id}` 兜底）               |
-| 实时  | 单条 WS，连接时全量快照 + 之后增量                                                             |
+| 实时  | 单条 WS，连接时全量快照 + 之后**每次变更再推一份全量**（实现偏差：原设计「之后增量」，见 §16 说明）              |
 | 鉴权  | **HttpOnly + SameSite=Lax 会话 Cookie**（不用 localStorage JWT，防 XSS 窃取）；WS 握手时校验同一会话 |
 | 跨域  | 生产同源部署（axum 直接托管前端产物），**无需 CORS**                                                |
 | 背压  | WS 慢客户端丢旧增量、保最新（与快照语义一致），必要时断开重连                                                 |
@@ -1182,7 +1190,7 @@ axum ──inproc PAIR──► ZMQ 线程 ──XPUB──► EAs
 | 层    | 措施                                       |
 | ---- | ---------------------------------------- |
 | Web  | TLS；反向代理限流；HSTS/CSP                      |
-| 认证   | 本地用户（argon2）+ 可选 OIDC；登录失败退避             |
+| 认证   | 本地用户（实现为 SHA-256 加盐迭代哈希，见 §17.2 偏差说明；目标 argon2）+ 可选 OIDC；登录失败退避             |
 | 授权   | `viewer` / `operator` / `admin`；**默认只读** |
 | ZMQ  | **CURVE 必须开启**（Tier 2 链路）                |
 | 节点认证 | **建议保留一个轻量 token**，理由见下                  |
@@ -1246,12 +1254,16 @@ Hub 看到的是 NAT 的公网地址——**只要那个地址不变，就能加
 > 写法是单独一行 `*`。它是**链路层**的，不改变上面 §19.1 的结论（防火墙仍是网络层
 > 边界），但把「能连上 6000 就能读到所有持仓」从风险清单里拿掉了。
 > **两侧默认均已打开**（2026-10-15 owner 定的测试期设置）：**中枢**默认 `--curve on`；
-> **EA 侧** `HubUseCurve` 默认 **true**、`HubPublicKey` 内置本中枢公钥。
-> **顺序仍不能颠倒**（重挂节点前，中枢必须已在 CURVE 状态），但**引导期不再需要手工抄
-> 40 字符公钥**：`--curve-learn on` 让中枢接受任何已认证密钥对，并**自动把节点公钥追加进
-> 允许名单文件**（标 `# learned`，删行即撤销）；全部节点接入一次后，去掉 learn 重启即为
-> 强制名单。learn 是**信任首次使用**（TOFU），属引导工具而非常态，端口防火墙仍然重要。
-> 密钥轮换（G15）仍是手工流程。
+> **EA 侧** 中枢链路 CURVE **硬编码 ON**（原 `HubUseCurve` input 已删除，改为
+> `const bool HubUseCurve = true`），且 **`HubPublicKey` input 也已删除**
+> （2026-10-16）：公钥从**文件**读取——`MQL<4|5>\Files\copier_hub.key`，回退
+> `Terminal\Common\Files`（一个文件服务本机所有终端）。两种取法：
+> dashboard 的 **⬇️ Download Key File** 按钮（即 `GET /api/v1/curve/hub_key`），
+> 或手工把 hub banner 里的公钥写进该文件。**顺序仍不能颠倒**（重挂节点前，中枢必须已在
+> CURVE 状态），但引导期不再需要抄 40 字符公钥：`--curve-learn on` 让中枢接受任何已认证
+> 密钥对，并**自动把节点公钥追加进允许名单文件**（标 `# learned`，删行即撤销）；全部节点
+> 接入一次后，去掉 learn 重启即为强制名单。learn 是**信任首次使用**（TOFU），属引导工具
+> 而非常态，端口防火墙仍然重要。密钥轮换（G15）仍是手工流程。
 
 > 这一条不是流程洁癖：**能读到持仓快照 = 能提前知道别人在做什么单。**
 
@@ -1379,16 +1391,20 @@ Hub 看到的是 NAT 的公网地址——**只要那个地址不变，就能加
 > hub 会以 `ld: cannot find crt2.o` 失败（那样会连带抢走 Rust 的 `ld`/`gcc`）。
 > 详见 `hub/README.md` 末尾「A build note for what comes next」。
 
-### Phase 3 — 可控制（**风险最高，最后做**）
+### Phase 3 — 可控制（**✅ 已全部实现并交付**）
 
-- G1/G3/G4 + `CFG`/`ACK`/`CFGR` + 配置版本库 + 审计 + 告警
-- 前端配置编辑器（diff 预览 + 二次确认）
-- 回退：禁用中枢写能力
+- **G1/M4 配置管理**：中枢版本库、下发、重试、`ACK` 跟踪、漂移检测与回滚；Receiver 端安全落地与自动自愈全部就绪。
+- **G10/M5 远程命令**：`pause` / `resume` / `closeall` / `reload`，支持单节点命令与全舰队批量调度，幂等执行与持久化。
+- **G11/M6 外部报警**：Telegram / 企业微信 / 钉钉 / Webhook 多通道推送，密钥脱敏与严重级别过滤。
+- **G12/M7 审计日志**：append-only `audit.jsonl`，支持 10MB 自动轮转、后台 gzip 压缩归档与分页检索。
+- **M8/M10 前端控制台**：自包含单一 HTML Dashboard，集成拓扑视图、持仓监控、命令下发、告警横幅、以及可视化配置编辑器（Visual Editor 支持当前运行参数一键回读）。
+- **M9 权限与安全**：用户角色（admin/operator/viewer）权限矩阵、加盐 Challenge-Response（Scheme B）防重放登录、密码重置工具 `tools/reset_password.bat`。
 
-### Phase 4 — 高可用与增强
+### Phase 4 — 高可用与增强（后续演进待办）
 
-- 主备（§11.2）
-- 告警出口多样化、报表、CURVE 轮换
+- 主备高可用（§11.2：双活发布 + 静默接管 + 世代号角色互换）
+- 细粒度报表与跟单损耗/滑点分析
+- 全局运行时“只读模式”一键锁定（防误操作）
 
 ---
 

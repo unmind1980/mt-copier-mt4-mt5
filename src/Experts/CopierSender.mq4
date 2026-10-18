@@ -35,8 +35,49 @@
 //--- MetaTrader's input dialog shows the comment INSTEAD of the variable
 //--- name whenever one is present, so a comment that does not name its
 //--- input leaves the operator reading a list of anonymous descriptions.
+#ifdef __MQL5__
+input group "--- Connectivity & Mode ---"
+#else
+input string _g_conn_ = ""; // --- Connectivity & Mode ---
+#endif
 input string BindAddress     = "*";         // BindAddress - "*" = all NICs, or one IP like 10.0.0.5
-input int    EventsPort      = 5555;        // EventsPort - 5555, or any free port 1024-49151
+input string EventsPort      = "";          // EventsPort - blank=Auto; or manual 1024-49151
+
+int          g_effectivePort = 5555;
+bool         g_isAutoPort    = true;
+
+int EffectivePort(bool &isAuto,string &errDesc)
+  {
+   errDesc = "";
+   string pStr = CopierTrim(EventsPort);
+   if(StringLen(pStr) == 0 || pStr == "0")
+     {
+      isAuto = true;
+      long acc = CopierAccountLogin();
+      return (int)(5000 + (MathAbs(acc) % 1000));
+     }
+
+   // 严格纯数字检查
+   for(int i = 0; i < StringLen(pStr); i++)
+     {
+      ushort c = StringGetCharacter(pStr, i);
+      if(c < '0' || c > '9')
+        {
+         errDesc = "EventsPort contains invalid characters (must be digits only, or blank for Auto).";
+         return 0;
+        }
+     }
+
+   long p = StringToInteger(pStr);
+   if(p < 1024 || p > 49151)
+     {
+      errDesc = "EventsPort (" + (string)p + ") out of range. Suggested port range: 1024-49151.";
+      return 0;
+     }
+
+   isAuto = false;
+   return (int)p;
+  }
 
 //--- The sender's identity IS its port; there is no separate name.
 //---
@@ -50,7 +91,7 @@ input int    EventsPort      = 5555;        // EventsPort - 5555, or any free po
 //--- NOTE two senders on DIFFERENT hosts may legitimately use the same port,
 //--- and would then share an id. On a multi-host setup give them different
 //--- ports, or use copier.ini, which still accepts an explicit id= per sender.
-string SenderId() { return (string)EventsPort; }
+string SenderId() { return (string)g_effectivePort; }
 //--- The CENTRAL CHANNEL (Tier 2). Leave empty for the normal direct setup.
 //---
 //--- Fill it in to ALSO publish through a central hub, for receivers that are
@@ -106,23 +147,11 @@ input bool   UseCurve        = false;       // UseCurve - turn Curve encryption 
 //--- the write gates above were hard-wired on: every session from here on is
 //--- a test session that needs the hub link encrypted.
 //---
-//--- COORDINATION - read before changing either of these back or forth:
-//---   HubUseCurve=true means the hub link REQUIRES CURVE. If the hub is
-//---   still started with `--curve off`, the handshake never completes and
-//---   this node simply never hears from the hub. So the order is always:
-//---     1. the hub's public key here (HubPublicKey),
-//---     2. this node's public key in the hub's curve_clients.txt,
-//---     3. the hub restarted with `--curve on`,
-//---     4. and only then re-attach the EA.
-//---   Turning it off is the same list in reverse.
-input bool   HubUseCurve      = true;       // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
-//--- The hub prints its public key with `copier-hub.exe --curve-show` (and in
-//--- its startup banner when it runs with --curve on). A PUBLIC key is not a
-//--- secret, so it is fine to ship it here - unlike the keypair file.
-//---
-//--- If the hub's key is ever rotated, THIS line has to be updated on every
-//--- node (that is the cost of baking it in; the input still overrides it).
-input string HubPublicKey     = "P7dvTYW2y7P2GRb0%cyi-T$<?bb/$e^1NzLc?G(5"; // HubPublicKey - the HUB's 40-char public key
+//--- CURVE on the HUB link is hard-wired ON. The Hub public key is resolved
+//--- automatically from copier_hub.key in MQL\Files or Terminal\Common\Files
+//--- (downloaded from the Web Dashboard). Neither HubUseCurve nor HubPublicKey
+//--- requires user input in the EA dialog.
+const bool   HubUseCurve      = true;       // Hub link CURVE encryption permanently enabled
 
 //--- cadence --------------------------------------------------------
 //--- SnapshotSeconds is the BASELINE full-state push interval, not the only
@@ -142,19 +171,36 @@ input string HubPublicKey     = "P7dvTYW2y7P2GRb0%cyi-T$<?bb/$e^1NzLc?G(5"; // H
 //--- If stop latency matters more than the bandwidth here, either lower this
 //--- (2 restores the old behaviour) or add an event-driven push on content
 //--- change, which is a separate decision and not part of this change.
+#ifdef __MQL5__
+input group "--- Cadence & Performance ---"
+#else
+input string _g_cadence_ = ""; // --- Cadence & Performance ---
+#endif
 input int    SnapshotSeconds = 10;          // SnapshotSeconds - baseline push interval; 0 = off
 input int    HeartbeatSeconds= 1;   // HeartbeatSeconds - account state interval
 input int    PollMs          = 100;         // PollMs - MT4 scan interval; <50 wastes CPU
 
-//--- filters --------------------------------------------------------
+#ifdef __MQL5__
+input group "--- Filters ---"
+#else
+input string _g_filters_ = ""; // --- Filters ---
+#endif
 input string IncludeSymbols  = "";          // IncludeSymbols - blank = all; ! prefix excludes
 input string IncludeMagicNumbers = "";   // IncludeMagicNumbers - blank=all; "0"=manual trades
 
-//--- sizing hint (receiver may override) ----------------------------
+#ifdef __MQL5__
+input group "--- Sizing Hint ---"
+#else
+input string _g_sizing_ = ""; // --- Sizing Hint ---
+#endif
 input double FixedLotSize    = 0.0;   // FixedLotSize - >0: send this size, not the real one
 input double LotSizeMultiplier = 0.0;   // LotSizeMultiplier - lots x this (if FixedLotSize=0)
 
-//--- misc -----------------------------------------------------------
+#ifdef __MQL5__
+input group "--- System ---"
+#else
+input string _g_system_ = ""; // --- System ---
+#endif
 input int    LogLevel        = 2;           // LogLevel - 0=err 1=warn 2=info 3=debug
 
 //--- STAT channel (optional) ----------------------------------------
@@ -272,7 +318,7 @@ long             g_bootMs=0;            // for UP=, the node's own uptime
 bool             g_peerWasDown[CP_MAX_PEERS];
 long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
 #define CP_PEER_TIMEOUT_MS 15000       // silence beyond this = disconnected
-#define CP_PING_MS          2000       // probe cadence
+#define CP_PING_MS          10000      // probe cadence (10s)
 //--- After an alert for a peer, stay quiet about that peer for a while. One
 //--- popup per outage is useful; one per flap cycle is not, and a flapping
 //--- link is exactly when an operator most needs the popup to still mean
@@ -283,7 +329,7 @@ bool             g_stateDirty=false;
 //=====================================================================
 // Helpers
 //=====================================================================
-string StatePath() { return "copier_sender_"+SenderId()+".st"; }
+string StatePath() { return "copier_sender_"+(string)CopierAccountLogin()+".st"; }
 
 void ParseFilter(const string csv,string &out[],bool &exclude,bool &active)
   {
@@ -522,6 +568,14 @@ int FindUidIn(const CopierPos &arr[],const int n,const string uid)
 //=====================================================================
 int OnInit()
   {
+   string portErr = "";
+   g_effectivePort = EffectivePort(g_isAutoPort, portErr);
+   if(StringLen(portErr) > 0)
+     {
+      Alert("[CopierSender] " + portErr);
+      Print("[CopierSender] ERROR: " + portErr);
+      return INIT_PARAMETERS_INCORRECT;
+     }
    MathSrand((int)(CopierNowMs()%2147483647)+(int)CopierAccountLogin());
    g_log.Init("sender_"+SenderId(),LogLevel);
 
@@ -536,7 +590,12 @@ int OnInit()
    if(CopierStateFile::Load(StatePath(),hdr,saved,savedCount))
      {
       for(int i=0;i<savedCount;i++) g_prev.Upsert(saved[i]);
-      g_log.Info("restored "+(string)savedCount+" position(s) from state");
+      g_log.Info("restored "+(string)savedCount+" position(s) from state ("+StatePath()+")");
+     }
+   else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount))
+     {
+      for(int i=0;i<savedCount;i++) g_prev.Upsert(saved[i]);
+      g_log.Info("restored "+(string)savedCount+" position(s) from legacy state (copier_sender_"+SenderId()+".st)");
      }
    else
      {
@@ -558,7 +617,7 @@ int OnInit()
    //--- server without a key cannot work, and starting anyway would produce
    //--- exactly the silent-never-connects symptom this design exists to kill.
    string curveSecret="",curvePublic="";
-   if(UseCurve || HubUseCurve)
+   if(UseCurve || (StringLen(HubEndpoint) > 0 && HubUseCurve))
      {
       CP_KEY_RESULT kr=g_key.Ensure(GetPointer(g_log));
       if(kr==CP_KEY_FAILED)
@@ -579,10 +638,23 @@ int OnInit()
       if(UseCurve) g_key.AnnouncePublic(GetPointer(g_log),"sender");
      }
 
-   if(!g_tp.BindSender(BindAddress,EventsPort,UseCurve,curveSecret))
+   if(!g_tp.BindSender(BindAddress,g_effectivePort,UseCurve,curveSecret))
      {
-      g_log.Error("cannot bind "+(string)EventsPort
-                  +" errno="+(string)g_tp.LastErrno());
+      int err=g_tp.LastErrno();
+      g_log.Error("cannot bind "+(string)g_effectivePort
+                  +" errno="+(string)err);
+      if(g_isAutoPort)
+        {
+         Alert("[CopierSender] AutoPort "+(string)g_effectivePort
+               +" is already in use or unavailable (errno="+(string)err
+               +")! Please configure an explicit port in EventsPort (1024-49151).");
+        }
+      else
+        {
+         Alert("[CopierSender] Port "+(string)g_effectivePort
+               +" cannot be bound (errno="+(string)err
+               +")! Check if port is in use.");
+        }
       return INIT_FAILED;
      }
 
@@ -613,26 +685,28 @@ int OnInit()
    //--- the clear as a fallback, which is the failure mode that would look
    //--- like success.
    bool hubCurveOk=true;
+   string activeHubKey="";
    if(HubUseCurve)
      {
-      if(StringLen(HubPublicKey)!=CP_KEY_LEN)
+      string keySrc="";
+      activeHubKey=CopierLoadHubPublicKey("",GetPointer(g_log),keySrc);
+      if(StringLen(activeHubKey)!=CP_KEY_LEN)
         {
-         g_log.Error("HubUseCurve is on but HubPublicKey is not a"
-                     +" "+IntegerToString(CP_KEY_LEN)+"-character key (it is "
-                     +IntegerToString(StringLen(HubPublicKey))+"). The hub prints"
-                     +" its public key in its startup banner. Hub link NOT opened.");
+         g_log.Error("Hub link CURVE is on but no valid "+IntegerToString(CP_KEY_LEN)+"-character Hub public key found."
+                     +" Download copier_hub.key from Web Dashboard to MQL\\Files (or Common\\Files)."
+                     +" Hub link NOT opened.");
          hubCurveOk=false;
         }
       else
         {
-         g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted.");
-         g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt:");
+         g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted (source: "+keySrc+").");
+         g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt (or auto-register):");
          g_log.Info("  "+curvePublic);
         }
      }
    if(StringLen(g_hubEp)>0 && hubCurveOk)
      {
-      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,HubPublicKey,curvePublic,curveSecret))
+      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,activeHubKey,curvePublic,curveSecret))
         {
          g_log.Error("central channel: cannot open a socket to "+g_hubEp
                      +" errno="+(string)g_tp.LastErrno()
@@ -669,7 +743,8 @@ int OnInit()
 
    EventSetMillisecondTimer(PollMs);
    g_panel.Init("cpsnd",10,20,430);
-   g_log.Info("sender "+SenderId()+" listening on port "+(string)EventsPort
+   g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
+              +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
               +" (one socket, both streams) ssid="+g_ssid
               +" nid="+(string)g_nid
               +" build="+CP_BUILD_STAMP);
@@ -967,12 +1042,12 @@ int SnapStaleIndex(const string who)
    int n=ArraySize(g_snapStaleWho);
    for(int i=0;i<n;i++)
       if(g_snapStaleWho[i]==who) return i;
-   ArrayResize(g_snapStaleWho,n+1);
-   ArrayResize(g_snapStaleN,n+1);
-   ArrayResize(g_snapStaleMs,n+1);
-   ArrayResize(g_snapRcptMs,n+1);
-   ArrayResize(g_snapIntMs,n+1);
-   ArrayResize(g_snapRepairMs,n+1);
+   ArrayResize(g_snapStaleWho,n+1,16);
+   ArrayResize(g_snapStaleN,n+1,16);
+   ArrayResize(g_snapStaleMs,n+1,16);
+   ArrayResize(g_snapRcptMs,n+1,16);
+   ArrayResize(g_snapIntMs,n+1,16);
+   ArrayResize(g_snapRepairMs,n+1,16);
    g_snapStaleWho[n]=who;
    g_snapStaleN[n]=0;
    g_snapStaleMs[n]=0;
@@ -1036,8 +1111,8 @@ void UpdatePanel()
    int r=0;
    g_panel.Row(r++,"Copier SENDER  -  account "
                    +(string)CopierAccountLogin(),CP_PANEL_TITLE);
-   g_panel.Row(r++,"Listening  "+(string)BindAddress+":"+(string)EventsPort
-                   +"   id "+(string)EventsPort,CP_PANEL_DIM);
+   g_panel.Row(r++,"Listening  "+(string)BindAddress+":"+(string)g_effectivePort
+                   +"   id "+(string)g_effectivePort+(g_isAutoPort ? " [Auto]" : ""),CP_PANEL_DIM);
    //--- WHICH CHANNELS ARE LIVE. Both rows of information D14 asked for are
    //--- kept: the direct side below is unchanged, and the central side is
    //--- added here plus as a row in the peer list (the hub is a peer like any

@@ -84,6 +84,11 @@ pub const KIND_CONFIG: &str = "config";
 /// An operational command. Sent as `CMD`; the ladder re-sends the same id.
 pub const KIND_OP: &str = "op";
 
+/// How long a FINISHED config command stays finished before `issue_cfg` will
+/// revive it. See the note there: the comparison that calls it runs on every
+/// heartbeat, so this is what separates "self-heal" from "flood".
+pub const REVIVE_COOLDOWN_SECS: u64 = 60;
+
 /// The operational commands, and the ONLY ones the hub will issue.
 ///
 /// A closed set, checked at the door, because the hub cannot tell a typo from
@@ -148,6 +153,7 @@ pub struct CommandStore {
     inner: Mutex<Inner>,
     path: PathBuf,
     enabled: bool,
+    salt: String,
 }
 
 impl CommandStore {
@@ -167,6 +173,7 @@ impl CommandStore {
             }),
             path: path.to_path_buf(),
             enabled: true,
+            salt: String::new(),
         })
     }
 
@@ -176,6 +183,7 @@ impl CommandStore {
     /// hub with no journal should still be able to answer `/commands` honestly
     /// rather than 503.
     pub fn disabled() -> CommandStore {
+        let salt = format!("{:04x}", (unix_millis() ^ (std::process::id() as u64)) & 0xffff);
         CommandStore {
             inner: Mutex::new(Inner {
                 file: None,
@@ -185,6 +193,7 @@ impl CommandStore {
             }),
             path: PathBuf::new(),
             enabled: false,
+            salt,
         }
     }
 
@@ -214,10 +223,60 @@ impl CommandStore {
     /// and a retry - all land on the same command instead of minting another.
     /// That is §5.4 rule 2 seen from the hub's side.
     pub fn issue_cfg(&self, node: &str, rev: u64, actor: &str, ip: &str) -> Command {
+        self.issue_cfg_at(node, rev, actor, ip, unix_secs())
+    }
+
+    /// `issue_cfg` with an explicit clock, so the revive cooldown can be
+    /// exercised without sleeping for a minute.
+    pub fn issue_cfg_at(
+        &self,
+        node: &str,
+        rev: u64,
+        actor: &str,
+        ip: &str,
+        now_secs: u64,
+    ) -> Command {
         let id = command_id_cfg(node, rev);
         let mut inner = self.inner.lock().unwrap();
-        if let Some(c) = inner.commands.get(&id) {
-            return c.clone();
+        if let Some(c) = inner.commands.get_mut(&id) {
+            if c.state == STATE_PENDING {
+                c.next_at = Instant::now();
+                return c.clone();
+            }
+            //--- A command that has ENDED - `unknown` after the ladder, or
+            //--- `rejected` by the node - is revived here, because the whole
+            //--- point of this call is "this node needs this revision". A node
+            //--- that restarts with a stale ini, or one that was simply
+            //--- offline for the whole ladder, would otherwise be stuck on the
+            //--- old config forever: the command existed, so nothing new was
+            //--- ever minted, and nothing ever re-sent it.
+            //---
+            //--- BUT NOT ON EVERY HEARTBEAT. This is called from the REG/HBT2
+            //--- comparison, which fires every 5 s - so an unconditional
+            //--- revival turns a node that keeps REJECTING a bad config into a
+            //--- push every 5 seconds, forever, with a log line each time.
+            //--- The cooldown makes the self-heal a retry every minute instead:
+            //--- fast enough to recover a node that came back, slow enough that
+            //--- a refusal is not amplified into a flood.
+            let last = c.ts.max(c.ack_at);
+            if now_secs.saturating_sub(last) < REVIVE_COOLDOWN_SECS {
+                return c.clone();
+            }
+            c.state = STATE_PENDING.to_string();
+            c.attempts = 0;
+            c.ack_at = 0;
+            c.err = String::new();
+            c.ts = now_secs;
+            c.next_at = Instant::now();
+            if !actor.is_empty() {
+                c.actor = actor.to_string();
+            }
+            if !ip.is_empty() {
+                c.ip = ip.to_string();
+            }
+            let updated = c.clone();
+            inner.append(&updated);
+            return updated;
         }
         let c = Command {
             id: id.clone(),
@@ -228,7 +287,7 @@ impl CommandStore {
             seq: 0,
             args: String::new(),
             state: STATE_PENDING.to_string(),
-            ts: unix_secs(),
+            ts: now_secs,
             actor: actor.to_string(),
             ip: ip.to_string(),
             attempts: 0,
@@ -247,8 +306,13 @@ impl CommandStore {
         let mut inner = self.inner.lock().unwrap();
         let seq = inner.seq.get(node).copied().unwrap_or(0) + 1;
         inner.seq.insert(node.to_string(), seq);
+        let id = if self.salt.is_empty() {
+            command_id_op(node, op, seq)
+        } else {
+            format!("{}-{}-{}-{}", node.replace(':', "-"), self.salt, op, seq)
+        };
         let c = Command {
-            id: command_id_op(node, op, seq),
+            id: id.clone(),
             node: node.to_string(),
             kind: KIND_OP.to_string(),
             rev: 0,
@@ -273,7 +337,7 @@ impl CommandStore {
         self.inner.lock().unwrap().commands.get(id).cloned()
     }
 
-    /// Newest first.
+    /// Newest first, with stable tie-breaking on id.
     pub fn commands(&self) -> Vec<Command> {
         let mut v: Vec<Command> = self
             .inner
@@ -283,12 +347,11 @@ impl CommandStore {
             .values()
             .cloned()
             .collect();
-        v.sort_by(|a, b| b.ts.cmp(&a.ts));
+        v.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
         v
     }
 
-    /// Every command for one node, newest first. One lookup rather than a
-    /// filter in the caller, because the API asks this per node detail.
+    /// Every command for one node, newest first, with stable tie-breaking on id.
     pub fn for_node(&self, node: &str) -> Vec<Command> {
         let mut v: Vec<Command> = self
             .inner
@@ -299,7 +362,7 @@ impl CommandStore {
             .filter(|c| c.node == node)
             .cloned()
             .collect();
-        v.sort_by(|a, b| b.ts.cmp(&a.ts));
+        v.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
         v
     }
 
@@ -486,6 +549,13 @@ fn unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
@@ -715,6 +785,64 @@ mod tests {
         let (total, _, torn) = s.stats();
         assert_eq!(total, 1, "the good command was lost");
         assert_eq!(torn, 1, "the torn line was not counted");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn repushing_terminal_config_command_revives_it() {
+        let p = tmp("repush");
+        let s = CommandStore::open(&p).unwrap();
+        let t0 = 1_700_000_000u64;
+        let cmd = s.issue_cfg_at("receiver:1", 5, "op", "", t0);
+        assert_eq!(cmd.state, STATE_PENDING);
+
+        // Exhaust the retry ladder so it ends up unknown
+        let mut now = Instant::now();
+        for _ in 0..10 {
+            let _ = s.due(now);
+            now += Duration::from_secs(120);
+        }
+        assert_eq!(s.command(&cmd.id).unwrap().state, STATE_UNKNOWN);
+
+        // Inside the cooldown the command stays finished: the comparison that
+        // calls this runs every 5 s, and reviving on every heartbeat would turn
+        // a node that keeps REJECTING a config into a permanent flood.
+        let early = s.issue_cfg_at("receiver:1", 5, "op", "", t0 + 5);
+        assert_eq!(early.state, STATE_UNKNOWN, "revived inside the cooldown");
+
+        // After it, the re-push must revive the command to pending with 0
+        // attempts and due immediately.
+        let revived =
+            s.issue_cfg_at("receiver:1", 5, "op", "", t0 + REVIVE_COOLDOWN_SECS + 1);
+        assert_eq!(revived.state, STATE_PENDING);
+        assert_eq!(revived.attempts, 0);
+
+        let due = s.due(Instant::now());
+        assert_eq!(due.len(), 1, "revived command must be due immediately");
+        assert_eq!(due[0].id, cmd.id);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn disabled_commands_store_uses_salted_ids() {
+        let s1 = CommandStore::disabled();
+        let c1 = s1.issue_op("receiver:1", "pause", "", "op", "");
+        assert!(c1.id.starts_with("receiver-1-"));
+        assert!(c1.id.ends_with("-pause-1"));
+        assert!(!s1.salt.is_empty());
+    }
+
+    #[test]
+    fn commands_sorting_is_deterministic_on_same_timestamp() {
+        let p = tmp("sort");
+        let s = CommandStore::open(&p).unwrap();
+        let _c1 = s.issue_op("receiver:1", "pause", "", "op", "");
+        let _c2 = s.issue_op("receiver:1", "resume", "", "op", "");
+        let list1 = s.commands();
+        let list2 = s.commands();
+        assert_eq!(list1.len(), 2);
+        assert_eq!(list1[0].id, list2[0].id);
+        assert_eq!(list1[1].id, list2[1].id);
         let _ = std::fs::remove_file(&p);
     }
 }

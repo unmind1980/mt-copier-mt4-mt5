@@ -475,6 +475,125 @@ def main():
                   for c in d.get("commands", [])),
               str(sorted({c["state"] for c in d.get("commands", [])})))
 
+        print()
+        print("== 10. receiver current setting reporting (REG & CFGRPT) & full [common] inputs ==")
+
+        def escape_ini(s):
+            out = s.replace("%", "%25")
+            out = out.replace("\r\n", "%0A").replace("\n", "%0A").replace("\r", "%0A")
+            out = out.replace("=", "%3D").replace(";", "%3B").replace("|", "%7C").replace("~", "%7E").replace(",", "%2C")
+            return out
+
+        # 10a. Simulate Receiver registering with its live Current Setting (including [common] inputs)
+        CURRENT_INI_1 = (
+            "[common]\n"
+            "deviation_points=30\n"
+            "max_slippage_pips=5.0\n"
+            "max_daily_loss_currency=1000.0\n"
+            "magic_number_offset=200000\n"
+            "copy_stop_loss=true\n"
+            "invert_trade_direction=false\n"
+            "\n"
+            "[sender1]\n"
+            "id=alpari01\n"
+            "events=5555\n"
+            "lotmode=multiplier\n"
+            "lotparam=1.5\n"
+        )
+        esc1 = escape_ini(CURRENT_INI_1)
+        up.send_multipart([b"@hub", env(RECV, "REG",
+            f"ROLE=receiver;ACC={RECV};VER=2.0;NAME=Pilot;UP=10;REV=5;INI={esc1}")])
+        time.sleep(1.0)
+
+        st, d = js("GET", f"/api/v1/nodes/{NODE}/config")
+        check("GET /config includes current_setting reported via REG",
+              bool(d.get("current_setting")), f"current_setting length {len(d.get('current_setting') or '')}")
+        check("...and current_setting matches what receiver reported",
+              d.get("current_setting") == CURRENT_INI_1,
+              "identical" if d.get("current_setting") == CURRENT_INI_1 else "differs")
+        check("...and current_setting_ts timestamp is recorded",
+              d.get("current_setting_ts", 0) > 0, str(d.get("current_setting_ts")))
+
+        # 10b. Simulate Receiver sending CFGRPT (effective config update)
+        CURRENT_INI_2 = (
+            "[common]\n"
+            "deviation_points=50\n"
+            "max_slippage_pips=3.0\n"
+            "max_daily_loss_currency=2500.0\n"
+            "magic_number_offset=200000\n"
+            "copy_stop_loss=false\n"
+            "invert_trade_direction=true\n"
+            "\n"
+            "[sender1]\n"
+            "id=alpari01\n"
+            "events=5555\n"
+            "lotmode=fixed\n"
+            "lotparam=0.10\n"
+        )
+        esc2 = escape_ini(CURRENT_INI_2)
+        up.send_multipart([b"@hub", env(RECV, "CFGRPT",
+            f"ROLE=receiver;ACC={RECV};REV=6;INI={esc2}")])
+        time.sleep(1.0)
+
+        st, d = js("GET", f"/api/v1/nodes/{NODE}/config")
+        check("CFGRPT updates current_setting on hub",
+              d.get("current_setting") == CURRENT_INI_2,
+              "identical" if d.get("current_setting") == CURRENT_INI_2 else "differs")
+
+        # 10c. Hub pushes a new config with comprehensive [common] receiver inputs
+        FULL_INI_PUSH = (
+            "[common]\n"
+            "deviation_points=40\n"
+            "max_slippage_pips=4.0\n"
+            "max_spread_pips=12.0\n"
+            "max_daily_loss_currency=3000.0\n"
+            "max_single_order_risk_currency=500.0\n"
+            "poll_interval_ms=100\n"
+            "enable_retry_on_requote=true\n"
+            "copy_take_profit=true\n"
+            "copy_stop_loss=true\n"
+            "\n"
+            "[sender1]\n"
+            "id=alpari01\n"
+            "events=5555\n"
+            "lotmode=multiplier\n"
+            "lotparam=2.5\n"
+        )
+        st, d = js("PUT", f"/api/v1/nodes/{NODE}/config", FULL_INI_PUSH)
+        check("PUT comprehensive [common] config accepted", st == 202, f"status {st}")
+        cmd_full = d.get("command_id")
+
+        cfg_received = None
+        deadline = time.time() + 4
+        while time.time() < deadline and cfg_received is None:
+            try:
+                parts = node.recv_multipart(zmq.NOBLOCK)
+            except zmq.Again:
+                time.sleep(0.1)
+                continue
+            if len(parts) >= 2 and b"T=CFG" in parts[1] and cmd_full.encode() in parts[1]:
+                cfg_received = parts[1].decode("latin-1")
+
+        check("comprehensive CFG with [common] delivered to receiver wire",
+              cfg_received is not None, f"ID={cmd_full}")
+        if cfg_received:
+            kv_full = {}
+            for item in cfg_received.split("|P=", 1)[1].split(";"):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    kv_full[k] = v
+            ini_un = kv_full.get("INI", "")
+            for a, b in (("%0A", "\n"), ("%0D", "\r"), ("%3D", "="), ("%3B", ";"),
+                         ("%7C", "|"), ("%7E", "~"), ("%2C", ","), ("%25", "%")):
+                ini_un = ini_un.replace(a, b)
+            check("...and received INI matches FULL_INI_PUSH byte-for-byte",
+                  ini_un == FULL_INI_PUSH,
+                  "identical" if ini_un == FULL_INI_PUSH else "differs")
+            check("...contains [common] section and risk limits",
+                  "[common]" in ini_un and "max_daily_loss_currency=3000.0" in ini_un,
+                  "verified")
+
+
     finally:
         stop(hub, out, cmds_path)
         for f in (cfg_path, audit_path):

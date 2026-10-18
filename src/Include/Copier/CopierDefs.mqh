@@ -198,13 +198,19 @@ bool CopierSeenRingApplies(const int kind)
 #define CP_T_SNAP    "SNAP"   // full open-position snapshot (authoritative)
 #define CP_T_OPEN    "OPEN"   // event: position opened
 #define CP_T_CLOSE   "CLOSE"  // event: position closed
-#define CP_T_PARTIAL "PARTIAL"// event: partial close      (P4, reserved)
-#define CP_T_MODIFY  "MODIFY" // event: sl/tp changed      (P4, reserved)
+#define CP_T_PARTIAL "PARTIAL"// event: partial close      (RESERVED - never emitted)
+//--- MODIFY is LIVE: the sender emits it when a mirrored position's SL/TP
+//--- changes (CopierSender.mq4, Emit(CP_T_MODIFY,...)) and the receiver acts on
+//--- it in HandleModifyEvent. The comment here said "(P4, reserved)" long after
+//--- that landed, which is the kind of note that makes a reader skip the one
+//--- message type they are looking for.
+#define CP_T_MODIFY  "MODIFY" // event: sl/tp changed
 #define CP_T_HBT     "HBT"    // heartbeat + account state
 #define CP_T_STAT    "STAT"   // receiver -> sender status
 #define CP_T_CFG     "CFG"    // hub -> node : apply this config (M4b)
 #define CP_T_ACK     "ACK"    // node -> hub : the result of a CFG
 #define CP_T_CFGR    "CFGR"   // node -> hub : send me my config again
+#define CP_T_CFGREPORT "CFGRPT" // node -> hub : current effective config report
 #define CP_T_CMD     "CMD"    // hub -> node : operational command (M5b)
 //--- SNAPSHOT RECEIPT, hub -> sender (central channel only).
 //---

@@ -83,11 +83,31 @@ public:
       return true;
      }
 
+   bool              HasSection(const string section) const
+     {
+      for(int i=0;i<m_n;i++)
+        {
+         if(StringCompare(m_sec[i],section,false)==0) return true;
+        }
+      return false;
+     }
+
+   bool              Has(const string section,const string key) const
+     {
+      for(int i=0;i<m_n;i++)
+        {
+         if(StringCompare(m_sec[i],section,false)==0 && StringCompare(m_key[i],key,false)==0)
+            return true;
+        }
+      return false;
+     }
+
    string            Get(const string section,const string key,const string deflt="") const
      {
       for(int i=0;i<m_n;i++)
         {
-         if(m_sec[i]==section && m_key[i]==key) return m_val[i];
+         if(StringCompare(m_sec[i],section,false)==0 && StringCompare(m_key[i],key,false)==0)
+            return m_val[i];
         }
       return deflt;
      }
@@ -110,6 +130,7 @@ public:
      {
       string v=Get(section,key,"");
       if(StringLen(v)==0) return deflt;
+      //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
       StringToLower(v);
       return (v=="1" || v=="true" || v=="yes" || v=="on");
      }

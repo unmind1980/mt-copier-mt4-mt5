@@ -28,6 +28,8 @@ set "HERE=%~dp0"
 set "REPO=%HERE%.."
 set "BIN=%REPO%\hub\target\release\copier-hub.exe"
 
+cd /d "%REPO%"
+
 set "PY="
 for %%c in (
   "%USERPROFILE%\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe"
@@ -84,6 +86,18 @@ if "%~1"=="--selftest" (
   echo.
   pause
   exit /b %errorlevel%
+)
+
+REM --- Check if another copier-hub.exe instance is already running
+tasklist /FI "IMAGENAME eq copier-hub.exe" 2>nul | find /I "copier-hub.exe" >nul
+if not errorlevel 1 (
+  echo.
+  echo   [WARNING] An instance of copier-hub.exe is already running!
+  echo   Port 6000 / 6010 is likely occupied.
+  echo   Please close the existing instance or terminate copier-hub.exe before starting.
+  echo.
+  pause
+  exit /b 1
 )
 
 echo.

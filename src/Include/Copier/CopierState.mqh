@@ -456,13 +456,25 @@ public:
 //=====================================================================
 // State file. Rewritten in full every time, never appended.
 //
-// NOTE on atomicity: the original design used write-temp + rename, but
-// FileMove does not compile consistently across MetaTrader builds, so
-// the file is deleted and rewritten in place instead. That leaves a
-// small window where a crash yields a truncated file - which is exactly
-// why every file ends with an "END:<n>" marker holding the record
-// count. Load() rejects a file whose END marker is missing or whose
-// count disagrees, and the caller then falls back to rebuilding
+// NOTE on atomicity: a true rename is not available here. FileMove does
+// not compile consistently across the MetaTrader builds this project
+// targets, and FileCopy - which looks like the portable answer - is NOT:
+// MQL4 takes (src, common_flag, dst) where MQL5 takes (src, dst, flags),
+// so the obvious swap compiles on one platform and fails on the other
+// (METRADER error 199, measured on the MT4 targets, 2026-10-18). So the
+// swap here is WRITE-SUCCESSOR, COPY-BYTES-IN-PLACE, DELETE-SUCCESSOR.
+//
+// The original order (delete the only copy, then rewrite it in place) was
+// worse in the one case that matters: a save that failed HALFWAY (disk
+// full, handles exhausted by another EA) destroyed the previous state
+// before proving the new one could be written, and the next restart
+// rebuilt identity from comments alone. Writing the successor first means
+// a failed save leaves the previous file exactly as it was.
+//
+// The residual crash window is "mid-copy of a finished file" rather than
+// "mid-rewrite of every line", and a torn result is still caught by the
+// "END:<n>" marker: Load() rejects a file whose END marker is missing or
+// whose count disagrees, and the caller then falls back to rebuilding
 // identity from the order comments. The state file is a cache, not the
 // source of truth, so this is safe.
 //=====================================================================
@@ -476,13 +488,16 @@ public:
    static bool       Save(const string path,const string header,
                           const CopierPos &pos[],const int count)
      {
-      FileDelete(path);
+      //--- The successor is written FIRST. If this open fails, or the
+      //--- writes below fail, the previous state file is untouched - the
+      //--- caller can fall back to it across a restart instead of nothing.
+      string tmp=path+".tmp";
+      FileDelete(tmp);
       //--- shareable for the same reason as the log: the state file is the
       //--- authoritative record of what a sender holds, and being unable to
       //--- read it while the EA runs makes it useless as a diagnostic.
-      int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI
-                     |FILE_SHARE_READ|FILE_SHARE_WRITE);
-      if(h==INVALID_HANDLE) return false;
+      int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      if(h==INVALID_HANDLE) return false;   // the OLD file is untouched
 
       FileWrite(h,CP_STATE_TAG_HDR+header);
       int written=0;
@@ -497,6 +512,27 @@ public:
       FileWrite(h,CP_STATE_TAG_END+(string)written);
       FileFlush(h);
       FileClose(h);
+
+      //--- Swap the successor over the old file. No FileCopy (not portable)
+      //--- and no FileMove (not available): read the successor back and
+      //--- write it over the target in place. Opening the target FAILS
+      //--- leaves the old state as it was; opening it TRUNCATES it, so a
+      //--- crash mid-copy is caught by the END marker in Load, exactly as
+      //--- before - but a failed save no longer destroys what was there.
+      int rh=FileOpen(tmp,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+      if(rh==INVALID_HANDLE) return false;
+      int wh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+      if(wh==INVALID_HANDLE)
+        {
+         FileClose(rh);
+         return false;                      // old file intact, tmp kept
+        }
+      while(!FileIsEnding(rh))
+         FileWrite(wh,FileReadString(rh));
+      FileClose(rh);
+      FileFlush(wh);
+      FileClose(wh);
+      FileDelete(tmp);
       return true;
      }
 

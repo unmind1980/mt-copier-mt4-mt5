@@ -75,12 +75,13 @@ mod commands;
 mod config;
 mod curve;
 mod envelope;
+mod notifications;
 mod positions;
 mod registry;
 mod stats;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use envelope::{envelope_hdr, envelope_kv, envelope_payload, envelope_type};
 use positions::{parse_snap, Positions};
@@ -303,6 +304,7 @@ struct Args {
     /// flip this default - before the hub faces anything but the owner's own
     /// test bench.
     writes: bool,
+    notifications: String,
     /// Where the M7 audit log is appended. Empty string = off (`--audit none`).
     ///
     /// Default sits next to `hub.log`, so `tools\hublog.bat` puts both in one
@@ -331,6 +333,7 @@ fn parse_args() -> Result<Args, String> {
         //--- time anyway. The struct field's doc comment carries the full
         //--- reasoning and the "flip it back" reminder.
         writes: true,
+        notifications: "alert_channels.json".to_string(),
         audit: "audit.jsonl".to_string(),
         verbose: false,
         stats_every: 30.0,
@@ -460,6 +463,11 @@ fn parse_args() -> Result<Args, String> {
                 a.audit = if v == "none" { String::new() } else { v.clone() };
                 i += 2;
             }
+            "--notifications" => {
+                let v = need(i)?;
+                a.notifications = if v == "none" { String::new() } else { v.clone() };
+                i += 2;
+            }
             "--help" | "-h" => {
                 return Err("help".to_string());
             }
@@ -492,6 +500,8 @@ fn usage() {
     println!("  --users        M9 user store (default users.json); sessions are");
     println!("                 always in-memory. --users none = empty store, which");
     println!("                 bootstraps a fresh admin on next start.");
+    println!("  --notifications alert channel store (default alert_channels.json);");
+    println!("                 --notifications none keeps channels in memory only.");
     println!("  --writes       on | off (default ON since 2026-10-14, owner's");
     println!("                 test-period setting). OFF means the hub cannot");
     println!("                 change any node's config: PUT/POST return 403 and");
@@ -1147,14 +1157,19 @@ fn main() {
     };
 
     if args.writes {
-        println!("[hub] WRITES ENABLED - this hub may change a node's config");
+        println!("[hub] WRITES ENABLED (default) - this hub may change a node's config");
         println!("[hub]   every change is audited; see --audit and --config");
     } else {
-        println!("[hub] writes disabled (default): PUT returns 403 and no CFG is sent");
+        println!("[hub] writes disabled (--writes off): PUT returns 403 and no CFG is sent");
     }
 
+    let notif_path = if args.notifications.is_empty() {
+        None
+    } else {
+        Some(std::path::Path::new(&args.notifications))
+    };
     let shared: api::SharedState = std::sync::Arc::new(std::sync::Mutex::new(
-        api::Shared::new(args.port, audit.clone(), cfg.clone(), cmds.clone(), args.writes),
+        api::Shared::new(args.port, audit.clone(), cfg.clone(), cmds.clone(), args.writes, notif_path),
     ));
     //--- Hand the CURVE identity (set up above, before bind) to the API so the
     //--- dashboard can show the public key - the one value every node's
@@ -1187,6 +1202,15 @@ fn main() {
     //--- a node stayed down - which is how an audit log becomes unreadable and
     //--- then unread.
     let mut last_liveness: std::collections::HashMap<String, Liveness> =
+        std::collections::HashMap::new();
+
+    //--- Rate limiting for DROP console logs and wire-triggered audit fsync entries
+    let mut last_drop_log = Instant::now() - Duration::from_secs(10);
+    let mut dropped_since_log = 0u64;
+    //--- Last time a STAT named a sender the hub does not know. Rate-limited
+    //--- because a misconfigured receiver emits one a second.
+    let mut last_rcpt_drop = Instant::now() - Duration::from_secs(60);
+    let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
         std::collections::HashMap::new();
 
     //--- The API thread, if it was asked for. Spawned before the loop so a
@@ -1342,11 +1366,26 @@ fn main() {
 
                     if !payload.starts_with(b"V=") {
                         st.note_dropped();
-                        println!(
-                            "[hub] DROP  topic={}  {} bytes, does not start with 'V='",
-                            ts,
-                            payload.len()
-                        );
+                        dropped_since_log += 1;
+                        if args.verbose || last_drop_log.elapsed() >= Duration::from_secs(2) {
+                            if dropped_since_log > 1 && !args.verbose {
+                                println!(
+                                    "[hub] DROP  topic={}  {} bytes, does not start with 'V=' ({} dropped in last {:.1}s)",
+                                    ts,
+                                    payload.len(),
+                                    dropped_since_log,
+                                    last_drop_log.elapsed().as_secs_f32()
+                                );
+                            } else {
+                                println!(
+                                    "[hub] DROP  topic={}  {} bytes, does not start with 'V='",
+                                    ts,
+                                    payload.len()
+                                );
+                            }
+                            last_drop_log = Instant::now();
+                            dropped_since_log = 0;
+                        }
                     } else if topic.starts_with(b"@") {
                         let ty = envelope_type(&payload);
                         st.note_control(&ty);
@@ -1463,6 +1502,12 @@ fn main() {
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
                                 if ty == "REG" {
                                     let name = envelope_kv(&payload, "NAME");
+                                    let ini_esc = envelope_kv(&payload, "INI");
+                                    if !ini_esc.is_empty() && role == "receiver" {
+                                        let current_ini = config::unescape_ini(&ini_esc);
+                                        let mut s = shared.lock().unwrap();
+                                        s.node_current_ini.insert(format!("{}:{}", role, acc), (current_ini, unix_secs()));
+                                    }
                                     //--- captured BEFORE the update, because
                                     //--- "it had no name and now it does" is
                                     //--- the event worth reporting.
@@ -1743,15 +1788,23 @@ fn main() {
                                 // unknown id left `kind` empty - derive it from
                                 // the id's shape instead (see unknown_ack_prefix).
                                 let action = format!("{}.unknown_ack", unknown_ack_prefix(&id));
-                                audit.record(
-                                    "",
-                                    "",
-                                    &action,
-                                    &who,
-                                    None,
-                                    Some(serde_json::json!({ "id": id })),
-                                    "unknown",
-                                );
+                                let throttle_key = (who.clone(), action.clone());
+                                let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                    Some(t) => t.elapsed() >= Duration::from_secs(10),
+                                    None => true,
+                                };
+                                if should_audit {
+                                    wire_audit_throttle.insert(throttle_key, Instant::now());
+                                    audit.record(
+                                        "",
+                                        "",
+                                        &action,
+                                        &who,
+                                        None,
+                                        Some(serde_json::json!({ "id": id })),
+                                        "unknown",
+                                    );
+                                }
                             }
                         }
 
@@ -1792,6 +1845,29 @@ fn main() {
                             }
                         }
 
+                        //--- CFGRPT: a receiver reporting its current live/effective configuration
+                        if ty == "CFGRPT" {
+                            let crole = envelope_kv(&payload, "ROLE");
+                            let cacc = envelope_kv(&payload, "ACC");
+                            let ini_esc = envelope_kv(&payload, "INI");
+                            let rev: u64 = envelope_kv(&payload, "REV").parse().unwrap_or(0);
+                            let key = if crole.is_empty() {
+                                format!("receiver:{}", cacc)
+                            } else {
+                                format!("{}:{}", crole, cacc)
+                            };
+                            if !ini_esc.is_empty() {
+                                let current_ini = config::unescape_ini(&ini_esc);
+                                let mut s = shared.lock().unwrap();
+                                s.node_current_ini.insert(key.clone(), (current_ini, unix_secs()));
+                                if rev > 0 {
+                                    s.node_rev.insert(key.clone(), rev);
+                                }
+                            }
+                            println!("[hub] {} reported current effective config (rev {})", key, rev);
+                            poke();
+                        }
+
                         if ty == "STAT" {
                             let sid = envelope_kv(&payload, "SID");
                             if !sid.is_empty() {
@@ -1815,37 +1891,115 @@ fn main() {
                                     envelope_kv(&payload, "LOTS").parse().unwrap_or(0.0);
                                 let orphaned: Option<u32> =
                                     envelope_kv(&payload, "ORPHAN").parse().ok();
-                                if !login.is_empty() && (!risk.is_empty() || held.is_some()) {
+                                let wait_total: Option<u32> =
+                                    envelope_kv(&payload, "WAIT").parse().ok();
+                                let wait_lots: f64 =
+                                    envelope_kv(&payload, "WLOTS").parse().unwrap_or(0.0);
+                                let wait_queued: Option<u32> =
+                                    envelope_kv(&payload, "WQUEUED").parse().ok();
+                                let wait_delayed: Option<u32> =
+                                    envelope_kv(&payload, "WDELAYED").parse().ok();
+                                let wait_mkt: Option<u32> =
+                                    envelope_kv(&payload, "WMKT").parse().ok();
+                                let equity: Option<f64> =
+                                    envelope_kv(&payload, "EQ").parse().ok();
+                                let balance: Option<f64> =
+                                    envelope_kv(&payload, "BL").parse().ok();
+                                //--- One lock for both: note_stat and the
+                                //--- mirror edge are written by the same
+                                //--- frame, and acquiring the shared mutex
+                                //--- twice per STAT (1/s per receiver) is two
+                                //--- round trips through a contended lock for
+                                //--- one line of state.
+                                if !login.is_empty() {
                                     let mut s = shared.lock().unwrap();
-                                    s.reg.note_stat("receiver", &login, blocked, &risk,
-                                                    held, held_lots, orphaned);
-                                }
-                                //--- The edge, learned as a by-product. The
-                                //--- hub has to read SID to know where to send
-                                //--- the receipt and LOGIN to say who it is
-                                //--- from, so "this receiver mirrors this
-                                //--- sender" is information the hub already
-                                //--- had and used to throw away. Recording it
-                                //--- is what makes /topology a topology.
-                                //
-                                //--- NOT the envelope header SID: a receiver
-                                //--- sets that to the literal "receiver" on
-                                //--- purpose - see CopierSendStatus in
-                                //--- CopierReceiver.mq4 - so the header names
-                                //--- the ROLE, never the node. The node is
-                                //--- LOGIN, and the target is the payload SID.
-                                {
-                                    let mut s = shared.lock().unwrap();
+                                    if !risk.is_empty() || held.is_some() || wait_total.is_some() || equity.is_some() {
+                                        s.reg.note_stat(
+                                            "receiver",
+                                            &login,
+                                            blocked,
+                                            &risk,
+                                            held,
+                                            held_lots,
+                                            orphaned,
+                                            wait_total,
+                                            wait_lots,
+                                            wait_queued,
+                                            wait_delayed,
+                                            wait_mkt,
+                                            equity,
+                                            balance,
+                                        );
+                                    }
+                                    //--- LOGIN is the receiver's own account
+                                    //--- and must be PRESENT: a STAT without
+                                    //--- it (an old EA build, a forged frame)
+                                    //--- would otherwise register the empty
+                                    //--- string as a mirroring account, which
+                                    //--- shows up in /topology as an edge to
+                                    //--- "". A missing LOGIN means "this frame
+                                    //--- says nothing about who mirrored",
+                                    //--- never "somebody with no name".
                                     s.mirrors
                                         .entry(sid.clone())
                                         .or_default()
                                         .insert(login.clone(), Instant::now());
                                 }
-                                if let Err(e) = send_receipt(&sock, &sid, &login, &h, &mut state)
-                                {
-                                    eprintln!("[hub] receipt relay failed: {}", e);
-                                } else {
-                                    st.note_receipt();
+                                //--- THE RECEIPT IS RELAYED ONLY TO A REAL
+                                //--- SENDER.
+                                //---
+                                //--- `SID` is a field the RECEIVER chooses, so
+                                //--- without this check a receiver could make
+                                //--- the hub unicast a `RCPT` to any nid on the
+                                //--- fleet - including another receiver's -
+                                //--- with any hash it liked. A sender acts on a
+                                //--- receipt ("the snapshot I sent is the one
+                                //--- you hold"), so a forged one either
+                                //--- suppresses a real repair or triggers a
+                                //--- repair flood. The hub already knows which
+                                //--- nodes registered as senders; asking it is
+                                //--- one short lookup.
+                                //--- ...and the check is SKIPPED for the first
+                                //--- minute and while the hub knows of no
+                                //--- sender at all. Right after a restart the
+                                //--- registry is rebuilt from HBT2/WHO, and a
+                                //--- receiver's STAT can easily arrive before
+                                //--- its sender's first heartbeat - measured
+                                //--- live: one receipt was refused in that
+                                //--- window on a 6 s run. Dropping it is
+                                //--- harmless (a receipt only ever CONFIRMS),
+                                //--- but the warning is noise, and a hub that
+                                //--- cries wolf at every restart teaches the
+                                //--- operator to ignore the line.
+                                let warm = started.elapsed() < Duration::from_secs(60);
+                                let (sid_is_sender, any_sender_known) = {
+                                    let s = shared.lock().unwrap();
+                                    let key = format!("sender:{}", sid);
+                                    let nodes = s.reg.nodes();
+                                    (
+                                        nodes.iter().any(|n| n.key == key),
+                                        nodes.iter().any(|n| n.key.starts_with("sender:")),
+                                    )
+                                };
+                                if sid_is_sender || !any_sender_known || warm {
+                                    if let Err(e) =
+                                        send_receipt(&sock, &sid, &login, &h, &mut state)
+                                    {
+                                        eprintln!("[hub] receipt relay failed: {}", e);
+                                    } else {
+                                        st.note_receipt();
+                                    }
+                                } else if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
+                                    //--- Rate-limited: a misconfigured receiver
+                                    //--- emits one STAT a second, and a line a
+                                    //--- second buries everything else.
+                                    last_rcpt_drop = Instant::now();
+                                    println!(
+                                        "[hub] WARN  STAT from {} names SID={} which is not a \
+                                         registered sender - receipt NOT relayed \
+                                         (further reports suppressed for 60s)",
+                                        login, sid
+                                    );
                                 }
                                 poke();
                             }
@@ -1894,17 +2048,25 @@ fn main() {
                                 //--- whole, its own header was wrong - so it
                                 //--- belongs in the audit rather than in a
                                 //--- counter nobody watches.
-                                audit.record(
-                                    "", "",
-                                    "snapshot.mismatch",
-                                    &format!("sender:{}", sid),
-                                    None,
-                                    Some(serde_json::json!({
-                                        "declared": declared,
-                                        "carried": carried,
-                                    })),
-                                    "mismatch",
-                                );
+                                let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
+                                let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                    Some(t) => t.elapsed() >= Duration::from_secs(10),
+                                    None => true,
+                                };
+                                if should_audit {
+                                    wire_audit_throttle.insert(throttle_key, Instant::now());
+                                    audit.record(
+                                        "", "",
+                                        "snapshot.mismatch",
+                                        &format!("sender:{}", sid),
+                                        None,
+                                        Some(serde_json::json!({
+                                            "declared": declared,
+                                            "carried": carried,
+                                        })),
+                                        "mismatch",
+                                    );
+                                }
                             }
                             poke();
                         }
@@ -1951,7 +2113,14 @@ fn main() {
                     if a.node.is_empty() { "-" } else { a.node.as_str() },
                     a.detail
                 );
-                audit.record("hub", "", &a.action(), &a.node, None, Some(a.detail), "firing");
+                audit.record("hub", "", &a.action(), &a.node, None, Some(a.detail.clone()), "firing");
+                //--- Dispatch alert to external notification channels
+                {
+                    let s = shared.lock().unwrap();
+                    if let Some(tx) = &s.notif_tx {
+                        let _ = tx.send(a.clone());
+                    }
+                }
                 //--- Wake the dashboards: an alert is exactly the state
                 //--- change the WebSocket exists for.
                 poke();
@@ -1982,6 +2151,7 @@ fn main() {
         //--- is an event and should not have to wait for the next stats window.
         if last_registry.elapsed().as_secs_f64() >= REGISTRY_EVERY_SECS {
             last_registry = Instant::now();
+            wire_audit_throttle.retain(|_, t| t.elapsed() < Duration::from_secs(60));
             let now = Instant::now();
             let counts = {
                 let mut s = shared.lock().unwrap();
@@ -1989,18 +2159,76 @@ fn main() {
                 //--- node that goes straight from online to forgotten still
                 //--- leaves both records in order.
                 let mut transitions: Vec<(String, Liveness, Liveness)> = Vec::new();
+                //--- Nodes this sweep sees for the FIRST time: every node the
+                //--- sweep right after a hub restart, and a node that
+                //--- re-appears after eviction. They get a silent baseline.
+                //---
+                //--- Without this seed the map NEVER populates: the first
+                //--- observation is the only thing that can add an entry, and
+                //--- it used to add nothing - so no transition could ever be
+                //--- observed for any node and node.offline/node.online were
+                //--- dead code (found by review, not by a test: the
+                //--- transitions themselves were correct, the map just stayed
+                //--- empty). A baseline is exactly what a transition detector
+                //--- needs, and the first sweep after start is no less a
+                //--- baseline than any other.
+                let mut seed: Vec<(String, Liveness)> = Vec::new();
                 for n in s.reg.nodes() {
                     let live = n.liveness(now);
                     match last_liveness.get(&n.key) {
                         Some(prev) if *prev != live => {
                             transitions.push((n.key.clone(), *prev, live));
                         }
-                        None => {}
+                        None => seed.push((n.key.clone(), live)),
                         _ => {}
                     }
                 }
                 let forgotten = s.reg.evict(now);
-                //--- the position view ages out on the same sweep, so a hub left
+                //--- Retain the per-node side tables that are keyed by the
+                //--- SAME "<role>:<acc>" the registry just forgot. They used
+                //--- to be written forever: node_rev grew on every CFGRPT of
+                //--- every node, node_current_ini on every CFGRPT/CFG, and a
+                //--- hub that runs for weeks against a pilot that keeps
+                //--- re-imaging its chart accounts grew them without bound.
+                //--- Eviction is the one place the hub decides a node is gone,
+                //--- so it is the one place they can be reclaimed.
+                for key in &forgotten {
+                    s.node_rev.remove(key);
+                    s.node_current_ini.remove(key);
+                    //--- The alert engine's per-node state goes with the node,
+                    //--- for the same reason: it was written per node seen and
+                    //--- never reclaimed. A key reused after eviction must not
+                    //--- inherit the old `was_offline` latch, or the next
+                    //--- observation looks like a recovery and reports one.
+                    s.alerts.forget(key);
+                    //--- mirrors is keyed by the SENDER, so an evicted sender
+                    //--- takes its whole edge map with it.
+                    if let Some((role, acc)) = key.split_once(':') {
+                        if role == "sender" {
+                            s.mirrors.remove(acc);
+                        }
+                    }
+                }
+                //--- `last_liveness` lives outside `s` and grew the same way:
+                //--- one row per node ever seen, never removed.
+                for key in &forgotten {
+                    last_liveness.remove(key);
+                }
+                //--- Age the mirror EDGES by their own timestamps. The registry
+                //--- can keep a receiver online on heartbeats alone while its
+                //--- STATs - the frames that carry the edge - stopped, and a
+                //--- forged SID nobody ever registered would otherwise keep a
+                //--- key forever. The inner timestamps are refreshed by every
+                //--- receipt heartbeat (default 1/s), so a live edge is never
+                //--- more than a second or two old; one 30 minutes old is a
+                //--- receiver that stopped mirroring.
+                for recvs in s.mirrors.values_mut() {
+                    recvs.retain(|_, ts| {
+                        now.saturating_duration_since(*ts) < crate::registry::EVICT_AFTER
+                    });
+                }
+                s.mirrors.retain(|_, recvs| !recvs.is_empty());
+                //--- The position view ages out on the same sweep, so a hub left
                 //--- running for weeks does not keep a row per sender that ever
                 //--- existed. Silent: a sender going quiet is already reported
                 //--- by the registry line above, and one event should not
@@ -2008,6 +2236,9 @@ fn main() {
                 s.pos.evict(now);
                 drop(s);
 
+                for (key, live) in seed {
+                    last_liveness.insert(key, live);
+                }
                 for (key, prev, now_live) in transitions {
                     last_liveness.insert(key.clone(), now_live);
                     //--- Only the two that a reader acts on. ONLINE->STALE is

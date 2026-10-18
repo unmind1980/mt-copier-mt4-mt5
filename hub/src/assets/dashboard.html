@@ -21,36 +21,71 @@
 -->
 <style>
   :root{
-    --bg:#f7f8fa; --panel:#ffffff; --line:#e3e6ea; --ink:#1c2128;
-    --dim:#6a737d; --ok:#1a7f37; --warn:#9a6700; --bad:#c9311c;
-    --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+    --bg:#f8fafc; --panel:#ffffff; --line:#e2e8f0; --line-subtle:#f1f5f9; --ink:#0f172a;
+    --dim:#64748b; --accent:#2563eb; --accent-hover:#1d4ed8;
+    --ok:#16a34a; --ok-bg:#f0fdf4; --ok-border:#bbf7d0;
+    --warn:#d97706; --warn-bg:#fffbeb; --warn-border:#fde68a;
+    --bad:#dc2626; --bad-bg:#fef2f2; --bad-border:#fecaca;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+    --radius-sm:6px; --radius-md:8px; --radius-lg:12px;
+    --shadow-sm:0 1px 2px 0 rgba(0,0,0,0.05);
+    --shadow-md:0 4px 6px -1px rgba(0,0,0,0.1),0 2px 4px -2px rgba(0,0,0,0.1);
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+       font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   header{background:var(--panel);border-bottom:1px solid var(--line);
-         padding:12px 20px;display:flex;gap:20px;align-items:baseline;flex-wrap:wrap}
-  header h1{font-size:15px;margin:0;font-weight:650}
-  .pill{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:10px;
-        border:1px solid var(--line);background:var(--bg);color:var(--dim)}
-  .pill.live{color:var(--ok);border-color:#b7ddc2}
-  .pill.poll{color:var(--warn);border-color:#e6d29a}
-  main{padding:20px;display:grid;gap:16px;grid-template-columns:1fr 1fr}
-  @media(max-width:1000px){main{grid-template-columns:1fr}}
-  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+         padding:12px 24px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+         position:sticky;top:0;z-index:10;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand-logo{display:flex;align-items:center;justify-content:center;width:26px;height:26px;
+              background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;border-radius:6px;font-size:13px;font-weight:700}
+  header h1{font-size:15.5px;margin:0;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+  .header-pills{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .pill{font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:12px;
+        border:1px solid var(--line);background:var(--bg);color:var(--dim);display:inline-flex;align-items:center;gap:5px}
+  .pill.live{color:var(--ok);border-color:#bbf7d0;background:var(--ok-bg)}
+  .pill.poll{color:var(--warn);border-color:#fde68a;background:var(--warn-bg)}
+  .pill.reconn{color:var(--warn);border-color:#f0ad4e}
+
+  main{padding:20px;display:flex;flex-direction:column;gap:16px;max-width:1440px;margin:0 auto}
+
+  /* KPI Grid */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .kpi-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+            padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column;
+            justify-content:space-between;transition:transform .15s ease,box-shadow .15s ease}
+  .kpi-card:hover{box-shadow:0 4px 8px rgba(0,0,0,.06)}
+  .kpi-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .kpi-title{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+  .kpi-icon{font-size:16px}
+  .kpi-value{font-size:18px;font-weight:700;color:var(--ink);font-family:var(--mono);margin-bottom:4px}
+  .kpi-subtitle{font-size:11.5px;color:var(--dim)}
+  .kpi-card.warn-active{border-color:var(--warn);background:#fffdf5}
+  .kpi-card.warn-active .kpi-value{color:var(--warn)}
+
+  /* Global Ops Toolbar */
+  .gops-toolbar{padding:12px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+  .gops-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+  /* Sections */
+  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
   section h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.06em;
-             color:var(--dim);padding:10px 14px;border-bottom:1px solid var(--line);
-             display:flex;justify-content:space-between;align-items:baseline}
+             color:var(--dim);padding:11px 16px;border-bottom:1px solid var(--line);
+             display:flex;justify-content:space-between;align-items:center;background:#fafbfc}
   section h2 span{font-family:var(--mono);text-transform:none;letter-spacing:0}
+
+  /* Tables */
   table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
-  th,td{padding:6px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-  th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  th,td{padding:8px 16px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em;background:#fcfdfd}
   tr:last-child td{border-bottom:none}
   td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-  th.num{padding-right:14px}
+  th.num{padding-right:16px}
+
   .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
   .online{background:var(--ok)} .stale{background:var(--warn)} .offline{background:var(--bad)}
-  .empty{padding:22px 14px;color:var(--dim);font-size:13px;text-align:center}
+  .empty{padding:24px 16px;color:var(--dim);font-size:13px;text-align:center}
   #topo svg{display:block;width:100%;height:260px}
   .nd{fill:#eef1f4;stroke:var(--line)}
   .nd.sender{fill:#e8f2fb} .nd.receiver{fill:#f0efe4}
@@ -58,6 +93,77 @@
   text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
   .lbl{fill:var(--dim);font-size:9.5px}
   footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
+
+  /* Badges & Telemetry */
+  .role-pill{display:inline-block;padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;margin-left:4px}
+  .role-pill.sender{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+  .role-pill.receiver{background:#fdf4ff;color:#86198f;border:1px solid #f5d0fe}
+  .ver-tag{font-size:11px;color:var(--dim);margin-left:4px;font-weight:normal}
+
+  .wait-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;font-family:var(--mono);font-size:11.5px;line-height:1.35;white-space:normal}
+  .wait-chip.warn{background:#fff7e0;color:#92400e;border:1px solid #ecd9a0}
+  .wait-chip.ok{background:#e8f5e9;color:#1e5e34;border:1px solid #b7ddc2}
+  .wait-chip.dim{background:var(--bg);color:var(--dim);border:1px solid var(--line)}
+  .wait-icon{font-size:13px;flex-shrink:0}
+  .wait-blocked{display:inline-block;padding:1px 5px;background:#fdecea;border:1px solid #f0b8b0;color:#8a1c10;border-radius:4px;font-weight:700;font-size:10px;margin-left:4px}
+  .node-fin{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:2px}
+  .ps-cell{cursor:pointer;transition:background .1s ease}
+  .ps-cell:hover{background:#f8fafc}
+  .ops-btn-group{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+
+  /* Operations Buttons */
+  .ops{white-space:nowrap}
+  .opbtn{font:11.5px/1 var(--mono);padding:4px 8px;border:1px solid var(--line);
+         background:var(--bg);color:var(--ink);border-radius:5px;cursor:pointer;transition:all .1s ease}
+  .opbtn:hover{border-color:#b9c0c8;background:#fff}
+  .opbtn:disabled{opacity:.5;cursor:default}
+  .opbtn.danger{color:var(--bad);border-color:#e8b4ab;background:#fff9f8}
+  .opbtn.danger:hover{border-color:var(--bad);background:#fdecea}
+  .opmsg{display:block;font-family:var(--mono);font-size:11.5px;color:var(--dim);
+         margin-top:3px;min-height:1em;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opmsg.ok{color:var(--ok)} .opmsg.warn{color:var(--warn)} .opmsg.bad{color:var(--bad)}
+
+  /* Modal styling */
+  #posmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);backdrop-filter:blur(2px);display:flex;
+            align-items:center;justify-content:center;z-index:18}
+  #posmodal.hidden{display:none}
+  .posbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+          width:960px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;
+          box-shadow:0 12px 32px rgba(0,0,0,.18);overflow:hidden}
+  .poshead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--bg)}
+  .poshead h2{margin:0;font-size:15px;font-weight:650;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .posbody{padding:16px 18px;overflow-y:auto;flex:1}
+  .posfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--bg);gap:12px;flex-wrap:wrap}
+  .pos-section-title{font-size:11.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+
+  /* Responsive Mobile Layout (@media max-width: 768px) */
+  @media(max-width:768px){
+    header{padding:10px 14px}
+    header h1{font-size:14px}
+    .kpi-grid{grid-template-columns:1fr 1fr;gap:8px}
+    .kpi-card{padding:10px 12px}
+    .kpi-value{font-size:15px}
+    .kpi-subtitle{font-size:10.5px}
+    main{padding:12px;gap:12px}
+
+    .gops-toolbar{padding:10px 12px;flex-direction:column;align-items:stretch;gap:8px}
+    .gops-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));width:100%}
+    .gops-group .opbtn{padding:8px;font-size:11.5px;text-align:center}
+
+    #nodes table,#nodes thead,#nodes tbody,#nodes tr,#nodes td{display:block}
+    #nodes thead{display:none}
+    #nodes tr{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.03)}
+    #nodes td{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px dashed var(--line);white-space:normal}
+    #nodes td::before{content:attr(data-label);font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;margin-right:12px}
+    #nodes td:last-child{border-bottom:none;padding-top:10px}
+    #nodes td.ops{flex-direction:column;align-items:stretch}
+    #nodes td.ops::before{margin-bottom:6px}
+    .ops-btn-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(75px,1fr));gap:6px;width:100%}
+    .ops-btn-group .opbtn{padding:8px 6px;font-size:12px;text-align:center;min-height:36px}
+  }
+
   /* M6 alert bar. Hidden when there is nothing to say - an alert that is
      always visible stops being one. */
   #alerts{display:none;padding:0 20px 0}
@@ -73,6 +179,7 @@
   #alerts .a .ax:hover{opacity:1}
   #alerts .a.crit{background:#fdecea;border-color:#f0b8b0;color:#8a1c10}
   #alerts .a.warn{background:#fff7e0;border-color:#ecd9a0;color:#7a5a00}
+  #alerts .a.ok{background:#e8f5e9;border-color:#a5d6a7;color:#1b5e20}
   #alerts .ares{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:bold;background:#d8eedf;color:#1e5e34;margin-left:6px;vertical-align:1px}
   /* M9: the login overlay. The page is one file by design (same-origin, no
      bundler), so the login is part of it: a 401 anywhere raises the overlay,
@@ -164,48 +271,234 @@
      Every other cell stays nowrap (numbers and ids read badly broken); this
      one cell is a LIST, so let it wrap like one. */
   #pos td.sy{white-space:normal}
+  /* --- Receiver Config Modal ----------------------------------------- */
+  #cfgmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
+            align-items:center;justify-content:center;z-index:15}
+  #cfgmodal.hidden{display:none}
+  .cfgbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+          width:840px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
+          box-shadow:0 8px 24px rgba(0,0,0,.15);overflow:hidden}
+  .cfghead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--bg)}
+  .cfghead h2{margin:0;font-size:15px;font-weight:650;color:var(--ink)}
+  .cfgbody{padding:16px 18px;overflow-y:auto;flex:1}
+  .cfgfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--bg);gap:12px;flex-wrap:wrap}
+  .cfgfoot .btns{display:flex;gap:8px}
+  .cfgtbl-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
+  .cfgtab{padding:6px 14px;border:none;background:none;font:13px system-ui,sans-serif;
+          color:var(--dim);cursor:pointer;border-bottom:2px solid transparent}
+  .cfgtab.active{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+  .cfgsubtabs{display:flex;gap:4px;background:var(--bg);padding:4px;border-radius:6px;border:1px solid var(--line);margin-bottom:12px;overflow-x:auto}
+  .cfgsubtab{padding:5px 11px;border:none;background:none;border-radius:4px;font:12px system-ui,sans-serif;color:var(--dim);cursor:pointer;white-space:nowrap}
+  .cfgsubtab.active{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .cfggroup{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:12px}
+  .cfggroup-title{font-size:12px;font-weight:700;color:var(--ink);margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.03em}
+  .cfgfield-check{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .cfgfield-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer}
+  .cfgfield-check label{font-size:12px;color:var(--ink);cursor:pointer;font-weight:500;text-transform:none}
+  .cfgbadge{display:inline-block;padding:2px 7px;border-radius:4px;font-family:var(--mono);
+            font-size:11px;font-weight:600}
+  .cfgbadge.ok{background:#d8eedf;color:#1e5e34;border:1px solid #b7ddc2}
+  .cfgbadge.warn{background:#fff7e0;color:#7a5a00;border:1px solid #ecd9a0}
+  .cfgbadge.bad{background:#fdecea;color:#8a1c10;border:1px solid #f0b8b0}
+  .cfgbadge.dim{background:var(--bg);color:var(--dim);border:1px solid var(--line)}
+  .cfgstatus-ribbon{display:flex;align-items:center;justify-content:space-between;gap:12px;
+                    padding:8px 12px;background:var(--bg);border:1px solid var(--line);
+                    border-radius:6px;margin-bottom:12px;flex-wrap:wrap;font-size:12px}
+  .cfghistrow{display:flex;gap:8px;align-items:center;margin-bottom:12px;padding:8px 12px;
+              background:var(--bg);border:1px solid var(--line);border-radius:6px;font-size:12px;
+              flex-wrap:wrap}
+  .sendercard{border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:12px;
+              background:var(--panel)}
+  .sendercard-head{display:flex;justify-content:space-between;align-items:center;
+                   margin-bottom:10px;padding-bottom:6px;border-bottom:1px dashed var(--line)}
+  .sendercard-head h3{margin:0;font-size:13px;font-family:var(--mono);color:var(--ink)}
+  .cfggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px}
+  .cfgfield{display:flex;flex-direction:column;gap:3px}
+  .cfgfield label{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  .cfgfield input,.cfgfield select{padding:6px 8px;border:1px solid var(--line);border-radius:5px;
+                                   font:12.5px var(--mono);color:var(--ink);background:var(--panel)}
+  .cfgfield input:focus,.cfgfield select:focus{outline:none;border-color:#80bdff}
+  .cfgfield .hint{font-size:10px;color:var(--dim)}
+  .symmaps{margin-top:8px;background:var(--bg);padding:8px 10px;border-radius:5px;border:1px solid var(--line)}
+  .symmaps-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .symmaps-head span{font-size:11px;font-weight:600;color:var(--dim)}
+  .symrow{display:flex;gap:6px;align-items:center;margin-bottom:4px}
+  .symrow input{flex:1;padding:4px 6px;border:1px solid var(--line);border-radius:4px;
+                font:12px var(--mono);background:var(--panel);color:var(--ink)}
+  .sc-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:12px 0 8px;padding-bottom:0;flex-wrap:wrap}
+  .sc-tab{background:none;border:none;border-bottom:2px solid transparent;padding:5px 9px;font-size:11px;font-weight:600;color:var(--dim);cursor:pointer;border-radius:3px 3px 0 0}
+  .sc-tab:hover{color:var(--ink)}
+  .sc-tab.active{color:#0969da;border-bottom-color:#0969da;font-weight:700}
+  .sc-panel{background:var(--bg);padding:10px 12px;border-radius:6px;border:1px solid var(--line);margin-bottom:8px}
+  .sc-panel.hidden{display:none}
+  .sc-panel-title{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:8px}
+  .cfgrawbox{width:100%;height:320px;font-family:var(--mono);font-size:12px;padding:10px;
+             border:1px solid var(--line);border-radius:6px;resize:vertical;line-height:1.45;
+             background:#fafbfc;color:var(--ink);white-space:pre}
+  .btn-primary{background:#1f883d;color:#fff;border:1px solid rgba(27,31,36,.15);
+               padding:7px 14px;border-radius:6px;cursor:pointer;font:13px system-ui,sans-serif;font-weight:600}
+  .btn-primary:hover{background:#1a7f37}
+  .btn-primary:disabled{opacity:.55;cursor:default}
+  .btn-sec{background:var(--bg);color:var(--ink);border:1px solid var(--line);
+           padding:7px 14px;border-radius:6px;cursor:pointer;font:13px system-ui,sans-serif}
+  .btn-sec:hover{border-color:#b9c0c8}
+  .btn-sec:disabled{opacity:.55;cursor:default}
+  .btn-danger{background:var(--bad);color:#fff;border:1px solid rgba(0,0,0,.15);
+              padding:7px 14px;border-radius:6px;cursor:pointer;font:13px system-ui,sans-serif;font-weight:600}
+  .btn-danger:hover{background:#a32014}
+  .btn-danger:disabled{opacity:.55;cursor:default}
+  /* --- Confirmation Modal (Dangerous Operations) ------------------- */
+  #confirmmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+                align-items:center;justify-content:center;z-index:30}
+  #confirmmodal.hidden{display:none}
+  .confirmbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+              width:460px;max-width:94vw;display:flex;flex-direction:column;
+              box-shadow:0 12px 36px rgba(0,0,0,.25);overflow:hidden}
+  .confirmhead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
+               justify-content:space-between;align-items:center;background:var(--bg)}
+  .confirmhead h2{margin:0;font-size:14.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:6px}
+  .confirmbody{padding:18px 20px;display:flex;gap:14px;align-items:flex-start}
+  .confirm-icon{font-size:26px;line-height:1;flex-shrink:0}
+  .confirm-content{flex:1}
+  .confirm-desc{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.45;margin-bottom:6px}
+  .confirm-detail{font-size:12px;color:var(--dim);line-height:1.5}
+  .confirmfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
+               justify-content:flex-end;align-items:center;background:var(--bg);gap:10px}
+  .cfgnotice{padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;line-height:1.4}
+  .cfgnotice.warn{background:#fff7e0;border:1px solid #ecd9a0;color:#7a5a00}
+  /* --- Notification Channels ---------------------------------------- */
+  #notifmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
+              align-items:center;justify-content:center;z-index:16}
+  #notifmodal.hidden{display:none}
+  #hubkeymodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
+               align-items:center;justify-content:center;z-index:16}
+  #hubkeymodal.hidden{display:none}
+  .notifbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+            width:580px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
+            box-shadow:0 8px 24px rgba(0,0,0,.15);overflow:hidden}
+  .notifhead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
+             justify-content:space-between;align-items:center;background:var(--bg)}
+  .notifhead h2{margin:0;font-size:15px;font-weight:650;color:var(--ink)}
+  .notifbody{padding:16px 18px;overflow-y:auto;flex:1}
+  .notiffoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
+             justify-content:space-between;align-items:center;background:var(--bg);gap:12px;flex-wrap:wrap}
+  .notiffoot .btns{display:flex;gap:8px}
+  .notifrow{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+  .notifrow label{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  .notifrow input,.notifrow select,.notifrow textarea{padding:7px 9px;border:1px solid var(--line);border-radius:6px;
+                                                      font:12.5px var(--mono);color:var(--ink);background:var(--panel)}
+  .notifrow input:focus,.notifrow select:focus,.notifrow textarea:focus{outline:none;border-color:#80bdff}
+  .notifrow .hint{font-size:11px;color:var(--dim)}
+  .notifrow.inline{flex-direction:row;align-items:center;gap:8px}
+  .notiftbl td{font-size:12px}
+  .notiftbl .chan-badge{display:inline-block;padding:2px 6px;border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:600}
+  .notiftbl .chan-tg{background:#e8f2fb;color:#0b5cad;border:1px solid #b2d7ff}
+  .notiftbl .chan-wc{background:#d8eedf;color:#1e5e34;border:1px solid #b7ddc2}
+  .notiftbl .chan-dt{background:#fff3cd;color:#856404;border:1px solid #ffeeba}
+  .notiftbl .chan-wh{background:#f0efe4;color:#495057;border:1px solid #ced4da}
 </style>
 </head>
 <body>
 <header>
-  <h1>mt-copier hub</h1>
-  <span class="pill" id="mode">connecting</span>
-  <span class="pill" id="who"></span>
-  <span class="pill" id="counts">-</span>
-  <span class="pill" id="up">-</span>
-  <span class="pill" id="age">-</span>
+  <div class="brand">
+    <div class="brand-logo">⚡</div>
+    <h1>mt-copier hub</h1>
+  </div>
+  <div class="header-pills">
+    <span class="pill" id="mode">connecting</span>
+    <span class="pill" id="who"></span>
+    <span class="pill" id="counts">-</span>
+    <span class="pill" id="up">-</span>
+    <span class="pill" id="age">-</span>
+  </div>
 </header>
 <div id="alerts"></div>
 
 <main>
-  <section id="globalops" style="grid-column:1/-1">
+  <!-- KPI Overview Grid -->
+  <div class="kpi-grid">
+    <div class="kpi-card" id="kpi_card_nodes">
+      <div class="kpi-card-head">
+        <span class="kpi-title">Active Terminals</span>
+        <span class="kpi-icon">🖥️</span>
+      </div>
+      <div class="kpi-value" id="kpi_nodes_val">-</div>
+      <div class="kpi-subtitle" id="kpi_nodes_sub">-</div>
+    </div>
+    
+    <div class="kpi-card" id="kpi_card_pos" style="cursor:pointer" title="Click to view open positions breakdown">
+      <div class="kpi-card-head">
+        <span class="kpi-title">Open Positions</span>
+        <span class="kpi-icon">📊</span>
+      </div>
+      <div class="kpi-value" id="kpi_pos_val">-</div>
+      <div class="kpi-subtitle" id="kpi_pos_sub">Click to inspect &rarr;</div>
+    </div>
+
+    <div class="kpi-card" id="kpi_card_wait" style="cursor:pointer" title="Click to view receiver waiting telemetry">
+      <div class="kpi-card-head">
+        <span class="kpi-title">Waiting to Open</span>
+        <span class="kpi-icon">⏳</span>
+      </div>
+      <div class="kpi-value" id="kpi_wait_val">-</div>
+      <div class="kpi-subtitle" id="kpi_wait_sub">-</div>
+    </div>
+
+    <div class="kpi-card" id="kpi_card_hub">
+      <div class="kpi-card-head">
+        <span class="kpi-title">Hub Status</span>
+        <span class="kpi-icon">⚡</span>
+      </div>
+      <div class="kpi-value" id="kpi_hub_val">-</div>
+      <div class="kpi-subtitle" id="kpi_hub_sub">-</div>
+    </div>
+  </div>
+
+  <section id="globalops">
     <h2>Global operations <span id="gstate"></span></h2>
-    <div style="padding:10px 14px">
-      <button class="opbtn" data-gop="pause">pause ALL receivers</button>
-      <button class="opbtn" data-gop="resume">resume ALL receivers</button>
-      <button class="opbtn danger" data-gop="closeall">CLOSE ALL (every receiver, every mirror)</button>
+    <div class="gops-toolbar">
+      <div class="gops-group danger-group">
+        <button class="opbtn danger" data-gop="closeall">🛑 CLOSE ALL (Every Receiver)</button>
+        <button class="opbtn" data-gop="pause">⏸️ Pause ALL</button>
+        <button class="opbtn" data-gop="resume">▶️ Resume ALL</button>
+      </div>
+      <div class="gops-group manage-group">
+        <button type="button" class="opbtn" id="btn-view-pos" style="font-weight:600">📊 Positions</button>
+        <button type="button" class="opbtn" id="btn-gop-cfg" style="font-weight:600">⚙️ Receiver Config</button>
+        <button type="button" class="opbtn" id="btn-gop-notif" style="font-weight:600">🔔 Notifications</button>
+        <button type="button" class="opbtn" id="btn-download-hub-key" style="font-weight:600">🔑 Download Hub Key</button>
+      </div>
       <span class="opmsg" id="gmsg"></span>
     </div>
   </section>
 
-  <section>
-    <h2>Nodes <span id="ncount"></span></h2>
+  <section id="nodes-sec">
+    <h2>
+      <span>Terminals &amp; Nodes <span id="ncount"></span></span>
+      <button type="button" class="opbtn" id="btn-open-cfg" style="text-transform:none;letter-spacing:normal;font-weight:600">+ Configure Receiver</button>
+    </h2>
     <div id="nodes"><div class="empty">loading</div></div>
   </section>
 
-  <section>
-    <h2>Positions <span id="pcount"></span></h2>
-    <div id="pos"><div class="empty">loading</div></div>
-  </section>
-
-  <section id="topo" style="grid-column:1/-1">
+  <section id="topo">
     <h2>Topology <span id="tcount"></span></h2>
     <div id="topobody"><div class="empty">loading</div></div>
   </section>
 
+  <!-- Notification Channels (Telegram / WeCom / DingTalk / Webhook) -->
+  <section id="notif-sec" class="hidden">
+    <h2>
+      <span>Notification Channels (Telegram / WeCom / DingTalk / Webhook) <span id="notifcount"></span></span>
+      <button type="button" class="opbtn" id="btn-add-notif" style="text-transform:none;letter-spacing:normal;font-weight:600">+ Add Channel</button>
+    </h2>
+    <div id="notifbody"><div class="empty">loading</div></div>
+  </section>
+
   <!-- M9: user management. Rendered ONLY for an admin (a 403 on the users
        endpoint hides it) - the server is the gate, this is just the chrome. -->
-  <section id="users-sec" class="hidden" style="grid-column:1/-1">
+  <section id="users-sec" class="hidden">
     <h2>Users <span id="ucount"></span></h2>
     <div id="usersbody"><div class="empty">loading</div></div>
     <form id="userform">
@@ -222,7 +515,7 @@
   </section>
 </main>
 
-<footer id="foot"><span id="writes-state">loading command state…</span> · <span id="curvekey" class="hidden">CURVE <code id="ckey" title="click to copy"></code> <a href="#" id="ckeycopy" style="color:inherit">(copy)</a></span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <span id="curvekey" class="hidden">CURVE <code id="ckey" title="click to copy"></code> <a href="#" id="ckeycopy" style="color:inherit">(copy)</a> · <a href="#" id="ckeydlg" style="color:inherit">(download / instructions)</a></span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
 
 <div id="pwdlg" class="hidden">
   <form id="pwdform">
@@ -261,6 +554,547 @@
   </form>
 </div>
 
+<div id="cfgmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="cfgtitle">
+  <div class="cfgbox">
+    <div class="cfghead">
+      <div style="flex:1">
+        <h2 id="cfgtitle">Receiver Configuration (copier.ini)</h2>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+          <label for="cfgtargetselect" style="font-size:12px;color:var(--dim);font-weight:600">Target Receiver:</label>
+          <select id="cfgtargetselect" style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);background:var(--panel);color:var(--ink)">
+          </select>
+          <input id="cfgtargetcustom" class="hidden" placeholder="e.g. 1002 or receiver:1002" style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);width:170px">
+          <button type="button" id="cfgtargetgo" class="opbtn hidden" style="padding:4px 8px">Switch</button>
+        </div>
+      </div>
+      <button type="button" id="cfgclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="cfgbody">
+      <div id="cfgnotice_writes" class="cfgnotice warn hidden">
+        ⚠️ <strong>Writes are disabled on this hub (--writes off).</strong> You can inspect the configuration, but cannot save changes or rollback until the hub is restarted with <code>--writes on</code>.
+      </div>
+      <div class="cfgstatus-ribbon">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <span>Status: <span id="cfgsyncbadge" class="cfgbadge dim">-</span></span>
+          <span>Hub Rev: <strong id="cfghubrev" style="font-family:var(--mono)">-</strong></span>
+          <span>Node Rev: <strong id="cfgnoderev" style="font-family:var(--mono)">-</strong></span>
+          <span>Current Setting: <span id="cfgcurrsettingbadge" class="cfgbadge dim">-</span></span>
+        </div>
+        <div style="color:var(--dim);font-size:11px" id="cfglastchange"></div>
+      </div>
+      <div class="cfghistrow">
+        <button type="button" id="cfgloadcurrentbtn" class="opbtn" style="background:#2d6930;color:#fff;border-color:#245427;font-weight:600" title="Load live Current Settings reported by the receiver terminal">📥 Load Current Setting from Node</button>
+        <div style="width:1px;height:18px;background:var(--line);margin:0 2px"></div>
+        <label for="cfghistselect" style="font-weight:600;color:var(--dim)">History:</label>
+        <select id="cfghistselect" style="flex:1;min-width:180px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);background:var(--panel)">
+          <option value="">(current configuration)</option>
+        </select>
+        <button type="button" id="cfgloadhist" class="opbtn" title="Load selected historical revision into the editor">load revision</button>
+        <button type="button" id="cfgrollbackbtn" class="opbtn danger" title="Immediately rollback node to selected revision">rollback to this rev</button>
+      </div>
+      <div class="cfgtbl-tabs">
+        <button type="button" class="cfgtab active" id="cfgtab_vis" data-tab="vis">Visual Editor</button>
+        <button type="button" class="cfgtab" id="cfgtab_raw" data-tab="raw">Raw INI Editor</button>
+      </div>
+      <div id="cfgpanel_vis">
+        <div class="cfgsubtabs">
+          <button type="button" class="cfgsubtab active" data-sub="senders" id="cfgsubtab_senders">Senders &amp; Strategies</button>
+          <button type="button" class="cfgsubtab" data-sub="risk" id="cfgsubtab_risk">Account Circuit Breakers [common]</button>
+          <button type="button" class="cfgsubtab" data-sub="system" id="cfgsubtab_system">System &amp; Engine [common]</button>
+          <button type="button" class="cfgsubtab" data-sub="exec" id="cfgsubtab_exec">Global Fallbacks [common]</button>
+          <button type="button" class="cfgsubtab hidden" data-sub="filter" id="cfgsubtab_filter">Filters</button>
+          <button type="button" class="cfgsubtab hidden" data-sub="gates" id="cfgsubtab_gates">Gates</button>
+        </div>
+
+        <!-- Senders subpanel -->
+        <div id="cfgsubpanel_senders">
+          <p style="font-size:12px;color:var(--dim);margin:0 0 10px">
+            Configure each upstream signal source independently. Each sender has its own sizing, risk limits, stop management, symbol filters, anti-stacking delays, and trading schedule.
+          </p>
+          <div id="cfgsenders_list"></div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+            <button type="button" id="cfgaddsender" class="btn-sec">+ Add Sender Section</button>
+            <button type="button" id="cfgloadtemplate" class="btn-sec" style="font-size:12px">Load Default Example</button>
+          </div>
+        </div>
+
+        <!-- Risk Limits subpanel -->
+        <div id="cfgsubpanel_risk" class="hidden">
+          <div class="cfggroup">
+            <div class="cfggroup-title">Circuit Breakers &amp; Exposure Caps</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+              <div class="cfgfield">
+                <label for="c_maxlotsperposition">Max Lots Per Position</label>
+                <input type="number" step="0.01" id="c_maxlotsperposition" placeholder="0.0 (off)">
+                <span class="hint">Single trade lot limit (0 = off)</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_maxtotallots">Max Total Lots</label>
+                <input type="number" step="0.01" id="c_maxtotallots" placeholder="0.0 (off)">
+                <span class="hint">Total mirrored volume limit (0 = off)</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_maxopenpositions">Max Open Positions</label>
+                <input type="number" step="1" id="c_maxopenpositions" placeholder="0 (off)">
+                <span class="hint">Max active open orders (0 = off)</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_dailylosspct">Daily Loss %</label>
+                <input type="number" step="0.1" id="c_dailylosspct" placeholder="0.0 (off)">
+                <span class="hint">Halt trading if equity drops % today</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_maxdrawdownpct">Max Drawdown %</label>
+                <input type="number" step="0.1" id="c_maxdrawdownpct" placeholder="0.0 (off)">
+                <span class="hint">Halt trading on total drawdown %</span>
+              </div>
+            </div>
+            <div class="cfgfield-check" style="margin-top:8px">
+              <input type="checkbox" id="c_riskcloseallontrip">
+              <label for="c_riskcloseallontrip">Risk Close All On Trip: Also close all held positions when risk percentage trips</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Execution & Stops subpanel -->
+        <div id="cfgsubpanel_exec" class="hidden">
+          <div class="cfggroup">
+            <div class="cfggroup-title">Order Execution &amp; Slippage</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+              <div class="cfgfield">
+                <label for="c_deviationpoints">Deviation Points</label>
+                <input type="number" step="1" id="c_deviationpoints" placeholder="30">
+                <span class="hint">Max allowed slippage in points</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_stopsthrottleseconds">Stops Throttle (Sec)</label>
+                <input type="number" step="1" id="c_stopsthrottleseconds" placeholder="2">
+                <span class="hint">Min seconds between stop modifications</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_emergencyslpips">Emergency SL (Pips)</label>
+                <input type="number" step="0.1" id="c_emergencyslpips" placeholder="0.0 (off)">
+                <span class="hint">Safety stop-loss backstop (0 = off)</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_emergencytppips">Emergency TP (Pips)</label>
+                <input type="number" step="0.1" id="c_emergencytppips" placeholder="0.0 (off)">
+                <span class="hint">Safety take-profit backstop (0 = off)</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_mirrorstops">
+                <label for="c_mirrorstops">Mirror Stops: Faithfully mirror sender's Stop-Loss and Take-Profit as relative distance</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_reopenclosedmirrors">
+                <label for="c_reopenclosedmirrors">Reopen Closed Mirrors: Re-open mirror if manually closed while sender still holds it</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_dedupduplicates">
+                <label for="c_dedupduplicates">Dedup Duplicates: Automatically prune duplicate mirrors for the same position</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filters & Direction subpanel -->
+        <div id="cfgsubpanel_filter" class="hidden">
+          <div class="cfggroup">
+            <div class="cfggroup-title">Trade Filtering &amp; Inversion</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+              <div class="cfgfield">
+                <label for="c_permittedsymbols">Permitted Symbols</label>
+                <input type="text" id="c_permittedsymbols" placeholder="e.g. EURUSD,GBPUSD,XAUUSD (blank=all)">
+                <span class="hint">Comma-separated allowed symbol whitelist</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_permittedmagic">Permitted Magic</label>
+                <input type="text" id="c_permittedmagic" placeholder="e.g. 10001,10002 (blank=all)">
+                <span class="hint">Comma-separated allowed sender order magics</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_ignoreuids">Ignore UIDs</label>
+                <input type="text" id="c_ignoreuids" placeholder="e.g. UID1,UID2 (blank=none)">
+                <span class="hint">Comma-separated order UIDs to permanently ignore</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_minsenderlotsize">Min Sender Lot</label>
+                <input type="number" step="0.01" id="c_minsenderlotsize" placeholder="0.0 (off)">
+                <span class="hint">Ignore sender trades below this lot size</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_maxsenderlotsize">Max Sender Lot</label>
+                <input type="number" step="0.01" id="c_maxsenderlotsize" placeholder="0.0 (off)">
+                <span class="hint">Ignore sender trades above this lot size</span>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:10px">
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_inverttrades">
+                <label for="c_inverttrades">Invert Trades (BUY &harr; SELL)</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_nobuy">
+                <label for="c_nobuy">No Buy (Block long buy orders)</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_nosell">
+                <label for="c_nosell">No Sell (Block short sell orders)</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_ignorenewentrysignals">
+                <label for="c_ignorenewentrysignals">Ignore New Entries (Pause opening new positions)</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_ignoreallexitsignals">
+                <label for="c_ignoreallexitsignals">Ignore Exit Signals (Do not close positions on exit)</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Delay Gates & Anti-Stacking subpanel -->
+        <div id="cfgsubpanel_gates" class="hidden">
+          <div class="cfggroup">
+            <div class="cfggroup-title">Existing Position Check &amp; Anti-Stacking</div>
+            <div class="cfgfield" style="max-width:340px;margin-bottom:10px">
+              <label for="c_checkforexistingposition">Check For Existing Position</label>
+              <select id="c_checkforexistingposition">
+                <option value="0">0: Off (No check, allow multiple mirrors)</option>
+                <option value="1">1: Same Symbol (Skip if ANY mirror open on symbol)</option>
+                <option value="2">2: Same Symbol &amp; Direction (Skip if open in same direction)</option>
+              </select>
+              <span class="hint">Prevent opening multiple positions on the same instrument</span>
+            </div>
+          </div>
+          <div class="cfggroup">
+            <div class="cfggroup-title">Entry Delay Gates</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+              <div class="cfgfield">
+                <label for="c_waitforseconds">Wait Seconds</label>
+                <input type="number" step="1" id="c_waitforseconds" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_waitforminutes">Wait Minutes</label>
+                <input type="number" step="1" id="c_waitforminutes" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_waitforhours">Wait Hours</label>
+                <input type="number" step="1" id="c_waitforhours" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_waitforprofitpips">Wait Profit Pips</label>
+                <input type="number" step="0.1" id="c_waitforprofitpips" placeholder="0.0 (off)">
+                <span class="hint">+N profit / -N pullback</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_waitforminutesbar">Wait M1 Bars</label>
+                <input type="number" step="1" id="c_waitforminutesbar" placeholder="0 (off)">
+                <span class="hint">Market open bars</span>
+              </div>
+            </div>
+          </div>
+          <div class="cfggroup">
+            <div class="cfggroup-title">Fill Timeout Expiry</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+              <div class="cfgfield">
+                <label for="c_requirepositionfillwithinseconds">Fill Seconds</label>
+                <input type="number" step="1" id="c_requirepositionfillwithinseconds" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_requirepositionfillwithinminutes">Fill Minutes</label>
+                <input type="number" step="1" id="c_requirepositionfillwithinminutes" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_requirepositionfillwithinhours">Fill Hours</label>
+                <input type="number" step="1" id="c_requirepositionfillwithinhours" placeholder="0">
+              </div>
+              <div class="cfgfield">
+                <label for="c_fillwithinminutesbar">Fill M1 Bars</label>
+                <input type="number" step="1" id="c_fillwithinminutesbar" placeholder="0 (off)">
+                <span class="hint">Market open bars</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Schedule & System subpanel -->
+        <div id="cfgsubpanel_system" class="hidden">
+          <div class="cfggroup">
+            <div class="cfggroup-title">Trading Schedule (Server Time)</div>
+            <div class="cfggrid" style="grid-template-columns:1fr 1fr">
+              <div class="cfgfield">
+                <label for="c_includetradingtimes">Include Trading Times</label>
+                <input type="text" id="c_includetradingtimes" placeholder="e.g. 08:00-17:00,20:00-23:00 (blank=all)">
+                <span class="hint">Comma-separated HH:MM-HH:MM ranges in SERVER time</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_daytradingtimes">Day Trading Times</label>
+                <input type="text" id="c_daytradingtimes" placeholder="e.g. Mon=08:00-17:00;Tue=08:00-17:00">
+                <span class="hint">Semicolon-separated Day=HH:MM-HH:MM</span>
+              </div>
+            </div>
+          </div>
+          <div class="cfggroup">
+            <div class="cfggroup-title">Runtime &amp; Display</div>
+            <div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+              <div class="cfgfield">
+                <label for="c_pollms">Poll Interval (ms)</label>
+                <input type="number" step="10" id="c_pollms" placeholder="100">
+                <span class="hint">Timer cadence (10-1000ms)</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_staleseconds">Stale Silence (Sec)</label>
+                <input type="number" step="1" id="c_staleseconds" placeholder="15">
+                <span class="hint">Disconnect silence threshold</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_maxactionspertick">Max Actions / Tick</label>
+                <input type="number" step="1" id="c_maxactionspertick" placeholder="5">
+                <span class="hint">Batch trade executions</span>
+              </div>
+              <div class="cfgfield">
+                <label for="c_loglevel">Log Level</label>
+                <select id="c_loglevel">
+                  <option value="0">0: Errors Only</option>
+                  <option value="1">1: Warnings &amp; Errors</option>
+                  <option value="2">2: Info (Standard)</option>
+                  <option value="3">3: Debug (Verbose)</option>
+                </select>
+              </div>
+              <div class="cfgfield">
+                <label for="c_syncheartbeatseconds">Sync Heartbeat (Sec)</label>
+                <input type="number" step="1" id="c_syncheartbeatseconds" placeholder="1">
+                <span class="hint">Receipt status cadence</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:10px">
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_statusenabled">
+                <label for="c_statusenabled">Status Enabled: Report status to Hub</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_showpanel">
+                <label for="c_showpanel">Show Chart Panel</label>
+              </div>
+              <div class="cfgfield-check">
+                <input type="checkbox" id="c_showorphanedlist">
+                <label for="c_showorphanedlist">Show Orphaned List on Panel</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="cfgpanel_raw" class="hidden">
+        <div style="margin-bottom:6px;font-size:11px;color:var(--dim)">
+          Raw <code>copier.ini</code> content. Common settings live in <code>[common]</code>; each sender has a section: <code>[sender0]</code>, <code>[sender1]</code>, etc.
+        </div>
+        <textarea id="cfgraw" class="cfgrawbox" spellcheck="false" placeholder="[common]&#10;deviationpoints=30&#10;&#10;[sender0]&#10;id=1001&#10;magic=770001&#10;lotmode=multiplier&#10;lotparam=1.0"></textarea>
+        <div id="cfgrawerr" class="opmsg bad" style="margin-top:4px"></div>
+      </div>
+    </div>
+    <div class="cfgfoot">
+      <span id="cfgmsg" class="opmsg" style="flex:1;max-width:440px"></span>
+      <div class="btns">
+        <button type="button" id="cfgcancel" class="btn-sec">Close</button>
+        <button type="button" id="cfgsave" class="btn-primary">Save &amp; Push to Receiver</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="notifmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="notiftitle">
+  <div class="notifbox">
+    <div class="notifhead">
+      <h2 id="notiftitle">Add Notification Channel</h2>
+      <button type="button" id="notifclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <form id="notifform" style="display:contents">
+      <div class="notifbody">
+        <input type="hidden" id="notif_id" value="">
+        <div class="notifrow">
+          <label for="notif_name">Channel Name</label>
+          <input id="notif_name" required placeholder="e.g. Trading Ops Telegram Group">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="notifrow">
+            <label for="notif_type">Platform / Type</label>
+            <select id="notif_type">
+              <option value="telegram">Telegram Bot</option>
+              <option value="wecom">WeCom Robot</option>
+              <option value="dingtalk">DingTalk Robot</option>
+              <option value="webhook">Custom Webhook</option>
+            </select>
+          </div>
+          <div class="notifrow">
+            <label for="notif_min_sev">Trigger Level</label>
+            <select id="notif_min_sev">
+              <option value="warning">Warning &amp; Critical (All alerts)</option>
+              <option value="critical">Critical Only (Major issues)</option>
+            </select>
+          </div>
+        </div>
+        <div class="notifrow inline" style="margin-bottom:14px">
+          <input type="checkbox" id="notif_enabled" checked style="width:16px;height:16px;cursor:pointer">
+          <label for="notif_enabled" style="text-transform:none;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:500">Enable this channel for alert dispatch</label>
+        </div>
+
+        <!-- Telegram panel -->
+        <div id="notif_cfg_telegram" class="notif-panel">
+          <div class="notifrow">
+            <label for="notif_tg_token">Bot Token</label>
+            <input id="notif_tg_token" placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
+            <span class="hint">Obtain from @BotFather in Telegram. Saved tokens are masked.</span>
+          </div>
+          <div class="notifrow">
+            <label for="notif_tg_chatid">Chat ID</label>
+            <input id="notif_tg_chatid" placeholder="e.g. -1001234567890 or 987654321">
+            <span class="hint">Target user ID or group chat ID (supergroups typically start with -100).</span>
+          </div>
+        </div>
+
+        <!-- WeCom panel -->
+        <div id="notif_cfg_wecom" class="notif-panel hidden">
+          <div class="notifrow">
+            <label for="notif_wecom_key">Webhook Key or URL</label>
+            <input id="notif_wecom_key" placeholder="e.g. 693a91f6-xxxx-xxxx-xxxx-xxxxxxxxxxxx or full webhook URL">
+            <span class="hint">In WeCom group settings -&gt; Group Bot -&gt; Add Bot -&gt; Copy webhook URL or key.</span>
+          </div>
+        </div>
+
+        <!-- DingTalk panel -->
+        <div id="notif_cfg_dingtalk" class="notif-panel hidden">
+          <div class="notifrow">
+            <label for="notif_dt_token">Access Token or Webhook URL</label>
+            <input id="notif_dt_token" placeholder="e.g. c821xxxx or full webhook URL">
+            <span class="hint">In DingTalk group -&gt; Bot Management -&gt; Custom Bot -&gt; Webhook access_token.</span>
+          </div>
+          <div class="notifrow">
+            <label for="notif_dt_secret">Secret (Signature Key, Optional)</label>
+            <input id="notif_dt_secret" placeholder="e.g. SEC... (leave blank if signature check is disabled)">
+            <span class="hint">If signature validation (HMAC-SHA256) is enabled in DingTalk bot settings, paste SECxxx here.</span>
+          </div>
+        </div>
+
+        <!-- Webhook panel -->
+        <div id="notif_cfg_webhook" class="notif-panel hidden">
+          <div class="notifrow">
+            <label for="notif_hook_url">Webhook URL</label>
+            <input id="notif_hook_url" placeholder="https://your-service.com/api/alerts">
+            <span class="hint">HTTP POST endpoint receiving JSON payload with alert details.</span>
+          </div>
+          <div class="notifrow">
+            <label for="notif_hook_headers">Custom Headers (JSON Object, Optional)</label>
+            <textarea id="notif_hook_headers" rows="2" placeholder='{"Authorization": "Bearer secret_token"}'></textarea>
+            <span class="hint">Custom request headers in JSON format (e.g. Bearer auth tokens).</span>
+          </div>
+        </div>
+
+        <div id="notifstatus" style="margin-top:8px">
+          <div id="notiferr" class="opmsg bad" style="max-width:none"></div>
+          <div id="notifok" class="opmsg ok" style="max-width:none"></div>
+        </div>
+      </div>
+      <div class="notiffoot">
+        <button type="button" id="notif_btn_test" class="btn-sec">🚀 Test Send</button>
+        <div class="btns">
+          <button type="button" id="notif_btn_cancel" class="btn-sec">Cancel</button>
+          <button type="submit" id="notif_btn_save" class="btn-primary">Save Channel</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="hubkeymodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="hubkeytitle">
+  <div class="notifbox" style="width:640px">
+    <div class="notifhead">
+      <h2 id="hubkeytitle">🔑 Hub Public Key File (copier_hub.key)</h2>
+      <button type="button" id="hubkeyclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="notifbody">
+      <div id="hubkey_disabled_notice" class="cfgnotice warn hidden">
+        ⚠️ <strong>CURVE encryption is currently disabled on this hub (--curve off).</strong>
+        To use encrypted connections, restart the hub with <code>--curve on</code> (and optionally <code>--curve-learn on</code>).
+      </div>
+      <div id="hubkey_content_wrap">
+        <div class="notifrow">
+          <label>Hub CurveZMQ Public Key</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="hubkey_val" readonly style="flex:1;background:var(--bg);font-weight:600" value="">
+            <button type="button" id="hubkey_copybtn" class="btn-sec" style="padding:6px 12px">Copy</button>
+          </div>
+          <span class="hint" id="hubkey_learn_hint">40-character Z85 public key. Safe to distribute to all nodes.</span>
+        </div>
+
+        <div style="margin:14px 0 6px 0;padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);font-size:12px;line-height:1.6">
+          <strong style="color:var(--ink);display:block;margin-bottom:6px">📁 Deployment Instructions (No manual input needed in EA):</strong>
+          <ol style="margin:0;padding-left:18px;color:var(--dim)">
+            <li>Click <strong>⬇️ Download Key File</strong> below to save <code>copier_hub.key</code>.</li>
+            <li>In MT4 / MT5, click <em>File → Open Data Folder</em>.</li>
+            <li>Place <code>copier_hub.key</code> into:
+              <ul style="margin:4px 0;padding-left:16px">
+                <li><code>MQL4\Files\</code> (for MT4) or <code>MQL5\Files\</code> (for MT5), <strong>OR</strong></li>
+                <li><code>Terminal\Common\Files\</code> (shared across ALL MT4/MT5 terminals on this computer!).</li>
+              </ul>
+            </li>
+            <li>Attach <code>CopierSender</code> or <code>CopierReceiver</code> with <code>Mode = Central (Hub)</code>. The EA automatically detects and loads the key file!</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+    <div class="notiffoot">
+      <div></div>
+      <div class="btns">
+        <a id="hubkey_dl_btn" href="/api/v1/curve/hub_key" download="copier_hub.key" class="opbtn" style="text-decoration:none;display:inline-flex;align-items:center;font-weight:600">⬇️ Download Key File</a>
+        <button type="button" id="hubkey_close_btn" class="btn-sec">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="posmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="postitle">
+  <div class="posbox">
+    <div class="poshead">
+      <h2 id="postitle">📊 Positions &amp; Mirrors Telemetry <span id="pcount"></span></h2>
+      <button type="button" id="posclose_x" style="background:none;border:none;font-size:22px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="posbody">
+      <div class="pos-section-title">📡 Senders Broadcasting to Hub</div>
+      <div id="pos"><div class="empty">loading</div></div>
+
+      <div class="pos-section-title" style="margin-top:20px">🎯 Receivers Mirrors &amp; Waiting Breakdown</div>
+      <div id="recposbody"><div class="empty">loading</div></div>
+    </div>
+    <div class="posfoot">
+      <span class="opmsg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
+      <button type="button" id="posclose_btn" class="btn-sec">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="confirmtitle">
+  <div class="confirmbox">
+    <div class="confirmhead">
+      <h2 id="confirmtitle">Confirm Action</h2>
+      <button type="button" id="confirmclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="confirmbody">
+      <div id="confirmicon" class="confirm-icon">⚠️</div>
+      <div class="confirm-content">
+        <div id="confirmdesc" class="confirm-desc">Are you sure?</div>
+        <div id="confirmdetail" class="confirm-detail"></div>
+      </div>
+    </div>
+    <div class="confirmfoot">
+      <button type="button" id="confirmcancelbtn" class="btn-sec">Cancel</button>
+      <button type="button" id="confirmokbtn" class="btn-danger">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <div id="login" class="hidden">
   <form id="loginform">
     <h2>mt-copier hub — sign in</h2>
@@ -276,6 +1110,8 @@
 // ---------------------------------------------------------------- state
 var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           users:{ rows:[] },
+          channels:[],
+          userRole:"",
           dismissedAlerts:{},
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
@@ -295,12 +1131,155 @@ function fmtAge(sec){
   return Math.floor(sec/3600) + "h ago";
 }
 
+function confirmDialog(opts){
+  return new Promise(function(resolve){
+    $("confirmtitle").textContent = opts.title || "Confirm Action";
+    $("confirmdesc").innerHTML = opts.desc || "Are you sure you want to proceed?";
+    var detailEl = $("confirmdetail");
+    if(opts.detail){
+      detailEl.innerHTML = opts.detail;
+      detailEl.classList.remove("hidden");
+    } else {
+      detailEl.innerHTML = "";
+      detailEl.classList.add("hidden");
+    }
+    $("confirmicon").textContent = opts.icon || (opts.danger ? "⚠️" : "ℹ️");
+    var okBtn = $("confirmokbtn");
+    okBtn.textContent = opts.confirmText || "Confirm";
+    okBtn.className = opts.danger ? "btn-danger" : "btn-primary";
+    $("confirmcancelbtn").textContent = opts.cancelText || "Cancel";
+    $("confirmmodal").classList.remove("hidden");
+    okBtn.focus();
+
+    function cleanup(res){
+      $("confirmmodal").classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      $("confirmcancelbtn").removeEventListener("click", onCancel);
+      $("confirmclose_x").removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKey);
+      resolve(res);
+    }
+    function onOk(){ cleanup(true); }
+    function onCancel(){ cleanup(false); }
+    function onKey(e){
+      if(e.key === "Escape"){ e.preventDefault(); cleanup(false); }
+    }
+
+    okBtn.addEventListener("click", onOk);
+    $("confirmcancelbtn").addEventListener("click", onCancel);
+    $("confirmclose_x").addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKey);
+  });
+}
+
 // ---------------------------------------------------------------- fetch
 function api(path, opts){
   return fetch(path, opts).then(function(r){
     if(!r.ok) throw new Error(path + " -> " + r.status);
     return r.json();
   });
+}
+
+// ---------------------------------------------------------------- crypto
+// Pure JavaScript SHA-256 for Scheme B challenge-response login. Self-contained,
+// zero external library dependencies, works in both secure and plain HTTP contexts.
+function sha256Bytes(data){
+  if(typeof data === "string"){
+    data = new TextEncoder().encode(data);
+  }
+  var K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+  var h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
+  var h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
+
+  var len = data.length;
+  var bitLen = len * 8;
+  var rem = len % 64;
+  var padLen = (rem < 56) ? (56 - rem) : (120 - rem);
+  var totalLen = len + padLen + 8;
+  var buf = new Uint8Array(totalLen);
+  buf.set(data);
+  buf[len] = 0x80;
+
+  var dv = new DataView(buf.buffer);
+  dv.setUint32(totalLen - 8, Math.floor(bitLen / 0x100000000), false);
+  dv.setUint32(totalLen - 4, bitLen >>> 0, false);
+
+  var w = new Uint32Array(64);
+  var numBlocks = totalLen / 64;
+
+  for(var b = 0; b < numBlocks; b++){
+    var off = b * 64;
+    for(var i = 0; i < 16; i++){
+      w[i] = dv.getUint32(off + i * 4, false);
+    }
+    for(var i = 16; i < 64; i++){
+      var s0 = ((w[i - 15] >>> 7) | (w[i - 15] << 25)) ^
+               ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^
+               (w[i - 15] >>> 3);
+      var s1 = ((w[i - 2] >>> 17) | (w[i - 2] << 15)) ^
+               ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^
+               (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    var a = h0, b_ = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+    for(var i = 0; i < 64; i++){
+      var s1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      var ch = (e & f) ^ ((~e) & g);
+      var t1 = (h + s1 + ch + K[i] + w[i]) >>> 0;
+      var s0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      var maj = (a & b_) ^ (a & c) ^ (b_ & c);
+      var t2 = (s0 + maj) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0;
+      d = c; c = b_; b_ = a; a = (t1 + t2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b_) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+  var out = new Uint8Array(32);
+  var outDv = new DataView(out.buffer);
+  outDv.setUint32(0, h0, false);
+  outDv.setUint32(4, h1, false);
+  outDv.setUint32(8, h2, false);
+  outDv.setUint32(12, h3, false);
+  outDv.setUint32(16, h4, false);
+  outDv.setUint32(20, h5, false);
+  outDv.setUint32(24, h6, false);
+  outDv.setUint32(28, h7, false);
+  return out;
+}
+
+function hexFromBytes(arr){
+  var res = "";
+  for(var i = 0; i < arr.length; i++){
+    var byteStr = arr[i].toString(16);
+    res += byteStr.length < 2 ? "0" + byteStr : byteStr;
+  }
+  return res;
+}
+
+function computeAuthProof(password, salt, nonce, rounds){
+  rounds = rounds || 4096;
+  var acc = sha256Bytes(salt + ":" + password);
+  for(var i = 1; i < rounds; i++){
+    acc = sha256Bytes(acc);
+  }
+  var storedHex = hexFromBytes(acc);
+  return hexFromBytes(sha256Bytes(storedHex + ":" + nonce));
 }
 
 // ---------------------------------------------------------------- order
@@ -342,6 +1321,143 @@ function stateText(n){
   return n.liveness + " \u00b7 quiet " + q + "s ago";
 }
 
+function formatWaiting(n){
+  if(n.role !== "receiver") return "-";
+  if(!n.waiting || n.waiting.total === undefined){
+    return '<span class="wait-chip dim">not reported</span>';
+  }
+  var w = n.waiting;
+  var total = w.total || 0;
+  var lots = (typeof w.lots === "number" && w.lots > 0) ? (" (" + w.lots.toFixed(2) + " lots)") : "";
+  var q = w.queued || 0;
+  var d = w.delayed || 0;
+  var m = w.mkt_closed || 0;
+
+  if(total > 0){
+    var text = "Waiting " + total + " to open (" + q + " queued, " + d + " delayed, " + m + " mkt closed)" + lots;
+    var riskNote = (n.blocked && n.risk) ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
+    return '<span class="wait-chip warn" title="Orders held waiting for filters, queues, or market open">' +
+           '<span class="wait-icon">⏳</span> <strong>' + esc(text) + '</strong>' + riskNote +
+           '</span>';
+  } else {
+    var riskNote = (n.blocked && n.risk) ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
+    return '<span class="wait-chip ok"><span class="wait-icon">✓</span> 0 waiting' + riskNote + '</span>';
+  }
+}
+
+function formatFinancials(n){
+  if(n.role !== "receiver") return "";
+  var parts = [];
+  if(typeof n.equity === "number"){
+    parts.push("Eq: $" + n.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+  }
+  if(typeof n.balance === "number"){
+    parts.push("Bal: $" + n.balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
+  }
+  if(!parts.length) return "";
+  return '<div class="node-fin">' + parts.join(" &middot; ") + '</div>';
+}
+
+function updateKpiCards(nodes, pos, d){
+  var totalSenders = 0, totalReceivers = 0;
+  var totalWaitOrders = 0, totalWaitLots = 0;
+  var waitBreakdown = { queued: 0, delayed: 0, mkt_closed: 0 };
+  var totalOpenPos = 0, totalOpenLots = 0;
+
+  nodes.forEach(function(n){
+    if(n.role === "sender") totalSenders++;
+    if(n.role === "receiver") totalReceivers++;
+    if(n.waiting && typeof n.waiting.total === "number"){
+      totalWaitOrders += n.waiting.total;
+      totalWaitLots += (n.waiting.lots || 0);
+      waitBreakdown.queued += (n.waiting.queued || 0);
+      waitBreakdown.delayed += (n.waiting.delayed || 0);
+      waitBreakdown.mkt_closed += (n.waiting.mkt_closed || 0);
+    }
+    if(n.positions && typeof n.positions.count === "number"){
+      totalOpenPos += n.positions.count;
+      totalOpenLots += (parseFloat(n.positions.lots) || 0);
+    }
+  });
+
+  var elKpiNodes = $("kpi_nodes_val");
+  if(elKpiNodes){
+    var online = nodes.filter(function(n){ return n.liveness === "online"; }).length;
+    elKpiNodes.textContent = online + " / " + nodes.length + " Online";
+    $("kpi_nodes_sub").textContent = totalSenders + " Senders · " + totalReceivers + " Receivers";
+  }
+
+  var elKpiPos = $("kpi_pos_val");
+  if(elKpiPos){
+    elKpiPos.textContent = totalOpenPos + " (" + totalOpenLots.toFixed(2) + " lots)";
+    $("kpi_pos_sub").textContent = pos.length + " Senders Broadcasting";
+  }
+
+  var elKpiWait = $("kpi_wait_val");
+  var cardWait = $("kpi_card_wait");
+  if(elKpiWait){
+    elKpiWait.textContent = totalWaitOrders + " Waiting" + (totalWaitLots > 0 ? " (" + totalWaitLots.toFixed(2) + " lots)" : "");
+    $("kpi_wait_sub").textContent = waitBreakdown.queued + " queued · " + waitBreakdown.delayed + " delayed · " + waitBreakdown.mkt_closed + " mkt closed";
+    if(cardWait){
+      cardWait.className = "kpi-card" + (totalWaitOrders > 0 ? " warn-active" : "");
+    }
+  }
+
+  var elKpiHub = $("kpi_hub_val");
+  if(elKpiHub){
+    elKpiHub.textContent = "up " + fmtAge(d.hub_uptime_secs);
+    var cvOn = d.curve && d.curve.on;
+    $("kpi_hub_sub").textContent = (cvOn ? "🔒 CURVE Encrypted" : "⚠️ Plain ZMQ") + " · " + (s.writes ? "Writes ON" : "Writes OFF");
+  }
+}
+
+function openPositionsModal(focusKey){
+  $("posmodal").classList.remove("hidden");
+  renderRecPositions();
+  if(focusKey){
+    var row = document.querySelector("#pos tr[data-s='" + focusKey + "']") ||
+              document.querySelector("#recposbody tr[data-k='" + focusKey + "']");
+    if(row){
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.style.background = "var(--ok-bg)";
+      setTimeout(function(){ row.style.background = ""; }, 2000);
+    }
+  }
+}
+
+function closePositionsModal(){
+  $("posmodal").classList.add("hidden");
+}
+
+function renderRecPositions(){
+  var host = $("recposbody");
+  if(!host) return;
+  var d = s.data;
+  if(!d || !d.nodes) return;
+  var receivers = (d.nodes || []).filter(function(n){ return n.role === "receiver"; });
+  if(!receivers.length){
+    host.innerHTML = '<div class="empty">No receiver nodes registered yet</div>';
+    return;
+  }
+  var rows = receivers.map(function(n){
+    var posCount = (n.positions && n.positions.count !== undefined) ? n.positions.count : "-";
+    var posLots = (n.positions && n.positions.lots !== undefined) ? (" (" + n.positions.lots + " lots)") : "";
+    var orphanStr = (n.positions && typeof n.positions.orphaned === "number") ? (" [+" + n.positions.orphaned + " orphan]") : "";
+    var wt = formatWaiting(n);
+    var fin = formatFinancials(n) || "-";
+    return '<tr data-k="' + esc(n.key) + '">' +
+           '<td><strong>' + esc(n.key) + '</strong> (' + esc(n.name || "-") + ')</td>' +
+           '<td class="num">' + esc(posCount) + esc(posLots) + esc(orphanStr) + '</td>' +
+           '<td>' + wt + '</td>' +
+           '<td>' + fin + '</td>' +
+           '<td><span class="dot ' + esc(n.liveness) + '"></span>' + esc(n.liveness) + '</td>' +
+           '</tr>';
+  }).join("");
+  host.innerHTML =
+    '<table><thead><tr><th>Receiver Node</th><th class="num">Managed Mirrors</th><th>Waiting Telemetry</th><th>Equity &amp; Balance</th><th>Liveness</th></tr></thead><tbody>' +
+    rows + '</tbody></table>';
+}
+
 // ---------------------------------------------------------------- render
 function render(){
   var d = s.data;
@@ -360,6 +1476,7 @@ function render(){
   renderAlerts(d.alerts || []);
   renderNodes(nodes);
   renderPositions(pos);
+  updateKpiCards(nodes, pos, d);
   drawTopology(nodes);
   renderCurveKey(d.curve || null);
 }
@@ -404,9 +1521,11 @@ function renderAlerts(alerts){
   var items = visible.slice(0, 5).map(function(a){
     var when = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
     var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
-    var isRecovered = (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online");
-    var sevClass = isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn");
-    var statusBadge = isRecovered ? ' <span class="ares">RESOLVED \u00b7 NODE IS ONLINE</span>' : '';
+    var isRecovered = (a.kind === "node.recovered" || (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online"));
+    var sevClass = (a.kind === "node.recovered") ? "ok" : (isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn"));
+    var statusBadge = (a.kind === "node.recovered")
+      ? ' <span class="ares">RECOVERED \u00b7 ONLINE</span>'
+      : (isRecovered ? ' <span class="ares">RESOLVED \u00b7 NODE IS ONLINE</span>' : '');
     return '<div class="a ' + sevClass + '">' +
            '<div class="atxt">' + esc(when) + " \u00b7 " + esc(a.kind) + " \u00b7 " + esc(a.node || "-") +
            statusBadge + " \u00b7 " + esc(JSON.stringify(a.detail)) + '</div>' +
@@ -440,27 +1559,28 @@ function renderNodes(nodes){
   var keys = nodes.map(function(n){ return n.key; }).join("\u0000");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
-      // Operational commands (M5a) target a RECEIVER only - the hub refuses
-      // them for a sender. So the buttons appear for receivers and a dash for
-      // senders, keeping the column aligned and the semantics honest.
       var ops = (n.role === "receiver")
-        ? "<button class='opbtn' data-op='pause'>pause</button>" +
+        ? "<button class='opbtn' data-op='positions'>positions</button>" +
+          "<button class='opbtn' data-op='config'>config</button>" +
+          "<button class='opbtn' data-op='pause'>pause</button>" +
           "<button class='opbtn' data-op='resume'>resume</button>" +
           "<button class='opbtn danger' data-op='closeall'>close all</button>" +
           "<button class='opbtn' data-op='reload'>reload</button>" +
           "<span class='opmsg'></span>"
-        : "<span class='opmsg'>-</span>";
+        : "<button class='opbtn' data-op='positions'>positions</button>" +
+          "<span class='opmsg'></span>";
       return "<tr data-k=\"" + esc(n.key) + "\">" +
-             "<td><span class='dot'></span><span class='k'></span></td>" +
-             "<td class='nm'><span class='nmv'></span> <span class='pzchip' style='display:none'" +
+             "<td data-label=\"Node\"><span class='dot'></span><span class='k'></span> <span class='role-pill'></span></td>" +
+             "<td data-label=\"Terminal\" class='nm'><span class='nmv'></span> <span class='ver-tag'></span> <span class='pzchip' style='display:none'" +
              " title='hub pause: no new mirrors until the hub sends resume'>PAUSED</span></td>" +
-             "<td class='num ps'></td>" +
-             "<td class='st'></td>" +
-             "<td class='ops'>" + ops + "</td></tr>";
+             "<td data-label=\"Positions\" class='ps-cell'><div class='num ps' style='cursor:pointer' title='Click to inspect positions'></div><div class='fin'></div></td>" +
+             "<td data-label=\"Waiting Telemetry\" class='wt-cell'><div class='wt'></div></td>" +
+             "<td data-label=\"State\" class='st-cell'><div class='st'></div></td>" +
+             "<td data-label=\"Operations\" class='ops'><div class='ops-btn-group'>" + ops + "</div></td></tr>";
     }).join("");
     host.innerHTML =
-      "<table><thead><tr><th>node</th><th>name</th><th class=\"num\">pos</th>" +
-      "<th>state</th><th>ops</th></tr></thead><tbody>" + rows + "</tbody></table>";
+      "<table><thead><tr><th>Node</th><th>Terminal Name</th><th class=\"num\">Positions / Financials</th>" +
+      "<th>Waiting Telemetry</th><th>State</th><th>Actions</th></tr></thead><tbody>" + rows + "</tbody></table>";
     s.nodeKeys = keys;
     s.nodeRows = {};
     var trs = host.getElementsByTagName("tr");
@@ -468,12 +1588,16 @@ function renderNodes(nodes){
       var k = trs[i].getAttribute("data-k");
       if(!k) continue;
       s.nodeRows[k] = {
-        dot: trs[i].getElementsByClassName("dot")[0],
-        k:   trs[i].getElementsByClassName("k")[0],
-        nm:  trs[i].getElementsByClassName("nmv")[0],
-        pz:  trs[i].getElementsByClassName("pzchip")[0],
-        ps:  trs[i].getElementsByClassName("ps")[0],
-        st:  trs[i].getElementsByClassName("st")[0]
+        dot: trs[i].querySelector(".dot"),
+        k:   trs[i].querySelector(".k"),
+        role: trs[i].querySelector(".role-pill"),
+        nm:  trs[i].querySelector(".nmv"),
+        ver: trs[i].querySelector(".ver-tag"),
+        pz:  trs[i].querySelector(".pzchip"),
+        ps:  trs[i].querySelector(".ps"),
+        fin: trs[i].querySelector(".fin"),
+        wt:  trs[i].querySelector(".wt"),
+        st:  trs[i].querySelector(".st")
       };
     }
   }
@@ -482,29 +1606,44 @@ function renderNodes(nodes){
     if(!r) return;
     r.dot.className = "dot " + n.liveness;
     r.k.textContent = n.key;
+    if(r.role){
+      r.role.textContent = n.role;
+      r.role.className = "role-pill " + n.role;
+    }
     r.nm.textContent = n.name || "-";
-    // M5b: the node's own hub-pause report. A chip rather than a state change:
-    // the node is online and healthy, it is just not opening new mirrors.
+    if(r.ver){
+      r.ver.textContent = n.ver ? "v" + n.ver : "";
+    }
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
-    // The receiver reports orphan-tagged positions separately; they are not
-    // in its managed HELD count. Show both figures without conflating them.
-    // Senders do not have orphan positions; only receivers do.
+
+    // Positions & Financials
     if(n.positions && n.positions.count !== undefined){
       if(n.role === "receiver"){
         var orphaned = n.positions.orphaned;
-        r.ps.textContent = n.positions.count +
+        var lotsStr = (typeof n.positions.lots === "number" || typeof n.positions.lots === "string")
+          ? " (" + n.positions.lots + " lots)" : "";
+        r.ps.textContent = n.positions.count + lotsStr +
           (typeof orphaned === "number" ? " (+" + orphaned + " orphan)" : " (+? orphan)");
-        r.ps.title = typeof orphaned === "number"
-          ? "Managed positions; " + orphaned + " orphaned copier position(s)"
-          : "Managed positions; orphan count not reported by this receiver";
+        r.ps.title = "Managed positions: " + n.positions.count + "; " + orphaned + " orphaned. Click to inspect.";
       } else {
-        r.ps.textContent = n.positions.count;
-        r.ps.title = "Open positions on sender: " + n.positions.count;
+        var sLots = n.positions.lots ? " (" + n.positions.lots + " lots)" : "";
+        r.ps.textContent = n.positions.count + sLots;
+        r.ps.title = "Open positions on sender: " + n.positions.count + sLots + ". Click to inspect.";
       }
     } else {
       r.ps.textContent = "-";
       r.ps.title = "Position count not reported yet";
     }
+
+    if(r.fin){
+      r.fin.innerHTML = formatFinancials(n);
+    }
+
+    // Waiting Telemetry
+    if(r.wt){
+      r.wt.innerHTML = formatWaiting(n);
+    }
+
     r.st.textContent = stateText(n);
   });
 }
@@ -576,7 +1715,7 @@ function drawTopology(nodes){
   // the shape IS the topology, so it never has to be computed.
   // The gap. The labels used to sit at the box EDGE (x +- 72, and the box is
   // 144 wide), so a name and its account-number box rendered as one smeared
-  // block - reported as "像素块连起来". Everything below is in units of that
+  // block - visual layout spacing unit. Everything below is in units of that
   // one number: BOX_W/2 is the box half-width, LBL_GAP the clear space between
   // the box and the text, and the columns are pushed out far enough that the
   // longest name still has room rather than being clipped by the viewBox.
@@ -660,7 +1799,14 @@ function startPolling(){
   s.mode = "poll";
   $("mode").textContent = "polling";
   $("mode").className = "pill poll";
-  s.poller = setInterval(refresh, 5000);
+  s.poller = setInterval(function(){
+    refresh();
+    // Periodically probe to see if WebSocket is available again (every ~20s)
+    s.pollTicks = (s.pollTicks || 0) + 1;
+    if(s.pollTicks % 4 === 0 && window.WebSocket){
+      startWS();
+    }
+  }, 5000);
   refresh();
 }
 
@@ -668,7 +1814,7 @@ function startWS(){
   var proto = location.protocol === "https:" ? "wss:" : "ws:";
   var ws = new WebSocket(proto + "//" + location.host + "/api/v1/stream");
   ws.onopen = function(){
-    s.mode = "ws"; s.misses = 0;
+    s.mode = "ws"; s.misses = 0; s.pollTicks = 0;
     $("mode").textContent = "live";
     $("mode").className = "pill live";
     if(s.poller){ clearInterval(s.poller); s.poller = null; }
@@ -684,9 +1830,12 @@ function startWS(){
   };
   ws.onclose = function(){
     s.misses++;
+    // Immediately refresh via HTTP so dashboard doesn't freeze while reconnecting
+    refresh();
     if(s.misses >= 3){ startPolling(); return; }
     $("mode").textContent = "reconnecting";
-    setTimeout(startWS, 800);
+    $("mode").className = "pill reconn";
+    setTimeout(startWS, 1000);
   };
   ws.onerror = function(){ /* onclose follows */ };
 }
@@ -774,23 +1923,53 @@ function onOpClick(ev){
     if(t.classList && t.classList.contains("opbtn")){ btn = t; break; }
     t = t.parentNode;
   }
-  if(!btn) return;
-  var td = btn.parentNode;
-  var k = td.parentNode.getAttribute("data-k");
+  if(!btn){
+    var psCell = ev.target.closest ? ev.target.closest(".ps-cell") : null;
+    if(psCell){
+      var trP = psCell.closest("tr");
+      if(trP) openPositionsModal(trP.getAttribute("data-k"));
+      return;
+    }
+    var wtCell = ev.target.closest ? ev.target.closest(".wt-cell") : null;
+    if(wtCell){
+      var trW = wtCell.closest("tr");
+      if(trW) openPositionsModal(trW.getAttribute("data-k"));
+      return;
+    }
+    return;
+  }
+  var tr = btn.closest ? btn.closest("tr") : (btn.parentNode ? btn.parentNode.parentNode : null);
+  var k = tr ? tr.getAttribute("data-k") : "";
   var op = btn.getAttribute("data-op");
-  var msg = td.querySelector ? td.querySelector(".opmsg") : null;
+  if(op === "positions"){
+    openPositionsModal(k);
+    return;
+  }
+  if(op === "config"){
+    openConfigModal(k);
+    return;
+  }
+  var msg = tr ? tr.querySelector(".opmsg") : null;
+  if(op === "closeall"){
+    confirmDialog({
+      title: "Confirm Close All Positions",
+      desc: "Close ALL positions on receiver <code>" + esc(k) + "</code>?",
+      detail: "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+      danger: true,
+      confirmText: "Close All Positions"
+    }).then(function(ok){
+      if(ok) sendCommand(k, op, msg);
+    });
+    return;
+  }
   sendCommand(k, op, msg);
 }
 
 // G10: one call, every receiver. The hub mints ONE COMMAND PER RECEIVER (a
 // broadcast frame would be one id shared by N nodes - see api.rs), so the
-// feedback lists every command_id. closeall asks first: it queues a close
-// for every mirrored position the copier holds.
+// feedback lists every command_id.
 function sendGlobal(op){
   var msgEl = $("gmsg");
-  if(op === "closeall" &&
-     !window.confirm("CLOSE ALL queues a close for EVERY mirrored position on EVERY receiver. Continue?"))
-    return;
   if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing global " + op + "…"; }
   fetch("/api/v1/commands", {
     method: "POST",
@@ -821,7 +2000,31 @@ function onGlobalClick(ev){
     if(t.classList && t.classList.contains("opbtn") && t.getAttribute("data-gop")){ btn = t; break; }
     t = t.parentNode;
   }
-  if(btn) sendGlobal(btn.getAttribute("data-gop"));
+  if(!btn) return;
+  var op = btn.getAttribute("data-gop");
+  if(op === "closeall"){
+    confirmDialog({
+      title: "⚠️ Dangerous Action: Global Close All",
+      desc: "Close ALL positions across EVERY receiver?",
+      detail: "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
+      danger: true,
+      confirmText: "Yes, Close All Positions"
+    }).then(function(ok){
+      if(ok) sendGlobal(op);
+    });
+  } else if(op === "pause"){
+    confirmDialog({
+      title: "Pause All Receivers",
+      desc: "Pause copying on ALL receivers?",
+      detail: "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+      danger: true,
+      confirmText: "Pause All Receivers"
+    }).then(function(ok){
+      if(ok) sendGlobal(op);
+    });
+  } else {
+    sendGlobal(op);
+  }
 }
 
 // Reflect whether this hub allows writes (--writes on). The flag is a startup
@@ -832,8 +2035,8 @@ function refreshWritesState(){
     var f = $("writes-state");
     if(!f) return;
     if(!s.writes){
-      f.textContent = "commands are OFF: this hub started with --writes off (the default). " +
-        "Restart with --writes on to issue operational commands (pause / resume / close-all / reload).";
+      f.textContent = "commands are OFF: this hub started with --writes off. " +
+        "Restart without --writes off (or with --writes on) to issue operational commands (pause / resume / close-all / reload).";
     } else {
       f.textContent = "operational commands target receivers; the EA acts on them once M5b lands. " +
         "Each click issues a command via the M5a hub endpoint and shows its command_id.";
@@ -858,6 +2061,11 @@ function startDashboard(){
   setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
   $("nodes").addEventListener("click", onOpClick);
   $("globalops").addEventListener("click", onGlobalClick);
+  $("btn-view-pos").addEventListener("click", function(){ openPositionsModal(); });
+  $("kpi_card_pos").addEventListener("click", function(){ openPositionsModal(); });
+  $("kpi_card_wait").addEventListener("click", function(){ openPositionsModal(); });
+  $("posclose_x").addEventListener("click", closePositionsModal);
+  $("posclose_btn").addEventListener("click", closePositionsModal);
   $("alerts").addEventListener("click", function(ev){
     var btn = ev.target.closest("button");
     if(!btn) return;
@@ -937,10 +2145,18 @@ function userAction(act, id, ev){
   $("uerr").textContent = ""; $("uok").textContent = "";
   var u = s.users.rows.filter(function(x){ return x.id === id; })[0];
   if(act === "del"){
-    if(!confirm("Delete user " + id + "?")) return;
-    api("/api/v1/users/" + encodeURIComponent(id), { method: "DELETE" })
-      .then(function(){ loadUsers(); })
-      .catch(function(e){ $("uerr").textContent = "delete failed: " + e.message; });
+    confirmDialog({
+      title: "Delete User Account",
+      desc: "Delete user <code>" + esc(id) + "</code>?",
+      detail: "The user will immediately lose access to the Hub Web Dashboard and all active sessions for this account will be invalidated.",
+      danger: true,
+      confirmText: "Delete User"
+    }).then(function(ok){
+      if(!ok) return;
+      api("/api/v1/users/" + encodeURIComponent(id), { method: "DELETE" })
+        .then(function(){ loadUsers(); })
+        .catch(function(e){ $("uerr").textContent = "delete failed: " + e.message; });
+    });
   } else if(act === "pwd" && u){
     openAdminPasswordReset(u);
   } else if(act === "toggle" && u){
@@ -1039,12 +2255,68 @@ $("ckeycopy").addEventListener("click", function(ev){
     navigator.clipboard.writeText(key).then(done, done);
   } else { done(); }
 });
+
+function openHubKeyModal(autoDownload){
+  var cv = (s.data && s.data.curve) || null;
+  var isCurveOn = cv && cv.on && cv.public_key;
+  $("hubkey_disabled_notice").classList.toggle("hidden", !!isCurveOn);
+  $("hubkey_content_wrap").classList.toggle("hidden", !isCurveOn);
+  $("hubkey_dl_btn").classList.toggle("hidden", !isCurveOn);
+  if(isCurveOn){
+    $("hubkey_val").value = cv.public_key;
+    var hint = "40-character Z85 public key. Safe to distribute to all nodes.";
+    if(cv.learn) hint += " (learn mode is ON: new connecting nodes are automatically authorized)";
+    $("hubkey_learn_hint").textContent = hint;
+    if(autoDownload){
+      var dl = document.createElement("a");
+      dl.href = "/api/v1/curve/hub_key";
+      dl.download = "copier_hub.key";
+      document.body.appendChild(dl);
+      dl.click();
+      document.body.removeChild(dl);
+    }
+  } else {
+    $("hubkey_val").value = "";
+  }
+  $("hubkeymodal").classList.remove("hidden");
+}
+
+function closeHubKeyModal(){
+  $("hubkeymodal").classList.add("hidden");
+}
+
+$("btn-download-hub-key").addEventListener("click", function(ev){
+  ev.preventDefault();
+  openHubKeyModal(true);
+});
+$("ckeydlg").addEventListener("click", function(ev){
+  ev.preventDefault();
+  openHubKeyModal(false);
+});
+$("hubkeyclose_x").addEventListener("click", closeHubKeyModal);
+$("hubkey_close_btn").addEventListener("click", closeHubKeyModal);
+$("hubkey_copybtn").addEventListener("click", function(){
+  var key = $("hubkey_val").value;
+  var btn = $("hubkey_copybtn");
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(key).then(function(){
+      btn.textContent = "Copied!";
+      setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+    });
+  } else {
+    $("hubkey_val").select();
+    document.execCommand("copy");
+    btn.textContent = "Copied!";
+    setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+  }
+});
 //--- Identity is applied through ONE function, from BOTH paths that learn it
 //--- (the whoami probe on page load, and the sign-in form). The bug this
 //--- replaces: the who pill was only set by the probe, so a FIRST sign-in
 //--- through the form left it empty until a reload - and the Users panel's
 //--- visibility lived in two places, which is how it drifts.
 function setRole(user, role){
+  s.userRole = role;
   $("who").textContent = user + " · " + role;
   //--- Admin-only chrome. The server is the gate (every /users endpoint 403s
   //--- a non-admin); this just stops a viewer or operator looking at controls
@@ -1052,6 +2324,11 @@ function setRole(user, role){
   var admin = (role === "admin");
   $("users-sec").classList.toggle("hidden", !admin);
   if(admin) loadUsers();
+
+  var canNotif = (role === "admin" || role === "operator" || role === "viewer");
+  $("notif-sec").classList.toggle("hidden", !canNotif);
+  $("btn-add-notif").classList.toggle("hidden", role === "viewer");
+  if(canNotif) loadNotifications();
 }
 api("/api/v1/whoami").then(function(j){
   $("login").classList.add("hidden");
@@ -1063,23 +2340,57 @@ api("/api/v1/whoami").then(function(j){
 $("loginform").addEventListener("submit", function(ev){
   ev.preventDefault();
   $("loginerr").textContent = "";
-  fetch("/api/v1/login", {
+  var user = $("user").value.trim();
+  var pass = $("pass").value;
+  if(!user || !pass){
+    $("loginerr").textContent = "please enter user id and password";
+    return;
+  }
+
+  // Scheme B: Salted Hashing Challenge-Response (never send plaintext password over HTTP)
+  // Step 1: Request short-lived nonce and salt from Axum
+  fetch("/api/v1/auth/nonce", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: $("user").value, password: $("pass").value })
+    body: JSON.stringify({ id: user })
   }).then(function(r){
+    if(!r.ok) throw new Error("nonce request failed");
+    return r.json();
+  }).then(function(ch){
+    // Step 2: Compute proof locally: Proof = SHA256(H + ":" + nonce)
+    var proof = computeAuthProof(pass, ch.salt, ch.nonce, ch.rounds);
+    // Step 3: Clear sensitive password from memory and form immediately
+    $("pass").value = "";
+    // Step 4: Submit authentication proof (the nonce will be destroyed immediately by hub)
+    return fetch("/api/v1/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: user, nonce: ch.nonce, proof: proof })
+    });
+  }).then(function(r){
+    //--- The hub answers 429 when it is refusing logins outright (a failed-
+    //--- login flood) or when it is holding as many challenges as it will.
+    //--- Saying so beats "invalid credentials", which would send the operator
+    //--- hunting for a typo that is not there.
+    if(r.status === 429){
+      return r.json().then(function(j){
+        throw new Error("throttled:" + ((j && (j.retry_after_secs || j.error)) || "retry shortly"));
+      }, function(){ throw new Error("throttled:retry shortly"); });
+    }
     if(!r.ok) throw new Error("invalid credentials");
     return r.json();
   }).then(function(j){
-    //--- Reload, deliberately - the same thing logout does. Identity is
-    //--- cheaper to RE-DERIVE than to reconcile: a fresh page runs whoami
-    //--- with the new cookie and every derived state (the who pill, the
-    //--- Users panel, the ops chrome) is consistent with it. The old way
-    //--- patched the pill in place and still showed the previous user when
-    //--- a stale whoami response landed after the login.
     location.reload();
-  }).catch(function(){
-    $("loginerr").textContent = "sign-in failed - check the id and password";
+  }).catch(function(err){
+    $("pass").value = "";
+    var m = (err && err.message) || "";
+    if(m === "invalid credentials"){
+      $("loginerr").textContent = "sign-in failed - check the id and password";
+    } else if(m.indexOf("throttled:") === 0){
+      $("loginerr").textContent = "too many failed attempts - wait a few seconds and try again (" + m.slice(10) + ")";
+    } else {
+      $("loginerr").textContent = "cannot connect to hub server (is copier-hub running?)";
+    }
   });
 });
 $("logout").addEventListener("click", function(ev){
@@ -1137,6 +2448,1313 @@ $("pwdform").addEventListener("submit", function(ev){
   }).catch(function(e){
     err.textContent = "request failed: " + e.message;
   });
+});
+
+// --- NOTIFICATION CHANNELS (Telegram, WeCom, DingTalk, Webhook) ---------
+function loadNotifications(){
+  api("/api/v1/notifications").then(function(j){
+    s.channels = j.channels || [];
+    renderNotifications(s.channels);
+  }).catch(function(e){
+    $("notifbody").innerHTML = '<div class="empty">Failed to load notification channels: ' + esc(e.message) + '</div>';
+  });
+}
+
+function getChannelTypeBadge(type){
+  if(type === "telegram") return '<span class="chan-badge chan-tg">Telegram</span>';
+  if(type === "wecom") return '<span class="chan-badge chan-wc">WeCom</span>';
+  if(type === "dingtalk") return '<span class="chan-badge chan-dt">DingTalk</span>';
+  if(type === "webhook") return '<span class="chan-badge chan-wh">Webhook</span>';
+  return '<span class="chan-badge">' + esc(type) + '</span>';
+}
+
+function getChannelSummary(ch){
+  var cfg = ch.config || {};
+  if(ch.channel_type === "telegram"){
+    return "chat: " + esc(cfg.chat_id || "-") + " · token: " + esc(cfg.bot_token || "-");
+  } else if(ch.channel_type === "wecom"){
+    return "key: " + esc(cfg.key || cfg.webhook_url || "-");
+  } else if(ch.channel_type === "dingtalk"){
+    return "token: " + esc(cfg.access_token || cfg.webhook_url || "-") + (cfg.secret ? " (signed)" : "");
+  } else if(ch.channel_type === "webhook"){
+    return esc(cfg.url || "-");
+  }
+  return "-";
+}
+
+function renderNotifications(channels){
+  $("notifcount").textContent = channels.length + " channel(s)";
+  if(!channels.length){
+    $("notifbody").innerHTML = '<div class="empty">No notification channels configured yet. Click "+ Add Channel" to set up Telegram, WeCom, DingTalk or Webhook alerts.</div>';
+    return;
+  }
+  var isViewer = (s.userRole === "viewer");
+  var html = '<table class="notiftbl"><thead><tr>' +
+             '<th>Name</th><th>Type</th><th>Min Severity</th><th>Status</th><th>Target Info</th>' +
+             (isViewer ? '' : '<th style="text-align:right">Actions</th>') +
+             '</tr></thead><tbody>' +
+             channels.map(function(c){
+               var sev = (c.min_severity === "critical") ? '<span style="color:var(--bad);font-weight:600">Critical Only</span>' : 'Warning &amp; Critical';
+               var st = c.enabled ? '<span class="dot online"></span>Active' : '<span class="dot offline"></span>Disabled';
+               var ops = isViewer ? '' :
+                 '<td class="ops" style="text-align:right">' +
+                 '<button class="opbtn" data-nact="test" title="Send a test alert now">Test</button> ' +
+                 '<button class="opbtn" data-nact="edit">Edit</button> ' +
+                 '<button class="opbtn" data-nact="toggle">' + (c.enabled ? "Disable" : "Enable") + '</button> ' +
+                 '<button class="opbtn danger" data-nact="del">Delete</button>' +
+                 '</td>';
+               return '<tr data-nid="' + esc(c.id) + '">' +
+                      '<td style="font-weight:600">' + esc(c.name) + '</td>' +
+                      '<td>' + getChannelTypeBadge(c.channel_type) + '</td>' +
+                      '<td>' + sev + '</td>' +
+                      '<td>' + st + '</td>' +
+                      '<td style="font-size:11.5px;color:var(--dim)">' + getChannelSummary(c) + '</td>' +
+                      ops + '</tr>';
+             }).join('') +
+             '</tbody></table>';
+  $("notifbody").innerHTML = html;
+}
+
+function openNotificationModal(channel){
+  var isEdit = !!channel;
+  $("notiftitle").textContent = isEdit ? "Edit Notification Channel" : "Add Notification Channel";
+  $("notif_id").value = isEdit ? channel.id : "";
+  $("notif_name").value = isEdit ? channel.name : "";
+  $("notif_type").value = isEdit ? channel.channel_type : "telegram";
+  $("notif_type").disabled = isEdit;
+  $("notif_min_sev").value = isEdit ? (channel.min_severity || "warning") : "warning";
+  $("notif_enabled").checked = isEdit ? !!channel.enabled : true;
+
+  $("notiferr").textContent = "";
+  $("notifok").textContent = "";
+
+  var cfg = (isEdit && channel.config) ? channel.config : {};
+  $("notif_tg_token").value = cfg.bot_token || "";
+  $("notif_tg_chatid").value = cfg.chat_id || "";
+  $("notif_wecom_key").value = cfg.key || cfg.webhook_url || "";
+  $("notif_dt_token").value = cfg.access_token || cfg.webhook_url || "";
+  $("notif_dt_secret").value = cfg.secret || "";
+  $("notif_hook_url").value = cfg.url || "";
+  $("notif_hook_headers").value = (cfg.headers && typeof cfg.headers === "object") ? JSON.stringify(cfg.headers, null, 2) : "";
+
+  updateNotifTypePanels();
+  $("notifmodal").classList.remove("hidden");
+  $("notif_name").focus();
+}
+
+function closeNotificationModal(){
+  $("notifmodal").classList.add("hidden");
+  $("notiferr").textContent = "";
+  $("notifok").textContent = "";
+}
+
+function updateNotifTypePanels(){
+  var t = $("notif_type").value;
+  ["telegram", "wecom", "dingtalk", "webhook"].forEach(function(k){
+    var el = $("notif_cfg_" + k);
+    if(el) el.classList.toggle("hidden", k !== t);
+  });
+}
+
+function collectNotifFormConfig(type){
+  var cfg = {};
+  if(type === "telegram"){
+    cfg.bot_token = $("notif_tg_token").value.trim();
+    cfg.chat_id = $("notif_tg_chatid").value.trim();
+  } else if(type === "wecom"){
+    var k = $("notif_wecom_key").value.trim();
+    if(k.startsWith("http://") || k.startsWith("https://")){
+      cfg.webhook_url = k;
+    } else {
+      cfg.key = k;
+    }
+  } else if(type === "dingtalk"){
+    var tok = $("notif_dt_token").value.trim();
+    if(tok.startsWith("http://") || tok.startsWith("https://")){
+      cfg.webhook_url = tok;
+    } else {
+      cfg.access_token = tok;
+    }
+    var sec = $("notif_dt_secret").value.trim();
+    if(sec) cfg.secret = sec;
+  } else if(type === "webhook"){
+    cfg.url = $("notif_hook_url").value.trim();
+    var hRaw = $("notif_hook_headers").value.trim();
+    if(hRaw){
+      try {
+        cfg.headers = JSON.parse(hRaw);
+      } catch(e){
+        throw new Error("Custom Headers must be a valid JSON object: " + e.message);
+      }
+    }
+  }
+  return cfg;
+}
+
+$("notifclose_x").addEventListener("click", closeNotificationModal);
+$("notif_btn_cancel").addEventListener("click", closeNotificationModal);
+$("btn-add-notif").addEventListener("click", function(){ openNotificationModal(); });
+$("btn-gop-notif").addEventListener("click", function(){
+  var sec = $("notif-sec");
+  if(sec.classList.contains("hidden")){
+    openNotificationModal();
+  } else {
+    sec.scrollIntoView({ behavior: "smooth" });
+  }
+});
+$("notif_type").addEventListener("change", updateNotifTypePanels);
+
+$("notifform").addEventListener("submit", function(ev){
+  ev.preventDefault();
+  var err = $("notiferr"), ok = $("notifok");
+  err.textContent = ""; ok.textContent = "";
+
+  var id = $("notif_id").value.trim();
+  var name = $("notif_name").value.trim();
+  var type = $("notif_type").value;
+  var min_severity = $("notif_min_sev").value;
+  var enabled = $("notif_enabled").checked;
+
+  if(!name){ err.textContent = "Channel Name is required"; return; }
+
+  var config;
+  try {
+    config = collectNotifFormConfig(type);
+  } catch(e){
+    err.textContent = e.message;
+    return;
+  }
+
+  $("notif_btn_save").disabled = true;
+  err.textContent = "Saving channel…";
+
+  fetch("/api/v1/notifications", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: id,
+      name: name,
+      channel_type: type,
+      enabled: enabled,
+      min_severity: min_severity,
+      config: config
+    })
+  }).then(function(r){
+    return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; });
+  }).then(function(res){
+    $("notif_btn_save").disabled = false;
+    if(!res.ok){
+      err.textContent = (res.j && res.j.error) || ("HTTP " + res.status);
+      return;
+    }
+    closeNotificationModal();
+    loadNotifications();
+  }).catch(function(e){
+    $("notif_btn_save").disabled = false;
+    err.textContent = "Save failed: " + e.message;
+  });
+});
+
+$("notif_btn_test").addEventListener("click", function(){
+  var err = $("notiferr"), ok = $("notifok");
+  err.textContent = ""; ok.textContent = "";
+
+  var id = $("notif_id").value.trim();
+  var name = $("notif_name").value.trim() || "Test Channel";
+  var type = $("notif_type").value;
+  var min_severity = $("notif_min_sev").value;
+  var enabled = $("notif_enabled").checked;
+
+  var config;
+  try {
+    config = collectNotifFormConfig(type);
+  } catch(e){
+    err.textContent = e.message;
+    return;
+  }
+
+  $("notif_btn_test").disabled = true;
+  ok.textContent = "Sending test alert…";
+
+  var payload = id ? { id: id, channel: { id: id, name: name, channel_type: type, enabled: enabled, min_severity: min_severity, config: config, created_at: 0 } }
+                   : { channel: { id: "", name: name, channel_type: type, enabled: enabled, min_severity: min_severity, config: config, created_at: 0 } };
+
+  fetch("/api/v1/notifications/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).then(function(r){
+    return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; });
+  }).then(function(res){
+    $("notif_btn_test").disabled = false;
+    if(res.ok && res.j && res.j.ok){
+      ok.textContent = "SUCCESS: Test notification sent! Response: " + (res.j.result || "OK");
+    } else {
+      ok.textContent = "";
+      err.textContent = "TEST FAILED: " + ((res.j && res.j.error) || ("HTTP " + res.status));
+    }
+  }).catch(function(e){
+    $("notif_btn_test").disabled = false;
+    ok.textContent = "";
+    err.textContent = "TEST ERROR: " + e.message;
+  });
+});
+
+$("notifbody").addEventListener("click", function(ev){
+  var btn = ev.target.closest("button");
+  if(!btn) return;
+  var tr = btn.closest("tr");
+  var nid = tr ? tr.getAttribute("data-nid") : "";
+  var ch = s.channels.filter(function(x){ return x.id === nid; })[0];
+  if(!ch) return;
+  var act = btn.getAttribute("data-nact");
+
+  if(act === "del"){
+    confirmDialog({
+      title: "Delete Notification Channel",
+      desc: "Delete notification channel <strong>" + esc(ch.name) + "</strong>?",
+      detail: "Alerts will no longer be dispatched to this channel (" + esc(ch.channel_type) + ").",
+      danger: true,
+      confirmText: "Delete Channel"
+    }).then(function(ok){
+      if(!ok) return;
+      api("/api/v1/notifications/" + encodeURIComponent(nid), { method: "DELETE" })
+        .then(function(){ loadNotifications(); })
+        .catch(function(e){ alert("Failed to delete channel: " + e.message); });
+    });
+  } else if(act === "edit"){
+    openNotificationModal(ch);
+  } else if(act === "toggle"){
+    fetch("/api/v1/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: ch.id,
+        name: ch.name,
+        channel_type: ch.channel_type,
+        enabled: !ch.enabled,
+        min_severity: ch.min_severity,
+        config: ch.config
+      })
+    }).then(function(r){
+      if(!r.ok) throw new Error("HTTP " + r.status);
+      loadNotifications();
+    }).catch(function(e){ alert("Failed to update status: " + e.message); });
+  } else if(act === "test"){
+    var oldText = btn.textContent;
+    btn.textContent = "Testing…";
+    btn.disabled = true;
+    fetch("/api/v1/notifications/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: ch.id })
+    }).then(function(r){
+      return r.json().then(function(j){ return { ok: r.ok, j: j }; });
+    }).then(function(res){
+      btn.disabled = false;
+      btn.textContent = oldText;
+      if(res.ok && res.j && res.j.ok){
+        alert("SUCCESS: Test alert successfully dispatched to " + ch.name + "!\nResponse: " + res.j.result);
+      } else {
+        alert("TEST FAILED for " + ch.name + ":\n" + ((res.j && res.j.error) || "Unknown error"));
+      }
+    }).catch(function(e){
+      btn.disabled = false;
+      btn.textContent = oldText;
+      alert("TEST ERROR: " + e.message);
+    });
+  }
+});
+
+// --- RECEIVER CONFIGURATION (M4) ----------------------------------------
+var cfgState = {
+  target: "",
+  data: null,
+  activeTab: "vis",
+  pollTimer: null
+};
+
+function normaliseReceiverKey(k){
+  k = (k || "").trim();
+  if(!k) return "";
+  if(!k.toLowerCase().startsWith("receiver:")) return "receiver:" + k;
+  return k;
+}
+
+function populateReceiverTargets(selectedKey){
+  var sel = $("cfgtargetselect");
+  var nodes = (s.data && s.data.nodes || []).filter(function(n){ return n.role === "receiver"; });
+  var opts = [];
+  var hasSelected = false;
+
+  nodes.forEach(function(n){
+    var isSel = (n.key === selectedKey);
+    if(isSel) hasSelected = true;
+    opts.push('<option value="' + esc(n.key) + '"' + (isSel ? ' selected' : '') + '>' +
+              esc(n.key) + (n.name ? ' (' + esc(n.name) + ')' : '') + '</option>');
+  });
+
+  if(selectedKey && !hasSelected && selectedKey !== "__custom__"){
+    opts.unshift('<option value="' + esc(selectedKey) + '" selected>' + esc(selectedKey) + ' (custom)</option>');
+    hasSelected = true;
+  }
+
+  opts.push('<option value="__custom__"' + (!hasSelected ? ' selected' : '') + '>+ Enter other receiver ID…</option>');
+  sel.innerHTML = opts.join("");
+
+  if(!hasSelected || sel.value === "__custom__"){
+    $("cfgtargetcustom").classList.remove("hidden");
+    $("cfgtargetgo").classList.remove("hidden");
+    if(selectedKey && selectedKey !== "__custom__"){
+      $("cfgtargetcustom").value = selectedKey;
+    }
+  } else {
+    $("cfgtargetcustom").classList.add("hidden");
+    $("cfgtargetgo").classList.add("hidden");
+  }
+}
+
+function openConfigModal(nodeKey){
+  nodeKey = normaliseReceiverKey(nodeKey);
+  var receivers = (s.data && s.data.nodes || []).filter(function(n){ return n.role === "receiver"; });
+  if(!nodeKey){
+    if(receivers.length > 0){
+      nodeKey = receivers[0].key;
+    } else {
+      nodeKey = "__custom__";
+    }
+  }
+  cfgState.target = (nodeKey === "__custom__") ? "receiver:default" : nodeKey;
+  populateReceiverTargets(nodeKey);
+
+  $("cfgnotice_writes").classList.add("hidden");
+  $("cfgsyncbadge").className = "cfgbadge dim";
+  $("cfgsyncbadge").textContent = "loading…";
+  $("cfgcurrsettingbadge").className = "cfgbadge dim";
+  $("cfgcurrsettingbadge").textContent = "-";
+  $("cfgloadcurrentbtn").disabled = true;
+  $("cfghubrev").textContent = "-";
+  $("cfgnoderev").textContent = "-";
+  $("cfglastchange").textContent = "";
+  $("cfghistselect").innerHTML = '<option value="">loading history…</option>';
+  $("cfgraw").value = "";
+  $("cfgrawerr").textContent = "";
+  $("cfgmsg").textContent = "";
+  $("cfgmsg").className = "opmsg";
+  $("cfgsave").disabled = false;
+  $("cfgrollbackbtn").disabled = false;
+  $("cfgsenders_list").innerHTML = '<div class="empty">loading configuration…</div>';
+  switchCfgTab("vis");
+  switchCfgSubTab("senders");
+  $("cfgmodal").classList.remove("hidden");
+  loadNodeConfig(cfgState.target);
+}
+
+function closeConfigModal(){
+  $("cfgmodal").classList.add("hidden");
+  if(cfgState.pollTimer){
+    clearTimeout(cfgState.pollTimer);
+    cfgState.pollTimer = null;
+  }
+}
+
+function switchCfgTab(tab){
+  cfgState.activeTab = tab;
+  $("cfgrawerr").textContent = "";
+  if(tab === "vis"){
+    $("cfgtab_vis").classList.add("active");
+    $("cfgtab_raw").classList.remove("active");
+    $("cfgpanel_vis").classList.remove("hidden");
+    $("cfgpanel_raw").classList.add("hidden");
+  } else {
+    $("cfgtab_raw").classList.add("active");
+    $("cfgtab_vis").classList.remove("active");
+    $("cfgpanel_raw").classList.remove("hidden");
+    $("cfgpanel_vis").classList.add("hidden");
+  }
+}
+
+var CFG_SUBTABS = ["senders", "risk", "exec", "filter", "gates", "system"];
+function switchCfgSubTab(sub){
+  CFG_SUBTABS.forEach(function(k){
+    var tabBtn = $("cfgsubtab_" + k);
+    var panel = $("cfgsubpanel_" + k);
+    if(tabBtn) tabBtn.classList.toggle("active", k === sub);
+    if(panel) panel.classList.toggle("hidden", k !== sub);
+  });
+}
+
+var COMMON_KEYS = [
+  { id: "c_deviationpoints", key: "deviationpoints", type: "int", def: "30" },
+  { id: "c_emergencyslpips", key: "emergencyslpips", type: "float", def: "0.0" },
+  { id: "c_emergencytppips", key: "emergencytppips", type: "float", def: "0.0" },
+  { id: "c_reopenclosedmirrors", key: "reopenclosedmirrors", type: "bool", def: "1" },
+  { id: "c_dedupduplicates", key: "dedupduplicates", type: "bool", def: "1" },
+  { id: "c_ignorenewentrysignals", key: "ignorenewentrysignals", type: "bool", def: "0" },
+  { id: "c_ignoreallexitsignals", key: "ignoreallexitsignals", type: "bool", def: "0" },
+  { id: "c_ignoreuids", key: "ignoreuids", type: "str", def: "" },
+  { id: "c_nobuy", key: "nobuy", type: "bool", def: "0" },
+  { id: "c_nosell", key: "nosell", type: "bool", def: "0" },
+  { id: "c_permittedsymbols", key: "permittedsymbols", type: "str", def: "" },
+  { id: "c_permittedmagic", key: "permittedmagic", type: "str", def: "" },
+  { id: "c_minsenderlotsize", key: "minsenderlotsize", type: "float", def: "0.0" },
+  { id: "c_maxsenderlotsize", key: "maxsenderlotsize", type: "float", def: "0.0" },
+  { id: "c_checkforexistingposition", key: "checkforexistingposition", type: "select", def: "0" },
+  { id: "c_requirepositionfillwithinseconds", key: "requirepositionfillwithinseconds", type: "int", def: "0" },
+  { id: "c_requirepositionfillwithinminutes", key: "requirepositionfillwithinminutes", type: "int", def: "0" },
+  { id: "c_requirepositionfillwithinhours", key: "requirepositionfillwithinhours", type: "int", def: "0" },
+  { id: "c_fillwithinminutesbar", key: "fillwithinminutesbar", type: "int", def: "0" },
+  { id: "c_waitforseconds", key: "waitforseconds", type: "int", def: "0" },
+  { id: "c_waitforminutes", key: "waitforminutes", type: "int", def: "0" },
+  { id: "c_waitforhours", key: "waitforhours", type: "int", def: "0" },
+  { id: "c_waitforprofitpips", key: "waitforprofitpips", type: "float", def: "0.0" },
+  { id: "c_waitforminutesbar", key: "waitforminutesbar", type: "int", def: "0" },
+  { id: "c_includetradingtimes", key: "includetradingtimes", type: "str", def: "" },
+  { id: "c_daytradingtimes", key: "daytradingtimes", type: "str", def: "" },
+  { id: "c_inverttrades", key: "inverttrades", type: "bool", def: "0" },
+  { id: "c_mirrorstops", key: "mirrorstops", type: "bool", def: "1" },
+  { id: "c_stopsthrottleseconds", key: "stopsthrottleseconds", type: "int", def: "2" },
+  { id: "c_maxlotsperposition", key: "maxlotsperposition", type: "float", def: "0.0" },
+  { id: "c_maxtotallots", key: "maxtotallots", type: "float", def: "0.0" },
+  { id: "c_maxopenpositions", key: "maxopenpositions", type: "int", def: "0" },
+  { id: "c_dailylosspct", key: "dailylosspct", type: "float", def: "0.0" },
+  { id: "c_maxdrawdownpct", key: "maxdrawdownpct", type: "float", def: "0.0" },
+  { id: "c_riskcloseallontrip", key: "riskcloseallontrip", type: "bool", def: "0" },
+  { id: "c_pollms", key: "pollms", type: "int", def: "100" },
+  { id: "c_staleseconds", key: "staleseconds", type: "int", def: "15" },
+  { id: "c_maxactionspertick", key: "maxactionspertick", type: "int", def: "5" },
+  { id: "c_loglevel", key: "loglevel", type: "select", def: "2" },
+  { id: "c_statusenabled", key: "statusenabled", type: "bool", def: "1" },
+  { id: "c_syncheartbeatseconds", key: "syncheartbeatseconds", type: "int", def: "1" },
+  { id: "c_showpanel", key: "showpanel", type: "bool", def: "1" },
+  { id: "c_showorphanedlist", key: "showorphanedlist", type: "bool", def: "0" }
+];
+
+function populateCommonToForm(common){
+  common = common || {};
+  COMMON_KEYS.forEach(function(item){
+    var el = $(item.id);
+    if(!el) return;
+    var val = common[item.key];
+    if(val === undefined || val === null) val = item.def;
+    if(item.type === "bool"){
+      el.checked = (val === "1" || val === "true" || val === true);
+    } else {
+      el.value = val;
+    }
+  });
+}
+
+function collectCommonFromForm(){
+  var common = {};
+  COMMON_KEYS.forEach(function(item){
+    var el = $(item.id);
+    if(!el) return;
+    if(item.type === "bool"){
+      common[item.key] = el.checked ? "1" : "0";
+    } else {
+      var v = (el.value !== undefined ? el.value : item.def);
+      common[item.key] = (typeof v === "string") ? v.trim() : String(v);
+    }
+  });
+  return common;
+}
+
+function parseIni(text){
+  var lines = text.split(/\r?\n/);
+  var common = {};
+  var senders = [];
+  var curSec = null;
+  var errors = [];
+
+  for(var i = 0; i < lines.length; i++){
+    var raw = lines[i];
+    var line = raw.trim();
+    if(!line || line.startsWith(";") || line.startsWith("#")) continue;
+    if(line.startsWith("[")){
+      if(!line.endsWith("]") || line.length < 3){
+        errors.push("Line " + (i+1) + ": malformed section " + line);
+        continue;
+      }
+      var sec = line.slice(1, -1).trim();
+      var secLower = sec.toLowerCase();
+      if(secLower === "common"){
+        curSec = "common";
+      } else if(secLower.startsWith("sender")){
+        var curSender = {
+          secName: sec,
+          id: "",
+          magic: "",
+          lotmode: "multiplier",
+          lotparam: "1.0",
+          suffix: "",
+          symbols: []
+        };
+        senders.push(curSender);
+        curSec = curSender;
+      } else {
+        curSec = null;
+      }
+      continue;
+    }
+    var eqIdx = line.indexOf("=");
+    if(eqIdx <= 0){
+      errors.push("Line " + (i+1) + ": expected key=value: " + line);
+      continue;
+    }
+    var key = line.slice(0, eqIdx).trim();
+    var val = line.slice(eqIdx + 1).trim();
+    var lk = key.toLowerCase();
+
+    if(curSec === "common"){
+      common[lk] = val;
+    } else if(curSec && typeof curSec === "object"){
+      if(lk === "id") curSec.id = val;
+      else if(lk === "magic") curSec.magic = val;
+      else if(lk === "lotmode") curSec.lotmode = val.toLowerCase();
+      else if(lk === "lotparam") curSec.lotparam = val;
+      else if(lk === "suffix") curSec.suffix = val;
+      else if(lk.startsWith("symbol.")){
+        var symFrom = key.slice(7).trim();
+        if(symFrom) curSec.symbols.push({ from: symFrom, to: val });
+      } else {
+        curSec[lk] = val;
+      }
+    }
+  }
+  return { common: common, senders: senders, errors: errors };
+}
+
+var SENDER_KEY_LIST = [
+  "deviationpoints", "emergencyslpips", "emergencytppips", "stopsthrottleseconds",
+  "mirrorstops", "inverttrades", "reopenclosedmirrors", "dedupduplicates",
+  "maxlotsperposition", "maxtotallots", "maxopenpositions",
+  "permittedsymbols", "permittedmagic", "minsenderlotsize", "maxsenderlotsize", "ignoreuids",
+  "nobuy", "nosell", "ignorenewentrysignals", "ignoreallexitsignals",
+  "checkforexistingposition", "waitforhours", "waitforminutes", "waitforseconds",
+  "waitforprofitpips", "waitforminutesbar", "requirepositionfillwithinhours",
+  "requirepositionfillwithinminutes", "requirepositionfillwithinseconds", "fillwithinminutesbar",
+  "includetradingtimes", "daytradingtimes", "staleseconds"
+];
+
+function serializeIni(common, senders){
+  var out = ["; copier.ini generated by mt-copier hub"];
+  out.push("[common]");
+  COMMON_KEYS.forEach(function(item){
+    var v = (common && common[item.key] !== undefined) ? common[item.key] : item.def;
+    out.push(item.key + "=" + v);
+  });
+  (senders || []).forEach(function(s, idx){
+    out.push("");
+    out.push("[sender" + idx + "]");
+    if(s.id) out.push("id=" + s.id.trim());
+    if(s.magic) out.push("magic=" + s.magic.trim());
+    out.push("lotmode=" + (s.lotmode || "multiplier"));
+    out.push("lotparam=" + (s.lotparam !== undefined && s.lotparam !== "" ? s.lotparam : "1.0"));
+    if(s.suffix) out.push("suffix=" + s.suffix.trim());
+    if(s.symbols && s.symbols.length){
+      s.symbols.forEach(function(sym){
+        if(sym.from && sym.to){
+          out.push("symbol." + sym.from.trim() + "=" + sym.to.trim());
+        }
+      });
+    }
+    SENDER_KEY_LIST.forEach(function(k){
+      var v = s[k];
+      if(v !== undefined && v !== null && v !== ""){
+        out.push(k + "=" + v);
+      }
+    });
+  });
+  out.push("");
+  return out.join("\n");
+}
+
+function renderSenderCards(senders){
+  var host = $("cfgsenders_list");
+  if(!senders || !senders.length){
+    host.innerHTML = '<div class="empty">No sender sections defined yet. Click "+ Add Sender Section" or "Load Default Example" to start.</div>';
+    return;
+  }
+  var html = senders.map(function(s, idx){
+    var lotmode = (s.lotmode || "multiplier").toLowerCase();
+    var symRows = (s.symbols || []).map(function(sym, sidx){
+      return '<div class="symrow" data-sidx="' + sidx + '">' +
+             '<input type="text" placeholder="From symbol (e.g. GOLD)" value="' + esc(sym.from) + '" class="sym-from">' +
+             '<span style="color:var(--dim)">\u2192</span>' +
+             '<input type="text" placeholder="To symbol (e.g. XAUUSD)" value="' + esc(sym.to) + '" class="sym-to">' +
+             '<button type="button" class="opbtn danger remove-symmap" title="remove mapping">&times;</button>' +
+             '</div>';
+    }).join("");
+
+    function isChk(v, defChk){
+      if(v === undefined || v === null || v === "") return !!defChk;
+      return (v === "1" || v === "true" || v === true);
+    }
+
+    return '<div class="sendercard" data-idx="' + idx + '">' +
+           '<div class="sendercard-head">' +
+           '<h3>[sender' + idx + ']' + (s.id ? ' &mdash; ' + esc(s.id) : '') + '</h3>' +
+           '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">remove section</button>' +
+           '</div>' +
+           '<div class="cfggrid">' +
+           '<div class="cfgfield">' +
+           '<label>Sender ID / NID *</label>' +
+           '<input type="text" class="inp-id" placeholder="e.g. 1001" value="' + esc(s.id) + '">' +
+           '<span class="hint">Sender account or NID</span>' +
+           '</div>' +
+           '<div class="cfgfield">' +
+           '<label>Magic Number *</label>' +
+           '<input type="text" class="inp-magic" placeholder="e.g. ' + (770000 + idx + 1) + '" value="' + esc(s.magic) + '">' +
+           '<span class="hint">Unique order magic</span>' +
+           '</div>' +
+           '<div class="cfgfield">' +
+           '<label>Lot Mode</label>' +
+           '<select class="inp-lotmode">' +
+           '<option value="multiplier"' + (lotmode === "multiplier" ? ' selected' : '') + '>multiplier</option>' +
+           '<option value="fixed"' + (lotmode === "fixed" ? ' selected' : '') + '>fixed</option>' +
+           '<option value="risk"' + (lotmode === "risk" ? ' selected' : '') + '>risk</option>' +
+           '<option value="off"' + (lotmode === "off" ? ' selected' : '') + '>off</option>' +
+           '</select>' +
+           '<span class="hint">Position sizing mode</span>' +
+           '</div>' +
+           '<div class="cfgfield">' +
+           '<label>Lot Param</label>' +
+           '<input type="number" step="0.01" class="inp-lotparam" placeholder="1.0" value="' + esc(s.lotparam !== undefined && s.lotparam !== "" ? s.lotparam : "1.0") + '">' +
+           '<span class="hint">Multiplier or fixed lots</span>' +
+           '</div>' +
+           '<div class="cfgfield">' +
+           '<label>Symbol Suffix</label>' +
+           '<input type="text" class="inp-suffix" placeholder="e.g. m, .pro" value="' + esc(s.suffix || "") + '">' +
+           '<span class="hint">Broker suffix (optional)</span>' +
+           '</div>' +
+           '</div>' +
+           '<div class="symmaps">' +
+           '<div class="symmaps-head">' +
+           '<span>Symbol Translations (symbol.&lt;FROM&gt; = &lt;TO&gt;)</span>' +
+           '<button type="button" class="opbtn add-symmap" data-idx="' + idx + '">+ add mapping</button>' +
+           '</div>' +
+           '<div class="symmaps-list">' + (symRows || '<div style="color:var(--dim);font-size:11px;padding:2px 0">No custom symbol translations (uses suffix or raw symbol).</div>') + '</div>' +
+           '</div>' +
+
+           // Subtabs for Strategy & Risk settings inside this sender
+           '<div class="sc-tabs">' +
+           '<button type="button" class="sc-tab active" data-sctab="risk">🛡️ Risk Limits</button>' +
+           '<button type="button" class="sc-tab" data-sctab="exec">🛑 Execution &amp; Stops</button>' +
+           '<button type="button" class="sc-tab" data-sctab="filter">🔍 Filters &amp; Direction</button>' +
+           '<button type="button" class="sc-tab" data-sctab="gates">⏳ Anti-Stack &amp; Delays</button>' +
+           '<button type="button" class="sc-tab" data-sctab="sched">📅 Schedule &amp; Timeout</button>' +
+           '</div>' +
+
+           // Panel: Risk
+           '<div class="sc-panel" data-scpanel="risk">' +
+           '<div class="sc-panel-title">🛡️ Risk Limits for [sender' + idx + ']</div>' +
+           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+           '<div class="cfgfield"><label>Max Lots / Trade</label><input type="number" step="0.01" class="inp-s-maxlotsperposition" placeholder="0.0 (off/inherit)" value="' + esc(s.maxlotsperposition || '') + '"><span class="hint">Single trade lot limit</span></div>' +
+           '<div class="cfgfield"><label>Max Total Lots</label><input type="number" step="0.01" class="inp-s-maxtotallots" placeholder="0.0 (off/inherit)" value="' + esc(s.maxtotallots || '') + '"><span class="hint">Total lots from this sender</span></div>' +
+           '<div class="cfgfield"><label>Max Open Positions</label><input type="number" step="1" class="inp-s-maxopenpositions" placeholder="0 (off/inherit)" value="' + esc(s.maxopenpositions || '') + '"><span class="hint">Max open trades cap</span></div>' +
+           '</div></div>' +
+
+           // Panel: Exec & Stops
+           '<div class="sc-panel hidden" data-scpanel="exec">' +
+           '<div class="sc-panel-title">🛑 Execution &amp; Stops for [sender' + idx + ']</div>' +
+           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+           '<div class="cfgfield"><label>Deviation Points</label><input type="number" step="1" class="inp-s-deviationpoints" placeholder="30" value="' + esc(s.deviationpoints !== undefined ? s.deviationpoints : '') + '"><span class="hint">Max slippage points</span></div>' +
+           '<div class="cfgfield"><label>Emergency SL (Pips)</label><input type="number" step="0.1" class="inp-s-emergencyslpips" placeholder="0.0 (off)" value="' + esc(s.emergencyslpips !== undefined ? s.emergencyslpips : '') + '"><span class="hint">Safety SL backstop</span></div>' +
+           '<div class="cfgfield"><label>Emergency TP (Pips)</label><input type="number" step="0.1" class="inp-s-emergencytppips" placeholder="0.0 (off)" value="' + esc(s.emergencytppips !== undefined ? s.emergencytppips : '') + '"><span class="hint">Safety TP backstop</span></div>' +
+           '<div class="cfgfield"><label>Stops Throttle (Sec)</label><input type="number" step="1" class="inp-s-stopsthrottleseconds" placeholder="2" value="' + esc(s.stopsthrottleseconds !== undefined ? s.stopsthrottleseconds : '') + '"><span class="hint">Min sec between modifications</span></div>' +
+           '</div>' +
+           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, true) ? ' checked' : '') + '><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + '><label>Invert Trades (BUY &harr; SELL)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, false) ? ' checked' : '') + '><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, true) ? ' checked' : '') + '><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
+           '</div></div>' +
+
+           // Panel: Filters
+           '<div class="sc-panel hidden" data-scpanel="filter">' +
+           '<div class="sc-panel-title">🔍 Filters &amp; Direction for [sender' + idx + ']</div>' +
+           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+           '<div class="cfgfield"><label>Permitted Symbols</label><input type="text" class="inp-s-permittedsymbols" placeholder="e.g. EURUSD,XAUUSD" value="' + esc(s.permittedsymbols || '') + '"><span class="hint">Allowed symbol whitelist</span></div>' +
+           '<div class="cfgfield"><label>Permitted Magic</label><input type="text" class="inp-s-permittedmagic" placeholder="e.g. 10001,10002" value="' + esc(s.permittedmagic || '') + '"><span class="hint">Allowed sender magic list</span></div>' +
+           '<div class="cfgfield"><label>Min Sender Lots</label><input type="number" step="0.01" class="inp-s-minsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.minsenderlotsize || '') + '"><span class="hint">Skip sender orders &lt; lots</span></div>' +
+           '<div class="cfgfield"><label>Max Sender Lots</label><input type="number" step="0.01" class="inp-s-maxsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.maxsenderlotsize || '') + '"><span class="hint">Skip sender orders &gt; lots</span></div>' +
+           '<div class="cfgfield" style="grid-column:1/-1"><label>Ignore Specific UIDs</label><input type="text" class="inp-s-ignoreuids" placeholder="e.g. a1b2c3d4,e5f6g7h8" value="' + esc(s.ignoreuids || '') + '"><span class="hint">Exempt these UIDs from convergence</span></div>' +
+           '</div>' +
+           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:6px">' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + '><label>Block Buy (NoBuy)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + '><label>Block Sell (NoSell)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + '><label>Ignore New Entry Signals (Close only)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + '><label>Ignore All Exit Signals (Open only)</label></div>' +
+           '</div></div>' +
+
+           // Panel: Gates
+           '<div class="sc-panel hidden" data-scpanel="gates">' +
+           '<div class="sc-panel-title">⏳ Anti-Stacking &amp; Delays for [sender' + idx + ']</div>' +
+           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+           '<div class="cfgfield" style="grid-column:1/-1"><label>Check For Existing Position</label>' +
+           '<select class="inp-s-checkforexistingposition">' +
+           '<option value="0"' + ((s.checkforexistingposition === "0" || !s.checkforexistingposition) ? ' selected' : '') + '>0 - Off (Allow multiple positions on same symbol)</option>' +
+           '<option value="1"' + (s.checkforexistingposition === "1" ? ' selected' : '') + '>1 - Any Direction (Skip if ANY position open on symbol)</option>' +
+           '<option value="2"' + (s.checkforexistingposition === "2" ? ' selected' : '') + '>2 - Same Direction (Skip if same direction open on symbol)</option>' +
+           '</select></div>' +
+           '<div class="cfgfield"><label>Wait Hours</label><input type="number" step="1" class="inp-s-waitforhours" placeholder="0" value="' + esc(s.waitforhours || '') + '"><span class="hint">Delay open (hrs)</span></div>' +
+           '<div class="cfgfield"><label>Wait Minutes</label><input type="number" step="1" class="inp-s-waitforminutes" placeholder="0" value="' + esc(s.waitforminutes || '') + '"><span class="hint">Delay open (min)</span></div>' +
+           '<div class="cfgfield"><label>Wait Seconds</label><input type="number" step="1" class="inp-s-waitforseconds" placeholder="0" value="' + esc(s.waitforseconds || '') + '"><span class="hint">Delay open (sec)</span></div>' +
+           '<div class="cfgfield"><label>Wait For Profit Pips</label><input type="number" step="0.1" class="inp-s-waitforprofitpips" placeholder="0.0" value="' + esc(s.waitforprofitpips || '') + '"><span class="hint">Delay until profit &gt;= pips</span></div>' +
+           '<div class="cfgfield"><label>Wait M1 Bars</label><input type="number" step="1" class="inp-s-waitforminutesbar" placeholder="0" value="' + esc(s.waitforminutesbar || '') + '"><span class="hint">Delay N M1 bars</span></div>' +
+           '<div class="cfgfield"><label>Fill Limit Hours</label><input type="number" step="1" class="inp-s-requirepositionfillwithinhours" placeholder="0" value="' + esc(s.requirepositionfillwithinhours || '') + '"><span class="hint">Expire open (hrs)</span></div>' +
+           '<div class="cfgfield"><label>Fill Limit Minutes</label><input type="number" step="1" class="inp-s-requirepositionfillwithinminutes" placeholder="0" value="' + esc(s.requirepositionfillwithinminutes || '') + '"><span class="hint">Expire open (min)</span></div>' +
+           '<div class="cfgfield"><label>Fill Limit Seconds</label><input type="number" step="1" class="inp-s-requirepositionfillwithinseconds" placeholder="0" value="' + esc(s.requirepositionfillwithinseconds || '') + '"><span class="hint">Expire open (sec)</span></div>' +
+           '<div class="cfgfield"><label>Fill Limit M1 Bars</label><input type="number" step="1" class="inp-s-fillwithinminutesbar" placeholder="0" value="' + esc(s.fillwithinminutesbar || '') + '"><span class="hint">Expire after N bars</span></div>' +
+           '</div></div>' +
+
+           // Panel: Schedule
+           '<div class="sc-panel hidden" data-scpanel="sched">' +
+           '<div class="sc-panel-title">📅 Schedule &amp; Timeout for [sender' + idx + ']</div>' +
+           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">' +
+           '<div class="cfgfield"><label>Include Trading Times</label><input type="text" class="inp-s-includetradingtimes" placeholder="e.g. 08:00-12:00,13:00-17:00" value="' + esc(s.includetradingtimes || '') + '"><span class="hint">Allowed hours</span></div>' +
+           '<div class="cfgfield"><label>Day Trading Times</label><input type="text" class="inp-s-daytradingtimes" placeholder="e.g. Mon:08:00-12:00;Tue:08:00-17:00" value="' + esc(s.daytradingtimes || '') + '"><span class="hint">Hours per day</span></div>' +
+           '<div class="cfgfield"><label>Stale Seconds</label><input type="number" step="1" class="inp-s-staleseconds" placeholder="15" value="' + esc(s.staleseconds !== undefined ? s.staleseconds : '') + '"><span class="hint">Signal stale timeout (sec)</span></div>' +
+           '</div></div>' +
+
+           '</div>';
+  }).join("");
+
+  host.innerHTML = html;
+}
+
+function collectSendersFromCards(){
+  var cards = $("cfgsenders_list").querySelectorAll(".sendercard");
+  var senders = [];
+  cards.forEach(function(c, idx){
+    var id = (c.querySelector(".inp-id") ? c.querySelector(".inp-id").value : "").trim();
+    var magic = (c.querySelector(".inp-magic") ? c.querySelector(".inp-magic").value : "").trim();
+    var lotmode = c.querySelector(".inp-lotmode") ? c.querySelector(".inp-lotmode").value : "multiplier";
+    var lotparam = (c.querySelector(".inp-lotparam") ? c.querySelector(".inp-lotparam").value : "1.0").trim();
+    var suffix = (c.querySelector(".inp-suffix") ? c.querySelector(".inp-suffix").value : "").trim();
+
+    var symRows = c.querySelectorAll(".symrow");
+    var symbols = [];
+    symRows.forEach(function(sr){
+      var sf = (sr.querySelector(".sym-from") ? sr.querySelector(".sym-from").value : "").trim();
+      var st = (sr.querySelector(".sym-to") ? sr.querySelector(".sym-to").value : "").trim();
+      if(sf && st) symbols.push({ from: sf, to: st });
+    });
+
+    var sObj = {
+      secName: "sender" + idx,
+      id: id,
+      magic: magic,
+      lotmode: lotmode,
+      lotparam: lotparam || "1.0",
+      suffix: suffix,
+      symbols: symbols
+    };
+
+    function val(cls, defVal){
+      var el = c.querySelector(cls);
+      if(!el) return defVal !== undefined ? defVal : "";
+      if(el.type === "checkbox") return el.checked ? "1" : "0";
+      var v = el.value !== undefined ? el.value.trim() : "";
+      return v !== "" ? v : (defVal !== undefined ? defVal : "");
+    }
+
+    sObj.maxlotsperposition = val(".inp-s-maxlotsperposition");
+    sObj.maxtotallots = val(".inp-s-maxtotallots");
+    sObj.maxopenpositions = val(".inp-s-maxopenpositions");
+
+    sObj.deviationpoints = val(".inp-s-deviationpoints");
+    sObj.emergencyslpips = val(".inp-s-emergencyslpips");
+    sObj.emergencytppips = val(".inp-s-emergencytppips");
+    sObj.stopsthrottleseconds = val(".inp-s-stopsthrottleseconds");
+    sObj.mirrorstops = val(".inp-s-mirrorstops");
+    sObj.inverttrades = val(".inp-s-inverttrades");
+    sObj.reopenclosedmirrors = val(".inp-s-reopenclosedmirrors");
+    sObj.dedupduplicates = val(".inp-s-dedupduplicates");
+
+    sObj.permittedsymbols = val(".inp-s-permittedsymbols");
+    sObj.permittedmagic = val(".inp-s-permittedmagic");
+    sObj.minsenderlotsize = val(".inp-s-minsenderlotsize");
+    sObj.maxsenderlotsize = val(".inp-s-maxsenderlotsize");
+    sObj.ignoreuids = val(".inp-s-ignoreuids");
+    sObj.nobuy = val(".inp-s-nobuy");
+    sObj.nosell = val(".inp-s-nosell");
+    sObj.ignorenewentrysignals = val(".inp-s-ignorenewentrysignals");
+    sObj.ignoreallexitsignals = val(".inp-s-ignoreallexitsignals");
+
+    sObj.checkforexistingposition = val(".inp-s-checkforexistingposition");
+    sObj.waitforhours = val(".inp-s-waitforhours");
+    sObj.waitforminutes = val(".inp-s-waitforminutes");
+    sObj.waitforseconds = val(".inp-s-waitforseconds");
+    sObj.waitforprofitpips = val(".inp-s-waitforprofitpips");
+    sObj.waitforminutesbar = val(".inp-s-waitforminutesbar");
+    sObj.requirepositionfillwithinhours = val(".inp-s-requirepositionfillwithinhours");
+    sObj.requirepositionfillwithinminutes = val(".inp-s-requirepositionfillwithinminutes");
+    sObj.requirepositionfillwithinseconds = val(".inp-s-requirepositionfillwithinseconds");
+    sObj.fillwithinminutesbar = val(".inp-s-fillwithinminutesbar");
+
+    sObj.includetradingtimes = val(".inp-s-includetradingtimes");
+    sObj.daytradingtimes = val(".inp-s-daytradingtimes");
+    sObj.staleseconds = val(".inp-s-staleseconds");
+
+    senders.push(sObj);
+  });
+  return senders;
+}
+
+function getDefaultIni(nodeKey){
+  var defCommon = {};
+  COMMON_KEYS.forEach(function(k){ defCommon[k.key] = k.def; });
+  return serializeIni(defCommon, [{
+    secName: "sender0",
+    id: "1001",
+    magic: "770001",
+    lotmode: "multiplier",
+    lotparam: "1.0",
+    suffix: "",
+    symbols: []
+  }]);
+}
+
+function loadNodeConfig(nodeKey){
+  api("/api/v1/nodes/" + encodeURIComponent(nodeKey) + "/config").then(function(d){
+    cfgState.data = d;
+    var writes = !!(d.writes_enabled && s.writes);
+    $("cfgnotice_writes").classList.toggle("hidden", writes);
+    $("cfgsave").disabled = !writes;
+    $("cfgrollbackbtn").disabled = !writes;
+
+    $("cfghubrev").textContent = d.hub_rev || 0;
+    $("cfgnoderev").textContent = d.node_rev || 0;
+
+    var badge = $("cfgsyncbadge");
+    if(!d.managed || !d.hub_rev){
+      badge.className = "cfgbadge dim";
+      badge.textContent = "NOT MANAGED";
+      badge.title = "No configuration pushed by the hub yet";
+    } else if(d.in_sync){
+      badge.className = "cfgbadge ok";
+      badge.textContent = "IN SYNC";
+      badge.title = "Node running Hub revision " + d.hub_rev;
+    } else if(d.drift){
+      badge.className = "cfgbadge bad";
+      badge.textContent = "DRIFT (node > hub)";
+      badge.title = "Node revision " + d.node_rev + " is ahead of Hub revision " + d.hub_rev;
+    } else {
+      badge.className = "cfgbadge warn";
+      badge.textContent = "OUT OF SYNC";
+      badge.title = "Node at Rev " + d.node_rev + ", waiting to match Hub Rev " + d.hub_rev;
+    }
+
+    var curBadge = $("cfgcurrsettingbadge");
+    if(d.current_setting){
+      var ageStr = d.current_setting_ts ? fmtAge((Date.now()/1000) - d.current_setting_ts) : "recently";
+      curBadge.className = "cfgbadge ok";
+      curBadge.textContent = "AVAILABLE (" + ageStr + ")";
+      curBadge.title = "Receiver node reported its running settings " + ageStr;
+      $("cfgloadcurrentbtn").disabled = false;
+    } else {
+      curBadge.className = "cfgbadge dim";
+      curBadge.textContent = "NONE REPORTED";
+      curBadge.title = "No current setting reported by receiver node yet";
+      $("cfgloadcurrentbtn").disabled = true;
+    }
+
+    if(d.rev){
+      var when = d.rev.ts ? new Date(d.rev.ts * 1000).toLocaleString() : "-";
+      $("cfglastchange").textContent = "Last pushed: Rev " + d.rev.rev + " by " + (d.rev.actor || "operator") + " (" + when + ")";
+    } else {
+      $("cfglastchange").textContent = "No revision history on hub yet";
+    }
+
+    // Populate history selector
+    var hOpts = ['<option value="">-- Current (Rev ' + (d.hub_rev || 0) + ') --</option>'];
+    (d.history || []).forEach(function(h){
+      var dt = h.ts ? new Date(h.ts * 1000).toLocaleDateString() + " " + new Date(h.ts * 1000).toLocaleTimeString() : "";
+      var from = h.from_rev ? " -> from rev " + h.from_rev : "";
+      hOpts.push('<option value="' + esc(h.rev) + '">Rev ' + esc(h.rev) + ' \u00b7 ' + esc(h.kind || "push") + from + ' \u00b7 ' + esc(h.actor || "") + ' (' + esc(dt) + ')</option>');
+    });
+    $("cfghistselect").innerHTML = hOpts.join("");
+
+    var iniContent = (d.rev && d.rev.ini) ? d.rev.ini : (d.current_setting ? d.current_setting : getDefaultIni(nodeKey));
+    $("cfgraw").value = iniContent;
+    var parsed = parseIni(iniContent);
+    populateCommonToForm(parsed.common);
+    renderSenderCards(parsed.senders);
+    if(!d.managed && d.current_setting){
+      $("cfgmsg").className = "opmsg ok";
+      $("cfgmsg").textContent = "Auto-loaded receiver's active Current Setting into editor.";
+    }
+  }).catch(function(e){
+    $("cfgmsg").className = "opmsg bad";
+    $("cfgmsg").textContent = "Failed to load config: " + e.message;
+  });
+}
+
+function pollConfigCommand(pollUrl, cid, rev, attempt){
+  if(!pollUrl) return;
+  cfgState.pollTimer = setTimeout(function(){
+    api(pollUrl).then(function(j){
+      if(!j || !j.state) return;
+      if(j.state === "pending" && attempt < 4){
+        pollConfigCommand(pollUrl, cid, rev, attempt + 1);
+        return;
+      }
+      $("cfgsave").disabled = false;
+      if(j.state === "acked"){
+        $("cfgmsg").className = "opmsg ok";
+        $("cfgmsg").textContent = "Rev " + rev + " acknowledged by receiver! Configuration is live.";
+        loadNodeConfig(cfgState.target);
+      } else if(j.state === "rejected"){
+        $("cfgmsg").className = "opmsg bad";
+        $("cfgmsg").textContent = "Rev " + rev + " rejected by receiver: " + (j.err || "unknown error");
+      } else {
+        $("cfgmsg").className = "opmsg warn";
+        $("cfgmsg").textContent = "Command " + cid + " state: " + j.state + (j.err ? " (" + j.err + ")" : "");
+      }
+    }).catch(function(){
+      $("cfgsave").disabled = false;
+    });
+  }, attempt === 0 ? 2500 : 3000);
+}
+
+$("cfgclose_x").addEventListener("click", closeConfigModal);
+$("cfgcancel").addEventListener("click", closeConfigModal);
+
+$("cfgtab_vis").addEventListener("click", function(){
+  if(cfgState.activeTab === "vis") return;
+  var raw = $("cfgraw").value;
+  var parsed = parseIni(raw);
+  if(parsed.errors.length){
+    $("cfgrawerr").textContent = "Cannot switch: " + parsed.errors.join("; ");
+    return;
+  }
+  populateCommonToForm(parsed.common);
+  renderSenderCards(parsed.senders);
+  switchCfgTab("vis");
+});
+
+$("cfgtab_raw").addEventListener("click", function(){
+  if(cfgState.activeTab === "raw") return;
+  var senders = collectSendersFromCards();
+  var common = collectCommonFromForm();
+  $("cfgraw").value = serializeIni(common, senders);
+  switchCfgTab("raw");
+});
+
+CFG_SUBTABS.forEach(function(k){
+  var tabBtn = $("cfgsubtab_" + k);
+  if(tabBtn){
+    tabBtn.addEventListener("click", function(){ switchCfgSubTab(k); });
+  }
+});
+
+$("cfgaddsender").addEventListener("click", function(){
+  var senders = collectSendersFromCards();
+  var nextIdx = senders.length;
+  senders.push({
+    secName: "sender" + nextIdx,
+    id: "",
+    magic: String(770000 + nextIdx + 1),
+    lotmode: "multiplier",
+    lotparam: "1.0",
+    suffix: "",
+    symbols: []
+  });
+  renderSenderCards(senders);
+  $("cfgraw").value = serializeIni(collectCommonFromForm(), senders);
+});
+
+$("cfgloadtemplate").addEventListener("click", function(){
+  confirmDialog({
+    title: "Reset Starter Template",
+    desc: "Reset editor with default starter template?",
+    detail: "All unsaved changes in the Visual Editor and Raw INI will be replaced with clean defaults.",
+    danger: false,
+    confirmText: "Reset Template"
+  }).then(function(ok){
+    if(!ok) return;
+    var ini = getDefaultIni(cfgState.target);
+    $("cfgraw").value = ini;
+    var parsed = parseIni(ini);
+    populateCommonToForm(parsed.common);
+    renderSenderCards(parsed.senders);
+    $("cfgmsg").className = "opmsg";
+    $("cfgmsg").textContent = "Loaded default template into editor.";
+  });
+});
+
+$("cfgloadcurrentbtn").addEventListener("click", function(){
+  var curIni = cfgState.data && cfgState.data.current_setting;
+  if(!curIni){
+    $("cfgmsg").className = "opmsg warn";
+    $("cfgmsg").textContent = "Receiver node has not reported live settings yet. Ensure receiver EA is attached with central hub mode.";
+    return;
+  }
+  var parsed = parseIni(curIni);
+  populateCommonToForm(parsed.common);
+  renderSenderCards(parsed.senders);
+  $("cfgraw").value = curIni;
+  var ageStr = cfgState.data.current_setting_ts ? fmtAge((Date.now()/1000) - cfgState.data.current_setting_ts) : "recently";
+  $("cfgmsg").className = "opmsg ok";
+  $("cfgmsg").textContent = "Loaded live Current Setting from receiver (reported " + ageStr + "). You can now edit and push.";
+});
+
+$("cfgsenders_list").addEventListener("click", function(ev){
+  var t = ev.target;
+  var scTab = t.closest(".sc-tab");
+  if(scTab){
+    var card = scTab.closest(".sendercard");
+    var tabKey = scTab.getAttribute("data-sctab");
+    card.querySelectorAll(".sc-tab").forEach(function(b){
+      b.classList.toggle("active", b.getAttribute("data-sctab") === tabKey);
+    });
+    card.querySelectorAll(".sc-panel").forEach(function(p){
+      p.classList.toggle("hidden", p.getAttribute("data-scpanel") !== tabKey);
+    });
+    return;
+  }
+  if(t.classList.contains("remove-sender")){
+    var card = t.closest(".sendercard");
+    var idx = parseInt(card.getAttribute("data-idx"), 10);
+    var senders = collectSendersFromCards();
+    senders.splice(idx, 1);
+    renderSenderCards(senders);
+    $("cfgraw").value = serializeIni(collectCommonFromForm(), senders);
+  } else if(t.classList.contains("add-symmap")){
+    var card = t.closest(".sendercard");
+    var list = card.querySelector(".symmaps-list");
+    var emptyHint = list.querySelector("div");
+    if(emptyHint && !emptyHint.classList.contains("symrow")) emptyHint.remove();
+    var row = document.createElement("div");
+    row.className = "symrow";
+    row.innerHTML = '<input type="text" placeholder="From symbol (e.g. GOLD)" class="sym-from">' +
+                    '<span style="color:var(--dim)">\u2192</span>' +
+                    '<input type="text" placeholder="To symbol (e.g. XAUUSD)" class="sym-to">' +
+                    '<button type="button" class="opbtn danger remove-symmap" title="remove mapping">&times;</button>';
+    list.appendChild(row);
+  } else if(t.classList.contains("remove-symmap")){
+    var row = t.closest(".symrow");
+    if(row) row.remove();
+    $("cfgraw").value = serializeIni(collectCommonFromForm(), collectSendersFromCards());
+  }
+});
+
+$("cfgpanel_vis").addEventListener("input", function(){
+  $("cfgraw").value = serializeIni(collectCommonFromForm(), collectSendersFromCards());
+});
+$("cfgpanel_vis").addEventListener("change", function(){
+  $("cfgraw").value = serializeIni(collectCommonFromForm(), collectSendersFromCards());
+});
+
+$("cfgsave").addEventListener("click", function(){
+  var msg = $("cfgmsg");
+  msg.className = "opmsg";
+  msg.textContent = "";
+
+  if(!s.writes || (cfgState.data && !cfgState.data.writes_enabled)){
+    msg.className = "opmsg bad";
+    msg.textContent = "Writes are disabled on the hub (--writes off). Restart with --writes on to deploy changes.";
+    return;
+  }
+
+  var iniText = "";
+  if(cfgState.activeTab === "vis"){
+    var senders = collectSendersFromCards();
+    if(!senders.length){
+      msg.className = "opmsg bad";
+      msg.textContent = "Configuration must have at least one sender section.";
+      switchCfgSubTab("senders");
+      return;
+    }
+    for(var i = 0; i < senders.length; i++){
+      if(!senders[i].id){
+        msg.className = "opmsg bad";
+        msg.textContent = "Sender #" + i + " ([sender" + i + "]) requires Sender ID / NID.";
+        switchCfgSubTab("senders");
+        return;
+      }
+      if(!senders[i].magic){
+        msg.className = "opmsg bad";
+        msg.textContent = "Sender #" + i + " ([sender" + i + "]) requires Magic Number.";
+        switchCfgSubTab("senders");
+        return;
+      }
+      if(isNaN(parseFloat(senders[i].lotparam))){
+        msg.className = "opmsg bad";
+        msg.textContent = "Sender #" + i + " ([sender" + i + "]) Lot Param must be a valid number.";
+        switchCfgSubTab("senders");
+        return;
+      }
+    }
+    iniText = serializeIni(collectCommonFromForm(), senders);
+  } else {
+    iniText = $("cfgraw").value.trim();
+    var parsed = parseIni(iniText);
+    if(parsed.errors.length){
+      msg.className = "opmsg bad";
+      msg.textContent = "INI Syntax Error: " + parsed.errors.join("; ");
+      return;
+    }
+    if(!parsed.senders.length){
+      msg.className = "opmsg bad";
+      msg.textContent = "Configuration must contain at least one [senderN] section.";
+      return;
+    }
+  }
+
+  msg.className = "opmsg";
+  msg.textContent = "Deploying configuration to " + cfgState.target + "…";
+  $("cfgsave").disabled = true;
+
+  fetch("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/config", {
+    method: "PUT",
+    headers: { "Content-Type": "text/plain" },
+    body: iniText
+  }).then(function(r){
+    return r.json().then(function(j){ return { status: r.status, j: j }; });
+  }).then(function(res){
+    if(res.status === 202 && res.j && res.j.accepted){
+      msg.className = "opmsg ok";
+      msg.textContent = "Saved Rev " + res.j.rev + ". Command " + res.j.command_id + " issued to receiver (" + res.j.state + ")…";
+      pollConfigCommand(res.j.poll, res.j.command_id, res.j.rev, 0);
+    } else {
+      $("cfgsave").disabled = false;
+      msg.className = "opmsg bad";
+      var err = (res.j && res.j.error) || ("HTTP " + res.status);
+      var det = (res.j && res.j.detail) ? " — " + res.j.detail : "";
+      msg.textContent = "Failed to save: " + err + det;
+    }
+  }).catch(function(e){
+    $("cfgsave").disabled = false;
+    msg.className = "opmsg bad";
+    msg.textContent = "Request error: " + e.message;
+  });
+});
+
+$("cfgloadhist").addEventListener("click", function(){
+  var rev = $("cfghistselect").value;
+  if(!rev){
+    if(cfgState.data && cfgState.data.rev && cfgState.data.rev.ini){
+      $("cfgraw").value = cfgState.data.rev.ini;
+      var parsedCur = parseIni(cfgState.data.rev.ini);
+      populateCommonToForm(parsedCur.common);
+      renderSenderCards(parsedCur.senders);
+      $("cfgmsg").className = "opmsg";
+      $("cfgmsg").textContent = "Loaded current configuration.";
+    }
+    return;
+  }
+  var rec = (cfgState.data && cfgState.data.history || []).filter(function(x){
+    return String(x.rev) === String(rev);
+  })[0];
+  if(rec && rec.ini){
+    $("cfgraw").value = rec.ini;
+    var parsedHist = parseIni(rec.ini);
+    populateCommonToForm(parsedHist.common);
+    renderSenderCards(parsedHist.senders);
+    $("cfgmsg").className = "opmsg";
+    $("cfgmsg").textContent = "Loaded Rev " + rev + " into editor. Review and click 'Save & Push' to apply.";
+  } else {
+    $("cfgmsg").className = "opmsg warn";
+    $("cfgmsg").textContent = "Revision " + rev + " has no INI payload in history.";
+  }
+});
+
+$("cfgrollbackbtn").addEventListener("click", function(){
+  var rev = $("cfghistselect").value;
+  if(!rev){
+    alert("Please select a historical revision from the dropdown to rollback to.");
+    return;
+  }
+  confirmDialog({
+    title: "Rollback Configuration",
+    desc: "Immediately rollback <code>" + esc(cfgState.target) + "</code> to Revision " + esc(rev) + "?",
+    detail: "The live configuration will be reverted to Revision " + esc(rev) + " and pushed to the receiver node immediately.",
+    danger: true,
+    confirmText: "Rollback to Rev " + rev
+  }).then(function(ok){
+    if(!ok) return;
+
+    var msg = $("cfgmsg");
+    msg.className = "opmsg";
+    msg.textContent = "Issuing rollback to Rev " + rev + "…";
+    $("cfgrollbackbtn").disabled = true;
+
+    fetch("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/config/rollback/" + rev, {
+      method: "POST"
+    }).then(function(r){
+      return r.json().then(function(j){ return { status: r.status, j: j }; });
+    }).then(function(res){
+      $("cfgrollbackbtn").disabled = false;
+      if(res.status === 202 && res.j && res.j.accepted){
+        msg.className = "opmsg ok";
+        msg.textContent = "Rolled back to Rev " + res.j.rolled_back_to + " (new Rev " + res.j.rev + "). Waiting for node ACK…";
+        pollConfigCommand(res.j.poll, res.j.command_id, res.j.rev, 0);
+      } else {
+        msg.className = "opmsg bad";
+        var err = (res.j && res.j.error) || ("HTTP " + res.status);
+        var det = (res.j && res.j.detail) ? " — " + res.j.detail : "";
+        msg.textContent = "Rollback failed: " + err + det;
+      }
+    }).catch(function(e){
+      $("cfgrollbackbtn").disabled = false;
+      msg.className = "opmsg bad";
+      msg.textContent = "Request error: " + e.message;
+    });
+  });
+});
+
+$("cfgtargetselect").addEventListener("change", function(){
+  var val = $("cfgtargetselect").value;
+  if(val === "__custom__"){
+    $("cfgtargetcustom").classList.remove("hidden");
+    $("cfgtargetgo").classList.remove("hidden");
+    $("cfgtargetcustom").value = "";
+    $("cfgtargetcustom").focus();
+  } else {
+    $("cfgtargetcustom").classList.add("hidden");
+    $("cfgtargetgo").classList.add("hidden");
+    cfgState.target = val;
+    loadNodeConfig(val);
+  }
+});
+
+$("cfgtargetgo").addEventListener("click", function(){
+  var raw = $("cfgtargetcustom").value.trim();
+  if(!raw){ alert("Please enter a receiver ID or account number."); return; }
+  var k = normaliseReceiverKey(raw);
+  cfgState.target = k;
+  populateReceiverTargets(k);
+  loadNodeConfig(k);
+});
+
+$("cfgtargetcustom").addEventListener("keydown", function(ev){
+  if(ev.key === "Enter"){
+    ev.preventDefault();
+    $("cfgtargetgo").click();
+  }
+});
+
+$("btn-open-cfg").addEventListener("click", function(){ openConfigModal(); });
+$("btn-gop-cfg").addEventListener("click", function(){ openConfigModal(); });
+
+document.addEventListener("keydown", function(ev){
+  if(ev.key === "Escape"){
+    if(!$("cfgmodal").classList.contains("hidden")){
+      closeConfigModal();
+    }
+    if(!$("notifmodal").classList.contains("hidden")){
+      closeNotificationModal();
+    }
+    if(!$("hubkeymodal").classList.contains("hidden")){
+      closeHubKeyModal();
+    }
+    if(!$("posmodal").classList.contains("hidden")){
+      closePositionsModal();
+    }
+  }
 });
 </script>
 </body>

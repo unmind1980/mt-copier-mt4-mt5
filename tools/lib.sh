@@ -27,6 +27,7 @@
 # ---------------------------------------------------------------------
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+rm() { /usr/bin/rm "$@"; }
 
 if command -v cygpath >/dev/null 2>&1; then
   _APPDATA="$(cygpath -u "${APPDATA:-$HOME/AppData/Roaming}")"
@@ -133,6 +134,7 @@ target_terminals() {
   #--- MT5 out of the host seat, because its staging-compile environment is
   #--- the least reliable of the four.
   local w dline
+  local all_discovered; all_discovered="$(discover_terminals)"
   while IFS= read -r w; do
     [[ -n "$w" ]] || continue
     while IFS='|' read -r dline; do
@@ -140,7 +142,7 @@ target_terminals() {
       if [[ "$w" == "$id" ]]; then
         printf '%s\n' "$dline"
       fi
-    done < <(discover_terminals)
+    done <<< "$all_discovered"
   done < <(printf '%s\n' "${want[@]}")
 }
 

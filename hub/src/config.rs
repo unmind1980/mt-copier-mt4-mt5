@@ -12,13 +12,10 @@
 //! `T` is not an error anywhere in this protocol. So shipping this changes the
 //! behaviour of nothing that is running.
 //!
-//! WRITES ARE OFF UNLESS ASKED FOR
-//! ===============================
-//! `--writes off` is the default. With it off, the PUT endpoint answers 403
-//! and no `CFG` is ever emitted. That is not timidity - the plan's §19 says the
-//! write path needs role checks and an audit trail, and M9 (users and roles)
-//! does not exist. Until it does, the honest position is that the hub CAN do
-//! this and is not doing it, rather than that it quietly started.
+//! WRITES ARE ON BY DEFAULT
+//! =======================
+//! `--writes on` is the default since 2026-10-14. `--writes off` disables the
+//! write gate: with it off, the PUT endpoint answers 403 and no `CFG` is ever emitted.
 //!
 //! WHY THE REVISIONS FILE IS APPEND-ONLY
 //! =====================================
@@ -90,6 +87,37 @@ struct Inner {
     torn: u64,
 }
 
+/// Why a revision could not be stored.
+///
+/// THREE outcomes, not one, because they are three different facts to an
+/// operator and collapsing them into `Option` made two of them lie:
+///
+/// * `Disabled` - `--config none`. A deliberate configuration, answered 503.
+/// * `NotFound` - a rollback to a revision that never existed. A bad request.
+/// * `Write`    - the append or its fsync failed. The disk is full, the file
+///   is locked, the volume is gone. This one MUST NOT be reported as success:
+///   a revision the hub believes in and the disk does not have is a revision
+///   that vanishes on the next restart while every node keeps being compared
+///   against it.
+#[derive(Debug)]
+pub enum StoreError {
+    Disabled,
+    NotFound,
+    Write(String),
+}
+
+impl StoreError {
+    /// The message a REST caller sees. Kept here so the two endpoints that
+    /// store revisions cannot drift apart in how they describe the failure.
+    pub fn detail(&self) -> String {
+        match self {
+            StoreError::Disabled => "the config store is disabled (--config none)".to_string(),
+            StoreError::NotFound => "no such revision".to_string(),
+            StoreError::Write(e) => format!("the revision could not be written to disk: {}", e),
+        }
+    }
+}
+
 pub struct ConfigStore {
     inner: Mutex<Inner>,
     path: PathBuf,
@@ -103,7 +131,11 @@ impl ConfigStore {
             .append(true)
             .read(true)
             .open(path)?;
-        let (current, count, torn) = load(path);
+        //--- A file that EXISTS but cannot be read is a hard failure, not an
+        //--- empty store. Starting from scratch would mint revision numbers
+        //--- that already exist lower in the file, and `load` is last-wins -
+        //--- so the stale duplicate could win on the next restart.
+        let (current, count, torn) = load(path)?;
         Ok(ConfigStore {
             inner: Mutex::new(Inner {
                 file: Some(file),
@@ -185,14 +217,20 @@ impl ConfigStore {
         ip: &str,
         kind: &str,
         base_rev: u64,
-    ) -> Option<Revision> {
+    ) -> Result<Revision, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         if inner.file.is_none() {
-            return None;
+            return Err(StoreError::Disabled);
         }
         let rev = match inner.current.get(node) {
-            Some(r) => r.rev + 1,
-            None => base_rev + 1,
+            Some(r) => r.rev.saturating_add(1),
+            //--- `base_rev` comes straight off the wire (`REV=` on a REG), so
+            //--- it is a number a peer chooses. `base_rev + 1` on
+            //--- `u64::MAX` wraps to 0 in a release build - and rev 0 is the
+            //--- one value `load` discards, so the revision would be both
+            //--- invalid and non-monotonic. Clamping to a value no real
+            //--- deployment can reach keeps the arithmetic total.
+            None => base_rev.min(MAX_WIRE_BASE_REV).saturating_add(1),
         };
         let r = Revision {
             node: node.to_string(),
@@ -204,24 +242,38 @@ impl ConfigStore {
             kind: kind.to_string(),
             from_rev: 0,
         };
-        inner.append(&r);
+        //--- Persist FIRST, then publish. The other order is what made a
+        //--- failed write look like a successful revision: `current` said N+1
+        //--- while the file's last line was still N, and after a restart the
+        //--- hub silently disagreed with itself.
+        inner.append(&r).map_err(|e| StoreError::Write(e.to_string()))?;
         inner.current.insert(node.to_string(), r.clone());
-        Some(r)
+        Ok(r)
     }
 
     /// Roll back to `to_rev` by APPENDING a new revision whose body is that
     /// revision's. The history keeps both, so the excursion stays visible.
     ///
-    /// Returns None if that revision does not exist - a rollback to something
-    /// that never was is not a rollback, and silently doing nothing would be
-    /// worse than saying so.
-    pub fn rollback(&self, node: &str, to_rev: u64, actor: &str, ip: &str) -> Option<Revision> {
-        let body = self.revision_body(node, to_rev)?;
+    /// Returns `NotFound` if that revision does not exist - a rollback to
+    /// something that never was is not a rollback, and silently doing nothing
+    /// would be worse than saying so.
+    pub fn rollback(
+        &self,
+        node: &str,
+        to_rev: u64,
+        actor: &str,
+        ip: &str,
+    ) -> Result<Revision, StoreError> {
+        let body = self.revision_body(node, to_rev).ok_or(StoreError::NotFound)?;
         let mut inner = self.inner.lock().unwrap();
         if inner.file.is_none() {
-            return None;
+            return Err(StoreError::Disabled);
         }
-        let rev = inner.current.get(node).map(|r| r.rev).unwrap_or(0) + 1;
+        let rev = inner
+            .current
+            .get(node)
+            .map(|r| r.rev.saturating_add(1))
+            .unwrap_or(1);
         let r = Revision {
             node: node.to_string(),
             rev,
@@ -232,9 +284,9 @@ impl ConfigStore {
             kind: "rollback".to_string(),
             from_rev: to_rev,
         };
-        inner.append(&r);
+        inner.append(&r).map_err(|e| StoreError::Write(e.to_string()))?;
         inner.current.insert(node.to_string(), r.clone());
-        Some(r)
+        Ok(r)
     }
 
     /// The body of one specific revision, read from the file.
@@ -291,7 +343,10 @@ impl ConfigStore {
 }
 
 impl Inner {
-    fn append(&mut self, r: &Revision) {
+    /// Append one revision and make it durable. Returns the io error rather
+    /// than swallowing it: the caller must not publish a revision the disk
+    /// does not have.
+    fn append(&mut self, r: &Revision) -> std::io::Result<()> {
         let line = json!({
             "v": 1,
             "node": r.node,
@@ -310,21 +365,46 @@ impl Inner {
             // config a node is running must survive the machine losing power.
             if let Err(e) = f.write_all(s.as_bytes()).and_then(|_| f.sync_data()) {
                 eprintln!("[hub] CONFIG WRITE FAILED: {}", e);
-                return;
+                return Err(e);
             }
         }
         self.count += 1;
+        Ok(())
     }
 }
 
-fn load(path: &Path) -> (HashMap<String, Revision>, u64, u64) {
+/// The largest `REV=` the hub will honour from the wire as a numbering base.
+///
+/// A node reports its own revision on REG so the hub can continue its
+/// numbering instead of appearing to go backwards. That number is chosen by
+/// the peer, and `base_rev + 1` on `u64::MAX` wraps to 0 - the one value
+/// `load` discards - which would break monotonicity AND silently lose the
+/// revision. A billion pushes is far beyond any real deployment, so anything
+/// above this is treated as "no usable base" and numbering starts at 1.
+const MAX_WIRE_BASE_REV: u64 = 1_000_000_000;
+
+fn load(path: &Path) -> std::io::Result<(HashMap<String, Revision>, u64, u64)> {
     let mut current: HashMap<String, Revision> = HashMap::new();
     let mut count = 0u64;
     let mut torn = 0u64;
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(_) => return (current, count, torn),
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        //--- A file that does not exist yet is an empty store - the normal
+        //--- first-run state. Anything ELSE (permissions, a directory in the
+        //--- way, I/O error) is propagated: silently returning an empty store
+        //--- would restart revision numbering on top of revisions that are
+        //--- still in the file.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((current, count, torn))
+        }
+        Err(e) => return Err(e),
     };
+    //--- LOSSY, deliberately. `read_to_string` fails on ANY invalid UTF-8,
+    //--- and a crash mid-append can split a multibyte character - so one torn
+    //--- line used to discard the ENTIRE history, including every other
+    //--- node's config. Replacing the bad bytes with U+FFFD leaves that one
+    //--- line unparseable (counted as torn) and every other line intact.
+    let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
@@ -360,7 +440,7 @@ fn load(path: &Path) -> (HashMap<String, Revision>, u64, u64) {
             }
         }
     }
-    (current, count, torn)
+    Ok((current, count, torn))
 }
 
 fn unix_secs() -> u64 {
@@ -395,77 +475,144 @@ fn unix_secs() -> u64 {
 /// comment claimed the wrong one:
 ///
 /// * It DOES guarantee that the output contains none of `| ; ~ , =` or a
-///   newline, which is the whole point - the value can be embedded in the
-///   payload without ending the field early.
-/// * It does NOT guarantee idempotence. `%` is both escaped and present in the
-///   output alphabet, so encoding twice gives `%2525` for a literal `%`.
-///   Percent-encoding is a layering, not a projection, and a test asserting
-///   otherwise is asserting something false.
+/// Escape one ini for embedding in a `CFG` payload.
+///
+/// WHY THIS ITERATES CHARACTERS, NOT BYTES (measured, not theoretical)
+/// ====================================================
+/// It used to iterate `s.bytes()` and push the survivors with `b as char`.
+/// In Rust, `u8 as char` maps the byte's VALUE to the code point with that
+/// number - so the UTF-8 sequence for '中' (bytes E4 B8 AD) came out as the
+/// three Latin-1 characters 'ä¸­', which is a different, longer UTF-8
+/// encoding once the payload is serialised. Every Chinese comment in a
+/// pushed ini therefore arrived on the node as mojibake, and
+/// `unescape(escape(x)) == x` failed for exactly the operator most likely
+/// to have written comments in the first place. Iterating `chars()` lets a
+/// non-ASCII character pass through UNTOUCHED - it contains none of the
+/// delimiters this encoding exists to escape, so there is nothing to do to
+/// it in the first place.
+///
+/// WHAT IS ESCAPED: the characters the payload format uses as delimiters -
+/// `%` (the escape character itself), `|` (field separator), `;` (payload
+/// KV separator), `,` (the INI list separator), `=` (the KV separator),
+/// `~` (MQL4 comment), `\n` and `\r` - the last two being the whole point:
+/// the value can be embedded in the payload without ending the field early.
+///
+/// It does NOT guarantee idempotence. `%` is both escaped and present in the
+/// output alphabet, so encoding twice gives `%2525` for a literal `%`.
+/// Percent-encoding is a layering, not a projection, and a test asserting
+/// otherwise is asserting something false.
 ///
 /// The property that actually matters is the round trip, and that is what is
-/// tested: `unescape(escape(x)) == x` for a real ini. The hub escapes exactly
-/// once and the node unescapes exactly once; neither needs to guess how many
-/// times the other ran.
+/// tested: `unescape(escape(x)) == x` for a real ini, Chinese comments
+/// included. The hub escapes exactly once and the node unescapes exactly
+/// once; neither needs to guess how many times the other ran.
 pub fn escape_ini(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + s.len() / 8);
-    for b in s.bytes() {
-        match b {
-            // '%' FIRST in the match is not an ordering requirement (each byte
+    for c in s.chars() {
+        match c {
+            // '%' FIRST in the match is not an ordering requirement (each char
             // is visited once), but it is the one that must exist for the
             // encoding to be reversible at all.
-            b'%' => out.push_str("%25"),
-            b'|' => out.push_str("%7C"),
-            b';' => out.push_str("%3B"),
-            b'~' => out.push_str("%7E"),
-            b',' => out.push_str("%2C"),
-            b'=' => out.push_str("%3D"),
-            b'\n' => out.push_str("%0A"),
-            b'\r' => out.push_str("%0D"),
-            _ => out.push(b as char),
+            '%' => out.push_str("%25"),
+            '|' => out.push_str("%7C"),
+            ';' => out.push_str("%3B"),
+            '~' => out.push_str("%7E"),
+            ',' => out.push_str("%2C"),
+            '=' => out.push_str("%3D"),
+            '\n' => out.push_str("%0A"),
+            '\r' => out.push_str("%0D"),
+            _ => out.push(c),
         }
     }
     out
 }
 
-/// The inverse. NOT USED BY THE HUB - it only ever encodes; a config arrives
-/// from an operator already in plain text and leaves escaped.
+/// Length of the UTF-8 sequence starting with `b0`. Only used to COPY
+/// pass-through characters out whole; a malformed lead byte degrades to 1
+/// rather than panicking, because the input may be a mangled file from an
+/// older build and the buyer of that mojibake is the reader, not a crash.
+fn utf8_seq_len(b0: u8) -> usize {
+    if b0 < 0x80 {
+        1
+    } else if b0 >> 5 == 0b110 {
+        2
+    } else if b0 >> 4 == 0b1110 {
+        3
+    } else if b0 >> 3 == 0b11110 {
+        4
+    } else {
+        1
+    }
+}
+
+/// The inverse. Used by the hub to decode current setting INI reports uploaded by nodes.
 ///
-/// It exists as the REFERENCE IMPLEMENTATION that the MQL mirror has to agree
-/// with, and so the escape can be tested for the property that matters (a round
-/// trip) rather than only for its output shape. `#[cfg(test)]` rather than
-/// `pub` so that a future caller cannot reach for it by accident and quietly
-/// make the hub depend on both directions.
-#[cfg(test)]
+/// The escape table is all-ASCII, so the `%` fast path is untouched by the
+/// char-copy below - but the OLD default pushed `b[i] as char`, which mapped
+/// every pass-through byte 0x80..=0xFF to its Latin-1 code point and
+/// re-encoded a UTF-8 sequence into something longer and wrong. A Chinese
+/// comment survived escape, then died here.
+///
+/// WHY THIS DECODES FROM BYTES AND NEVER SLICES THE &str
+/// ====================================================
+/// It used to read the two hex digits as `&s[i + 1..i + 3]`. `i + 3` is not
+/// guaranteed to be a char boundary: a payload of `%` followed by one
+/// multibyte character (`"%中"` - three bytes) puts index 3 in the middle of
+/// that character, and Rust PANICS on the slice rather than returning
+/// something wrong. `unescape_ini` runs on the `INI=` field of every `REG`
+/// and `CFGRPT` that arrives on the wire, so a single malformed frame from
+/// any node that can reach the port would take the whole hub down - a remote
+/// crash reachable from a trusted-but-compromised peer, and one the MQL
+/// decoder (CopierIniUnescape) never had because MQL has no such slice.
+///
+/// Reading the two bytes directly and validating them as hex digits makes
+/// the panic impossible by construction: no string index is ever computed
+/// from a length that could land mid-character.
 pub fn unescape_ini(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() + 1 && i + 2 <= b.len() - 1 + 1 {
-            if i + 2 < b.len() {
-                let hex = &s[i + 1..i + 3];
-                let ch = match hex {
-                    "25" => Some('%'),
-                    "7C" => Some('|'),
-                    "3B" => Some(';'),
-                    "7E" => Some('~'),
-                    "2C" => Some(','),
-                    "3D" => Some('='),
-                    "0A" => Some('\n'),
-                    "0D" => Some('\r'),
+        //--- `i + 2 < b.len()` guarantees both bytes below exist. They are
+        //--- checked to be hex DIGITS, which also proves they are ASCII and
+        //--- therefore never continuation bytes of a multibyte character.
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h1), Some(h2)) = (hex_val(b[i + 1]), hex_val(b[i + 2])) {
+                let code = (h1 << 4) | h2;
+                //--- Only the eight escapes the encoder produces are
+                //--- accepted. A decoder that passed any %XX through would
+                //--- turn a corrupt payload into a plausible-looking ini,
+                //--- which is worse than refusing it. An unknown escape is
+                //--- copied literally below, exactly as before.
+                let decoded = match code {
+                    b'%' | b'|' | b';' | b'~' | b',' | b'=' | b'\n' | b'\r' => Some(code),
                     _ => None,
                 };
-                if let Some(c) = ch {
-                    out.push(c);
+                if let Some(c) = decoded {
+                    out.push(c as char);
                     i += 3;
                     continue;
                 }
             }
         }
-        out.push(b[i] as char);
-        i += 1;
+        //--- Copy the WHOLE character at this boundary. `i` is always on one:
+        //--- the loop advances by whole sequences and by ASCII escapes only.
+        let end = (i + utf8_seq_len(b[i])).min(b.len());
+        out.push_str(&s[i..end]);
+        i = end;
     }
     out
+}
+
+/// Value of one ASCII hex digit, or None. Used by `unescape_ini`, where a
+/// non-digit must mean "not an escape" rather than an error.
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// What an ini must look like before the hub will store and push it.
@@ -587,6 +734,32 @@ mod tests {
         assert_eq!(unescape_ini(&escape_ini(&e)), e);
     }
 
+    /// A `%` followed by a multibyte character used to PANIC, because the
+    /// decoder sliced `&s[i+1..i+3]` and `i+3` can land inside a character.
+    /// `unescape_ini` runs on the `INI=` field of every REG and CFGRPT, so
+    /// that panic was a remote crash of the whole hub. These inputs are all
+    /// malformed and all reachable from the wire; none may panic.
+    #[test]
+    fn unescape_never_panics_on_a_percent_before_a_multibyte_char() {
+        for s in [
+            "%中",          // % + one 3-byte char: index 3 is mid-character
+            "%%中",         // two % then a 3-byte char
+            "a=%é",         // the realistic shape: an unescaped value
+            "%中文注释",     // % followed by several multibyte chars
+            "%",            // a lone trailing escape character
+            "%2",           // a truncated escape
+            "%zz",          // not hex
+            "%25中",        // a VALID escape followed by multibyte text
+        ] {
+            // The assertion is simply "returns", but the value is checked for
+            // the one case with a defined answer so the test is not vacuous.
+            let got = unescape_ini(s);
+            if s == "%25中" {
+                assert_eq!(got, "%中", "a valid escape before text must decode");
+            }
+        }
+    }
+
     #[test]
     fn a_first_revision_continues_the_nodes_own_numbering() {
         let p = tmp("base");
@@ -608,8 +781,8 @@ mod tests {
     fn a_rollback_appends_rather_than_rewrites() {
         let p = tmp("rollback");
         let c = ConfigStore::open(&p).unwrap();
-        c.put("receiver:1", "a=1\n", "op", "ip", "push", 0);
-        c.put("receiver:1", "a=2\n", "op", "ip", "push", 0);
+        c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
+        c.put("receiver:1", "a=2\n", "op", "ip", "push", 0).unwrap();
         let before = std::fs::read(&p).unwrap();
 
         let r = c.rollback("receiver:1", 1, "op", "ip").unwrap();
@@ -632,8 +805,56 @@ mod tests {
     fn a_rollback_to_a_revision_that_never_existed_is_refused() {
         let p = tmp("rollback_bad");
         let c = ConfigStore::open(&p).unwrap();
-        c.put("receiver:1", "a=1\n", "op", "ip", "push", 0);
-        assert!(c.rollback("receiver:1", 99, "op", "ip").is_none());
+        c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
+        assert!(matches!(
+            c.rollback("receiver:1", 99, "op", "ip"),
+            Err(StoreError::NotFound)
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// A `REV=` from the wire is a number a peer chooses. `base_rev + 1` on
+    /// `u64::MAX` wraps to 0 in a release build - the one value `load`
+    /// discards - so the revision would be both invalid and non-monotonic.
+    #[test]
+    fn an_absurd_wire_base_rev_cannot_wrap_to_zero() {
+        let p = tmp("basemax");
+        let c = ConfigStore::open(&p).unwrap();
+        let r = c.put("receiver:1", "a=1\n", "op", "ip", "push", u64::MAX).unwrap();
+        assert!(r.rev > 0, "a wrapped revision number would be discarded by load");
+        assert!(r.rev <= MAX_WIRE_BASE_REV + 1);
+        // And the next one still moves forward.
+        let r2 = c.put("receiver:1", "a=2\n", "op", "ip", "push", u64::MAX).unwrap();
+        assert_eq!(r2.rev, r.rev + 1);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// A crash mid-append can split a multibyte character. `read_to_string`
+    /// fails on the WHOLE file in that case, which used to discard every
+    /// node's config and restart revision numbering on top of revisions that
+    /// were still on disk. The lossy read keeps the good lines.
+    #[test]
+    fn a_torn_multibyte_line_does_not_discard_the_rest_of_the_history() {
+        let p = tmp("torn_utf8");
+        {
+            let c = ConfigStore::open(&p).unwrap();
+            c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
+            c.put("receiver:2", "b=1\n", "op", "ip", "push", 0).unwrap();
+        }
+        // Simulate a torn append: half a JSON line ending inside a 3-byte
+        // character (E4 B8), which makes the file invalid UTF-8.
+        {
+            use std::io::Write as _;
+            let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+            f.write_all(b"{\"v\":1,\"node\":\"receiver:3\",\"rev\":1,\"ini\":\"\xE4\xB8").unwrap();
+        }
+        let c = ConfigStore::open(&p).expect("an unreadable tail must not lose the store");
+        assert_eq!(c.current("receiver:1").map(|r| r.rev), Some(1));
+        assert_eq!(c.current("receiver:2").map(|r| r.rev), Some(1));
+        let (count, nodes, torn) = c.stats();
+        assert_eq!(count, 2, "the two good revisions were lost");
+        assert_eq!(nodes, 2);
+        assert_eq!(torn, 1, "the torn line was not counted");
         let _ = std::fs::remove_file(&p);
     }
 
@@ -659,9 +880,9 @@ mod tests {
         let p = tmp("reopen");
         {
             let c = ConfigStore::open(&p).unwrap();
-            c.put("receiver:1", "a=1\n", "op", "ip", "push", 0);
-            c.put("receiver:1", "a=2\n", "op", "ip", "push", 0);
-            c.put("receiver:2", "b=1\n", "op", "ip", "push", 0);
+            c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
+            c.put("receiver:1", "a=2\n", "op", "ip", "push", 0).unwrap();
+            c.put("receiver:2", "b=1\n", "op", "ip", "push", 0).unwrap();
         }
         let c = ConfigStore::open(&p).unwrap();
         assert_eq!(c.current("receiver:1").unwrap().rev, 2);

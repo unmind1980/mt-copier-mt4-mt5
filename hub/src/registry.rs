@@ -113,6 +113,16 @@ pub struct Node {
     /// means this frame carries positions only and must preserve risk state.
     pub blocked: u32,
     pub risk: String,
+    /// Receiver waiting figures: how many mirrors are waiting to open
+    /// (queued at broker, delayed by wait gates, or held by market closed).
+    pub wait_total: Option<u32>,
+    pub wait_lots: f64,
+    pub wait_queued: Option<u32>,
+    pub wait_delayed: Option<u32>,
+    pub wait_mkt: Option<u32>,
+    /// Receiver financial snapshot: equity and balance reported by the terminal.
+    pub equity: Option<f64>,
+    pub balance: Option<f64>,
 }
 
 impl Node {
@@ -261,8 +271,23 @@ impl Registry {
     /// is blocking and which limit (if any) tripped. Update-only, for the
     /// same reason as note_ts: a STAT is not a registration, and a hub that
     /// learned nodes from STATs would be a hub that trusts the wire.
-    pub fn note_stat(&mut self, role: &str, acc: &str, blocked: u32, risk: &str,
-                     held: Option<u32>, held_lots: f64, orphaned: Option<u32>) {
+    pub fn note_stat(
+        &mut self,
+        role: &str,
+        acc: &str,
+        blocked: u32,
+        risk: &str,
+        held: Option<u32>,
+        held_lots: f64,
+        orphaned: Option<u32>,
+        wait_total: Option<u32>,
+        wait_lots: f64,
+        wait_queued: Option<u32>,
+        wait_delayed: Option<u32>,
+        wait_mkt: Option<u32>,
+        equity: Option<f64>,
+        balance: Option<f64>,
+    ) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
             if !risk.is_empty() {
                 e.blocked = blocked;
@@ -275,6 +300,19 @@ impl Registry {
                 e.held = Some(h);
                 e.held_lots = held_lots;
                 e.orphaned = orphaned;
+            }
+            if let Some(w) = wait_total {
+                e.wait_total = Some(w);
+                e.wait_lots = wait_lots;
+                e.wait_queued = wait_queued;
+                e.wait_delayed = wait_delayed;
+                e.wait_mkt = wait_mkt;
+            }
+            if let Some(eq) = equity {
+                e.equity = Some(eq);
+            }
+            if let Some(bl) = balance {
+                e.balance = Some(bl);
             }
         }
     }
@@ -310,6 +348,13 @@ impl Registry {
             orphaned: None,
             blocked: 0,
             risk: String::new(),
+            wait_total: None,
+            wait_lots: 0.0,
+            wait_queued: None,
+            wait_delayed: None,
+            wait_mkt: None,
+            equity: None,
+            balance: None,
         })
     }
 
@@ -330,6 +375,16 @@ impl Registry {
         });
         self.evicted += gone.len() as u64;
         gone
+    }
+
+    #[allow(dead_code)]
+    pub fn get(&self, key: &str) -> Option<&Node> {
+        self.nodes.get(key)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Node> {
+        self.nodes.get_mut(key)
     }
 
     /// Every node, newest activity first. The order is fixed so the output is
@@ -412,10 +467,20 @@ mod tests {
         let now = t0();
         r.on_reg("receiver", "777777", "2.0", "MT5-B", 1, now);
 
-        // Full minute report sets risk + counts.
-        r.note_stat("receiver", "777777", 2, "daily-loss", Some(4), 0.87, Some(1));
-        // More frequent sync heartbeat carries only counts and no RISK/BLOCKED.
-        r.note_stat("receiver", "777777", 0, "", Some(5), 1.12, Some(2));
+        // Full minute report sets risk + counts + waiting + equity.
+        r.note_stat(
+            "receiver", "777777", 2, "daily-loss",
+            Some(4), 0.87, Some(1),
+            Some(3), 0.30, Some(1), Some(0), Some(2),
+            Some(10050.25), Some(10000.00),
+        );
+        // More frequent sync heartbeat carries counts and waiting figures, preserving risk.
+        r.note_stat(
+            "receiver", "777777", 0, "",
+            Some(5), 1.12, Some(2),
+            Some(9), 0.09, Some(0), Some(0), Some(9),
+            Some(10015.99), Some(10022.01),
+        );
 
         let n = &r.nodes()[0];
         assert_eq!(n.blocked, 2);
@@ -423,6 +488,13 @@ mod tests {
         assert_eq!(n.held, Some(5));
         assert_eq!(n.held_lots, 1.12);
         assert_eq!(n.orphaned, Some(2));
+        assert_eq!(n.wait_total, Some(9));
+        assert_eq!(n.wait_lots, 0.09);
+        assert_eq!(n.wait_queued, Some(0));
+        assert_eq!(n.wait_delayed, Some(0));
+        assert_eq!(n.wait_mkt, Some(9));
+        assert_eq!(n.equity, Some(10015.99));
+        assert_eq!(n.balance, Some(10022.01));
     }
 
     #[test]

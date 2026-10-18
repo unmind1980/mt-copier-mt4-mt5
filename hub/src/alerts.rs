@@ -10,6 +10,7 @@
 //! | kind                | from                                    | severity |
 //! |---------------------|-----------------------------------------|----------|
 //! | `node.offline`      | registry liveness (60 s of quiet)       | critical |
+//! | `node.recovered`    | recovery back online after outage       | warning  |
 //! | `node.clock.drift`  | a CHANGE in the node's clock offset vs ours | warning |
 //! | `risk.blocked`      | `BLOCKED=` on the receiver's STAT       | warning  |
 //! | `risk.tripped`      | `RISK=<trip key>` on the receiver's STAT| critical |
@@ -133,6 +134,8 @@ pub struct AlertEngine {
     /// The liveness we last SAW per node, so an offline -> online ->
     /// offline cycle is two incidents, not one.
     was_offline: HashMap<String, bool>,
+    /// Timestamp (unix secs) when node went offline, used to calculate outage duration on recovery.
+    offline_since: HashMap<String, u64>,
 }
 
 impl Default for AlertEngine {
@@ -147,7 +150,13 @@ impl AlertEngine {
             recent: VecDeque::new(),
             fired: HashMap::new(),
             was_offline: HashMap::new(),
+            offline_since: HashMap::new(),
         }
+    }
+
+    /// Clear the silence window for (kind, key) so a subsequent incident alerts immediately.
+    pub fn rearm(&mut self, kind: &'static str, key: &str) {
+        self.fired.remove(&(kind, key.to_string()));
     }
 
     /// The recent ring, newest first, for the API and the snapshot.
@@ -186,10 +195,45 @@ impl AlertEngine {
                 return false;
             }
         }
+        //--- BOUNDED. `command.unknown` uses window 0, which means "remember
+        //--- forever" - and command ids are never reused, so every command
+        //--- that ever timed out left an entry behind for the life of the
+        //--- process. A hub that runs for months issues a lot of commands.
+        //--- Evicting the OLDEST is safe: a window-0 entry only ever answers
+        //--- "did this exact id already fire", and a command that old is not
+        //--- being re-evaluated.
+        if self.fired.len() >= MAX_FIRED_KEYS && !self.fired.contains_key(&k) {
+            if let Some(oldest) = self
+                .fired
+                .iter()
+                .min_by_key(|(_, t)| **t)
+                .map(|(kk, _)| kk.clone())
+            {
+                self.fired.remove(&oldest);
+            }
+        }
         self.fired.insert(k, now);
         true
     }
+
+    /// Forget everything about a node the registry has evicted.
+    ///
+    /// The registry is the only place the hub decides a node is GONE, so it is
+    /// the only place this state can be reclaimed - and it was not being
+    /// reclaimed at all: `was_offline` and `offline_since` kept a row per node
+    /// ever seen, and a key that came back after eviction inherited
+    /// `was_offline = true`, which made the next observation look like a
+    /// RECOVERY and fired a `node.recovered` for a node that had never been
+    /// reported down in this life.
+    pub fn forget(&mut self, node_key: &str) {
+        self.was_offline.remove(node_key);
+        self.offline_since.remove(node_key);
+        self.fired.retain(|(_, k), _| k != node_key);
+    }
 }
+
+/// Upper bound on the dedup map. See `allow` for why it needs one.
+const MAX_FIRED_KEYS: usize = 2048;
 
 /// Did the node's clock offset MOVE by enough to matter? The first
 /// measurement establishes the baseline and never fires - a node's opening
@@ -224,6 +268,15 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         let offline = matches!(n.liveness(instant_now), Liveness::Offline);
         let was = s.alerts.was_offline.insert(n.key.clone(), offline);
         if offline && !was.unwrap_or(false) {
+            //--- The outage clock starts at the node's LAST CONTACT, not at
+            //--- the moment the hub noticed. `offline` only becomes true after
+            //--- OFFLINE_AFTER (~60s) of silence plus up to one 5s tick, so
+            //--- seeding it with `now` reported every two-minute outage as
+            //--- "60s" in the recovery alert and in the notification.
+            let quiet = instant_now.saturating_duration_since(n.last_seen).as_secs();
+            s.alerts
+                .offline_since
+                .insert(n.key.clone(), now.saturating_sub(quiet));
             let a = Alert {
                 ts: now,
                 kind: "node.offline",
@@ -232,6 +285,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 detail: json!({
                     "role": n.role_str(),
                     "name": n.name,
+                    "account": n.acc,
                     "quiet_secs": instant_now.saturating_duration_since(n.last_seen).as_secs(),
                 }),
             };
@@ -239,6 +293,24 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 s.alerts.push(a.clone());
                 fired.push(a);
             }
+        } else if !offline && was == Some(true) {
+            let outage_secs = s.alerts.offline_since.remove(&n.key).map(|t| now.saturating_sub(t));
+            // Re-arm node.offline so the next failure triggers an alert immediately
+            s.alerts.rearm("node.offline", &n.key);
+            let a = Alert {
+                ts: now,
+                kind: "node.recovered",
+                severity: Severity::Warning,
+                node: n.key.clone(),
+                detail: json!({
+                    "role": n.role_str(),
+                    "name": n.name,
+                    "account": n.acc,
+                    "outage_secs": outage_secs,
+                }),
+            };
+            s.alerts.push(a.clone());
+            fired.push(a);
         }
 
         //--- clock drift, as a JUMP against the previous offset. A stable
@@ -355,6 +427,46 @@ mod tests {
         assert!(e.allow("command.unknown", "receiver-1-pause-2", 1000, 0));
     }
 
+    /// Command ids are never reused and `command.unknown` remembers forever,
+    /// so without a bound the dedup map grows for the life of the process.
+    #[test]
+    fn the_dedup_map_is_bounded() {
+        let mut e = AlertEngine::new();
+        for i in 0..(MAX_FIRED_KEYS + 50) {
+            e.allow("command.unknown", &format!("cmd-{}", i), 1000, 0);
+        }
+        assert!(
+            e.fired.len() <= MAX_FIRED_KEYS,
+            "the dedup map grew to {}",
+            e.fired.len()
+        );
+        // The most recent keys are still remembered, which is what matters:
+        // an old command is not being re-evaluated.
+        let last = format!("cmd-{}", MAX_FIRED_KEYS + 49);
+        assert!(!e.allow("command.unknown", &last, 1000, 0));
+    }
+
+    /// An evicted node must not leave a `was_offline` latch behind, or a key
+    /// reused later reports a recovery for a node that never went down.
+    #[test]
+    fn forget_clears_a_nodes_alert_state() {
+        let mut e = AlertEngine::new();
+        e.was_offline.insert("receiver:1".into(), true);
+        e.offline_since.insert("receiver:1".into(), 500);
+        e.allow("node.offline", "receiver:1", 1000, 600);
+        e.allow("node.offline", "receiver:2", 1000, 600);
+
+        e.forget("receiver:1");
+        assert!(!e.was_offline.contains_key("receiver:1"));
+        assert!(!e.offline_since.contains_key("receiver:1"));
+        assert!(!e.fired.contains_key(&("node.offline", "receiver:1".to_string())));
+        // ...and the other node is untouched.
+        assert!(e.fired.contains_key(&("node.offline", "receiver:2".to_string())));
+        // A fresh observation of the forgotten key is a FIRST one, not a
+        // recovery, so it may fire again.
+        assert!(e.allow("node.offline", "receiver:1", 2000, 600));
+    }
+
     #[test]
     fn the_ring_is_bounded_and_newest_first() {
         let mut e = AlertEngine::new();
@@ -393,5 +505,83 @@ mod tests {
         assert!(!drift_jumped(Some(-10800), -10799, 300));
         // Exactly at the threshold fires (>=).
         assert!(drift_jumped(Some(0), 300, 300));
+    }
+
+    #[test]
+    fn node_offline_and_recovery_cycle_with_rearm() {
+        use std::time::Instant;
+
+        let mut s = Shared::new(
+            6000,
+            std::sync::Arc::new(crate::audit::Audit::disabled()),
+            std::sync::Arc::new(crate::config::ConfigStore::disabled()),
+            std::sync::Arc::new(crate::commands::CommandStore::disabled()),
+            false,
+            None,
+        );
+        let now = 1000u64;
+
+        // Register a node
+        s.reg.on_reg(
+            "sender",
+            "12345",
+            "v1",
+            "Sender 12345",
+            60,
+            Instant::now(),
+        );
+
+        // Baseline tick - node is online, establishes baseline, fires nothing
+        let fired = evaluate(&mut s, now);
+        assert!(fired.is_empty());
+
+        // Simulate node going offline (last_seen set to > 60s ago)
+        if let Some(n) = s.reg.get_mut("sender:12345") {
+            n.last_seen = Instant::now() - std::time::Duration::from_secs(65);
+        }
+
+        // Tick 2: node goes offline -> node.offline fired
+        let fired2 = evaluate(&mut s, now + 5);
+        assert_eq!(fired2.len(), 1);
+        assert_eq!(fired2[0].kind, "node.offline");
+        assert_eq!(fired2[0].severity, Severity::Critical);
+        assert_eq!(fired2[0].node, "sender:12345");
+        assert_eq!(fired2[0].detail["account"], "12345");
+
+        // Tick 3: node stays offline -> dedup / silence window suppresses duplicate
+        let fired3 = evaluate(&mut s, now + 10);
+        assert!(fired3.is_empty());
+
+        // Node recovers (new heartbeat)
+        if let Some(n) = s.reg.get_mut("sender:12345") {
+            n.last_seen = Instant::now();
+        }
+
+        // Tick 4: node recovers -> node.recovered fired with outage duration
+        let fired4 = evaluate(&mut s, now + 30);
+        assert_eq!(fired4.len(), 1);
+        assert_eq!(fired4[0].kind, "node.recovered");
+        assert_eq!(fired4[0].severity, Severity::Warning);
+        assert_eq!(fired4[0].node, "sender:12345");
+        assert_eq!(fired4[0].detail["account"], "12345");
+        //--- 90, not 25. The node was last heard from 65 s before the tick
+        //--- that NOTICED it was offline, and 25 s passed between that tick
+        //--- and the recovery - so the outage really was 90 s. The old
+        //--- assertion said 25 because the clock was seeded at DETECTION,
+        //--- which under-reported every outage by the detection delay
+        //--- (OFFLINE_AFTER plus up to one tick). This test encoded the bug.
+        assert_eq!(fired4[0].detail["outage_secs"], 90);
+
+        // Tick 5: node stays online -> nothing fired
+        let fired5 = evaluate(&mut s, now + 35);
+        assert!(fired5.is_empty());
+
+        // Node drops offline again later: must be re-armed and fire node.offline again
+        if let Some(n) = s.reg.get_mut("sender:12345") {
+            n.last_seen = Instant::now() - std::time::Duration::from_secs(65);
+        }
+        let fired6 = evaluate(&mut s, now + 45);
+        assert_eq!(fired6.len(), 1);
+        assert_eq!(fired6[0].kind, "node.offline");
     }
 }

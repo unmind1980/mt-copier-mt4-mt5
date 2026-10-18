@@ -48,24 +48,25 @@ Confirm the build landed:
 
 ## Phase 1 — MT5 sender → MT4 receiver
 
-Leave the MT5 sender running exactly as it is. It already holds
-`127.0.0.1:5555`, so nothing new is bound.
+Leave the MT5 sender running. Note its port from the Experts log (e.g. AutoPort `5697` or manual `5555`).
 
-1. Copy `config/copier.mt4receiver.ini` to
-   `<MT4 terminal>\MQL4\Files\copier.ini`.
+1. Direct mode runs straight from inputs (no ini required):
+   * `SenderIP` = `127.0.0.1`
+   * `SenderPort` = `<sender_port>` (matches the MT5 sender's AutoPort or manual port)
+   * `InpMagic` = `""` (blank = Auto Magic: automatically adopts `SenderPort`; or enter custom magic e.g. `770000`)
+   * `LogLevel` = `2`
 
-   (It is the same shape as the loopback config; the only thing that
-   matters is `id = sender01`, matching the sender's `SenderId`.)
+   (Alternatively, for Central Hub testing, set `HubEndpoint` = `127.0.0.1:6000` to connect to the Central Hub, allowing all senders, sizing, and multi-tier risk to be managed and monitored from the Web Dashboard.)
 
 2. Drag `CopierReceiver` onto any chart in the **MT4** terminal.
 
-3. Inputs: `ConfigFile` = `copier.ini`, `LogLevel` = `2`.
+3. Inputs: verify `SenderPort` matches sender, `InpMagic` is blank (or set to `770000`), `LogLevel` = `2`.
 
 4. Expected in the MT4 Experts log and in
-   `MQL4\Files\copier_receiver.0.log`:
+   `MQL4\Files\copier_receiver_<magic>.0.log`:
 
    ```
-   receiver up, 1 sender(s), magic base=770000
+   receiver up, 1 sender(s), magic=<magic>
    ```
 
    If that line never appears, the receiver never got through `OnInit` —
@@ -120,9 +121,9 @@ holds 5555 on this machine:
 Each sender binds exactly one port; events and snapshots share it.
 
 1. In the **MT4** terminal (`Alpari MT4-2`), drag `CopierSender` onto a chart.
-   * `SenderId` = `mt4demo`
    * `BindAddress` = `tcp://127.0.0.1`
-   * `EventsPort` = `5565` — the only port bound
+   * `EventsPort` = `5565` — the only port bound, **and the sender's identity**:
+     `SenderId()` returns the port, so there is no `SenderId` input to type
    * `UseCurve` = `false`, `LogLevel` = `2`
 
    > CURVE needs no key inputs any more — each EA generates its own keypair
@@ -133,16 +134,19 @@ Each sender binds exactly one port; events and snapshots share it.
 
    ```ini
    [sender1]
-   id        = mt4demo
+   id        = 5565
    events    = tcp://127.0.0.1:5565
-   snap      = tcp://127.0.0.1:5566
    lotmode   = multiplier
    lotparam  = 1.0
    magic     = 770001
    ```
 
+   **`id` must be the sender's derived identity — its `EventsPort` number**
+   (`5565` here), because that is what the sender puts in the envelope's `SID=`.
    **`magic` must differ from sender0's** (770000) — that is what keeps the
    two senders' positions apart on the same receiving account.
+   (`snap=` no longer appears: the sender binds one port for both streams, and an
+   old `snap=` line is parsed but ignored.)
 
 3. Restart the MT5 receiver (remove and re-add the EA so it re-reads the
    config). It should log `receiver up, 2 sender(s)`.
@@ -176,8 +180,9 @@ sequence counter, magic and desired-position set.
 
 ### What to check specifically on the MT4 sender
 
-* `MQL4\Files\copier_sender_mt4demo.0.log` contains
-  `sender mt4demo listening on port 5565 ssid=...`
+* `MQL4\Files\copier_sender_5565.0.log` contains
+  `sender 5565 listening on port 5565 ssid=...` (no `SenderId` input — the
+  port IS the id, so the log line names it)
 * `open <uid> tkt=<n> <sym> side=<n> lots=<n>` — the ticket here is the MT4
   order ticket, and it is what the receiver writes into its comment, so the
   two should match.
@@ -196,15 +201,14 @@ terminals it is the natural place to end up.
 to look for in the logs. The rest of this section is the reference for what
 that config means and why.
 
-* **sender**: MT4 **B** (`Alpari MT4-2`), `SenderId` = `mt4demo`,
-  `BindAddress` = `tcp://127.0.0.1`, ports **5565** / **5566**
+* **sender**: MT4 **B** (`Alpari MT4-2`), no `SenderId` input — the identity is
+  the derived `EventsPort`, `BindAddress` = `tcp://127.0.0.1`, port **5565**
 * **receiver**: MT4 **A** (`Alpari MT4`), `MQL4\Files\copier.ini`:
 
   ```ini
   [sender0]
-  id       = mt4demo
+  id       = 5565
   events   = tcp://127.0.0.1:5565
-  snap     = tcp://127.0.0.1:5566
   lotmode  = multiplier
   lotparam = 1.0
   magic    = 770000
@@ -213,7 +217,7 @@ that config means and why.
 
 Stop the MT5 sender first if you want this clean — otherwise it keeps
 broadcasting on 5555 and MT4 A will ignore it (its config names only
-`mt4demo`), which is itself a useful check that unknown senders are ignored
+`5565`), which is itself a useful check that unknown senders are ignored
 rather than mis-handled.
 
 Everything MT4-specific to watch for is the same list as phase 1.
@@ -257,7 +261,7 @@ running. Set a stop-loss and a take-profit on the sender, then:
 |---|---|
 | mirror carries both | receiver `exec set-stops <sid> <uid> <sym> sl=.. tp=..` |
 | the value is a **distance**, not a price | the mirror's stop is the same number of points from **its own** entry, which will be a different absolute price |
-| the sender moves its stop | the receiver follows within ~2 s (one snapshot) |
+| the sender moves its stop | the receiver follows on the `MODIFY` event, sub-second; the snapshot (default 10 s) is the fallback that converges it either way |
 | the sender **removes** its stop | the receiver removes its own too — faithful convergence, not a bug |
 | the stop is inside this broker's minimum distance | one warning that it was widened; the mirror is **wider** than the sender's |
 | timing at open | the mirror appears ~100 ms after the position, not with it |
@@ -376,6 +380,6 @@ invalid-stop rejection shows up there.
 | EA terminates immediately, nothing in the log | **Allow DLL imports** is off (no VC++ runtime is needed any more — see above) |
 | `cannot bind ... errno=48` | port already in use — the MT5 sender holds 5555 |
 | `receiver up` never appears | `copier.ini` is not in that terminal's `MQL4\Files`, or it is malformed |
-| nothing mirrors, no errors at all | the receiver ignores messages whose `SID` it does not recognise, silently — check that `id=` matches the sender's `SenderId` exactly |
+| nothing mirrors, no errors at all | the receiver ignores messages whose `SID` it does not recognise, silently — check that `id=` matches the sender's identity, which in direct mode is its `EventsPort` number |
 | `not offered by this broker` | the MT4 broker does not list that symbol name — add a `symbol.` mapping or a `suffix` |
 | orders open but the comment looks wrong | MT4 caps comments at 31 chars, some brokers at 27; check the UID is intact |

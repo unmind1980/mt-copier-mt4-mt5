@@ -51,9 +51,9 @@ pub const POSITIONS_TTL: Duration = Duration::from_secs(600);
 /// What one snapshot said, read-only.
 #[derive(Default, Debug, PartialEq, Clone)]
 pub struct SnapView {
-    /// The `N=` the sender declared. Kept only so a mismatch is visible; the
+    /// The `N=` the sender declared, if present. Kept only so a mismatch is visible; the
     /// truth used downstream is `records`, which is what actually arrived.
-    pub declared: usize,
+    pub declared: Option<usize>,
     /// Records actually parsed.
     pub records: usize,
     /// Sum of the LOT column over the records parsed.
@@ -101,8 +101,10 @@ impl Positions {
             return; // no identity, no row
         }
         self.parsed += 1;
-        if v.declared != v.records {
-            self.mismatched += 1;
+        if let Some(dec) = v.declared {
+            if dec != v.records {
+                self.mismatched += 1;
+            }
         }
         let e = self.by_sender.entry(sid.to_string()).or_insert_with(|| SenderView {
             count: 0,
@@ -208,7 +210,7 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
     }
 
     if let Some((s, e)) = value_span(payload, b"N") {
-        v.declared = parse_usize(&payload[s..e]);
+        v.declared = Some(parse_usize(&payload[s..e]));
     }
 
     let (rs, re) = match value_span(payload, b"R") {
@@ -352,7 +354,7 @@ mod tests {
             &rec("CCCC", "XAUUSD", 1, "0.02000000"),
         ]);
         let v = parse_snap(&p);
-        assert_eq!(v.declared, 3);
+        assert_eq!(v.declared, Some(3));
         assert_eq!(v.records, 3);
         assert!((v.lots - 0.62).abs() < 1e-9, "{}", v.lots);
         assert_eq!(v.receipt, "a1b2c3d4");
@@ -364,6 +366,7 @@ mod tests {
     #[test]
     fn an_empty_account_is_not_an_error() {
         let v = parse_snap(b"N=0;H=a1b2c3d4");
+        assert_eq!(v.declared, Some(0));
         assert_eq!(v.records, 0);
         assert_eq!(v.lots, 0.0);
         assert!(v.symbols.is_empty());
@@ -375,8 +378,19 @@ mod tests {
         // N= says 99, one record arrives. records is what actually came.
         let p = format!("N=99;R={};H=x", rec("AAAA", "EURUSD", 1, "0.01"));
         let v = parse_snap(p.as_bytes());
-        assert_eq!(v.declared, 99);
+        assert_eq!(v.declared, Some(99));
         assert_eq!(v.records, 1);
+    }
+
+    #[test]
+    fn absent_n_is_not_a_mismatch() {
+        let p = format!("R={};H=x", rec("AAAA", "EURUSD", 1, "0.01"));
+        let v = parse_snap(p.as_bytes());
+        assert_eq!(v.declared, None);
+        assert_eq!(v.records, 1);
+        let mut pos = Positions::new();
+        pos.on_snap("1", &v, Instant::now());
+        assert_eq!(pos.mismatched, 0);
     }
 
     #[test]

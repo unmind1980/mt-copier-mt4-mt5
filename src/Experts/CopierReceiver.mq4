@@ -69,390 +69,219 @@
 //--- exists. If a missing file could push the receiver back to direct mode, a
 //--- hub-mode receiver's FIRST configuration would deadlock: it would never
 //--- connect, so the hub could never push the file that would make it connect.
-input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty = direct mode
-//--- M4b. OFF by default, and the default is the point.
-//---
-//--- A CFG tells this receiver to rewrite its own copier.ini and reload. Per
-//--- the plan's §19.1 the ZMQ port's only trust boundary is the firewall and
-//--- there is NO token - so anything that can reach the hub port can publish a
-//--- CFG, and a forged one would let it replace this receiver's configuration.
-//--- That is strictly worse than pushing fake trades.
-//---
-//--- So it takes TWO deliberate acts: the hub must be started with
-//--- `--writes on` AND have a stored config for this node, and this input must
-//--- be turned on here. Until M9 (users and roles) exists there is nothing else
-//--- standing in the way, and one switch is not enough for the one operation
-//--- that can stop a receiver from starting.
-//--- NOT INPUTS any more (owner decision, 2026-10-14): "remove them from the
-//--- dialog and hard-code true - do not let the user choose". The history
-//--- that got here is worth keeping: both gates shipped as inputs defaulting
-//--- FALSE (the plan's no-auth stance), the owner flipped the defaults to
-//--- TRUE for the test campaign, and the per-chart input memory still showed
-//--- the old false on every chart that had ever attached - so recompiling
-//--- read as "the default did not change". A plain global keeps every gate
-//--- branch below working and keeps the flip-back a one-word edit: set false
-//--- here (and --writes in hub/src/main.rs) before the hub faces anything
-//--- but the owner's own test bench.
-bool AcceptConfigPush=true;   // apply a copier.ini the hub pushed
-bool AcceptCommands=true;     // act on operational commands (pause/resume/closeall/reload)
-//--- MagicBase is GONE. It only ever supplied a default magic derived from a
-//--- sender's position in copier.ini, so reordering the sections silently
-//--- changed a sender's magic and orphaned its open positions. Every sender
-//--- now pins magic= explicitly, and a missing one is a startup error.
 
-//--- ONE-SENDER MODE, configured entirely from these inputs.
-//---
-//--- This is the whole of direct mode: fill these in for the common case of a
-//--- single sender. There is no file to point at any more - copier.ini belongs
-//--- to CENTRAL (hub) mode, where the hub owns it.
-//---
-//--- To mirror several senders directly, attach one CopierReceiver per sender
-//--- on separate charts. That was always the beginner's path anyway, since they
-//--- never had the file.
-//---
-//--- For a second sender without a file, attach a second CopierReceiver to
-//--- another chart, one sender per instance. See the note on InstanceName.
-input string SenderIP        = "127.0.0.1";   // SenderIP - the sender's address
-input int    SenderPort      = 5555;          // SenderPort - the sender's EventsPort (1024-49151)
-//--- UseCurve sits ABOVE SenderServerKey on purpose: the key below is only
-//--- meaningful when this switch is on, and an input list reads top-down.
-//---
-//--- The comment is deliberately the same wording the sender uses, because it
-//--- is the same switch doing the same thing on both ends - see the long note
-//--- further down for what turning it on involves (nothing to paste on THIS
-//--- side: the receiver generates its own keypair).
-input bool   UseCurve        = false;         // UseCurve - turn Curve encryption on (key is automatic)
-//--- SenderServerKey is needed ONLY while UseCurve is ON. Turning UseCurve off
-//--- makes this field inert - it is neither validated nor sent - so a leftover
-//--- value here is harmless, and turning UseCurve back on finds it still there.
-input string SenderServerKey = "";   // SenderServerKey - SENDER public key; needs UseCurve ON
+#ifdef __MQL5__
+input group "--- Connectivity & Mode ---"
+#else
+input string _g_conn_ = ""; // --- Connectivity & Mode ---
+#endif
+input string HubEndpoint     = "";            // HubEndpoint - e.g. 10.8.0.1:6000; empty = direct mode
+input string SenderIP        = "127.0.0.1";    // SenderIP - the sender's address
+input int    SenderPort      = 5555;           // SenderPort - the sender's EventsPort (1024-49151)
+input bool   UseCurve        = false;          // UseCurve - turn Curve encryption on (key is automatic)
+input string SenderServerKey = "";            // SenderServerKey - SENDER public key; needs UseCurve ON
+input string InpMagic        = "";            // Magic Number - blank=Auto (uses SenderPort)
 
-//--- CURVE on the HUB link (central mode), which is a SEPARATE switch from
-//--- UseCurve above.
-//---
-//--- On the direct channel the SENDER is the CURVE server, so this receiver
-//--- holds the sender's public key in SenderServerKey. On the hub link the
-//--- HUB is the server (§19.1 - it is the one binding the port), so this node
-//--- is a CLIENT: it needs the hub's public key in HubPublicKey, and the hub
-//--- needs THIS node's public key in its curve_clients.txt allow-list.
-//---
-//--- Two switches rather than one because a deployment may run the direct
-//--- channel in plaintext and the hub link encrypted (or the reverse). The
-//--- keypair is the same file either way (MQL\Files\copier_curve.key): one
-//--- terminal, one identity.
-//--- DEFAULT TRUE since 2026-10-15, by the owner's call (same reasoning as
-//--- the write gates above: every session from here on is a test session
-//--- that needs the hub link encrypted).
-//---
-//--- COORDINATION - read before changing either of these back or forth:
-//---   HubUseCurve=true means the hub link REQUIRES CURVE. In central mode
-//---   the hub IS this receiver's feed, so if the hub is still started with
-//---   `--curve off` the handshake never completes and this receiver goes
-//---   BLIND. The order is always:
-//---     1. the hub's public key here (HubPublicKey),
-//---     2. this node's public key in the hub's curve_clients.txt,
-//---     3. the hub restarted with `--curve on`,
-//---     4. and only then re-attach the EA.
-//---   Turning it off is the same list in reverse.
-input bool   HubUseCurve      = true;  // HubUseCurve - CURVE on the HUB link (needs HubPublicKey)
-//--- The hub prints its public key with `copier-hub.exe --curve-show` (and in
-//--- its startup banner when it runs with --curve on). A PUBLIC key is not a
-//--- secret, so shipping it here is fine - unlike the keypair file.
-//---
-//--- If the hub's key is ever rotated, THIS line has to be updated on every
-//--- node (that is the cost of baking it in; the input still overrides it).
-input string HubPublicKey     = "P7dvTYW2y7P2GRb0%cyi-T$<?bb/$e^1NzLc?G(5"; // HubPublicKey - the HUB's 40-char public key
-input long   Magic           = 5555;          // Magic - unique per sender; the port works well
-//--- A dropdown, not free text. Typing "multiplier" by hand is a silent
-//--- failure waiting to happen: anything misspelt falls through to the
-//--- default branch and the account is sized by a rule the operator did not
-//--- choose. A dropdown cannot be misspelt.
-//--- The dropdown's VALUES ARE the internal codes (CP_SIZE_*), deliberately.
-//--- They used to be a separate numbering with a mapping between them, which
-//--- meant anything carrying the raw value - a saved .set, a chart template, or
-//--- a number the central hub writes into copier.ini - could mean one thing at
-//--- the input and another in the code. See the note in CopierSizing.mqh.
-//---
-//--- The display ORDER is still Off / Multiplier / Fixed because that reads
-//--- better in the dialog; the explicit assignments keep the order and the
-//--- numbering independent.
-//---
-//--- UPGRADE NOTE: with a saved input set, SenderLotMode=2 used to mean Fixed
-//--- and now means Off. The startup log prints the effective mode in words, so
-//--- this shows up on the first run rather than as a sizing mystery later.
+//--- Direct mode runtime magic (resolved from InpMagic or SenderPort)
+long         Magic           = 0;
+
+//--- Hardcoded gates & hub link CURVE (M4b / M9)
+bool         AcceptConfigPush = true;          // apply a copier.ini the hub pushed
+bool         AcceptCommands   = true;          // act on operational commands (pause/resume/closeall/reload)
+const bool   HubUseCurve      = true;          // Hub link CURVE encryption permanently enabled
+
+#ifdef __MQL5__
+input group "--- Sizing & Symbol Mapping ---"
+#else
+input string _g_sizing_ = ""; // --- Sizing & Symbol Mapping ---
+#endif
 enum ENUM_LOT_MODE
   {
    LOT_OFF        = CP_SIZE_OFF,          // Off - mirror the sender's lots unchanged
    LOT_MULTIPLIER = CP_SIZE_MULTIPLIER,   // Multiplier - sender lots x SenderLotParam
    LOT_FIXED      = CP_SIZE_FIXED         // Fixed - always SenderLotParam
   };
-input ENUM_LOT_MODE SenderLotMode = LOT_MULTIPLIER;   // SenderLotMode - 0=multiplier 1=fixed 2=off
-input double SenderLotParam  = 1.0;           // SenderLotParam - multiplier, or fixed lots
-input string SenderSuffix    = "";            // SenderSuffix - appended to unmapped symbols
-input string SenderSymbolMap = "";            // SenderSymbolMap - FROM=TO pairs, e.g. GOLD=XAUUSD
+input ENUM_LOT_MODE SenderLotMode = LOT_MULTIPLIER; // SenderLotMode - 0=multiplier 1=fixed 2=off
+input double        SenderLotParam = 1.0;            // SenderLotParam - multiplier, or fixed lots
+input string        SenderSuffix   = "";             // SenderSuffix - appended to unmapped symbols
+input string        SenderSymbolMap= "";             // SenderSymbolMap - FROM=TO pairs, e.g. GOLD=XAUUSD
 
-//--- There is no InstanceName input: Magic IS the instance name.
-//---
-//--- Two receivers in one terminal must not share a log file, a state file or
-//--- a ZeroMQ context. The state file is the dangerous one - its UID<->ticket
-//--- map is the only way to identify a position after an MT5 partial close
-//--- overwrites the comment, so sharing it corrupts both instances' identity
-//--- silently, with nothing in the log.
-//---
-//--- Magic already has to be unique per sender (the receiver refuses to start
-//--- otherwise) and two instances mirroring the same sender would be wrong
-//--- anyway, so it is exactly the key needed - and one less thing to get
-//--- wrong by hand.
-input int    DeviationPoints = 30;            // DeviationPoints - slippage allowed, in points
+#ifdef __MQL5__
+input group "--- Risk Limits ---"
+#else
+input string _g_risk_ = ""; // --- Risk Limits ---
+#endif
+input double InpMaxLotsPerPosition = 0.0;   // MaxLotsPerPosition - 0=off; cap on ONE position
+double       MaxLotsPerPosition    = 0.0;
+input double InpMaxTotalLots       = 0.0;   // MaxTotalLots - 0 = off. Cap on TOTAL mirrored volume
+double       MaxTotalLots          = 0.0;
+input int    InpMaxOpenPositions   = 0;     // MaxOpenPositions - 0=off; cap on open count
+int          MaxOpenPositions      = 0;
+input double InpDailyLossPct       = 0.0;   // DailyLossPct - 0=off; stop the day after this % loss
+double       DailyLossPct          = 0.0;
+input double InpMaxDrawdownPct     = 0.0;   // MaxDrawdownPct - 0 = off. Stop until reload
+double       MaxDrawdownPct        = 0.0;
+input bool   InpRiskCloseAllOnTrip = false; // RiskCloseAllOnTrip - also close held positions
+bool         RiskCloseAllOnTrip    = false;
 
-//--- security (ZMQ CURVE) -------------------------------------------
-//---
-//--- UseCurve and SenderServerKey are declared further up, next to the
-//--- sender's address, because that is where an operator looks for them.
-//--- This block is the WHY; the declarations are the WHERE.
-//---
-//--- ONE input to fill in, and it is the OTHER side's key, not this one's.
-//---
-//--- This receiver is the CURVE CLIENT. A client needs a keypair of its
-//--- own, but that keypair is not asked for: it is generated on first
-//--- start into MQL\Files\copier_curve.key and reused from then on, exactly
-//--- as the sender does. The public half is a pure function of the secret
-//--- half (zmq_curve_public), so asking for both only ever added the chance
-//--- of the two disagreeing - and a mismatched keypair has no symptom at
-//--- all beyond a handshake that never completes.
-//---
-//--- So the only thing left to configure is SenderServerKey, and only while
-//--- UseCurve is ON: the PUBLIC key of the sender this receiver talks to.
-//--- That is the one value that genuinely cannot be derived locally, because
-//--- it belongs to the other machine. Copy it from the sender's Experts log,
-//--- where it is printed at every start under "CURVE PUBLIC KEY (sender)".
-//---
-//--- With UseCurve off, SenderServerKey is IGNORED - it is not validated and
-//--- not sent anywhere, so leaving a stale value in it is harmless and
-//--- deliberate: flipping UseCurve back on finds the key still there.
+#ifdef __MQL5__
+input group "--- Execution & Stops ---"
+#else
+input string _g_exec_ = ""; // --- Execution & Stops ---
+#endif
+input int    InpDeviationPoints      = 30;    // DeviationPoints - slippage allowed, in points
+int          DeviationPoints         = 30;
+input double InpEmergencySLPips      = 0.0;   // EmergencySLPips - 0=off; local stop at open
+double       EmergencySLPips         = 0.0;
+input double InpEmergencyTPPips      = 0.0;   // EmergencyTPPips - 0=off; local target at open
+double       EmergencyTPPips         = 0.0;
+input bool   InpMirrorStops          = true;  // MirrorStops - copy the sender's SL/TP, as a distance
+bool         MirrorStops             = true;
+input bool   InpInvertTrades         = false; // InvertTrades - mirror the opposite direction
+bool         InvertTrades            = false;
+input bool   InpReopenClosedMirrors  = false; // ReopenClosedMirrors - restore vanished mirrors
+bool         ReopenClosedMirrors     = false;
+input bool   InpDedupDuplicates      = true;  // DedupDuplicates - remove a 2nd position, same UID
+bool         DedupDuplicates         = true;
+input int    InpStopsThrottleSeconds = 2;     // StopsThrottleSeconds - min gap between stop edits
+int          StopsThrottleSeconds    = 2;
 
-//--- safety net -----------------------------------------------------
-input double EmergencySLPips = 0.0;   // EmergencySLPips - 0=off; local stop at open
-input double EmergencyTPPips = 0.0;   // EmergencyTPPips - 0=off; local target at open
+#ifdef __MQL5__
+input group "--- Filters & Direction ---"
+#else
+input string _g_filter_ = ""; // --- Filters & Direction ---
+#endif
+input string InpPermittedSymbols      = "";    // PermittedSymbols - (A,B)=accept; (!A,B)=reject
+string       PermittedSymbols         = "";
+input string InpPermittedMagic        = "";    // PermittedMagic - "5,6"=only; "!5,6"=all but; ""=all
+string       PermittedMagic           = "";
+input double InpMinSenderLotSize      = 0.0;   // MinSenderLotSize - 0 = off. On SENDER volume
+double       MinSenderLotSize         = 0.0;
+input double InpMaxSenderLotSize      = 0.0;   // MaxSenderLotSize - 0 = off. On SENDER volume
+double       MaxSenderLotSize         = 0.0;
+input string InpIgnoreUids            = "";    // IgnoreUids - uids to leave alone, e.g. ABCD1234
+string       IgnoreUids               = "";
+input bool   InpNoBuy                 = false; // NoBuy - refuse Buy entries
+bool         NoBuy                    = false;
+input bool   InpNoSell                = false; // NoSell - refuse Sell entries
+bool         NoSell                   = false;
+input bool   InpIgnoreNewEntrySignals = false; // IgnoreNewEntrySignals - open nothing new
+bool         IgnoreNewEntrySignals    = false;
+input bool   InpIgnoreAllExitSignals  = false; // IgnoreAllExitSignals - close nothing; manage by hand
+bool         IgnoreAllExitSignals     = false;
 
-//--- a mirror that vanished -----------------------------------------
-//--- When the sender still holds a position whose mirror has disappeared on
-//--- this account - closed by hand, by another EA, or by a stop-out - the
-//--- copier normally re-opens it. That is the self-healing path, and it is
-//--- OFF by default: putting back a position someone closed on purpose is a
-//--- surprising thing to do without being asked for.
-//---
-//--- Two things are deliberately NOT affected either way:
-//--- * the FIRST open of a UID (no mirror to restore, only one to create)
-//--- * the copier's own cancel-and-replace (a pending order that filled on
-//---   the sender), so disabling this cannot drop a mirror entirely
-input bool   ReopenClosedMirrors = false;     // ReopenClosedMirrors - restore vanished mirrors
-
-//--- convergence ----------------------------------------------------
-//--- One UID must map to one position on this account - LocalFindUid, the
-//--- seen-ring and the state file all assume it. When two positions share a
-//--- UID the extra one is invisible to every loop, so it is never closed,
-//--- trimmed or reported; it just doubles the exposure. With this on, the
-//--- copier removes the extra one. Set false to only report it.
-input bool   DedupDuplicates  = true;         // DedupDuplicates - remove a 2nd position, same UID
-
-//--- entry/exit gates -----------------------------------------------
-//--- These gate ACTIONS, not management. With either on, an existing mirror
-//--- still gets its stops synced and its volume trimmed - only the opening
-//--- or the closing is withheld. A switch that also froze stop management
-//--- would be a much more dangerous thing than it looks.
-input bool   IgnoreNewEntrySignals = false;   // IgnoreNewEntrySignals - open nothing new
-input bool   IgnoreAllExitSignals  = false;   // IgnoreAllExitSignals - close nothing; manage by hand
-//--- Per-POSITION opt-out, the narrow version of the two switches above.
-//---
-//--- Needed because convergence runs BOTH ways: closing a mirror by hand looks
-//--- exactly like "the receiver is missing a position the sender has", so it is
-//--- faithfully restored a couple of seconds later. Listing the UID here hands
-//--- that one position over to you - it is neither opened nor closed again.
-//---
-//--- UIDs are the 8 characters after "tc|" in this account's order comment, and
-//--- they appear in every "exec open" line of the log. Separators may be commas,
-//--- semicolons, pipes or spaces, and case does not matter:
-//---     IgnoreUids = "ABCD1234,EFGH5678"
-//--- Anything that is not a well-formed uid is rejected AND REPORTED at startup
-//--- rather than dropped quietly, so a typo cannot look like it worked.
-input string IgnoreUids        = "";   // IgnoreUids - uids to leave alone, e.g. ABCD1234
-
-//--- direction and symbol gates -------------------------------------
-input bool   NoBuy            = false;        // NoBuy - refuse Buy entries
-input bool   NoSell           = false;        // NoSell - refuse Sell entries
-input string PermittedSymbols = "";   // PermittedSymbols - (A,B)=accept; (!A,B)=reject
-//--- Same list syntax as PermittedSymbols, but matched against the magic on
-//--- the SENDER's position - NOT this account's mirror magic, which is already
-//--- fixed per sender in copier.ini.
-//---
-//--- It exists so that two receivers of ONE sender can mirror different
-//--- subsets of it. The sender's own IncludeMagicNumbers filter is global to
-//--- that sender; this one is per receiver, so "I want the manual trades but
-//--- not the EA's" can be decided here without touching the sender.
-//---
-//---     "54321,56789"     accept only these
-//---     "!77889,998877"   accept everything EXCEPT these
-//---     ""                accept everything (the default)
-//---
-//--- Gates OPENING only, like every other entry gate: a mirror that already
-//--- exists keeps having its stops synced and its volume trimmed.
-input string PermittedMagic   = "";   // PermittedMagic - "5,6"=only; "!5,6"=all but; ""=all
-
-//--- sizing gates, applied to the SENDER's volume -------------------
-//--- Deliberately NOT the same as MaxLotsPerPosition, which caps the size
-//--- this account ends up with. These filter on what the sender did, before
-//--- any multiplier - so "skip anything the sender traded above 1 lot" keeps
-//--- meaning that after you change SenderLotParam.
-input double MinSenderLotSize = 0.0;          // MinSenderLotSize - 0 = off. On SENDER volume
-input double MaxSenderLotSize = 0.0;          // MaxSenderLotSize - 0 = off. On SENDER volume
-
-//--- anti-stacking ---------------------------------------------------
-//--- Checked against THIS sender's mirrors only, so the N:M design is
-//--- preserved: two senders may still hold opposing positions on one symbol,
-//--- which is a documented capability. Counting every position on the account
-//--- would let an unrelated EA's trade block the copier.
-//--- Both POSITIONS AND PENDING ORDERS count - a working order is still
-//--- exposure, and it lives in a different pool from positions.
+#ifdef __MQL5__
+input group "--- Anti-Stack & Delays ---"
+#else
+input string _g_antistack_ = ""; // --- Anti-Stack & Delays ---
+#endif
 enum ENUM_EXISTING_CHECK
   {
    EXIST_OFF       = 0,   // Off
    EXIST_SAME_SYM  = 1,   // Any mirror on the same symbol
    EXIST_SAME_DIR  = 2    // Same symbol AND same direction
   };
-input ENUM_EXISTING_CHECK CheckForExistingPosition = EXIST_OFF;   // CheckForExistingPosition - 0=off 1=sym 2=dir
+input ENUM_EXISTING_CHECK InpCheckForExistingPosition = EXIST_OFF; // CheckForExistingPosition - 0=off 1=sym 2=dir
+ENUM_EXISTING_CHECK       CheckForExistingPosition    = EXIST_OFF;
+input int    InpWaitForSeconds                   = 0;   // WaitForSeconds - delay after the sender opened
+int          WaitForSeconds                      = 0;
+input int    InpWaitForMinutes                   = 0;   // WaitForMinutes - added to the above
+int          WaitForMinutes                      = 0;
+input int    InpWaitForHours                     = 0;   // WaitForHours - added to the above
+int          WaitForHours                        = 0;
+input double InpWaitForProfitPips                = 0.0; // WaitForProfitPips - 0=off; +N profit, -N dip
+double       WaitForProfitPips                   = 0.0;
+input int    InpWaitForMinutesBar                = 0;   // WaitForMinutesBar - delay this many M1 bars
+int          WaitForMinutesBar                   = 0;
+input int    InpRequirePositionFillWithinSeconds = 0;   // FillWithinSeconds - see the two below. 0 = off
+int          RequirePositionFillWithinSeconds    = 0;
+input int    InpRequirePositionFillWithinMinutes = 0;   // FillWithinMinutes - added to the above
+int          RequirePositionFillWithinMinutes    = 0;
+input int    InpRequirePositionFillWithinHours   = 0;   // FillWithinHours - added to the above
+int          RequirePositionFillWithinHours      = 0;
+input int    InpFillWithinMinutesBar             = 0;   // FillWithinMinutesBar - drop after this many M1 bars
+int          FillWithinMinutesBar                = 0;
 
-//--- give up on a mirror that never appears --------------------------
-//--- Total = Hours*3600 + Minutes*60 + Seconds. All zero = off.
-//---
-//--- This is the one switch here that LOSES a trade, so it is deliberately
-//--- opt-in: a mirror filled six hours late is arguably worse than none, but
-//--- "arguably" is not something to decide for the operator. It logs at ERROR
-//--- level when it fires, because the two accounts now differ.
-input int    RequirePositionFillWithinSeconds = 0;  // FillWithinSeconds - see the two below. 0 = off
-input int    RequirePositionFillWithinMinutes = 0;  // FillWithinMinutes - added to the above
-input int    RequirePositionFillWithinHours   = 0;  // FillWithinHours - added to the above
-//--- Bars, not minutes: a bar only exists while the market is open, so a
-//--- weekend or a session break does not advance the count. That is the whole
-//--- difference from the minutes parameter above, and the reason both exist.
-input int    FillWithinMinutesBar = 0;        // FillWithinMinutesBar - drop after this many M1 bars
+#ifdef __MQL5__
+input group "--- Schedule & Timeout ---"
+#else
+input string _g_sched_ = ""; // --- Schedule & Timeout ---
+#endif
+input string InpIncludeTradingTimes = "";  // IncludeTradingTimes - "HH:MM-HH:MM,..." in SERVER time
+string       IncludeTradingTimes    = "";
+input string InpDayTradingTimes     = "";  // DayTradingTimes - "Mon=08:00-17:00"; blank=closed
+string       DayTradingTimes        = "";
+input int    InpStaleSeconds        = 15;  // StaleSeconds - silence stops new entries
+int          StaleSeconds           = 15;
 
-//--- delay the entry -------------------------------------------------
-//--- Measured from the SENDER's own open time, not from when we noticed -
-//--- the point is to enter later than the sender did, so that is the only
-//--- clock that means anything. Converted across the clock offset first.
-//--- All of these hold NEW ENTRIES only; exits are never delayed, because
-//--- delaying an exit strands a position.
-input int    WaitForSeconds   = 0;   // WaitForSeconds - delay after the sender opened
-input int    WaitForMinutes   = 0;            // WaitForMinutes - added to the above
-input int    WaitForHours     = 0;            // WaitForHours - added to the above
-input double WaitForProfitPips= 0.0;   // WaitForProfitPips - 0=off; +N profit, -N dip
-//--- Bars, not minutes - see the note on FillWithinMinutesBar above.
-input int    WaitForMinutesBar = 0;           // WaitForMinutesBar - delay this many M1 bars
-
-//--- trading windows, in SERVER time ---------------------------------
-//--- Times are compared against the terminal's own clock, so they mean what
-//--- the Market Watch clock shows - not the operator's local time. That is
-//--- deliberate: the whole point is usually to avoid a session boundary or a
-//--- rollover, and those happen at a fixed SERVER time.
-//---
-//--- Format "HH:MM-HH:MM", comma-separated. A range whose end is before its
-//--- start wraps past midnight, so 22:00-02:00 is one window, not an empty
-//--- one. "00:00-00:00" means all day.
-//--- Blank = no restriction.
-input string IncludeTradingTimes = "";        // IncludeTradingTimes - "HH:MM-HH:MM,..." in SERVER time
-input string DayTradingTimes     = "";   // DayTradingTimes - "Mon=08:00-17:00"; blank=closed
-
-//--- direction inversion --------------------------------------------
-input bool   InvertTrades     = false;        // InvertTrades - mirror the opposite direction
-//--- mirror the sender's stop-loss / take-profit.
-//---
-//--- Copied as a DISTANCE from the entry, not as a price: the two sides
-//--- filled at different prices, so an absolute level can land on the wrong
-//--- side of this account's market. See CopierMirrorStop().
-//---
-//--- The sender's stop wins whenever it has one; EmergencySLPips is only
-//--- the backstop for a sender that leaves positions unprotected.
-input bool   MirrorStops      = true;         // MirrorStops - copy the sender's SL/TP, as a distance
-//--- Minimum gap between two stop edits on ONE position.
-//---
-//--- The sender emits a MODIFY the moment a stop moves, and a trailing stop
-//--- moves on nearly every scan - so without a floor here, one trailing stop
-//--- becomes ~10 broker OrderModify calls a second on this account. Brokers
-//--- rate-limit that, and the failures look like the copier being broken.
-//---
-//--- This throttles the BROKER CALL, not the message: a change that arrives
-//--- inside the window is not dropped, it is deferred. The desired value is
-//--- remembered and convergence re-runs ten times a second, so the newest
-//--- value is applied as soon as the window opens. Dropping it instead would
-//--- leave the mirror holding a stale stop until the next snapshot - which is
-//--- the delay this whole path exists to remove.
-input int    StopsThrottleSeconds = 2;   // StopsThrottleSeconds - min gap between stop edits
-//--- risk switches --------------------------------------------------
-//--- All OFF by default, so an unconfigured receiver behaves exactly as it
-//--- did before these existed. They gate OPENING a new position and nothing
-//--- else: a trim, a close, a dedup removal or a stop adjustment all reduce
-//--- or preserve risk, and blocking a close would be actively dangerous.
-//---
-//--- The point of them: the copier reproduces SOMEONE ELSE'S trading and has
-//--- no opinion about whether it is sane. A sender with a fat finger or a
-//--- much larger account will happily order something ruinous, and this
-//--- receiver would faithfully do it.
-input double MaxLotsPerPosition = 0.0;   // MaxLotsPerPosition - 0=off; cap on ONE position
-input double MaxTotalLots       = 0.0;   // MaxTotalLots - 0 = off. Cap on TOTAL mirrored volume
-input int    MaxOpenPositions   = 0;   // MaxOpenPositions - 0=off; cap on open count
-input double DailyLossPct       = 0.0;   // DailyLossPct - 0=off; stop the day after this % loss
-input double MaxDrawdownPct     = 0.0;   // MaxDrawdownPct - 0 = off. Stop until reload
-//--- When a PERCENTAGE switch trips, also close what we already hold?
-//---
-//--- Default false, matching the disconnect policy: stop adding risk, keep
-//--- the positions, and let a human decide. A forced close at an unknown
-//--- price is the one action that cannot be taken back, and the switch has
-//--- already stopped the bleeding by refusing new entries.
-input bool   RiskCloseAllOnTrip = false;   // RiskCloseAllOnTrip - also close held positions
-//--- runtime --------------------------------------------------------
-input int    PollMs            = 100;         // PollMs - timer interval in milliseconds
-input int    StaleSeconds      = 15;   // StaleSeconds - silence stops new entries
-input int    MaxActionsPerTick = 5;           // MaxActionsPerTick - trades executed per timer tick
-input int    LogLevel          = 2;           // LogLevel - 0=errors 1=warnings 2=info 3=debug
-
-//--- STAT channel (receiver -> sender status) -----------------------
-//--- The status rides UP the SAME socket the data comes down, so it costs
-//--- no port and no second socket. PUB/SUB could not do that - they are
-//--- each strictly one-way - but the transport uses XPUB/XSUB, which are
-//--- bidirectional; see the header of CopierTransport.mqh, and
-//--- tools/zmq_bidir_test.py which measures it rather than assuming it.
-input bool   StatusEnabled     = true;   // StatusEnabled - report this account once a minute
-//--- SNAPSHOT RECEIPT cadence (receiver -> sender).
-//---
-//--- Every status also carries the hash of the last snapshot we ingested, so
-//--- the sender can tell whether THIS receiver has the current state and
-//--- re-send to it alone if not - instead of broadcasting the full snapshot to
-//--- everyone forever. See doc/SNAPSHOT-DEMAND-PLAN.md.
-//---
-//--- It rides the status message, so it needs no port and no second socket.
-//--- This input sets how OFTEN; the payload cost is about 20 bytes.
-//---
-//--- Faster costs nothing but a few bytes and finds a behind receiver sooner;
-//--- slower is quieter. 1s matches the sender's own HeartbeatSeconds. 0 turns
-//--- the receipt OFF - the sender then never learns this receiver is behind,
-//--- and falls back to its periodic full snapshot.
-input int    SyncHeartbeatSeconds = 1;  // SyncHeartbeatSeconds - snapshot receipt, 0=off
-input bool   ShowPanel         = true;        // ShowPanel - draw the status panel on the chart
-//--- The orphan row is OFF by default. Orphans are a configuration fault, not
-//--- a routine state, so the row is noise on a healthy account - and the same
-//--- finding is already reported at ERROR level in the log at startup
-//--- (ReportOrphanedMirrors). Turn this on while investigating, or leave it on
-//--- if you would rather see it every second than read the log.
-//---
-//--- Note it only controls DISPLAY. The orphan count is still computed and the
-//--- startup log line is unaffected either way.
-input bool   ShowOrphanedList  = false;   // ShowOrphanedList - list orphans on the panel
+#ifdef __MQL5__
+input group "--- System & Display ---"
+#else
+input string _g_sys_ = ""; // --- System & Display ---
+#endif
+input int    InpPollMs               = 100;   // PollMs - timer interval in milliseconds
+int          PollMs                  = 100;
+input int    InpMaxActionsPerTick    = 5;     // MaxActionsPerTick - trades executed per timer tick
+int          MaxActionsPerTick       = 5;
+input int    InpLogLevel             = 2;     // LogLevel - 0=errors 1=warnings 2=info 3=debug
+int          LogLevel                = 2;
+input bool   InpStatusEnabled        = true;  // StatusEnabled - report this account once a minute
+bool         StatusEnabled           = true;
+input int    InpSyncHeartbeatSeconds = 1;     // SyncHeartbeatSeconds - snapshot receipt, 0=off
+int          SyncHeartbeatSeconds    = 1;
+input bool   InpShowPanel            = true;  // ShowPanel - draw the status panel on the chart
+bool         ShowPanel               = true;
+input bool   InpShowOrphanedList     = false; // ShowOrphanedList - list orphans on the panel
+bool         ShowOrphanedList        = false;
 
 //=====================================================================
 // Per-sender state. Parallel fixed arrays - no maps, no dictionaries,
 // nothing that can grow without bound.
 //=====================================================================
+struct CopierSenderSettings
+  {
+   int                 deviationPoints;
+   double              emergencySLPips;
+   double              emergencyTPPips;
+   bool                reopenclosedmirrors;
+   bool                dedupduplicates;
+   bool                ignorenewentrysignals;
+   bool                ignoreallexitsignals;
+   string              ignoreuids;
+   bool                nobuy;
+   bool                nosell;
+   string              permittedsymbols;
+   string              permittedmagic;
+   double              minsenderlotsize;
+   double              maxsenderlotsize;
+   ENUM_EXISTING_CHECK checkforexistingposition;
+   int                 requirepositionfillwithinseconds;
+   int                 requirepositionfillwithinminutes;
+   int                 requirepositionfillwithinhours;
+   int                 fillwithinminutesbar;
+   int                 waitforseconds;
+   int                 waitforminutes;
+   int                 waitforhours;
+   double              waitforprofitpips;
+   int                 waitforminutesbar;
+   string              includetradingtimes;
+   string              daytradingtimes;
+   bool                inverttrades;
+   bool                mirrorstops;
+   int                 stopsThrottleSeconds;
+   double              maxLotsPerPosition;
+   double              maxTotalLots;
+   int                 maxOpenPositions;
+   int                 staleSeconds;
+  };
+
+CopierSenderSettings g_senderCfg[CP_MAX_SENDERS];
+CopierRisk           g_senderRisk[CP_MAX_SENDERS];
+CopierList           g_senderPermitted[CP_MAX_SENDERS];
+CopierList           g_senderPermittedMagic[CP_MAX_SENDERS];
+CopierTradingTimes   g_senderHours[CP_MAX_SENDERS];
+CopierIgnore         g_senderIgnore[CP_MAX_SENDERS];
+
 string  g_sid[CP_MAX_SENDERS];
 string  g_epEvents[CP_MAX_SENDERS];
 string  g_epSnap[CP_MAX_SENDERS];
@@ -756,6 +585,8 @@ CopierPeerTable  g_peers;              // senders we have heard from
 CopierCurveKey   g_key;
 
 CopierPanel      g_panel;
+string           g_hubPeerName="hub";
+long             g_lastHubPingMs=0;
 long             g_lastPingMs=0;
 //--- Edge-triggered: see the note on the sender's copy. A repeating popup
 //--- teaches people to dismiss the channel without reading it.
@@ -765,7 +596,7 @@ long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
 //--- before the first heartbeat arrives.
 string           g_senderAcc[CP_MAX_SENDERS];
 #define CP_PEER_TIMEOUT_MS 15000
-#define CP_PING_MS          2000
+#define CP_PING_MS          10000
 //--- One popup per outage: see the note on the sender's copy.
 #define CP_ALERT_QUIET_MS  (5*60*1000)
 CopierTradingTimes g_hours;  // IncludeTradingTimes / DayTradingTimes, server time
@@ -845,16 +676,38 @@ void MapAdd(const int si,const string from,const string to)
   {
    for(int i=0;i<g_nMap;i++)
      {
+      //--- (si,from) is the key: two senders may map the same symbol
+      //--- differently, and that is deliberate.
       if(g_mapSender[i]==si && g_mapFrom[i]==from) { g_mapTo[i]=to; return; }
      }
    if(g_nMap>=CP_MAX_SENDERS*CP_MAX_SYMBOL_MAP) return;
-   ArrayResize(g_mapFrom,g_nMap+1);
-   ArrayResize(g_mapTo,g_nMap+1);
-   ArrayResize(g_mapSender,g_nMap+1);
+   ArrayResize(g_mapFrom,g_nMap+1,16);
+   ArrayResize(g_mapTo,g_nMap+1,16);
+   ArrayResize(g_mapSender,g_nMap+1,16);
    g_mapFrom[g_nMap]=from;
    g_mapTo[g_nMap]=to;
    g_mapSender[g_nMap]=si;
    g_nMap++;
+  }
+
+//--- Drop every symbol mapping. Called at the TOP of both LoadConfig paths.
+//---
+//--- MapAdd only ever APPENDS (or updates an exact (si,from) match), so a
+//--- SECOND load - a CFG push re-reading the ini, or any re-initialisation -
+//--- would stack the old rows under the new ones. MapSymbol returns the
+//--- FIRST (si,from) match, so the stale row would win: a changed mapping
+//--- never applies and a DELETED one survives until the terminal restarts,
+//--- routing orders to a symbol the operator just removed from the config.
+//--- The same stale rows also ride CFGRPT (the serializer walks this table),
+//--- so the hub's "current setting" would drift from what the receiver is
+//--- actually running. Clearing on load makes "the mapping in effect" exactly
+//--- "the mapping in the file" - which is the whole point of a runtime reload.
+void MapClear()
+  {
+   ArrayResize(g_mapFrom,0);
+   ArrayResize(g_mapTo,0);
+   ArrayResize(g_mapSender,0);
+   g_nMap=0;
   }
 
 string MapSymbol(const int si,const string sym,const string suffix)
@@ -883,7 +736,18 @@ string MapSymbol(const int si,const string sym,const string suffix)
 //--- using the same ';' the wire format already uses for key=value pairs.
 bool LoadConfigFromInputs()
   {
+   ResetRuntimeInputsFromInputs();
    g_nSenders=1;
+
+   //--- Same rule as the hub path: g_desired is indexed
+   //--- si*CP_MAX_POSITIONS+i, so its size IS the sender count. Direct
+   //--- mode never re-loads its config after OnInit today, but the resize
+   //--- is one line and makes the invariant local rather than depending on
+   //--- which caller ran first.
+   ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
+
+   //--- Start from an empty symbol map on every load - see MapClear.
+   MapClear();
 
    //--- The routing id IS the port, exactly as on the sender. Both ends derive
    //--- it from the same number, so there is nothing to keep in step and no
@@ -941,9 +805,417 @@ bool LoadConfigFromInputs()
       MapAdd(0,from,to);
      }
 
+   CopierIni emptyIni;
+   InitSenderSettings(0, emptyIni, "sender0");
+
    g_log.Info("configured from EA inputs: one sender ("+g_sid[0]
               +"), magic "+(string)g_magic[0]+", endpoint "+g_epEvents[0]);
    return true;
+  }
+
+void ResetRuntimeInputsFromInputs()
+  {
+   string mStr = CopierTrim(InpMagic);
+   if(StringLen(mStr) == 0 || mStr == "0")
+     {
+      if(SenderPort > 0 && SenderPort <= 65535)
+         Magic = (long)SenderPort;
+      else
+         Magic = 0;
+     }
+   else
+     {
+      Magic = StringToInteger(mStr);
+     }
+
+   DeviationPoints                  = InpDeviationPoints;
+   EmergencySLPips                  = InpEmergencySLPips;
+   EmergencyTPPips                  = InpEmergencyTPPips;
+   ReopenClosedMirrors              = InpReopenClosedMirrors;
+   DedupDuplicates                  = InpDedupDuplicates;
+   IgnoreNewEntrySignals            = InpIgnoreNewEntrySignals;
+   IgnoreAllExitSignals             = InpIgnoreAllExitSignals;
+   IgnoreUids                       = InpIgnoreUids;
+   NoBuy                            = InpNoBuy;
+   NoSell                           = InpNoSell;
+   PermittedSymbols                 = InpPermittedSymbols;
+   PermittedMagic                   = InpPermittedMagic;
+   MinSenderLotSize                 = InpMinSenderLotSize;
+   MaxSenderLotSize                 = InpMaxSenderLotSize;
+   CheckForExistingPosition         = InpCheckForExistingPosition;
+   RequirePositionFillWithinSeconds = InpRequirePositionFillWithinSeconds;
+   RequirePositionFillWithinMinutes = InpRequirePositionFillWithinMinutes;
+   RequirePositionFillWithinHours   = InpRequirePositionFillWithinHours;
+   FillWithinMinutesBar             = InpFillWithinMinutesBar;
+   WaitForSeconds                   = InpWaitForSeconds;
+   WaitForMinutes                   = InpWaitForMinutes;
+   WaitForHours                     = InpWaitForHours;
+   WaitForProfitPips                = InpWaitForProfitPips;
+   WaitForMinutesBar                = InpWaitForMinutesBar;
+   IncludeTradingTimes              = InpIncludeTradingTimes;
+   DayTradingTimes                  = InpDayTradingTimes;
+   InvertTrades                     = InpInvertTrades;
+   MirrorStops                      = InpMirrorStops;
+   StopsThrottleSeconds             = InpStopsThrottleSeconds;
+   MaxLotsPerPosition               = InpMaxLotsPerPosition;
+   MaxTotalLots                     = InpMaxTotalLots;
+   MaxOpenPositions                 = InpMaxOpenPositions;
+   DailyLossPct                     = InpDailyLossPct;
+   MaxDrawdownPct                   = InpMaxDrawdownPct;
+   RiskCloseAllOnTrip               = InpRiskCloseAllOnTrip;
+   PollMs                           = InpPollMs;
+   StaleSeconds                     = InpStaleSeconds;
+   MaxActionsPerTick                = InpMaxActionsPerTick;
+   LogLevel                         = InpLogLevel;
+   StatusEnabled                    = InpStatusEnabled;
+   SyncHeartbeatSeconds             = InpSyncHeartbeatSeconds;
+   ShowPanel                        = InpShowPanel;
+   ShowOrphanedList                 = InpShowOrphanedList;
+  }
+
+void ApplyCommonConfig(const CopierIni &ini)
+  {
+   if(!ini.HasSection("common")) return;
+
+   int oldLogLevel = LogLevel;
+   int oldPollMs   = PollMs;
+
+   if(ini.Has("common","deviationpoints"))
+      DeviationPoints = ini.GetInt("common","deviationpoints",DeviationPoints);
+   if(ini.Has("common","emergencyslpips"))
+      EmergencySLPips = ini.GetDouble("common","emergencyslpips",EmergencySLPips);
+   if(ini.Has("common","emergencytppips"))
+      EmergencyTPPips = ini.GetDouble("common","emergencytppips",EmergencyTPPips);
+   if(ini.Has("common","reopenclosedmirrors"))
+      ReopenClosedMirrors = ini.GetBool("common","reopenclosedmirrors",ReopenClosedMirrors);
+   if(ini.Has("common","dedupduplicates"))
+      DedupDuplicates = ini.GetBool("common","dedupduplicates",DedupDuplicates);
+   if(ini.Has("common","ignorenewentrysignals"))
+      IgnoreNewEntrySignals = ini.GetBool("common","ignorenewentrysignals",IgnoreNewEntrySignals);
+   if(ini.Has("common","ignoreallexitsignals"))
+      IgnoreAllExitSignals = ini.GetBool("common","ignoreallexitsignals",IgnoreAllExitSignals);
+   if(ini.Has("common","ignoreuids"))
+      IgnoreUids = ini.Get("common","ignoreuids",IgnoreUids);
+   if(ini.Has("common","nobuy"))
+      NoBuy = ini.GetBool("common","nobuy",NoBuy);
+   if(ini.Has("common","nosell"))
+      NoSell = ini.GetBool("common","nosell",NoSell);
+   if(ini.Has("common","permittedsymbols"))
+      PermittedSymbols = ini.Get("common","permittedsymbols",PermittedSymbols);
+   if(ini.Has("common","permittedmagic"))
+      PermittedMagic = ini.Get("common","permittedmagic",PermittedMagic);
+   if(ini.Has("common","minsenderlotsize"))
+      MinSenderLotSize = ini.GetDouble("common","minsenderlotsize",MinSenderLotSize);
+   if(ini.Has("common","maxsenderlotsize"))
+      MaxSenderLotSize = ini.GetDouble("common","maxsenderlotsize",MaxSenderLotSize);
+   if(ini.Has("common","checkforexistingposition"))
+      CheckForExistingPosition = (ENUM_EXISTING_CHECK)ini.GetInt("common","checkforexistingposition",(int)CheckForExistingPosition);
+   if(ini.Has("common","requirepositionfillwithinseconds"))
+      RequirePositionFillWithinSeconds = ini.GetInt("common","requirepositionfillwithinseconds",RequirePositionFillWithinSeconds);
+   if(ini.Has("common","requirepositionfillwithinminutes"))
+      RequirePositionFillWithinMinutes = ini.GetInt("common","requirepositionfillwithinminutes",RequirePositionFillWithinMinutes);
+   if(ini.Has("common","requirepositionfillwithinhours"))
+      RequirePositionFillWithinHours = ini.GetInt("common","requirepositionfillwithinhours",RequirePositionFillWithinHours);
+   if(ini.Has("common","fillwithinminutesbar"))
+      FillWithinMinutesBar = ini.GetInt("common","fillwithinminutesbar",FillWithinMinutesBar);
+   if(ini.Has("common","waitforseconds"))
+      WaitForSeconds = ini.GetInt("common","waitforseconds",WaitForSeconds);
+   if(ini.Has("common","waitforminutes"))
+      WaitForMinutes = ini.GetInt("common","waitforminutes",WaitForMinutes);
+   if(ini.Has("common","waitforhours"))
+      WaitForHours = ini.GetInt("common","waitforhours",WaitForHours);
+   if(ini.Has("common","waitforprofitpips"))
+      WaitForProfitPips = ini.GetDouble("common","waitforprofitpips",WaitForProfitPips);
+   if(ini.Has("common","waitforminutesbar"))
+      WaitForMinutesBar = ini.GetInt("common","waitforminutesbar",WaitForMinutesBar);
+   if(ini.Has("common","includetradingtimes"))
+      IncludeTradingTimes = ini.Get("common","includetradingtimes",IncludeTradingTimes);
+   if(ini.Has("common","daytradingtimes"))
+      DayTradingTimes = ini.Get("common","daytradingtimes",DayTradingTimes);
+   if(ini.Has("common","inverttrades"))
+      InvertTrades = ini.GetBool("common","inverttrades",InvertTrades);
+   if(ini.Has("common","mirrorstops"))
+      MirrorStops = ini.GetBool("common","mirrorstops",MirrorStops);
+   if(ini.Has("common","stopsthrottleseconds"))
+      StopsThrottleSeconds = ini.GetInt("common","stopsthrottleseconds",StopsThrottleSeconds);
+   if(ini.Has("common","maxlotsperposition"))
+      MaxLotsPerPosition = ini.GetDouble("common","maxlotsperposition",MaxLotsPerPosition);
+   if(ini.Has("common","maxtotallots"))
+      MaxTotalLots = ini.GetDouble("common","maxtotallots",MaxTotalLots);
+   if(ini.Has("common","maxopenpositions"))
+      MaxOpenPositions = ini.GetInt("common","maxopenpositions",MaxOpenPositions);
+   if(ini.Has("common","dailylosspct"))
+      DailyLossPct = ini.GetDouble("common","dailylosspct",DailyLossPct);
+   if(ini.Has("common","maxdrawdownpct"))
+      MaxDrawdownPct = ini.GetDouble("common","maxdrawdownpct",MaxDrawdownPct);
+   if(ini.Has("common","riskcloseallontrip"))
+      RiskCloseAllOnTrip = ini.GetBool("common","riskcloseallontrip",RiskCloseAllOnTrip);
+   if(ini.Has("common","pollms"))
+      PollMs = ini.GetInt("common","pollms",PollMs);
+   if(ini.Has("common","staleseconds"))
+      StaleSeconds = ini.GetInt("common","staleseconds",StaleSeconds);
+   if(ini.Has("common","maxactionspertick"))
+      MaxActionsPerTick = ini.GetInt("common","maxactionspertick",MaxActionsPerTick);
+   if(ini.Has("common","loglevel"))
+      LogLevel = ini.GetInt("common","loglevel",LogLevel);
+   if(ini.Has("common","statusenabled"))
+      StatusEnabled = ini.GetBool("common","statusenabled",StatusEnabled);
+   if(ini.Has("common","syncheartbeatseconds"))
+      SyncHeartbeatSeconds = ini.GetInt("common","syncheartbeatseconds",SyncHeartbeatSeconds);
+   if(ini.Has("common","showpanel"))
+      ShowPanel = ini.GetBool("common","showpanel",ShowPanel);
+   if(ini.Has("common","showorphanedlist"))
+      ShowOrphanedList = ini.GetBool("common","showorphanedlist",ShowOrphanedList);
+
+   // Apply to live runtime modules
+   CopierRiskLimits rl;
+   rl.maxLotsPerPosition = MaxLotsPerPosition;
+   rl.maxTotalLots       = MaxTotalLots;
+   rl.maxOpenPositions   = MaxOpenPositions;
+   rl.dailyLossPct       = DailyLossPct;
+   rl.maxDrawdownPct     = MaxDrawdownPct;
+   g_risk.Configure(rl);
+
+   g_permitted.Set(PermittedSymbols);
+   g_permittedMagic.Set(PermittedMagic);
+   g_hours.Set(IncludeTradingTimes,DayTradingTimes);
+   g_ignore.SetText(IgnoreUids);
+
+   if(LogLevel != oldLogLevel)
+      g_log.Init("receiver"+InstanceSuffix(),LogLevel);
+   if(PollMs != oldPollMs && PollMs > 0)
+     {
+      EventKillTimer();
+      EventSetMillisecondTimer(PollMs);
+     }
+  }
+
+void InitSenderSettings(const int si, const CopierIni &ini, const string sec)
+  {
+   if(si < 0 || si >= CP_MAX_SENDERS) return;
+
+   g_senderCfg[si].deviationPoints                  = ini.GetInt(sec, "deviationpoints", DeviationPoints);
+   g_senderCfg[si].emergencySLPips                  = ini.GetDouble(sec, "emergencyslpips", EmergencySLPips);
+   g_senderCfg[si].emergencyTPPips                  = ini.GetDouble(sec, "emergencytppips", EmergencyTPPips);
+   g_senderCfg[si].reopenclosedmirrors              = ini.GetBool(sec, "reopenclosedmirrors", ReopenClosedMirrors);
+   g_senderCfg[si].dedupduplicates                  = ini.GetBool(sec, "dedupduplicates", DedupDuplicates);
+   g_senderCfg[si].ignorenewentrysignals            = ini.GetBool(sec, "ignorenewentrysignals", IgnoreNewEntrySignals);
+   g_senderCfg[si].ignoreallexitsignals             = ini.GetBool(sec, "ignoreallexitsignals", IgnoreAllExitSignals);
+   g_senderCfg[si].ignoreuids                       = ini.Get(sec, "ignoreuids", IgnoreUids);
+   g_senderCfg[si].nobuy                            = ini.GetBool(sec, "nobuy", NoBuy);
+   g_senderCfg[si].nosell                           = ini.GetBool(sec, "nosell", NoSell);
+   g_senderCfg[si].permittedsymbols                 = ini.Get(sec, "permittedsymbols", PermittedSymbols);
+   g_senderCfg[si].permittedmagic                   = ini.Get(sec, "permittedmagic", PermittedMagic);
+   g_senderCfg[si].minsenderlotsize                 = ini.GetDouble(sec, "minsenderlotsize", MinSenderLotSize);
+   g_senderCfg[si].maxsenderlotsize                 = ini.GetDouble(sec, "maxsenderlotsize", MaxSenderLotSize);
+   g_senderCfg[si].checkforexistingposition         = (ENUM_EXISTING_CHECK)ini.GetInt(sec, "checkforexistingposition", (int)CheckForExistingPosition);
+   g_senderCfg[si].requirepositionfillwithinseconds = ini.GetInt(sec, "requirepositionfillwithinseconds", RequirePositionFillWithinSeconds);
+   g_senderCfg[si].requirepositionfillwithinminutes = ini.GetInt(sec, "requirepositionfillwithinminutes", RequirePositionFillWithinMinutes);
+   g_senderCfg[si].requirepositionfillwithinhours   = ini.GetInt(sec, "requirepositionfillwithinhours", RequirePositionFillWithinHours);
+   g_senderCfg[si].fillwithinminutesbar             = ini.GetInt(sec, "fillwithinminutesbar", FillWithinMinutesBar);
+   g_senderCfg[si].waitforseconds                   = ini.GetInt(sec, "waitforseconds", WaitForSeconds);
+   g_senderCfg[si].waitforminutes                   = ini.GetInt(sec, "waitforminutes", WaitForMinutes);
+   g_senderCfg[si].waitforhours                     = ini.GetInt(sec, "waitforhours", WaitForHours);
+   g_senderCfg[si].waitforprofitpips                = ini.GetDouble(sec, "waitforprofitpips", WaitForProfitPips);
+   g_senderCfg[si].waitforminutesbar                = ini.GetInt(sec, "waitforminutesbar", WaitForMinutesBar);
+   g_senderCfg[si].includetradingtimes              = ini.Get(sec, "includetradingtimes", IncludeTradingTimes);
+   g_senderCfg[si].daytradingtimes                  = ini.Get(sec, "daytradingtimes", DayTradingTimes);
+   g_senderCfg[si].inverttrades                     = ini.GetBool(sec, "inverttrades", InvertTrades);
+   g_senderCfg[si].mirrorstops                      = ini.GetBool(sec, "mirrorstops", MirrorStops);
+   g_senderCfg[si].stopsThrottleSeconds             = ini.GetInt(sec, "stopsthrottleseconds", StopsThrottleSeconds);
+   g_senderCfg[si].maxLotsPerPosition               = ini.GetDouble(sec, "maxlotsperposition", MaxLotsPerPosition);
+   g_senderCfg[si].maxTotalLots                     = ini.GetDouble(sec, "maxtotallots", MaxTotalLots);
+   g_senderCfg[si].maxOpenPositions                 = ini.GetInt(sec, "maxopenpositions", MaxOpenPositions);
+   g_senderCfg[si].staleSeconds                     = ini.GetInt(sec, "staleseconds", StaleSeconds);
+
+   CopierRiskLimits rl;
+   rl.maxLotsPerPosition = g_senderCfg[si].maxLotsPerPosition;
+   rl.maxTotalLots       = g_senderCfg[si].maxTotalLots;
+   rl.maxOpenPositions   = g_senderCfg[si].maxOpenPositions;
+   rl.dailyLossPct       = 0.0;
+   rl.maxDrawdownPct     = 0.0;
+   g_senderRisk[si].Configure(rl);
+
+   g_senderPermitted[si].Set(g_senderCfg[si].permittedsymbols);
+   g_senderPermittedMagic[si].Set(g_senderCfg[si].permittedmagic);
+   g_senderHours[si].Set(g_senderCfg[si].includetradingtimes, g_senderCfg[si].daytradingtimes);
+   g_senderIgnore[si].SetText(g_senderCfg[si].ignoreuids);
+  }
+
+void PendingOpensForSender(const int si, int &cnt, double &lots)
+  {
+   cnt = 0;
+   lots = 0.0;
+   for(int i = 0; i < g_qn; i++)
+     {
+      if(g_q[i].senderIdx == si && g_q[i].kind == CP_ACT_OPEN)
+        {
+         cnt++;
+         lots += g_q[i].lots;
+        }
+     }
+  }
+
+string SerializeCurrentConfigToIni()
+  {
+   string out = "; copier.ini (active current settings)\n";
+   out += "[common]\n";
+   out += "deviationpoints=" + (string)DeviationPoints + "\n";
+   out += "emergencyslpips=" + DoubleToString(EmergencySLPips, 1) + "\n";
+   out += "emergencytppips=" + DoubleToString(EmergencyTPPips, 1) + "\n";
+   out += "reopenclosedmirrors=" + (ReopenClosedMirrors ? "1" : "0") + "\n";
+   out += "dedupduplicates=" + (DedupDuplicates ? "1" : "0") + "\n";
+   out += "ignorenewentrysignals=" + (IgnoreNewEntrySignals ? "1" : "0") + "\n";
+   out += "ignoreallexitsignals=" + (IgnoreAllExitSignals ? "1" : "0") + "\n";
+   out += "ignoreuids=" + IgnoreUids + "\n";
+   out += "nobuy=" + (NoBuy ? "1" : "0") + "\n";
+   out += "nosell=" + (NoSell ? "1" : "0") + "\n";
+   out += "permittedsymbols=" + PermittedSymbols + "\n";
+   out += "permittedmagic=" + PermittedMagic + "\n";
+   out += "minsenderlotsize=" + DoubleToString(MinSenderLotSize, 2) + "\n";
+   out += "maxsenderlotsize=" + DoubleToString(MaxSenderLotSize, 2) + "\n";
+   out += "checkforexistingposition=" + (string)((int)CheckForExistingPosition) + "\n";
+   out += "requirepositionfillwithinseconds=" + (string)RequirePositionFillWithinSeconds + "\n";
+   out += "requirepositionfillwithinminutes=" + (string)RequirePositionFillWithinMinutes + "\n";
+   out += "requirepositionfillwithinhours=" + (string)RequirePositionFillWithinHours + "\n";
+   out += "fillwithinminutesbar=" + (string)FillWithinMinutesBar + "\n";
+   out += "waitforseconds=" + (string)WaitForSeconds + "\n";
+   out += "waitforminutes=" + (string)WaitForMinutes + "\n";
+   out += "waitforhours=" + (string)WaitForHours + "\n";
+   out += "waitforprofitpips=" + DoubleToString(WaitForProfitPips, 1) + "\n";
+   out += "waitforminutesbar=" + (string)WaitForMinutesBar + "\n";
+   out += "includetradingtimes=" + IncludeTradingTimes + "\n";
+   out += "daytradingtimes=" + DayTradingTimes + "\n";
+   out += "inverttrades=" + (InvertTrades ? "1" : "0") + "\n";
+   out += "mirrorstops=" + (MirrorStops ? "1" : "0") + "\n";
+   out += "stopsthrottleseconds=" + (string)StopsThrottleSeconds + "\n";
+   out += "maxlotsperposition=" + DoubleToString(MaxLotsPerPosition, 2) + "\n";
+   out += "maxtotallots=" + DoubleToString(MaxTotalLots, 2) + "\n";
+   out += "maxopenpositions=" + (string)MaxOpenPositions + "\n";
+   out += "dailylosspct=" + DoubleToString(DailyLossPct, 2) + "\n";
+   out += "maxdrawdownpct=" + DoubleToString(MaxDrawdownPct, 2) + "\n";
+   out += "riskcloseallontrip=" + (RiskCloseAllOnTrip ? "1" : "0") + "\n";
+   out += "pollms=" + (string)PollMs + "\n";
+   out += "staleseconds=" + (string)StaleSeconds + "\n";
+   out += "maxactionspertick=" + (string)MaxActionsPerTick + "\n";
+   out += "loglevel=" + (string)LogLevel + "\n";
+   out += "statusenabled=" + (StatusEnabled ? "1" : "0") + "\n";
+   out += "syncheartbeatseconds=" + (string)SyncHeartbeatSeconds + "\n";
+   out += "showpanel=" + (ShowPanel ? "1" : "0") + "\n";
+   out += "showorphanedlist=" + (ShowOrphanedList ? "1" : "0") + "\n";
+
+   if(g_nSenders > 0)
+     {
+      for(int i = 0; i < g_nSenders; i++)
+        {
+         out += "\n[sender" + (string)i + "]\n";
+         out += "id=" + g_sid[i] + "\n";
+         out += "magic=" + (string)g_magic[i] + "\n";
+         out += "lotmode=" + CopierLotModeText(g_lotMode[i]) + "\n";
+         out += "lotparam=" + DoubleToString(g_lotParam[i], 4) + "\n";
+         if(StringLen(g_suffix[i]) > 0)
+            out += "suffix=" + g_suffix[i] + "\n";
+         for(int m = 0; m < g_nMap; m++)
+           {
+            if(g_mapSender[m] == i)
+               out += "symbol." + g_mapFrom[m] + "=" + g_mapTo[m] + "\n";
+           }
+         out += "deviationpoints=" + (string)g_senderCfg[i].deviationPoints + "\n";
+         out += "emergencyslpips=" + DoubleToString(g_senderCfg[i].emergencySLPips, 1) + "\n";
+         out += "emergencytppips=" + DoubleToString(g_senderCfg[i].emergencyTPPips, 1) + "\n";
+         out += "reopenclosedmirrors=" + (g_senderCfg[i].reopenclosedmirrors ? "1" : "0") + "\n";
+         out += "dedupduplicates=" + (g_senderCfg[i].dedupduplicates ? "1" : "0") + "\n";
+         out += "ignorenewentrysignals=" + (g_senderCfg[i].ignorenewentrysignals ? "1" : "0") + "\n";
+         out += "ignoreallexitsignals=" + (g_senderCfg[i].ignoreallexitsignals ? "1" : "0") + "\n";
+         out += "ignoreuids=" + g_senderCfg[i].ignoreuids + "\n";
+         out += "nobuy=" + (g_senderCfg[i].nobuy ? "1" : "0") + "\n";
+         out += "nosell=" + (g_senderCfg[i].nosell ? "1" : "0") + "\n";
+         out += "permittedsymbols=" + g_senderCfg[i].permittedsymbols + "\n";
+         out += "permittedmagic=" + g_senderCfg[i].permittedmagic + "\n";
+         out += "minsenderlotsize=" + DoubleToString(g_senderCfg[i].minsenderlotsize, 2) + "\n";
+         out += "maxsenderlotsize=" + DoubleToString(g_senderCfg[i].maxsenderlotsize, 2) + "\n";
+         out += "checkforexistingposition=" + (string)((int)g_senderCfg[i].checkforexistingposition) + "\n";
+         out += "requirepositionfillwithinseconds=" + (string)g_senderCfg[i].requirepositionfillwithinseconds + "\n";
+         out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[i].requirepositionfillwithinminutes + "\n";
+         out += "requirepositionfillwithinhours=" + (string)g_senderCfg[i].requirepositionfillwithinhours + "\n";
+         out += "fillwithinminutesbar=" + (string)g_senderCfg[i].fillwithinminutesbar + "\n";
+         out += "waitforseconds=" + (string)g_senderCfg[i].waitforseconds + "\n";
+         out += "waitforminutes=" + (string)g_senderCfg[i].waitforminutes + "\n";
+         out += "waitforhours=" + (string)g_senderCfg[i].waitforhours + "\n";
+         out += "waitforprofitpips=" + DoubleToString(g_senderCfg[i].waitforprofitpips, 1) + "\n";
+         out += "waitforminutesbar=" + (string)g_senderCfg[i].waitforminutesbar + "\n";
+         out += "includetradingtimes=" + g_senderCfg[i].includetradingtimes + "\n";
+         out += "daytradingtimes=" + g_senderCfg[i].daytradingtimes + "\n";
+         out += "inverttrades=" + (g_senderCfg[i].inverttrades ? "1" : "0") + "\n";
+         out += "mirrorstops=" + (g_senderCfg[i].mirrorstops ? "1" : "0") + "\n";
+         out += "stopsthrottleseconds=" + (string)g_senderCfg[i].stopsThrottleSeconds + "\n";
+         out += "maxlotsperposition=" + DoubleToString(g_senderCfg[i].maxLotsPerPosition, 2) + "\n";
+         out += "maxtotallots=" + DoubleToString(g_senderCfg[i].maxTotalLots, 2) + "\n";
+         out += "maxopenpositions=" + (string)g_senderCfg[i].maxOpenPositions + "\n";
+         out += "staleseconds=" + (string)g_senderCfg[i].staleSeconds + "\n";
+        }
+     }
+   else if(!g_hubOn)
+     {
+      out += "\n[sender0]\n";
+      out += "id=" + (string)SenderPort + "\n";
+      out += "magic=" + (string)Magic + "\n";
+      out += "lotmode=" + CopierLotModeText((int)SenderLotMode) + "\n";
+      out += "lotparam=" + DoubleToString(SenderLotParam, 4) + "\n";
+      if(StringLen(SenderSuffix) > 0)
+         out += "suffix=" + SenderSuffix + "\n";
+      out += "deviationpoints=" + (string)g_senderCfg[0].deviationPoints + "\n";
+      out += "emergencyslpips=" + DoubleToString(g_senderCfg[0].emergencySLPips, 1) + "\n";
+      out += "emergencytppips=" + DoubleToString(g_senderCfg[0].emergencyTPPips, 1) + "\n";
+      out += "reopenclosedmirrors=" + (g_senderCfg[0].reopenclosedmirrors ? "1" : "0") + "\n";
+      out += "dedupduplicates=" + (g_senderCfg[0].dedupduplicates ? "1" : "0") + "\n";
+      out += "ignorenewentrysignals=" + (g_senderCfg[0].ignorenewentrysignals ? "1" : "0") + "\n";
+      out += "ignoreallexitsignals=" + (g_senderCfg[0].ignoreallexitsignals ? "1" : "0") + "\n";
+      out += "ignoreuids=" + g_senderCfg[0].ignoreuids + "\n";
+      out += "nobuy=" + (g_senderCfg[0].nobuy ? "1" : "0") + "\n";
+      out += "nosell=" + (g_senderCfg[0].nosell ? "1" : "0") + "\n";
+      out += "permittedsymbols=" + g_senderCfg[0].permittedsymbols + "\n";
+      out += "permittedmagic=" + g_senderCfg[0].permittedmagic + "\n";
+      out += "minsenderlotsize=" + DoubleToString(g_senderCfg[0].minsenderlotsize, 2) + "\n";
+      out += "maxsenderlotsize=" + DoubleToString(g_senderCfg[0].maxsenderlotsize, 2) + "\n";
+      out += "checkforexistingposition=" + (string)((int)g_senderCfg[0].checkforexistingposition) + "\n";
+      out += "requirepositionfillwithinseconds=" + (string)g_senderCfg[0].requirepositionfillwithinseconds + "\n";
+      out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[0].requirepositionfillwithinminutes + "\n";
+      out += "requirepositionfillwithinhours=" + (string)g_senderCfg[0].requirepositionfillwithinhours + "\n";
+      out += "fillwithinminutesbar=" + (string)g_senderCfg[0].fillwithinminutesbar + "\n";
+      out += "waitforseconds=" + (string)g_senderCfg[0].waitforseconds + "\n";
+      out += "waitforminutes=" + (string)g_senderCfg[0].waitforminutes + "\n";
+      out += "waitforhours=" + (string)g_senderCfg[0].waitforhours + "\n";
+      out += "waitforprofitpips=" + DoubleToString(g_senderCfg[0].waitforprofitpips, 1) + "\n";
+      out += "waitforminutesbar=" + (string)g_senderCfg[0].waitforminutesbar + "\n";
+      out += "includetradingtimes=" + g_senderCfg[0].includetradingtimes + "\n";
+      out += "daytradingtimes=" + g_senderCfg[0].daytradingtimes + "\n";
+      out += "inverttrades=" + (g_senderCfg[0].inverttrades ? "1" : "0") + "\n";
+      out += "mirrorstops=" + (g_senderCfg[0].mirrorstops ? "1" : "0") + "\n";
+      out += "stopsthrottleseconds=" + (string)g_senderCfg[0].stopsThrottleSeconds + "\n";
+      out += "maxlotsperposition=" + DoubleToString(g_senderCfg[0].maxLotsPerPosition, 2) + "\n";
+      out += "maxtotallots=" + DoubleToString(g_senderCfg[0].maxTotalLots, 2) + "\n";
+      out += "maxopenpositions=" + (string)g_senderCfg[0].maxOpenPositions + "\n";
+      out += "staleseconds=" + (string)g_senderCfg[0].staleSeconds + "\n";
+     }
+
+   return out;
+  }
+
+void SendCurrentConfigReport()
+  {
+   if(!g_hubOn) return;
+   CopierEnv e;
+   e.v = CP_PROTO_V;
+   e.sid = (string)g_nid;
+   e.ssid = (string)CopierAccountLogin();
+   e.seq = ++g_statusSeq;
+   e.ts = CopierServerTime();
+   e.ms = CopierNowMs();
+   e.type = CP_T_CFGREPORT;
+   e.payload = "REV=" + (string)g_cfgRev + ";ROLE=receiver;ACC=" + (string)CopierAccountLogin()
+               + ";INI=" + CopierIniEscape(SerializeCurrentConfigToIni());
+   g_tp.SendUp("@hub", CopierEncodeEnv(e));
   }
 
 //--- CENTRAL (hub) mode.
@@ -971,6 +1243,17 @@ bool LoadConfigForHub()
    if(!ini.Load(CP_INI_PATH))
      {
       g_nSenders=0;
+      //--- THE ARRAY FOLLOWS THE COUNT. This function runs a SECOND time
+      //--- when the hub pushes a CFG, and the documented hub bootstrap is
+      //--- exactly that: connect with no ini (zero senders), let the hub
+      //--- push the file, load it here. g_desired was allocated in OnInit
+      //--- at the THEN-current count - zero - so without this resize the
+      //--- first SNAP after the push writes g_desired[base+i] on a
+      //--- zero-length array and the receiver dies with "array out of
+      //--- range": the chart goes, not just the mirror. Growing preserves
+      //--- what is there, and every sender's g_desiredCount is reset to 0
+      //--- below, so nothing stale is readable before the next SNAP.
+      ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
       g_log.Warn("central mode: no "+CP_INI_PATH+" yet, so this receiver mirrors"
                  +" NOTHING. It is connected to the hub and waiting - the hub"
                  +" owns this file and pushes it. If it never arrives, check"
@@ -979,8 +1262,21 @@ bool LoadConfigForHub()
       return true;                    // connected, zero senders - NOT a failure
      }
 
+   ApplyCommonConfig(ini);
+
+   //--- Start from an empty symbol map on every load - see MapClear. A CFG
+   //--- push re-runs this whole function, and without the clear the old
+   //--- rows stay underneath the new ones.
+   MapClear();
+
    g_nSenders=ini.SenderCount();
    if(g_nSenders>CP_MAX_SENDERS) g_nSenders=CP_MAX_SENDERS;
+   //--- Same resize as the no-ini branch above: a CFG push re-runs this
+   //--- whole function, and the count can go from N to M in either
+   //--- direction. g_desired is indexed as si*CP_MAX_POSITIONS + i, so its
+   //--- size IS the sender count - re-reading the ini without resizing it
+   //--- is the crash the bootstrap path hits first.
+   ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
    if(g_nSenders<=0)
      {
       g_log.Warn("central mode: "+CP_INI_PATH+" has no [senderN] sections, so"
@@ -1053,6 +1349,8 @@ bool LoadConfigForHub()
       g_stale[i]=false;
       g_ready[i]=false;
       g_desiredCount[i]=0;
+
+      InitSenderSettings(i, ini, sec);
      }
 
    g_log.Info("central mode: "+IntegerToString(g_nSenders)+" sender(s) from "
@@ -1195,6 +1493,187 @@ string InstanceSuffix()
   }
 
 string ReceiverStatePath() { return "copier_receiver"+InstanceSuffix()+".st"; }
+
+//--- The drawdown PEAK, persisted beside (but separate from) the position
+//--- state.
+//---
+//--- WHY A SEPARATE FILE
+//--- ===================
+//--- `copier_receiver*.st` is the position-identity cache and its format is
+//--- shared with the sender's writer; adding a field to it would mean
+//--- changing a contract that protects real orders. This file holds one
+//--- number that nothing else reads, so it can be added, lost or deleted
+//--- without any effect on identity.
+//---
+//--- WHY IT IS KEYED BY ACCOUNT, NOT BY MAGIC
+//--- ========================================
+//--- The drawdown switch is ACCOUNT-wide (it is `g_risk`, not
+//--- `g_senderRisk`), so the peak is a property of the account's equity curve.
+//--- Keying it by a magic would silently start a second, unrelated peak the
+//--- moment the operator edited the magic - which is the same
+//--- "restart forgives the drawdown" hole in a different disguise.
+string RiskPeakPath() { return "copier_risk_"+(string)CopierAccountLogin()+".dat"; }
+long   g_lastPeakSave=0;
+
+void RiskPeakLoad()
+  {
+   int h=FileOpen(RiskPeakPath(),FILE_READ|FILE_TXT|FILE_ANSI
+                  |FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE) return;              // first run: no peak yet
+   double peak=0.0;
+   while(!FileIsEnding(h))
+     {
+      string line=CopierTrim(FileReadString(h));
+      if(StringLen(line)==0) continue;
+      string v="";
+      if(CopierKvGet(line,"PEAK",v)) peak=StringToDouble(v);
+     }
+   FileClose(h);
+   if(peak<=0.0) return;
+   g_risk.SeedPeak(peak);
+   if(g_risk.PeakEquity()>peak+0.005)
+      g_log.Info("drawdown baseline restored from "+RiskPeakPath()
+                 +": peak "+DoubleToString(peak,2)
+                 +" (current equity is already higher, so that value stands)");
+   else
+      g_log.Info("drawdown baseline restored from "+RiskPeakPath()
+                 +": peak "+DoubleToString(peak,2)
+                 +" - a restart no longer re-bases the drawdown to today's"
+                 +" equity");
+  }
+
+//--- `force` writes even inside the throttle window (used on shutdown).
+void RiskPeakSave(const bool force)
+  {
+   double peak=g_risk.PeakEquity();
+   if(peak<=0.0) return;
+   long now=CopierNowMs();
+   //--- Once a minute is enough: the peak only matters if the terminal dies,
+   //--- and losing up to a minute of a RISING peak understates the baseline by
+   //--- at most that minute's gain - never overstates it, which is the
+   //--- direction that would falsely block trading.
+   if(!force && now-g_lastPeakSave<60000) return;
+   g_lastPeakSave=now;
+   int h=FileOpen(RiskPeakPath(),FILE_WRITE|FILE_TXT|FILE_ANSI
+                  |FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h==INVALID_HANDLE)
+     {
+      if(g_once.ShouldEmit("peaksave"))
+         g_log.Warn("cannot write "+RiskPeakPath()+" - the drawdown peak will"
+                    +" NOT survive a restart (reported at most once per 10 min)");
+      return;
+     }
+   FileWrite(h,"V=1");
+   FileWrite(h,"PEAK="+DoubleToString(peak,2));
+   FileFlush(h);
+   FileClose(h);
+  }
+
+//--- Terminal-wide mutual exclusion for Receiver instances on the same account.
+//--- Central mode allows strictly ONE receiver per account (it handles all senders via Hub).
+//--- Direct mode allows multiple receivers for different senders, BUT each chart must have
+//--- a unique Magic number to prevent state-file collisions and duplicate order execution.
+bool g_lockAcquired=false;
+
+string InstanceLockName()
+  {
+   if(StringLen(HubEndpoint)>0)
+      return "CP_LOCK_RCV_C_"+(string)CopierNid(CopierAccountLogin());
+   if(Magic<=0) return "";
+   return "CP_LOCK_RCV_D_"+(string)Magic;
+  }
+
+bool ChartExists(const long id)
+  {
+   if(id<=0) return false;
+   long curr=ChartFirst();
+   while(curr>=0)
+     {
+      if(curr==id) return true;
+      curr=ChartNext(curr);
+     }
+   return false;
+  }
+
+void SetLockChartId(const string name,const long chartId)
+  {
+   long hi=(chartId>>32)&0xFFFFFFFF;
+   long lo=chartId&0xFFFFFFFF;
+   GlobalVariableTemp(name+"_H");
+   GlobalVariableSet(name+"_H",(double)hi);
+   GlobalVariableTemp(name+"_L");
+   GlobalVariableSet(name+"_L",(double)lo);
+  }
+
+long GetLockChartId(const string name)
+  {
+   if(!GlobalVariableCheck(name+"_H") || !GlobalVariableCheck(name+"_L"))
+      return 0;
+   long hi=(long)GlobalVariableGet(name+"_H");
+   long lo=(long)GlobalVariableGet(name+"_L");
+   return (hi<<32)|(lo&0xFFFFFFFF);
+  }
+
+void DelLockChartId(const string name)
+  {
+   GlobalVariableDel(name+"_H");
+   GlobalVariableDel(name+"_L");
+   GlobalVariableDel(name); // legacy cleanup
+  }
+
+bool AcquireInstanceLock()
+  {
+   string name=InstanceLockName();
+   if(StringLen(name)==0) return true;
+   long myChart=ChartID();
+   if(GlobalVariableCheck(name+"_H") || GlobalVariableCheck(name+"_L"))
+     {
+      long holderChart=GetLockChartId(name);
+      if(holderChart!=myChart)
+        {
+         if(ChartExists(holderChart))
+           {
+            string sym=ChartSymbol(holderChart);
+            if(StringLen(sym)==0) sym="unknown";
+            if(StringLen(HubEndpoint)>0)
+              {
+               g_log.Error("A CopierReceiver instance is ALREADY running on chart "
+                           +(string)holderChart+" ("+sym+") with lock "+name
+                           +". Running two receivers on the same account in Central mode causes"
+                           +" state-file corruption and duplicate executions. Refusing to start.");
+              }
+            else
+              {
+               g_log.Error("A CopierReceiver instance with Magic "+(string)Magic
+                           +" is ALREADY running on chart "+(string)holderChart
+                           +" ("+sym+") with lock "+name
+                           +". In Direct mode, each chart must use a unique Magic number to prevent"
+                           +" state-file collisions and duplicate executions. Refusing to start.");
+              }
+            return false;
+           }
+         else
+           {
+            g_log.Warn("Reclaiming stale receiver lock "+name+" from non-existent chart "
+                       +(string)holderChart);
+           }
+        }
+     }
+   SetLockChartId(name,myChart);
+   g_lockAcquired=true;
+   return true;
+  }
+
+void ReleaseInstanceLock()
+  {
+   if(!g_lockAcquired) return;
+   g_lockAcquired=false;
+   string name=InstanceLockName();
+   if(StringLen(name)==0) return;
+   long myChart=ChartID();
+   if(GetLockChartId(name)==myChart)
+      DelLockChartId(name);
+  }
 
 //--- M5b: the operational-command state, one small file, the same pattern
 //--- CopierCfgRevSave uses for the config revision. The ACK body is stored
@@ -1783,6 +2262,67 @@ void ExecuteQueue()
          continue;
         }
 
+      //--- RISK RE-CHECK ON THE WAY OUT, for opens only. Converge gates an
+      //--- open against the account-wide and per-sender risk switches before
+      //--- queueing it - and the queue DRAIN used to send whatever was in
+      //--- it, unchanged. So the risk state at QUEUE time was the only state
+      //--- ever consulted: entries parked behind a nightly stall (market
+      //--- shut, feed down, hub PAUSED) were released the moment the stall
+      //--- cleared, against the account as it is NOW - twenty queued opens
+      //--- sized against a balance that has since dropped, a daily loss that
+      //--- has since tripped, or positions that opened in the meantime. The
+      //--- gates were bypassed precisely when they mattered most.
+      //---
+      //--- Cheaper than the converge-time pair on purpose: the per-sender
+      //--- counts here are the queue's own pending opens plus the current
+      //--- account totals, which is the same information the gates act on.
+      //--- A blocked entry is DROPPED, not rotated: it is not a delay, it is
+      //--- a decision - and converge re-derives it from the sender's desired
+      //--- set on the very next snapshot, where it is gated again. The seen
+      //--- ring is deliberately NOT touched, so a risk state that later frees
+      //--- allows the entry through the normal path.
+      if(a.kind==CP_ACT_OPEN)
+        {
+         int    pCount=0;
+         double pLots=0.0;
+         PendingOpens(pCount,pLots);
+         string why="";
+         if(!g_risk.AllowOpen(a.lots,g_ourCount,g_ourLots,pCount,pLots,why))
+           {
+            g_riskBlocked++;
+            if(g_once.ShouldEmit("drainrisk|"+a.uid))
+               g_log.Warn("queued open "+a.uid+" "+a.sym+" dropped by the"
+                          +" account risk gate after its wait: "+why
+                          +". It is re-derived from the next snapshot and"
+                          +" re-gated, so nothing is lost if the risk state"
+                          +" frees (reported at most once per 10 min).");
+            ShiftQueue();
+            skipped++;
+            continue;
+           }
+         int    sPendCount=0;
+         double sPendLots=0.0;
+         if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
+           {
+            PendingOpensForSender(a.senderIdx,sPendCount,sPendLots);
+            string sWhy="";
+            if(!g_senderRisk[a.senderIdx].AllowOpen(a.lots,g_ourCount,g_ourLots,
+                                                    sPendCount,sPendLots,sWhy))
+              {
+               g_riskBlocked++;
+               if(g_once.ShouldEmit("drainsrisk|"+g_sid[a.senderIdx]+"|"+a.uid))
+                  g_log.Warn("queued open "+a.uid+" "+a.sym+" dropped by"
+                             +" sender "+g_sid[a.senderIdx]+"'s risk gate"
+                             +" after its wait: "+sWhy+". Re-derived from the"
+                             +" next snapshot and re-gated (reported at most"
+                             +" once per 10 min).");
+               ShiftQueue();
+               skipped++;
+               continue;
+              }
+           }
+        }
+
       if(a.kind==CP_ACT_OPEN)
         {
          CopierSymInfo si;
@@ -1796,6 +2336,10 @@ void ExecuteQueue()
             done++;
             continue;
            }
+         int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         double emSL = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencySLPips:EmergencySLPips;
+         double emTP = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencyTPPips:EmergencyTPPips;
+
          if(a.ordKind==CP_ORD_PENDING)
            {
             //--- a working order, not a market entry. It keeps the sender's
@@ -1819,23 +2363,23 @@ void ExecuteQueue()
             pp.pexpire =a.pexpire;
             pp.used    =true;
             ok=CopierPlacePending(pp,a.sym,g_magic[a.senderIdx],
-                                  DeviationPoints,err);
+                                  dev,err);
            }
          else
            {
          double sl=0.0,tp=0.0;
-         if(EmergencySLPips>0.0)
+         if(emSL>0.0)
            {
             int e2=0;
-            sl=CopierEmergencySl(a.sym,a.side,0.0,EmergencySLPips,si,e2);
+            sl=CopierEmergencySl(a.sym,a.side,0.0,emSL,si,e2);
            }
-         if(EmergencyTPPips>0.0)
+         if(emTP>0.0)
            {
             double px=0.0;
             if(CopierGetPrice(a.sym,a.side,px))
               {
                double pip=PipSize(si);
-               tp=(a.side==CP_SIDE_BUY)?(px+EmergencyTPPips*pip):(px-EmergencyTPPips*pip);
+               tp=(a.side==CP_SIDE_BUY)?(px+emTP*pip):(px-emTP*pip);
                tp=NormalizeDouble(tp,si.digits);
               }
            }
@@ -1843,7 +2387,7 @@ void ExecuteQueue()
          //--- sender's ticket (so the two orders can be matched by eye)
          ok=CopierOpenMarket(a.sym,a.side,a.lots,sl,tp,
                              CopierCommentForUid(a.uid,a.senderTicket),
-                             g_magic[a.senderIdx],DeviationPoints,err);
+                             g_magic[a.senderIdx],dev,err);
            }
         }
       else if(a.kind==CP_ACT_MODIFY)
@@ -1856,13 +2400,14 @@ void ExecuteQueue()
         }
       else
         {
+         int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
          if(a.kind==CP_ACT_TRIM)
             ok=CopierClosePartial(a.ticket,a.lots,a.sym,a.side,
                                   g_magic[a.senderIdx],
                                   CopierCommentForUid(a.uid,a.senderTicket),
-                                  DeviationPoints,err);
+                                  dev,err);
          else
-            ok=CopierClosePosition(a.ticket,DeviationPoints,err);
+            ok=CopierClosePosition(a.ticket,dev,err);
         }
 
       if(ok)
@@ -2206,7 +2751,7 @@ bool StopsDiffer(const double have,const double want,const CopierSymInfo &si)
 void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                          const CopierPos &local)
   {
-   if(!MirrorStops) return;
+   if(!g_senderCfg[si].mirrorstops) return;
 
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(local.sym,si2)) return;
@@ -2238,31 +2783,11 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      }
 
    //--- The sender's stops, as a distance, re-anchored on our own entry.
-   //---
-   //--- When the direction is INVERTED the sender's stops SWAP ROLES, and
-   //--- that is the whole point rather than a detail.
-   //---
-   //--- A sender BUY @1.1000 with SL 1.0950 and TP 1.1100 is stopped out when
-   //--- price FALLS and takes profit when price RISES. Our mirror is a SELL, so
-   //--- it profits when price falls and loses when it rises. Therefore:
-   //---   the level where the sender is stopped out (1.0950) is where WE take
-   //---   profit, and the level where the sender takes profit (1.1100) is
-   //---   where WE are stopped out.
-   //---
-   //--- Keeping SL as SL and TP as TP - which is what this did first - leaves
-   //--- our protective stop at the sender's RISK distance and our target at
-   //--- the sender's REWARD distance. That is risk and reward swapped: the
-   //--- mirror would be stopped out exactly where the sender banks its
-   //--- profit, which is the opposite of a hedge.
-   //---
-   //--- CopierMirrorStopInverted is still the right primitive: it measures the
-   //--- sender's level as a magnitude and re-applies it on whichever side OUR
-   //--- role calls for, so the swap needs no extra sign handling.
    double feedSl,feedTp;
-   CopierMapInvertedStops(InvertTrades,dSl,dTp,feedSl,feedTp);
+   CopierMapInvertedStops(g_senderCfg[si].inverttrades,dSl,dTp,feedSl,feedTp);
 
    double wantSl,wantTp;
-   if(InvertTrades)
+   if(g_senderCfg[si].inverttrades)
      {
       wantSl=CopierMirrorStopInverted(feedSl,dOpn,
                                       local.openPx,local.side,true);
@@ -2278,11 +2803,11 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      }
 
    //--- the sender has no stop of its own, so the local backstop applies
-   if(wantSl<=0.0 && EmergencySLPips>0.0)
+   if(wantSl<=0.0 && g_senderCfg[si].emergencySLPips>0.0)
      {
       int e=0;
       wantSl=CopierEmergencySl(local.sym,local.side,local.openPx,
-                               EmergencySLPips,si2,e);
+                               g_senderCfg[si].emergencySLPips,si2,e);
      }
 
    //--- clear the broker's minimum distance BEFORE comparing, or a stop
@@ -2299,16 +2824,13 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2))
       return;
 
-   //--- Say what was computed, once per UID. Stops are the one thing where a
-   //--- wrong result is invisible until it costs money, and with the direction
-   //--- inverted there is no way to eyeball "is that the right side?" from the
-   //--- final numbers alone - the inputs have to be shown too.
+   //--- Say what was computed, once per UID.
    if(g_once.ShouldEmit("stopcalc|"+local.uid))
      {
       CopierSymInfo ci;
       int cg=CopierGetSymbolInfo(local.sym,ci)?ci.digits:5;
       g_log.Info("stops for "+local.uid+" "+local.sym
-                 +(InvertTrades?" (INVERTED, roles swapped)":"")
+                 +(g_senderCfg[si].inverttrades?" (INVERTED, roles swapped)":"")
                  +": sender sl="+((dSl>0.0)?DoubleToString(dSl,cg):"none")
                  +" tp="+((dTp>0.0)?DoubleToString(dTp,cg):"none")
                  +" from its entry "+DoubleToString(dOpn,cg)
@@ -2320,22 +2842,10 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                  +" tp="+((wantTp>0.0)?DoubleToString(wantTp,cg):"none"));
      }
 
-   //--- THROTTLE, and it defers rather than drops.
-   //---
-   //--- The sender emits a MODIFY the instant a stop moves, and a trailing
-   //--- stop moves on nearly every scan - so without a floor one trailing stop
-   //--- becomes ten broker OrderModify calls a second, which brokers
-   //--- rate-limit and which then looks like the copier being broken.
-   //---
-   //--- Returning here does NOT lose the change. The desired value is still
-   //--- held (the snapshot or the override above), convergence re-runs ten
-   //--- times a second, and this check passes the moment the window opens.
-   //--- Dropping it instead would leave the mirror on a stale stop until the
-   //--- next snapshot - the very delay this path exists to remove.
    long nowMs=CopierNowMs();
    if(oi<0) oi=StopsOvIndex(desired.uid,true);
-   if(StopsThrottleSeconds>0 && g_stLastMs[oi]>=0
-      && nowMs-g_stLastMs[oi]<(long)StopsThrottleSeconds*1000)
+   if(g_senderCfg[si].stopsThrottleSeconds>0 && g_stLastMs[oi]>=0
+      && nowMs-g_stLastMs[oi]<(long)g_senderCfg[si].stopsThrottleSeconds*1000)
       return;
    g_stLastMs[oi]=nowMs;
 
@@ -2396,7 +2906,7 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
         }
       if(groupN<2) continue;
 
-      if(!DedupDuplicates)
+      if(!g_senderCfg[si].dedupduplicates)
         {
          //--- stays true on every tick until a human acts, so it must be
          //--- rate-limited or it drowns the log at ~10 Hz
@@ -2511,6 +3021,11 @@ void RefreshRisk()
       g_riskDayStartEquity=CopierAccountBalance()-CopierRealizedToday(dayStart);
      }
    g_risk.ObserveAt(CopierAccountEquity(),dayStart/86400,g_riskDayStartEquity);
+   //--- Persist the peak so a terminal restart cannot re-base the drawdown
+   //--- switch. Internally throttled to once a minute; a rising peak that is
+   //--- lost to a crash understates the baseline by that minute's gain, which
+   //--- is the safe direction (it can never falsely block trading).
+   if(g_risk.PeakEquity()>0.0) RiskPeakSave(false);
   }
 
 //=====================================================================
@@ -2651,13 +3166,26 @@ int AccountExposure(const CopierPos &all[],const int an,
 void ConvergeSender(const int si)
   {
    if(!g_ready[si]) return;    // no snapshot yet -> do nothing at all
-   if(g_stale[si])  return;    // sender silent -> keep positions, stop entries
+
+   //--- A stale sender (no SNAPSHOT within StaleSeconds) stops NEW entries,
+   //--- and NOTHING ELSE. The gate used to return here, which also skipped
+   //--- the close half: the mirror then held the sender's old positions for
+   //--- as long as the sender was silent, with margin, swap and risk budget
+   //--- locked in the whole time - a sender that goes quiet while holding a
+   //--- large position froze the receiver's account indefinitely. Closing
+   //--- on stale data only releases OUR capital; it cannot invent an entry.
+   //--- Managing existing mirrors (re-stops, dedup) also continues: those
+   //--- act on positions this account already holds.
+   bool mayOpen=!g_stale[si];
 
    CopierPos all[];
    int an=CopierReadPositions(all,CP_MAX_POSITIONS);
    CopierPos loc[];
    int ln=LocalForSender(si,all,an,loc);
    int base=si*CP_MAX_POSITIONS;
+
+   double sLots=0.0;
+   for(int k=0;k<ln;k++) sLots+=loc[k].lots;
 
    //--- one UID, one position. Has to run BEFORE the diff below:
    //--- LocalFindUid returns the first match, so a duplicate left in place
@@ -2670,101 +3198,50 @@ void ConvergeSender(const int si)
       CopierPos d=g_desired[base+i];
 
       //--- the operator asked us to leave this one alone (IgnoreUids)
-      if(g_ignore.Has(d.uid)) continue;
+      if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
 
       int li=LocalFindUid(loc,ln,d.uid);
       if(li>=0)
         {
-         //--- THE MIRROR IS IN PLACE, SO CLEAR THE GUARDS FOR THIS UID.
-         //---
-         //--- This MUST happen before any branch below can `continue`, and
-         //--- that ordering is the whole point. The seen-ring answers "have I
-         //--- already done this?", which is wrong for any action whose key can
-         //--- legitimately recur - and a kind mismatch is exactly such a case:
-         //--- cancel, re-place, cancel again is the normal sequence when a
-         //--- pending order fills on one side before the other.
-         //---
-         //--- Leaving the guard in place made the SECOND cancel silently
-         //--- vanish, so the receiver sat on a pending order against a live
-         //--- position and re-logged the same line forever. Measured: ~30
-         //--- identical lines with no close between them.
-         //--- PREFIX forget, NOT an exact one. The OPEN key carries the
-         //--- entry kind as a SUFFIX - "sid:OPEN:uid:0" for a market entry,
-         //--- ":1" for a pending one - added so that suppressing an
-         //--- unplaceable pending cannot suppress the position it becomes.
-         //---
-         //--- An exact Forget on "sid:OPEN:uid" therefore matched NOTHING,
-         //--- and this guard was never cleared at all. The consequence: a
-         //--- mirror closed by hand while the sender still held it was NOT
-         //--- restored for the ring's whole ten-minute TTL - the exact
-         //--- scenario this Forget exists to prevent, and the reason the
-         //--- previous build appeared to "reopen" while this one does not.
-         //---
-         //--- Changing a key's shape silently breaks every exact-match
-         //--- lookup against it. If a key can carry a suffix, clear it by
-         //--- prefix.
          g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
          g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+d.uid);
          g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_TRIM+":"+d.uid);
 
-         //--- Seeing the mirror is the strongest possible evidence that this
-         //--- account holds it, and it covers the case the executor cannot: a
-         //--- mirror that was already there when this instance started, whose
-         //--- open this process never performed.
          g_everOpened.Add(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
 
-
-         //--- SAME UID, DIFFERENT KIND. The sender's pending order filled
-         //--- (or its position is now a working order) and ours has not
-         //--- followed. Cancel ours and let the next pass open the right
-         //--- thing: leaving it would mirror a working order against a live
-         //--- position, which is a real divergence, not a rounding detail.
-         //---
-         //--- The ticket survives this on both platforms - MT4 keeps it when
-         //--- a pending order fills, and MT5 sets a position's
-         //--- POSITION_IDENTIFIER to the order ticket that opened it, which
-         //--- the sender now logs explicitly. That is why the UID matches at
-         //--- all and why this shows up as a kind mismatch rather than as a
-         //--- close+reopen.
          if(loc[li].kind!=d.kind)
            {
             g_log.Info("uid "+d.uid+" changed kind on the sender ("
                        +(string)loc[li].kind+" -> "+(string)d.kind
                        +"); cancelling the mirror and re-opening it");
-            //--- remember that this close is ours and a replacement is meant
-            //--- to follow, so the operator's "do not re-open" switch cannot
-            //--- turn a routine kind change into a lost mirror
             g_reopenExpected.Add(g_sid[si]+":"+d.uid);
             PushAction(si,CP_ACT_CLOSE,d.uid,loc[li].sym,loc[li].side,
                        loc[li].lots,loc[li].ticket);
             continue;
            }
 
-         //--- STOPS SYNC, queued BEFORE the volume sync below on purpose.
-         //--- On MT4 a partial close makes the broker replace the ticket, so
-         //--- a modify still holding the old ticket would be skipped; doing
-         //--- the stops first means they are applied to the position that
-         //--- still exists, and MT4's remainder inherits them.
          QueueModifyIfNeeded(si,d,loc[li]);
-
-         //--- VOLUME SYNC. A position that exists on both sides but is
-         //--- smaller on the sender means the sender took a partial profit.
-         //--- Without this the receiver keeps a position larger than the
-         //--- sender's, which is a real divergence - the exact case MT4
-         //--- produces, because a partial close there makes the broker
-         //--- replace the ticket and the sender inherits the UID (so it is
-         //--- NOT a close+reopen, and never reaches the branches above).
          QueueTrimIfNeeded(si,d,loc[li]);
+         continue;
+        }
+
+      //--- Desired but not mirrored = an OPEN. This is the one half the
+      //--- stale gate holds back: with the sender silent there is no fresh
+      //--- reason to take new risk in its name. Rate-limited log, because a
+      //--- long silence would otherwise print once per position per tick.
+      if(!mayOpen)
+        {
+         if(g_once.ShouldEmit("stalegate|"+g_sid[si]))
+            g_log.Warn("sender "+g_sid[si]+" has been silent past its"
+                       +" StaleSeconds - no new mirrors are opened for it,"
+                       +" and existing ones keep converging (closes and"
+                       +" stops still apply). The next snapshot clears this.");
          continue;
         }
 
       string rsym=MapSymbol(si,d.sym,g_suffix[si]);
       if(!CopierSymbolExists(rsym))
         {
-         //--- This condition stays true on EVERY timer tick until someone
-         //--- adds the symbol at the broker, and converge runs at ~10 Hz.
-         //--- Logging it each time produced 2542 lines / 264 KB in 21
-         //--- minutes on real pilot logs, so it goes through CopierOnceLog.
          if(g_once.ShouldEmit(g_sid[si]+"|nosym|"+d.sym))
             g_log.Warn("sender "+g_sid[si]+" symbol "+d.sym+" -> "+rsym
                        +" is not available on this account. The copier HAS"
@@ -2787,54 +3264,42 @@ void ConvergeSender(const int si)
                     +" senderLots="+DoubleToString(d.lots,2));
          continue;
         }
-      //--- RISK GATE, and it is deliberately placed BEFORE the RESTORING
-      //--- note: a blocked entry is not a restore, and saying it is would be
-      //--- a lie in the log.
-      //---
-      //--- Only OPENING is gated. Every other action the queue can carry
-      //--- (trim, close, dedup, set-stops) reduces or preserves risk, so
-      //--- blocking one would be backwards - and blocking a CLOSE would be
-      //--- actively dangerous.
-      //---
-      //--- The held figures AND what is already queued. Several opens are
-      //--- decided in this one pass and each must see the ones before it.
+
+      //--- Account-wide risk gate
       int    pendCount=0;
       double pendLots=0.0;
       PendingOpens(pendCount,pendLots);
       string riskWhy="";
       if(!g_risk.AllowOpen(lots,g_ourCount,g_ourLots,pendCount,pendLots,riskWhy))
         {
-         //--- Keyed on a STABLE identifier, NOT the message. The message now
-         //--- quotes live equity and therefore changes on every tick, so
-         //--- using it as the key would make every line look like a new one
-         //--- and defeat the rate limiter completely.
          string blockKey=g_risk.BlockKey();
-         if(StringLen(blockKey)==0) blockKey=riskWhy;  // a size/count cap: stable text
+         if(StringLen(blockKey)==0) blockKey=riskWhy;
          g_riskBlocked++;
          if(g_once.ShouldEmit("risk|"+blockKey))
             g_log.Warn("risk switch blocked a new entry - "+riskWhy);
          continue;
         }
 
-      //--- A PENDING entry carries its stops ABSOLUTELY, unlike a market
-      //--- entry. That is not an inconsistency: the mirror is placed at the
-      //--- sender's own trigger price, so the entry price on both sides is
-      //--- the same number and the distance mapping would return exactly
-      //--- the same value. Absolute is the simpler expression of the same
-      //--- thing here.
+      //--- Per-sender specific risk gate
+      int    sPendCount=0;
+      double sPendLots=0.0;
+      PendingOpensForSender(si,sPendCount,sPendLots);
+      string sRiskWhy="";
+      if(!g_senderRisk[si].AllowOpen(lots,ln,sLots,sPendCount,sPendLots,sRiskWhy))
+        {
+         string sBlockKey=g_senderRisk[si].BlockKey();
+         if(StringLen(sBlockKey)==0) sBlockKey=sRiskWhy;
+         g_riskBlocked++;
+         if(g_once.ShouldEmit("senderrisk|"+g_sid[si]+"|"+sBlockKey))
+            g_log.Warn("sender "+g_sid[si]+" risk switch blocked a new entry - "+sRiskWhy);
+         continue;
+        }
+
       double osl=(d.kind==CP_ORD_PENDING)?d.sl:0.0;
       double otp=(d.kind==CP_ORD_PENDING)?d.tp:0.0;
 
-      //--- INVERT FIRST. Everything downstream that looks at direction - the
-      //--- NoBuy/NoSell gates, the anti-stacking direction match, the stop
-      //--- mirroring - must see the direction this account will actually
-      //--- trade, not the sender's.
-      if(InvertTrades)
+      if(g_senderCfg[si].inverttrades)
         {
-         //--- A working order is refused rather than inverted. Inverting a
-         //--- pending entry means re-deriving its trigger as a distance from
-         //--- the CURRENT price on the opposite side - a different operation
-         //--- with a different risk profile, and not something to guess at.
          if(d.kind==CP_ORD_PENDING)
            {
             if(g_once.ShouldEmit("invpend|"+d.uid))
@@ -2847,27 +3312,13 @@ void ConvergeSender(const int si)
          d.side=(d.side==CP_SIDE_BUY)?CP_SIDE_SELL:CP_SIDE_BUY;
         }
 
-      //--- ENTRY GATES. Each answers "should this mirror exist at all?", so
-      //--- they sit together and they SKIP rather than queue - nothing enters
-      //--- the retry machinery for an entry the operator has ruled out.
-      //---
-      //--- They gate OPENING only. A mirror that already exists keeps having
-      //--- its stops synced and its volume trimmed regardless, which is the
-      //--- whole difference between "stop opening" and "stop managing" - and
-      //--- getting it wrong would silently freeze the stops on live trades.
-      if(IgnoreNewEntrySignals)
+      if(g_senderCfg[si].ignorenewentrysignals)
         {
-         if(g_once.ShouldEmit("gatenew"))
-            g_log.Info("IgnoreNewEntrySignals is on - no new mirrors are"
+         if(g_once.ShouldEmit("gatenew|"+g_sid[si]))
+            g_log.Info("sender "+g_sid[si]+" IgnoreNewEntrySignals is on - no new mirrors are"
                        +" opened. Existing ones are still managed normally.");
          continue;
         }
-      //--- M5b: the hub's pause command lands here, at the same choke point
-      //--- as the configured gates, for the same reason - and with the same
-      //--- rule as every gate in this block: OPENING only. A mirror that
-      //--- already exists keeps having its stops synced, its volume trimmed
-      //--- and its sender's closes followed, so a pause never freezes risk
-      //--- management on live trades.
       if(g_cmdPaused)
         {
          if(g_once.ShouldEmit("cmdpause"))
@@ -2876,32 +3327,18 @@ void ConvergeSender(const int si)
                        +" clears this.");
          continue;
         }
-      if(NoBuy && d.side==CP_SIDE_BUY)   continue;
-      if(NoSell && d.side==CP_SIDE_SELL) continue;
+      if(g_senderCfg[si].nobuy && d.side==CP_SIDE_BUY)   continue;
+      if(g_senderCfg[si].nosell && d.side==CP_SIDE_SELL) continue;
 
-      //--- Matched against the RECEIVER's symbol name, because that is the
-      //--- name the operator can read off this terminal. Matching the
-      //--- sender's name would make the list mean something different on
-      //--- every receiver.
-      if(!g_permitted.Allows(rsym))
+      if(!g_senderPermitted[si].Allows(rsym))
         {
-         if(g_once.ShouldEmit("gatesym|"+rsym))
-            g_log.Info("symbol "+rsym+" is not in PermittedSymbols - its"
+         if(g_once.ShouldEmit("gatesym|"+g_sid[si]+"|"+rsym))
+            g_log.Info("sender "+g_sid[si]+" symbol "+rsym+" is not in PermittedSymbols - its"
                        +" entries are skipped");
          continue;
         }
 
-      //--- Matched against the SENDER's magic - the magic of the position it
-      //--- is reporting, straight off the wire - not this account's mirror
-      //--- magic. That is the only thing that exists before the mirror does,
-      //--- and it is what lets two receivers of one sender mirror different
-      //--- subsets of it (see the input note).
-      //---
-      //--- An entry whose magic is not permitted is SKIPPED, never queued, so
-      //--- it does not enter the retry machinery - same as every other entry
-      //--- gate. Keyed per sender AND magic so a second sender with the same
-      //--- magic still gets its own line.
-      if(!g_permittedMagic.Allows((string)d.magic))
+      if(!g_senderPermittedMagic[si].Allows((string)d.magic))
         {
          if(g_once.ShouldEmit("gatemagic|"+g_sid[si]+"|"+(string)d.magic))
             g_log.Info("sender "+g_sid[si]+" reports magic "+(string)d.magic
@@ -2910,17 +3347,9 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- On the SENDER's volume, before any multiplier - see the input note.
-      if(MinSenderLotSize>0.0 && d.lots<MinSenderLotSize) continue;
-      if(MaxSenderLotSize>0.0 && d.lots>MaxSenderLotSize) continue;
+      if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
+      if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
 
-      //--- STALE FEED. The server clock has not moved for a minute, which
-      //--- means no quotes are arriving - the market is shut, or the feed is
-      //--- down. Either way nothing here can be priced, and the session
-      //--- schedule cannot be trusted because it is being evaluated against a
-      //--- frozen instant. This is the gate that actually holds during the
-      //--- weekly close; the schedule check below only works while the clock
-      //--- is moving.
       if(!g_srvEverMoved
          || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS)
         {
@@ -2935,13 +3364,6 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- THIS SYMBOL'S OWN FEED. The check above watches the server clock;
-      //--- this one watches the instrument. On MT5 they are not the same test
-      //--- at all, because the clock keeps advancing after the weekly close
-      //--- while no quotes arrive - so the gate above never fires there, and
-      //--- every weekend the receiver kept trying to open against a shut
-      //--- market. Holding is safe for the same reason as above: the return of
-      //--- the quotes is the signal that the market reopened.
       if(CopierSymbolFeedStale(rsym,CP_SYM_STALL_MS))
         {
          if(g_once.ShouldEmit("symstall|"+rsym))
@@ -2955,10 +3377,6 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- OUTSIDE TRADING HOURS. Checked BEFORE sending, so the doomed
-      //--- attempt never happens - this is the pre-filter, and the err=132
-      //--- cooldown below is the backstop for the cases the schedule cannot
-      //--- predict (holidays, halts, early closes).
       if(!CopierInTradingSession(rsym))
         {
          if(g_once.ShouldEmit("sess|"+rsym))
@@ -2969,10 +3387,6 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- MARKET CLOSED. Skipped, not queued and not attempted, for a minute
-      //--- after the broker last said so. See the note on g_mktClosed: this is
-      //--- per SYMBOL on purpose, because one cooldown for the instrument is
-      //--- what stops 190 pending entries each retrying on their own.
       if(g_mktClosed.Has(rsym))
         {
          if(g_once.ShouldEmit("mktclosed|"+rsym))
@@ -2983,15 +3397,10 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- TRADING WINDOW. Server time, so it lines up with the Market Watch
-      //--- clock and with the session boundaries these windows exist to avoid.
-      //--- Gates ENTRIES only: a position opened inside the window is still
-      //--- closed when the sender closes it, outside the window or not.
-      //--- Blocking exits on a clock would strand positions.
-      if(g_hours.Active() && !g_hours.Allows(CopierServerTime()))
+      if(g_senderHours[si].Active() && !g_senderHours[si].Allows(CopierServerTime()))
         {
          if(g_once.ShouldEmit("gatehours|"+g_sid[si]))
-            g_log.Info("outside the configured trading window (server time "
+            g_log.Info("sender "+g_sid[si]+" outside configured trading window (server time "
                        +TimeToString(CopierServerTime(),TIME_MINUTES)
                        +") - new entries are held back. Existing mirrors are"
                        +" still managed and still close when the sender"
@@ -2999,36 +3408,19 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- ANTI-STACKING, ACCOUNT-WIDE. Anything already on this account for
-      //--- this symbol - ours, another sender's, a manual trade, another EA's
-      //--- - counts. See AccountExposure() for why that is the intent here
-      //--- rather than the per-sender scoping used elsewhere.
-      if(CheckForExistingPosition!=EXIST_OFF)
+      if(g_senderCfg[si].checkforexistingposition!=EXIST_OFF)
         {
-         bool sameDirOnly=(CheckForExistingPosition==EXIST_SAME_DIR);
+         bool sameDirOnly=(g_senderCfg[si].checkforexistingposition==EXIST_SAME_DIR);
          if(AccountExposure(all,an,rsym,d.side,sameDirOnly)>0)
            {
-            if(g_once.ShouldEmit("gateexist|"+rsym))
-               g_log.Info("CheckForExistingPosition: the account already holds"
+            if(g_once.ShouldEmit("gateexist|"+g_sid[si]+"|"+rsym))
+               g_log.Info("sender "+g_sid[si]+" CheckForExistingPosition: account already holds"
                           +" "+rsym+(sameDirOnly?" in this direction":"")
-                          +" - skipping further entries for it. This counts"
-                          +" every position and order on the account, not just"
-                          +" the copier's. Set the input to 0 to allow it.");
+                          +" - skipping further entries for it.");
             continue;
            }
         }
 
-      //--- Age of the SENDER's own position, converted into our timebase.
-      //---
-      //--- Everything below is measured from when the sender opened it, not
-      //--- from when we noticed. That is the meaningful clock for "is this
-      //--- trade still worth entering": a mirror taken up six hours after the
-      //--- fact enters at a price that has nothing to do with the original
-      //--- decision.
-      //---
-      //--- Clamped at zero: a small negative means the clocks are a few
-      //--- seconds out, and "opened in the future" must read as brand new
-      //--- rather than as a negative age that passes every check.
       long openedOurs=0;
       if(d.openTime>0) openedOurs=SenderTimeToOurs(si,d.openTime);
       long ageSec=0;
@@ -3039,15 +3431,10 @@ void ConvergeSender(const int si)
         }
       else
         {
-         //--- The age could not be measured, so EVERY gate below that depends
-         //--- on it - the wait, the fill timeout - is skipped and the entry
-         //--- goes through immediately. That is the worst possible failure:
-         //--- the feature is configured, does nothing, and no line anywhere
-         //--- says why. So say it, with the raw values needed to fix it.
-         if((WaitForHours>0 || WaitForMinutes>0 || WaitForSeconds>0
-             || RequirePositionFillWithinHours>0
-             || RequirePositionFillWithinMinutes>0
-             || RequirePositionFillWithinSeconds>0)
+         if((g_senderCfg[si].waitforhours>0 || g_senderCfg[si].waitforminutes>0 || g_senderCfg[si].waitforseconds>0
+             || g_senderCfg[si].requirepositionfillwithinhours>0
+             || g_senderCfg[si].requirepositionfillwithinminutes>0
+             || g_senderCfg[si].requirepositionfillwithinseconds>0)
             && g_once.ShouldEmit("noclocks|"+d.uid))
             g_log.Warn("cannot measure how old "+d.uid+" "+rsym+" is, so the"
                        +" configured wait / fill timeout CANNOT be applied and"
@@ -3057,12 +3444,9 @@ void ConvergeSender(const int si)
                        +(string)g_senderClockOffset[si]+"s");
         }
 
-      //--- WAIT: hold the entry back for a fixed time from the sender's open.
-      //--- AND-combined with the profit gate below, so setting both means
-      //--- "at least this long, and only once it is in profit".
       {
-       long waitSec=(long)WaitForHours*3600+(long)WaitForMinutes*60
-                   +(long)WaitForSeconds;
+       long waitSec=(long)g_senderCfg[si].waitforhours*3600+(long)g_senderCfg[si].waitforminutes*60
+                   +(long)g_senderCfg[si].waitforseconds;
        if(waitSec>0 && openedOurs>0 && ageSec<waitSec)
          {
           if(g_once.ShouldEmit("wait|"+g_sid[si]+"|"+rsym))
@@ -3070,27 +3454,21 @@ void ConvergeSender(const int si)
                         +CopierSecText(ageSec)+" ago and the configured wait"
                         +" is "+CopierSecText(waitSec)+", so it will enter in"
                         +" "+CopierSecText(waitSec-ageSec));
-          //--- count it as pending: the operator's question is "what is this
-          //--- account still waiting to open", and this is one of them
           g_waitHeld++;
           g_waitLots+=lots;
           continue;
          }
       }
 
-      //--- WAIT BY BARS. Same idea as the wait above, but counted in M1 bars
-      //--- instead of wall-clock seconds, so a weekend or a session break does
-      //--- not consume the wait. Measured on OUR terminal's bars, from the
-      //--- sender's open time converted into our clock.
-      if(WaitForMinutesBar>0 && openedOurs>0)
+      if(g_senderCfg[si].waitforminutesbar>0 && openedOurs>0)
         {
          int bars=CopierM1BarsSince(rsym,(datetime)openedOurs,
-                                    WaitForMinutesBar);
-         if(bars<WaitForMinutesBar)
+                                    g_senderCfg[si].waitforminutesbar);
+         if(bars<g_senderCfg[si].waitforminutesbar)
            {
             if(g_once.ShouldEmit("waitbar|"+g_sid[si]+"|"+rsym))
                g_log.Info("holding "+rsym+" - waiting for "
-                          +(string)WaitForMinutesBar+" M1 bar(s) and "
+                          +(string)g_senderCfg[si].waitforminutesbar+" M1 bar(s) and "
                           +(string)bars+" have formed since the sender opened"
                           +" it");
             g_waitHeld++;
@@ -3099,22 +3477,7 @@ void ConvergeSender(const int si)
            }
         }
 
-      //--- WAIT FOR PROFIT: hold until the trade reaches a given P&L on OUR
-      //--- feed, measured from the SENDER's entry price. Prices differ between
-      //--- brokers, so this is a judgement call the operator opts into - and
-      //--- the reason the slippage tolerance usually needs raising once it is
-      //--- on.
-      //---
-      //--- BOTH SIGNS, and they are not the same test. The threshold is a
-      //--- LEVEL the P&L has to reach, in whichever direction it points:
-      //---   +10 -> wait until the trade is 10 pips in PROFIT
-      //---   -10 -> wait until it is 10 pips in LOSS, i.e. wait for a pullback
-      //---          and enter cheaper
-      //---
-      //--- Writing it as one comparison (`profitPips < threshold`) only ever
-      //--- worked for the positive half: for a negative threshold it is true
-      //--- at entry, so the gate silently did nothing at all.
-      if(WaitForProfitPips!=0.0 && d.openPx>0.0)
+      if(g_senderCfg[si].waitforprofitpips!=0.0 && d.openPx>0.0)
         {
          CopierSymInfo pi;
          if(CopierGetSymbolInfo(rsym,pi))
@@ -3128,13 +3491,13 @@ void ConvergeSender(const int si)
                                  ?((closePx-d.openPx)/pipSize)
                                  :((d.openPx-closePx)/pipSize);
 
-               if(!CopierProfitTargetReached(profitPips,WaitForProfitPips))
+               if(!CopierProfitTargetReached(profitPips,g_senderCfg[si].waitforprofitpips))
                  {
                   if(g_once.ShouldEmit("waitpf|"+g_sid[si]+"|"+rsym))
                      g_log.Info("holding "+rsym+" - the sender's entry is at "
                                 +CopierFmtDouble(profitPips,1)+" pips;"
                                 +" waiting for it to reach "
-                                +CopierFmtDouble(WaitForProfitPips,1)
+                                +CopierFmtDouble(g_senderCfg[si].waitforprofitpips,1)
                                 +" pips before entering");
                   g_waitHeld++;
                   g_waitLots+=lots;
@@ -3144,18 +3507,10 @@ void ConvergeSender(const int si)
            }
         }
 
-      //--- FILL TIMEOUT. Abandons a mirror that never appeared, measured from
-      //--- the sender's open time - so a receiver that was down for an hour
-      //--- does NOT come back and open every position the sender took while
-      //--- it was away, at prices that no longer relate to those decisions.
-      //---
-      //--- The only switch here that deliberately LOSES a trade, so it says
-      //--- so at ERROR level: the accounts are now genuinely different and
-      //--- nothing else will ever mention it again.
       {
-       long limitSec=(long)RequirePositionFillWithinHours*3600
-                    +(long)RequirePositionFillWithinMinutes*60
-                    +(long)RequirePositionFillWithinSeconds;
+       long limitSec=(long)g_senderCfg[si].requirepositionfillwithinhours*3600
+                    +(long)g_senderCfg[si].requirepositionfillwithinminutes*60
+                    +(long)g_senderCfg[si].requirepositionfillwithinseconds;
        if(limitSec>0 && openedOurs>0)
          {
           if(g_fillDropped.Has(d.uid)) continue;
@@ -3173,22 +3528,17 @@ void ConvergeSender(const int si)
          }
       }
 
-      //--- FILL TIMEOUT, COUNTED IN BARS. Same loss, different clock: an M1
-      //--- bar only exists while the market is open, so a Friday-evening
-      //--- signal is not silently expired by the weekend before Monday has a
-      //--- chance to mirror it. That is the reason this exists alongside the
-      //--- seconds-based timeout rather than replacing it.
-      if(FillWithinMinutesBar>0 && openedOurs>0)
+      if(g_senderCfg[si].fillwithinminutesbar>0 && openedOurs>0)
         {
          if(g_fillDropped.Has(d.uid)) continue;
          int bars=CopierM1BarsSince(rsym,(datetime)openedOurs,
-                                    FillWithinMinutesBar);
-         if(bars>=FillWithinMinutesBar)
+                                    g_senderCfg[si].fillwithinminutesbar);
+         if(bars>=g_senderCfg[si].fillwithinminutesbar)
            {
             g_fillDropped.Add(d.uid);
             g_log.Error("DROPPED "+d.uid+" "+rsym+" - "+(string)bars
                         +" M1 bar(s) have formed since the sender opened it,"
-                        +" past the "+(string)FillWithinMinutesBar
+                        +" past the "+(string)g_senderCfg[si].fillwithinminutesbar
                         +"-bar fill timeout, so it is abandoned. THIS ACCOUNT"
                         +" IS NOW MISSING A TRADE THE SENDER HAS. Raise the"
                         +" timeout, or set it to 0 to keep retrying.");
@@ -3196,28 +3546,6 @@ void ConvergeSender(const int si)
            }
         }
 
-      //--- DO NOT SEND AN ORDER THE BROKER IS GOING TO REFUSE.
-      //---
-      //--- At a cap of 200 open positions, every further open is refused.
-      //--- Sending it anyway, and retrying every two seconds, turns one
-      //--- clean refusal into a request flood - roughly 30 refused orders a
-      //--- minute per UID - which is how an account gets throttled or
-      //--- BLOCKED rather than merely refused. So count first, then skip.
-      //---
-      //--- The counts are account-wide (RefreshRisk), because a broker cap
-      //--- does not care who opened the position. Positions and pending
-      //--- orders are checked against their own limits because the broker
-      //--- caps them separately.
-      //---
-      //--- Skipped, NOT queued: nothing enters the retry machinery, so a
-      //--- limit does not generate a single refused order. The entry is
-      //--- re-derived by the next snapshot and goes through as soon as the
-      //--- sender closes something and room appears.
-      //--- The cap counts POSITIONS AND PENDING ORDERS TOGETHER - a broker's
-      //--- "order" quota is Total Position + Total Pending, so a market
-      //--- entry consumes it exactly as a working order does. Gating only
-      //--- the pending side was wrong and would let market entries walk
-      //--- straight into a refusal.
       if(g_brokerOrdLimit>0 && (g_acctPositions+g_acctOrders)>=g_brokerOrdLimit)
         {
          if(g_once.ShouldEmit("brokerlimit|any"))
@@ -3231,23 +3559,7 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- RESTORE OR NOT.
-      //---
-      //--- A UID we have opened before, now missing locally while the sender
-      //--- still holds it, is a MIRROR THAT DISAPPEARED - closed by hand, by
-      //--- another EA, or by a stop-out. Re-opening it is the self-healing
-      //--- path, and it is what makes a hand-closed mirror come back, which
-      //--- not every operator wants. So it is a switch.
-      //---
-      //--- Only reached when the mirror is ABSENT, so a mirror that is still
-      //--- in place keeps getting its stops and volume synced either way.
-      //---
-      //--- The FIRST open of a UID is never affected: there is no mirror to
-      //--- restore, only one to create. And a close the copier performed
-      //--- itself expecting a replacement (a pending order that filled on the
-      //--- sender) is exempt - blocking that would silently drop the mirror
-      //--- rather than leave a closed one alone, which nobody asked for.
-      if(!ReopenClosedMirrors
+      if(!g_senderCfg[si].reopenclosedmirrors
          && g_everOpened.Has(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid)
          && !g_reopenExpected.Has(g_sid[si]+":"+d.uid))
         {
@@ -3259,22 +3571,8 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      //--- Queue FIRST, then log. The RESTORING line used to be printed
-      //--- before the queueing, so a suppressed action produced an
-      //--- identical line on every converge pass - 10 a second, forever.
-      //--- 4904 of them were once produced for two UIDs.
-      //--- The ENTRY KIND is part of the key. A pending entry and the market
-      //--- position it becomes when it fills are different actions on the
-      //--- same UID, and on MT4 the pending one can never be placed at all.
-      //--- Without the kind in the key, suppressing the unplaceable pending
-      //--- would also suppress the position that follows - which loses the
-      //--- trade rather than a log line.
-      //--- When a delay is configured, say WHY this entry is going through
-      //--- now. Without it a working delay and a missing one look identical
-      //--- from the log: the position simply appears either way. One line per
-      //--- UID, and only when there is something to explain.
-      if((WaitForHours>0 || WaitForMinutes>0 || WaitForSeconds>0
-          || WaitForProfitPips!=0.0)
+      if((g_senderCfg[si].waitforhours>0 || g_senderCfg[si].waitforminutes>0 || g_senderCfg[si].waitforseconds>0
+          || g_senderCfg[si].waitforprofitpips!=0.0)
          && g_once.ShouldEmit("opened|"+d.uid))
          g_log.Info("opening "+d.uid+" "+rsym+" - the sender opened it "
                     +CopierSecText(ageSec)+" ago (openTime="
@@ -3285,34 +3583,13 @@ void ConvergeSender(const int si)
                              ":"+(string)d.kind,osl,otp,
                              d.kind,d.ptype,d.pprice,d.pstop,d.pexpire);
 
-      //--- d.ticket is the SENDER's ticket for this position, straight off
-      //--- the wire; it goes into the comment we write on our own order.
-      //---
-      //--- A UID the receiver has opened before, which is now missing
-      //--- locally, is a RESTORE - the sender still holds it and this
-      //--- account does not. That is the self-healing path working, but it
-      //--- also fires when someone closes the mirror by hand, which reads
-      //--- as "it keeps coming back". Say which one it is, and how to opt
-      //--- out - but only when we are actually about to do it.
       string openKey=g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid;
-      //--- Rate-limited. The line is now only printed when the action was
-      //--- actually queued, but a persistently FAILING open re-queues on
-      //--- every retry (every two seconds), which produced a RESTORING line
-      //--- on each one. The first occurrence still prints immediately; a
-      //--- repeat waits ten minutes.
       if(queued && g_everOpened.Has(openKey)
          && g_once.ShouldEmit("restore|"+d.uid))
          g_log.Info("RESTORING "+d.uid+" "+rsym+" - the sender still holds it"
                     +" and this account does not (closed by hand, by another"
                     +" EA, or by a stop-out). To leave it alone, add "+d.uid
                     +" to the IgnoreUids input");
-      //--- NOTE: `g_everOpened` is NOT added here. Queueing is an INTENT, and
-      //--- an intent can fail - with AutoTrading off it always does. Marking
-      //--- the UID as "this account has held it" on the attempt made the next
-      //--- pass treat the retry as a RESTORE, so with ReopenClosedMirrors=false
-      //--- the mirror was abandoned for good: "LEAVING <uid> closed - this
-      //--- account had it open before" about a position it never opened.
-      //--- It is recorded on SUCCESS instead - see the executor.
      }
 
    //--- mirrored but no longer desired -> close
@@ -3325,20 +3602,12 @@ void ConvergeSender(const int si)
         }
       if(stillDesired) continue;
 
-      //--- ignored positions are neither opened nor closed by the copier:
-      //--- they are handed over to the operator entirely. Closing them here
-      //--- would defeat the point of listing them.
-      if(g_ignore.Has(loc[i].uid)) continue;
+      if(g_ignore.Has(loc[i].uid) || g_senderIgnore[si].Has(loc[i].uid)) continue;
 
-      //--- EXIT GATE. The sender has closed this and we are not following,
-      //--- so the two accounts now hold DIFFERENT positions - this account is
-      //--- still exposed to something the sender has exited. That is the
-      //--- point of the switch, but it is not a quiet state to leave someone
-      //--- in, so say it once per UID rather than silently withholding.
-      if(IgnoreAllExitSignals)
+      if(g_senderCfg[si].ignoreallexitsignals)
         {
-         if(g_once.ShouldEmit("gateexit|"+loc[i].uid))
-            g_log.Warn("IgnoreAllExitSignals is on - NOT closing "
+         if(g_once.ShouldEmit("gateexit|"+g_sid[si]+"|"+loc[i].uid))
+            g_log.Warn("sender "+g_sid[si]+" IgnoreAllExitSignals is on - NOT closing "
                        +loc[i].uid+" "+loc[i].sym+" even though the sender"
                        +" has exited it. This account is still in that trade"
                        +" and nothing here will close it. Close it by hand, or"
@@ -3462,12 +3731,12 @@ int StopsOvIndex(const string uid,const bool create)
    for(int i=0;i<n;i++)
       if(g_stUid[i]==uid) return i;
    if(!create) return -1;
-   ArrayResize(g_stUid,n+1);
-   ArrayResize(g_stHasOv,n+1);
-   ArrayResize(g_stOvSl,n+1);
-   ArrayResize(g_stOvTp,n+1);
-   ArrayResize(g_stOvOpn,n+1);
-   ArrayResize(g_stLastMs,n+1);
+   ArrayResize(g_stUid,n+1,32);
+   ArrayResize(g_stHasOv,n+1,32);
+   ArrayResize(g_stOvSl,n+1,32);
+   ArrayResize(g_stOvTp,n+1,32);
+   ArrayResize(g_stOvOpn,n+1,32);
+   ArrayResize(g_stLastMs,n+1,32);
    g_stUid[n]=uid;
    g_stHasOv[n]=false;
    g_stOvSl[n]=0.0;
@@ -3708,6 +3977,7 @@ void HandleCfg(const CopierEnv &e)
    g_cfgAck="ID="+id+";OK=1;REV="+(string)rev+";WARN="+(string)warnings;
    CopierCfgRevSave(id,rev);
    SendCfgAck(g_cfgAck);
+   SendCurrentConfigReport();
 
    g_log.Info("CFG "+id+" applied: rev "+(string)rev+", "
               +IntegerToString(beforeN)+" -> "+IntegerToString(g_nSenders)
@@ -4031,6 +4301,8 @@ void HubAnnounce(const bool isReg)
    //--- The hub ignores the field from a sender, and an OLD hub ignores it
    //--- entirely - unknown payload fields are skipped by design.
    e.payload+=CP_SEP_KV+"PAUSED="+(g_cmdPaused?"1":"0");
+   if(isReg)
+      e.payload+=CP_SEP_KV+"INI="+CopierIniEscape(SerializeCurrentConfigToIni());
    //--- Dropped silently on purpose: one lost heartbeat is nothing, and a log
    //--- line per failure would be a line per five seconds on a hub that is
    //--- simply not running yet. The hub's WHO sweep is the recovery path.
@@ -4146,6 +4418,22 @@ void HandleMessage(const string msg,const int stream)
          //--- the sender; see the longer note there.
          HubAnnounce(true);
         }
+      else if(e.type==CP_T_PONG)
+        {
+         string pms="",pfrom="",pto="";
+         CopierKvGet(e.payload,"MS",pms);
+         CopierKvGet(e.payload,"FROM",pfrom);
+         CopierKvGet(e.payload,"TO",pto);
+         if((pto==(string)g_nid || pto==(string)CopierAccountLogin()) && StringLen(pfrom)>0)
+           {
+            if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
+              {
+               if(g_once.ShouldEmit("rtt|"+pfrom))
+                  g_log.Info("link to "+pfrom+" measured: "
+                             +(string)g_peers.RttFor(pfrom)+" ms round trip");
+              }
+           }
+        }
       else if(e.type==CP_T_CFG) HandleCfg(e);
       else if(e.type==CP_T_CMD) HandleCmd(e);
       else if(g_once.ShouldEmit("hubctl|"+e.type))
@@ -4211,7 +4499,7 @@ void HandleMessage(const string msg,const int stream)
       //--- Using TO as the peer name registered this receiver under its OWN
       //--- account number, so the panel listed itself as a second, silent
       //--- "sender" beside the real one - forever.
-      if(pto==(string)CopierAccountLogin() && StringLen(pfrom)>0
+      if((pto==(string)CopierAccountLogin() || (g_hubOn && pto==(string)g_nid)) && StringLen(pfrom)>0
          && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
          //--- first successful measurement: the only line that distinguishes
@@ -4244,9 +4532,11 @@ void HandleMessage(const string msg,const int stream)
 //=====================================================================
 int OnInit()
   {
+   ResetRuntimeInputsFromInputs();
    //--- One log per instance, or two receivers in one terminal write the same
    //--- file and overwrite each other's history.
    g_log.Init("receiver"+InstanceSuffix(),LogLevel);
+   if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
    //--- g_backoff carries its own per-key deadline; there is no single TTL
    //--- to set, which is the whole point of it.
@@ -4264,6 +4554,12 @@ int OnInit()
    rl.dailyLossPct      =DailyLossPct;
    rl.maxDrawdownPct    =MaxDrawdownPct;
    g_risk.Configure(rl);
+   //--- Restore the drawdown peak measured in the PREVIOUS run. Without this
+   //--- every terminal restart re-based the drawdown to the equity of the
+   //--- moment, so the one switch whose job is "stop and look at this" was
+   //--- forgiven by the event most likely to follow a bad day. Called AFTER
+   //--- Configure so the restored peak is measured against the current limits.
+   RiskPeakLoad();
    //--- "remember what we have opened" survives long enough to recognise a
    //--- restore a day later; the dedup ring is a different lifetime.
    //--- NOTE: no `L` suffix on the literals - MQL5 accepts `12L`, MQL4
@@ -4385,7 +4681,7 @@ int OnInit()
    //--- automatic while the server's cannot.
    g_myPublicKey="";
    string mySecret="";
-   if(UseCurve || HubUseCurve)
+   if(UseCurve || (g_hubOn && HubUseCurve))
      {
       CP_KEY_RESULT kr=g_key.Ensure(GetPointer(g_log));
       if(kr==CP_KEY_FAILED)
@@ -4442,20 +4738,21 @@ int OnInit()
       //--- CURVE SERVER on its side (§19.1 - it binds the port), so this node
       //--- is a client and holds the HUB's public key, not the sender's.
       bool hubCurveOk=true;
+      string activeHubKey="";
       if(HubUseCurve)
         {
-         if(StringLen(HubPublicKey)!=CP_KEY_LEN)
+         string keySrc="";
+         activeHubKey=CopierLoadHubPublicKey("",GetPointer(g_log),keySrc);
+         if(StringLen(activeHubKey)!=CP_KEY_LEN)
            {
-            g_log.Error("HubUseCurve is on but HubPublicKey is not a"
-                        +" "+IntegerToString(CP_KEY_LEN)+"-character key (it is "
-                        +IntegerToString(StringLen(HubPublicKey))+"). The hub"
-                        +" prints its public key in its startup banner.");
+            g_log.Error("Hub link CURVE is on but no valid "+IntegerToString(CP_KEY_LEN)+"-character Hub public key found."
+                        +" Download copier_hub.key from Web Dashboard to MQL\\Files (or Common\\Files).");
             hubCurveOk=false;
            }
          else
            {
-            g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted.");
-            g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt:");
+            g_log.Info("CURVE: the hub link to "+g_hubEp+" is encrypted (source: "+keySrc+").");
+            g_log.Info("  Add THIS node's public key to the hub's curve_clients.txt (or auto-register):");
             g_log.Info("  "+g_myPublicKey);
            }
         }
@@ -4465,11 +4762,11 @@ int OnInit()
          //--- set, the hub IS this receiver's channel - there is no direct
          //--- one to fall back to. Starting without it would look like a
          //--- running receiver that mirrors nothing.
-         g_log.Error("central mode: the hub link was NOT opened - fix"
-                     +" HubPublicKey (see above) and restart.");
+         g_log.Error("central mode: the hub link was NOT opened - download"
+                     +" copier_hub.key from Web Dashboard to MQL\\Files (or Common\\Files) and restart.");
          return INIT_FAILED;
         }
-      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,HubPublicKey,
+      if(!g_tp.ConnectHub(g_hubEp,HubUseCurve,activeHubKey,
                           g_myPublicKey,mySecret))
         {
          g_log.Error("central mode: cannot open a socket to "+g_hubEp
@@ -4494,6 +4791,7 @@ int OnInit()
          g_tp.Subscribe(g_sid[i]);
       g_hubUpMs=CopierNowMs();
       g_bootMs=g_hubUpMs;
+      g_peers.Seen(g_hubPeerName);
       //--- Best effort: the socket is IMMEDIATE, so a send made before the TCP
       //--- connection completes is DISCARDED rather than queued. This one may
       //--- well be lost, which is fine - the first few announcements in OnTimer
@@ -4603,7 +4901,13 @@ void OnDeinit(const int reason)
    g_log.Info("receiver stopped reason="+(string)reason+" holding "
               +(string)hc+" copier position(s)"+(hc>0?": "+held:""));
 
+   //--- Force the peak out on the way down, ignoring the once-a-minute
+   //--- throttle: a clean shutdown is exactly the moment the in-memory peak is
+   //--- about to be lost, and it costs one small file write.
+   RiskPeakSave(true);
+
    g_tp.Close();
+   ReleaseInstanceLock();
   }
 
 //--- Probe every sender, and say once when one goes quiet.
@@ -4653,6 +4957,24 @@ void CheckPeers()
         }
      }
 
+   //--- In Central mode, probe the Hub link directly on its own channel.
+   //--- The Hub replies with PONG to @<nid>, measuring the round-trip latency.
+   if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
+     {
+      g_lastHubPingMs=now;
+      CopierEnv he;
+      he.v=CP_PROTO_V;
+      he.sid=(string)g_nid;
+      he.ssid=(string)CopierAccountLogin();
+      he.seq=++g_statusSeq;
+      he.ts=CopierServerTime();
+      he.ms=now;
+      he.type=CP_T_PING;
+      he.payload=CopierPayloadPing(now,(string)g_nid);
+      g_tp.SendUp("@hub",CopierEncodeEnv(he));
+      g_peers.ProbeSent(g_hubPeerName,now);
+     }
+
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
@@ -4670,7 +4992,8 @@ void CheckPeers()
       if(down && !g_peerWasDown[i])
         {
          g_peerWasDown[i]=true;
-         g_log.Warn("sender "+nm+" "
+         string what=(nm==g_hubPeerName)?"hub":"sender";
+         g_log.Warn(what+" "+nm+" "
                     +((silent<0)?"has NEVER been heard from"
                                 :("has been silent for "
                                   +(string)(silent/1000)+"s"))
@@ -4678,7 +5001,7 @@ void CheckPeers()
          if(now-g_peerAlerted[i]>=CP_ALERT_QUIET_MS)
            {
             g_peerAlerted[i]=now;
-            Alert("Copier RECEIVER: sender "+nm+" DISCONNECTED ("
+            Alert("Copier RECEIVER: "+what+" "+nm+" DISCONNECTED ("
                   +((silent<0)?"never heard from"
                               :((string)(silent/1000)+"s silent"))
                   +"). Existing positions are kept;"
@@ -4688,7 +5011,8 @@ void CheckPeers()
       else if(!down && g_peerWasDown[i])
         {
          g_peerWasDown[i]=false;
-         g_log.Info("sender "+nm+" is back");
+         string what=(nm==g_hubPeerName)?"hub":"sender";
+         g_log.Info(what+" "+nm+" is back");
         }
      }
   }
@@ -4750,7 +5074,7 @@ void UpdatePanel()
    //--- bottom of the background - the panel would look broken rather than
    //--- simply shorter.
    int orphanRows=(ShowOrphanedList?(2+CP_PANEL_ORPHAN_SHOW):0);
-   int rows=10+np+orphanRows;
+   int rows=11+np+orphanRows;
    g_panel.Begin(rows);
 
    int r=0;
@@ -4759,6 +5083,12 @@ void UpdatePanel()
    g_panel.Row(r++,"Magic "+(string)((g_nSenders>0)?g_magic[0]:0)
                    +"   "+(string)g_nSenders+" sender(s) configured",
                CP_PANEL_DIM);
+   if(g_hubOn)
+      g_panel.Row(r++,"Mode       CENTRAL (Hub)   NID "+(string)g_nid,
+                  CP_PANEL_OK);
+   else
+      g_panel.Row(r++,"Mode       DIRECT",
+                  CP_PANEL_DIM);
    g_panel.Row(r++,"Managing   open "+IntegerToString(nOpen)
                    +"   pending "+IntegerToString(nPend)
                    +"   total "+IntegerToString(nOpen+nPend),
@@ -4815,7 +5145,7 @@ void UpdatePanel()
                         +" - see the Experts log",CP_PANEL_BAD);
      }
 
-   g_panel.Row(r++,"Senders connected: "+IntegerToString(np),
+   g_panel.Row(r++,"Peers connected: "+IntegerToString(np)+((g_hubOn)?"  (incl. hub)":""),
                (np>0)?CP_PANEL_OK:CP_PANEL_BAD);
 
    for(int i=0;i<np && i<CP_MAX_PEERS;i++)
@@ -4827,7 +5157,8 @@ void UpdatePanel()
       bool down=(st==CP_PEER_DOWN);
       long rtt=g_peers.RttAt(i);
 
-      string line="  "+nm+"   ";
+      bool isHub=(nm==g_hubPeerName);
+      string line=isHub?("  HUB  "+g_hubEp+"   "):("  "+nm+"   ");
       if(st==CP_PEER_CONNECT)
          line+="connecting...";
       else if(down)
@@ -4965,29 +5296,23 @@ void OnTimer()
      {
       if(g_lastMsgMs[i]==0) continue;        // never heard from it yet
       if(g_stale[i]) continue;
-      if(now-g_lastMsgMs[i]>(long)StaleSeconds*1000)
+      int sSec=(g_senderCfg[i].staleSeconds>0)?g_senderCfg[i].staleSeconds:StaleSeconds;
+      if(now-g_lastMsgMs[i]>(long)sSec*1000)
         {
          g_stale[i]=true;
-         g_log.Error("sender "+g_sid[i]+" silent for >"+(string)StaleSeconds
+         g_log.Error("sender "+g_sid[i]+" silent for >"+(string)sSec
                      +"s: new entries stopped, existing positions kept");
         }
      }
 
    //--- 3) hearing the sender but never getting a usable snapshot?
-   //---
-   //--- The receiver does NOTHING until it has seen a snapshot, so a broken
-   //--- snapshot stream - wrong port, dropped, or arriving empty - makes the
-   //--- EA look idle while heartbeats keep arriving and the log stays
-   //--- clean. That silence is exactly what made this take so long to find
-   //--- (a PUB-side ZMQ_CONFLATE on libzmq 4.2.0 delivered zero-length
-   //--- snapshots; both ends now run 4.3.5 but CONFLATE is still not used).
-   //--- Say it out loud instead of failing quietly.
    for(int i=0;i<g_nSenders;i++)
      {
       if(g_ready[i]) continue;                        // has snapshots
       if(g_lastSnapMs[i]!=0) continue;                // had one, resyncing
       if(g_firstMsgMs[i]==0) continue;                // nothing heard yet
-      if(now-g_lastMsgMs[i]>(long)StaleSeconds*1000) continue;  // covered
+      int sSec=(g_senderCfg[i].staleSeconds>0)?g_senderCfg[i].staleSeconds:StaleSeconds;
+      if(now-g_lastMsgMs[i]>(long)sSec*1000) continue;  // covered
       if(now-g_firstMsgMs[i]<10000) continue;         // give it 10s
       if(g_onceNoSnap.ShouldEmit("nosnap|"+g_sid[i]))
          g_log.Error("sender "+g_sid[i]+" is sending events but NO usable"
@@ -5210,9 +5535,22 @@ void OnTimer()
                    +CP_SEP_KV+"H="+g_snapHash[i];
          if(putPositionSummary)
            {
+            int qOpen=0;
+            double qLots=0.0;
+            PendingOpens(qOpen,qLots);
+            int waitTotal=qOpen+g_waitHeld+g_mktHeld;
+            double waitLots=qLots+g_waitLots+g_mktHeldLots;
+
             st+=CP_SEP_KV+"HELD="+(string)g_ourCount
                +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
-               +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount;
+               +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
+               +CP_SEP_KV+"WAIT="+(string)waitTotal
+               +CP_SEP_KV+"WLOTS="+DoubleToString(waitLots,2)
+               +CP_SEP_KV+"WQUEUED="+(string)qOpen
+               +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
+               +CP_SEP_KV+"WMKT="+(string)g_mktHeld
+               +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
+               +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
             putPositionSummary=false;  // once per batch, not per sender
            }
          if(putFigures)

@@ -963,6 +963,39 @@ void TestRiskDailyAndDrawdown()
    Ok("risk: ...and still blocks an open",
       !rk2.AllowOpen(0.01,0,0.0,0,0.0,why));
 
+   //--- A RESTORED PEAK MUST SURVIVE ARMING, AND MUST BE ABLE TO TRIP ON IT.
+   //---
+   //--- The peak used to live only in memory, so every terminal restart
+   //--- re-based the drawdown to the equity of the moment and the switch was
+   //--- silently forgiven by the event most likely to follow a bad day. The
+   //--- receiver now persists it and calls SeedPeak before the first
+   //--- observation - which means arming must RAISE the peak, never assign it,
+   //--- and must not return before the trip checks.
+   CopierRiskLimits dd2;
+   dd2.maxLotsPerPosition=0.0;
+   dd2.maxTotalLots      =0.0;
+   dd2.maxOpenPositions  =0;
+   dd2.dailyLossPct      =0.0;
+   dd2.maxDrawdownPct    =10.0;
+
+   CopierRisk rkSeed;
+   rkSeed.Configure(dd2);
+   rkSeed.SeedPeak(10000.0);                  // last run's peak
+   rkSeed.ObserveAt(8800.0,500,8800.0);       // -12% from it
+   Ok("risk: a restored peak trips on the arming observation",
+      rkSeed.DrawdownTripped());
+   Ok("risk: ...and arming did not overwrite it with today's equity",
+      MathAbs(rkSeed.PeakEquity()-10000.0)<0.001);
+
+   //--- ...and the control: with NO restored peak, arming at the same equity
+   //--- cannot trip, so a genuinely fresh start is not blocked.
+   CopierRisk rkFresh;
+   rkFresh.Configure(dd2);
+   rkFresh.ObserveAt(8800.0,500,8800.0);
+   Ok("risk: a fresh start does not trip on arming",!rkFresh.DrawdownTripped());
+   Ok("risk: ...and its peak is today's equity",
+      MathAbs(rkFresh.PeakEquity()-8800.0)<0.001);
+
    //--- RECONFIGURING MUST RE-EVALUATE THE LATCHES.
    //---
    //--- Changing an EA's inputs reinitialises it but does NOT reset its

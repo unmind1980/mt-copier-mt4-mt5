@@ -33,6 +33,7 @@ import tempfile
 import zmq
 
 MAGIC = "copier-curve-key v1"
+HUB_MAGIC = "copier-hub-key v1"
 KEY_LEN = 40
 
 fails = []
@@ -89,6 +90,34 @@ def parse_keyfile(text):
     return pub, sec, ""
 
 
+def parse_hub_keyfile(text):
+    """Mirror of CopierParseHubKeyFileHandle()."""
+    lines = text.splitlines()
+    if not lines:
+        return "", "empty file"
+    first = True
+    pub = ""
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if first:
+            first = False
+            if s != HUB_MAGIC:
+                return "", "bad magic line"
+            continue
+        if s.startswith("#"):
+            continue
+        p = field(s, "PUBLIC")
+        if p:
+            pub = p
+        elif len(s) == KEY_LEN:
+            pub = s
+    if len(pub) != KEY_LEN:
+        return "", f"bad length pub={len(pub)}"
+    return pub, ""
+
+
 def write_keyfile(path, pub, sec, magic=MAGIC):
     with open(path, "w", encoding="ascii", newline="\n") as fh:
         fh.write(magic + "\n")
@@ -96,6 +125,14 @@ def write_keyfile(path, pub, sec, magic=MAGIC):
         fh.write("#\n")
         fh.write("PUBLIC=" + pub + "\n")
         fh.write("SECRET=" + sec + "\n")
+
+
+def write_hub_keyfile(path, pub, magic=HUB_MAGIC):
+    with open(path, "w", encoding="ascii", newline="\n") as fh:
+        fh.write(magic + "\n")
+        fh.write("# Hub CurveZMQ Public Key file\n")
+        fh.write("# Downloaded from Copier Hub Web Dashboard\n")
+        fh.write("PUBLIC=" + pub + "\n")
 
 
 # ----------------------------------------------------------------------
@@ -152,6 +189,31 @@ def main():
         open(kp, "w").close()
         _, _, why = parse_keyfile(open(kp, encoding="ascii").read())
         check("rejects an empty file", why == "empty file", why)
+
+        # --- 4. Hub public key file (copier_hub.key) tests
+        hkp = os.path.join(td, "copier_hub.key")
+        hpub, _ = zmq.curve_keypair()
+        hpub = hpub.decode()
+        write_hub_keyfile(hkp, hpub)
+        read_hpub, hwhy = parse_hub_keyfile(open(hkp, encoding="utf-8").read())
+        check("hub key: written copier_hub.key loads back", hwhy == "", hwhy)
+        check("hub key: public key matches exactly", read_hpub == hpub)
+
+        # 4a. foreign magic
+        write_hub_keyfile(hkp, hpub, magic="copier-hub-key v99")
+        _, hwhy = parse_hub_keyfile(open(hkp, encoding="utf-8").read())
+        check("hub key: rejects foreign magic", hwhy == "bad magic line", hwhy)
+
+        # 4b. truncated key
+        write_hub_keyfile(hkp, hpub[:35])
+        _, hwhy = parse_hub_keyfile(open(hkp, encoding="utf-8").read())
+        check("hub key: rejects truncated public key", "bad length" in hwhy, hwhy)
+
+        # 4c. naked key fallback without PUBLIC= prefix
+        with open(hkp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(HUB_MAGIC + "\n# comment\n" + hpub + "\n")
+        read_hpub, hwhy = parse_hub_keyfile(open(hkp, encoding="utf-8").read())
+        check("hub key: accepts naked 40-character key line", hwhy == "" and read_hpub == hpub)
 
     print()
     print("== result ==")

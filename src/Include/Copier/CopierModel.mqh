@@ -582,6 +582,7 @@ long CopierMt4FromTicket(const string comment)
   {
    if(StringLen(comment)==0) return 0;
    string low=comment;
+   //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
    StringToLower(low);
    int p=StringFind(low,"from #");
    if(p<0) return 0;

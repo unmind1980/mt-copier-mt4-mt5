@@ -23,6 +23,7 @@ matrix against the real HTTP API:
     auth.logout, user.upsert, user.delete, user.bootstrap,
     user.password_changed.
 """
+import hashlib
 import http.client
 import json
 import os
@@ -236,6 +237,61 @@ def main():
         for need in ("auth.login", "auth.denied", "auth.logout",
                      "user.upsert", "user.bootstrap", "user.password_changed"):
             check(f"audit has {need}", need in actions, str(sorted(actions)))
+
+        # =================================================================
+        print()
+        print("== 6b. Scheme B challenge-response (Salted Hashing + Nonce) ==")
+
+        def compute_proof(password, salt, nonce, rounds=4096):
+            acc = hashlib.sha256(f"{salt}:{password}".encode("utf-8")).digest()
+            for _ in range(1, rounds):
+                acc = hashlib.sha256(acc).digest()
+            stored_hex = acc.hex()
+            return hashlib.sha256(f"{stored_hex}:{nonce}".encode("utf-8")).hexdigest()
+
+        # 1. request nonce for admin
+        st, ch = js("POST", "/api/v1/auth/nonce", {"id": "admin"})
+        check("POST /api/v1/auth/nonce -> 200", st == 200, f"status {st}")
+        check("...returns non-empty nonce", bool(ch.get("nonce")), f"nonce={ch.get('nonce')}")
+        check("...returns salt and rounds", bool(ch.get("salt")) and ch.get("rounds") == 4096,
+              f"salt={ch.get('salt')} rounds={ch.get('rounds')}")
+
+        # 2. calculate proof and login
+        proof = compute_proof("hub-test-pass", ch["salt"], ch["nonce"], ch["rounds"])
+        st, raw, sc = req("POST", "/api/v1/login",
+                          json.dumps({"id": "admin", "nonce": ch["nonce"], "proof": proof}))
+        challenge_tok = None
+        for part in sc.split(";"):
+            part = part.strip()
+            if part.startswith("mtc_session="):
+                challenge_tok = part[len("mtc_session="):]
+        check("challenge-response login succeeds -> 200", st == 200, f"status {st}")
+        check("...and received session cookie", bool(challenge_tok), "cookie present")
+
+        # 3. whoami verifies the session
+        st, d = js("GET", "/api/v1/whoami", cookie=challenge_tok)
+        check("...and whoami confirms admin role", st == 200 and d.get("role") == "admin",
+              f"status {st} {d}")
+
+        # 4. replay attack fails: the nonce was consumed immediately
+        st, _, _ = req("POST", "/api/v1/login",
+                       json.dumps({"id": "admin", "nonce": ch["nonce"], "proof": proof}))
+        check("replay with consumed nonce fails -> 401", st == 401, f"status {st}")
+
+        # 5. bad proof fails
+        st, ch2 = js("POST", "/api/v1/auth/nonce", {"id": "admin"})
+        st, _, _ = req("POST", "/api/v1/login",
+                       json.dumps({"id": "admin", "nonce": ch2["nonce"], "proof": "wrong_proof_hash"}))
+        check("bad proof fails -> 401", st == 401, f"status {st}")
+
+        # 6. non-existent user returns dummy salt and cannot login
+        st, ch_ghost = js("POST", "/api/v1/auth/nonce", {"id": "nobody_here"})
+        check("non-existent user gets a dummy salt (no enumeration)",
+              st == 200 and len(ch_ghost.get("salt", "")) == 16, f"salt={ch_ghost.get('salt')}")
+        ghost_proof = compute_proof("random-pass", ch_ghost["salt"], ch_ghost["nonce"], ch_ghost["rounds"])
+        st, _, _ = req("POST", "/api/v1/login",
+                       json.dumps({"id": "nobody_here", "nonce": ch_ghost["nonce"], "proof": ghost_proof}))
+        check("...and cannot log in -> 401", st == 401, f"status {st}")
     finally:
         p.terminate()
         try:

@@ -194,8 +194,9 @@ look maintained when it is not.
 
 ### Logging: only the unusual
 
-Routine traffic is **counted, not printed**. `PING` fires every 2 s per sender
-and `HBT2` every 5 s per node; printing them buries everything that is *not*
+Routine traffic is **counted, not printed**. `PING` fires every 10 s per peer
+(the EAs' `CP_PING_MS`) and `HBT2` every 5 s per node; printing them buries
+everything that is *not*
 routine, and an operator who cannot see the signal stops reading the log
 altogether. Both still appear in the stats line and under `--verbose`.
 
@@ -283,6 +284,8 @@ involved.
                     read the key while a hub is already running - `--curve on`
                     would need the port that hub is holding.
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
+--notifications P   external alert channel store (default alert_channels.json;
+                    `none` keeps channels in memory only) — see "Notifications"
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
 --duration SECS     exit after this many seconds (0 = run until Ctrl-C)
@@ -349,12 +352,14 @@ copy it straight across.
    The same key is printed in the startup banner whenever the hub does run
    with `--curve on`, and it lives on the `PUBLIC=` line of
    `curve_hub.keys`.
-2. **Get the key to the nodes.** The EAs' `HubPublicKey` input currently
-   ships with this hub's key already in it (2026-10-15, the owner's test
-   campaign), so a node attached from a fresh chart needs nothing typed —
-   check it in the dialog if the chart has been attached before, because MQL
-   remembers per-chart input values. Set `HubUseCurve=true` if it is not
-   already (it is the shipped default).
+2. **Get the key to the nodes.** The `HubUseCurve` / `HubPublicKey` inputs are
+   gone from the EA dialogs (2026-10-16): `HubUseCurve` is a hard-coded
+   `const bool = true`, and the key is **loaded from a file** —
+   `MQL<4|5>\Files\copier_hub.key` in the terminal, falling back to the shared
+   `Terminal\Common\Files\copier_hub.key` — so one shared file serves every
+   terminal on the machine. Write the hub's 40-char public key into that file
+   (format: `copier-hub-key v1` header line, then `PUBLIC=<key>`) and nothing
+   is typed into any dialog.
 3. **Let the nodes register themselves** — `--curve-learn on`. The hub
    already knows each connecting node's public key (libzmq hands it over
    with the handshake; that is the whole reason ZAP can decide anything), so
@@ -480,23 +485,27 @@ promise is that the hub can be stopped, or be wrong, without affecting a single
 order — which is why the write path (`CFG`/`ACK`/`CFGR`) is **Phase 3**, the
 highest-risk step, and is deliberately not in this file.
 
-## The API (M8/M10) — the read half
+## The API (M8/M10) — the read half, and the write half that followed
 
 `copier-hub` now also serves HTTP + WebSocket on **`--http`**, default
 **`127.0.0.1:6010`**. Run `tools\hublog.bat` and open
 <http://127.0.0.1:6010/>.
 
-**Everything is read-only, and that is the boundary that matters more than the
-feature.** There is no POST, PUT or DELETE. Adding one needs the plan's M4/M5 —
-config push and commands, with their `202` + `command_id` semantics and their
-audit trail. A write endpoint before that could only act *locally*, and a hub
-that appears able to change a node while being unable to is worse than a hub
-that never offered.
+**The trade path is still read-only, and that is the boundary that matters more
+than the feature.** The API's write half arrived after this section was first
+written — M4 config push, M5 commands, M9 users, M11-era notification channels —
+each with a role gate, the `--writes` master switch, and an audit record, and each
+documented in its own section below. None of it touches a trade: the hub still
+cannot open, close or modify a position, only a node's configuration and its own
+metadata. A write endpoint answers **403** with `--writes off`, and separately
+answers **403** when the session's role is below its bar. The table is the whole
+surface as it stands.
 
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/` | the dashboard (one HTML file, compiled in) |
-| POST | `/api/v1/login` | `{id, password}` → session cookie; the ONLY unauthenticated endpoint besides the health probes |
+| POST | `/api/v1/auth/nonce` | `{id}` → `{nonce, salt, rounds}`; single-use 10s nonce for salted challenge-response auth |
+| POST | `/api/v1/login` | `{id, nonce, proof}` (Scheme B salted challenge-response) or `{id, password}` → session cookie; unauthenticated endpoint |
 | POST | `/api/v1/logout` | kills the caller's session |
 | POST | `/api/v1/password` | `{old, new}` — change YOUR OWN password (any role; the old one is required); ends the caller's other sessions |
 | GET | `/api/v1/whoami` | the caller's id and role |
@@ -507,12 +516,42 @@ that never offered.
 | GET | `/api/v1/alerts` | the M6 alert ring |
 | GET | `/healthz` `/readyz` | liveness, and "is there anyone here yet" |
 | WS | `/api/v1/stream` | a full snapshot on connect and on every change (session cookie required) |
+| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only** |
+| GET | `/api/v1/config` | the config version store (revisions, and their INIs) |
+| GET | `/api/v1/nodes/{id}/config` | the live and the pushed config of one node, side by side |
+| PUT | `/api/v1/nodes/{id}/config` | record a config revision and push it as `CFG`; operator + `--writes on` |
+| POST | `/api/v1/nodes/{id}/config/rollback/{rev}` | re-push an earlier revision; operator + `--writes on` |
+| GET | `/api/v1/commands` | the command journal (in-flight and terminal) |
+| GET | `/api/v1/commands/{id}` | one command's state |
+| POST | `/api/v1/commands` | G10 global: one command per known receiver; operator + `--writes on` |
+| POST | `/api/v1/nodes/{id}/commands` | `pause`/`resume`/`closeall`/`reload` → **202** + `command_id`; operator + `--writes on` |
+| GET · POST | `/api/v1/users` | M9 user management; **admin only** |
+| DELETE | `/api/v1/users/{id}` | remove a user; **admin only** |
+| GET · POST | `/api/v1/notifications` | external alert channels, secrets masked on read; upsert needs operator |
+| DELETE | `/api/v1/notifications/{id}` | remove a channel; operator |
+| POST | `/api/v1/notifications/test` | fire a test message through a channel; operator |
+| GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — no 40-char key to transcribe (404 with `--curve off`) |
 
-**Everything except `/`, the health probes and `/login` requires a session**
+**Everything except `/`, the health probes, `/api/v1/auth/nonce`, `/api/v1/login`,
+`/api/v1/logout` and `/api/v1/whoami` requires a session**
 (M9). A missing or expired one answers **401**; a logged-in role below the
 endpoint's requirement answers **403** and the denial is audited. The first
 hub start with an empty user table bootstraps user `admin` and prints its
 password **once** — it is stored only as a salted hash; log in and change it.
+
+### Authentication & Password Recovery (M9)
+
+- **Challenge-Response Login (Scheme B)**: To prevent plaintext password transmission and replay attacks, the web frontend executes a challenge-response handshake:
+  1. Frontend calls `POST /api/v1/auth/nonce` with `{ "id": "<user>" }`.
+  2. Backend returns a single-use random `nonce` with a 10-second expiration window, along with the user's salt and iterations.
+  3. Frontend computes the digest `proof = SHA256(computed_hash + nonce)` and posts `{ "id": "<user>", "nonce": "<nonce>", "proof": "<proof>" }` to `POST /api/v1/login`.
+  4. Backend verifies the proof against its stored hash with the same nonce and **immediately destroys the nonce**, preventing replay attacks even if intercepted.
+- **Admin Password Reset Utility**: If the initial generated admin password is lost or forgotten, run:
+  ```cmd
+  tools\reset_password.bat
+  :: or: python tools/reset_password.py --user admin --password <newpass>
+  ```
+  This calculates a fresh salted iterative SHA-256 hash and updates `users.json` directly without requiring database surgery. Restart the hub to apply.
 
 **The edges in `/topology` are not free, and they are the interesting part.**
 The hub only knows "this receiver mirrors this sender" because relaying a
@@ -806,7 +845,7 @@ receiver.
 
 ## Alerts (M6)
 
-`hub/src/alerts.rs` evaluates five rules every **5 s** — a cadence of its own,
+`hub/src/alerts.rs` evaluates six rules every **5 s** — a cadence of its own,
 not `--stats-every`, because a dead node is worth noticing in five seconds
 rather than thirty. Each rule fires an alert that is written to BOTH surfaces:
 
@@ -817,10 +856,11 @@ rather than thirty. Each rule fires an alert that is written to BOTH surfaces:
 | kind | fires when | severity |
 |---|---|---|
 | `node.offline` | a node has been quiet for 60 s (the registry's offline threshold) | critical |
-| `node.clock.drift` | the node's own `TS` sits ≥300 s from the hub's clock | warning |
-| `risk.blocked` | the receiver's STAT reports `BLOCKED>`0 — entries its risk gates are holding | warning |
+| `node.recovered` | a node that had gone offline is back — closed loop with the offline alert, reporting the outage duration | warning |
+| `node.clock.drift` | the node's clock offset vs the hub's **changes** (a stable offset is a deployment fact, not a fault — first live run taught this the hard way) | warning |
+| `risk.blocked` | the receiver's STAT reports `BLOCKED>0` — entries its risk gates are holding | warning |
 | `risk.tripped` | the receiver's STAT reports `RISK=<trip key>` — a limit tripped | critical |
-| `command.unknown` | a command exhausted the 2/5/15/60 ladder unanswered (including journalled ones re-seen after a hub restart) | warning |
+| `command.unknown` | a command exhausted the 2/5/15/60 ladder unanswered (issued within the last hour; older corpses in the journal stay quiet) | warning |
 
 The two rules that make it usable: **dedup with a silence window** (one
 `node.offline` per incident, not per evaluation) and **re-arm** (a node that
@@ -832,6 +872,36 @@ confident wrongness this project keeps un-learning.
 
 `tools/hub_alerts_test.py` fires drift, blocked, tripped, offline and the
 silence window against the real binary.
+
+## Notifications (external push)
+
+When the alert engine fires, `hub/src/notifications.rs` also pushes the alert
+to any **external channel** the operator has configured — Telegram, WeCom
+(企业微信), DingTalk (钉钉), or a generic webhook. The dispatch runs on the
+Tokio runtime (the same one the HTTP server uses), so a slow or unreachable
+external API can never stall the ZMQ router thread.
+
+* Texts are **unified English** — no Chinese characters, so they survive every
+  downstream pipeline unchanged.
+* Each channel has a **minimum severity** (`critical`-only or everything), so
+  a busy channel can take only the alerts that page somebody.
+* Secrets (bot tokens, webhook keys, dingtalk secrets, Authorization headers)
+  are **masked** in every API response — the store file keeps the real values,
+  the API never echoes them back.
+* Store: `alert_channels.json` by default (`--notifications none` = memory
+  only). Adding, changing or removing a channel, and sending a test, all
+  require `operator` (and each is audited).
+
+| Method | Path | Answers |
+|---|---|---|
+| GET | `/api/v1/notifications` | every channel (secrets masked) |
+| POST | `/api/v1/notifications` | upsert one channel (id in body) |
+| DELETE | `/api/v1/notifications/{id}` | remove a channel |
+| POST | `/api/v1/notifications/test` | fire a test message through a channel, right now |
+
+`tools/hub_notifications_test.py` covers the CRUD, the severity filter, the
+secret masking, and the closed-loop recovery path (`node.recovered` after
+`node.offline`).
 
 ## The audit log (M7)
 
@@ -878,6 +948,30 @@ bad line in the *middle* is counted separately as `skipped`, because in an
 append-only file that should be impossible and "impossible" deserves its own
 number.
 
+### Rotation: bounded, gzipped, and non-blocking (2026-10-16)
+
+The file now **rotates itself** rather than growing forever: when it reaches
+**10 MB** the active file is archived and a fresh one opened. The sequence is
+arranged so the router thread never waits on disk: flush → rename to a scratch
+name → **open the fresh file immediately** (writes resume) → gzip the archive
+→ shift the numbered archives (`.1.gz` … `.10.gz`) → prune the oldest.
+Archives are kept compressed — an audit is evidence, and evidence that is
+never read compresses extremely well — and capped at **10 generations**
+(~100 MB worst case, in practice far less).
+
+Two integrity rules travel with the rotation:
+
+* **`seq` stays monotonic across it.** After a restart that lands right after
+  a rotation, `last_seq()` falls back to reading `.1.gz` — decompressing one
+  archive rather than renumbering from zero.
+* **`GET /api/v1/audit?limit=N` still answers N records**, transparently
+  stitching the active file with `.1.gz`…`.N.gz` when the active file alone
+  holds fewer than requested. The reader never sees the rotation happen.
+
+The API exposes the state: `rotations`, `max_bytes`, `max_backups` ride on
+the audit response. `tools/hub_audit_rotation_test.py` asserts all of it
+against the real binary.
+
 **If the audit cannot be opened, the hub refuses to start.** That is the one
 place here where refusing is right: everywhere else the hub degrades and says
 so, but an audit that is silently off produces the same output as a hub where
@@ -921,9 +1015,8 @@ itself is a log nobody reads, and then a log nobody checks.
 - **No SQLite.** The operational state (registry, positions) is deliberately
   in-memory; the audit, config revisions, command journal and now the user
   table are JSON/JSONL files, which §15 calls the Phase-1 shape. SQLite is M11.
-- **No CURVE.** The EAs open the central channel with CURVE off (Phase 1). A
-  hub link across a public network is therefore plaintext — put it on a private
-  network or a VPN.
+  (CURVE, which this list used to carry as "not yet", has been implemented and
+  ON by default since 2026-10-15 — see the CURVE section above.)
 - **The position view (M3) reads `SNAP`.** This is the one place the hub parses a
   payload rather than moving it, so the boundary is worth stating: the parse is
   **read-only**, it happens **after** the forward, and it produces a **separate**

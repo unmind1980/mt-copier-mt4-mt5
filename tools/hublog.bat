@@ -33,6 +33,8 @@ set "REPO=%HERE%.."
 set "BIN=%REPO%\hub\target\release\copier-hub.exe"
 set "LOG=%REPO%\hub.log"
 
+cd /d "%REPO%"
+
 if not exist "%BIN%" (
   echo.
   echo   Cannot find the hub binary:
@@ -41,6 +43,18 @@ if not exist "%BIN%" (
   echo   Build it first:
   echo     tools\hubrs.bat --build
   echo     ^(or: bash hub/build.sh --release^)
+  echo.
+  pause
+  exit /b 1
+)
+
+REM --- Check if another copier-hub.exe instance is already running
+tasklist /FI "IMAGENAME eq copier-hub.exe" 2>nul | find /I "copier-hub.exe" >nul
+if not errorlevel 1 (
+  echo.
+  echo   [WARNING] An instance of copier-hub.exe is already running!
+  echo   Port 6000 / 6010 is likely occupied.
+  echo   Please close the existing instance or terminate copier-hub.exe before starting.
   echo.
   pause
   exit /b 1

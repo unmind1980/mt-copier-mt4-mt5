@@ -107,7 +107,7 @@ deploy_into() {
   # The match is deliberately narrow: only Copier<Name>.{mq4,mq5,ex4,ex5}
   # inside Scripts/, so nothing the operator put there by hand is removed.
   local sbase
-  for f in "$mql/Scripts/"Copier*; do
+  for f in "$mql/Scripts/"Copier*.mq4 "$mql/Scripts/"Copier*.mq5 "$mql/Scripts/"Copier*.ex4 "$mql/Scripts/"Copier*.ex5; do
     [[ -f "$f" ]] || continue
     sbase="$(basename "$f")"; sbase="${sbase%.*}"
     if [[ ! -f "$SRC/Scripts/$sbase.mq4" && ! -f "$SRC/Scripts/$sbase.mq5" ]]; then
@@ -133,7 +133,14 @@ deploy_into() {
   local zdir
   if [[ "$plat" == "MQL5" ]]; then zdir="MT5"; else zdir="MT4"; fi
   if [[ -d "$ZMQ/Library/$zdir" ]]; then
-    cp -f "$ZMQ/Library/$zdir/"*.dll "$mql/Libraries/"
+    for dll in "$ZMQ/Library/$zdir/"*.dll; do
+      [[ -f "$dll" ]] || continue
+      dst="$mql/Libraries/$(basename "$dll")"
+      if [[ -f "$dst" ]] && cmp -s "$dll" "$dst"; then
+        continue
+      fi
+      cp -f "$dll" "$mql/Libraries/" 2>/dev/null || true
+    done
     echo "    dlls: $(ls "$ZMQ/Library/$zdir" | tr '\n' ' ')"
     #--- libsodium.dll was a SEPARATE dependency up to libzmq 4.2.x. From
     #--- 4.3.5 it is linked statically, so leaving an old copy behind would

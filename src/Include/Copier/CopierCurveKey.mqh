@@ -91,6 +91,12 @@
 #define CP_KEY_LINE_MAGIC  (CP_KEY_MAGIC+" v"+CP_KEY_VERSION)
 #define CP_KEY_LEN         40
 
+//--- Hub public key file conventions (downloaded from Web Dashboard)
+#define CP_HUB_KEY_FILE       "copier_hub.key"
+#define CP_HUB_KEY_MAGIC      "copier-hub-key"
+#define CP_HUB_KEY_VERSION    "1"
+#define CP_HUB_KEY_LINE_MAGIC (CP_HUB_KEY_MAGIC+" v"+CP_HUB_KEY_VERSION)
+
 //--- Result of an attempt to obtain a keypair. Callers switch on this
 //--- rather than on a bool, because "generated a new one" and "read an
 //--- existing one" are very different events to report: the first must be
@@ -137,6 +143,8 @@ private:
       int n=StringLen(name);
       if(StringLen(line)<n+1) return "";
       string head=StringSubstr(line,0,n);
+      //--- In MQL4/MQL5, StringToUpper takes string& and modifies it in-place.
+      //--- It returns bool (success). Never assign the return value to string!
       StringToUpper(head);
       string nm=name;
       StringToUpper(nm);
@@ -191,7 +199,11 @@ private:
       //--- nothing at all.
       string p2="",s2="";
       CP_KEY_RESULT r=LoadFile(p2,s2);
-      if(r!=CP_KEY_READ || p2!=pub || s2!=sec) return false;
+      if(r!=CP_KEY_READ || p2!=pub || s2!=sec)
+        {
+         m_lastErr=(GetLastError()!=0)?GetLastError():1;
+         return false;
+        }
       return true;
      }
 
@@ -341,6 +353,125 @@ public:
       log.Info("===============================================================");
      }
   };
+
+//+------------------------------------------------------------------+
+//| Helper to parse a single line for a key-value field             |
+//+------------------------------------------------------------------+
+string CopierKeyExtractField(const string line,const string name)
+  {
+   int n=StringLen(name);
+   if(StringLen(line)<n+1) return "";
+   string head=StringSubstr(line,0,n);
+   //--- StringToUpper modifies the string in-place by reference in MQL4/MQL5.
+   StringToUpper(head);
+   string nm=name;
+   StringToUpper(nm);
+   if(head!=nm) return "";
+   if(StringGetCharacter(line,n)!='=') return "";
+   return CopierTrim(StringSubstr(line,n+1));
+  }
+
+//+------------------------------------------------------------------+
+//| Read and parse a copier_hub.key file from a given handle         |
+//+------------------------------------------------------------------+
+string CopierParseHubKeyFileHandle(const int h)
+  {
+   if(h==INVALID_HANDLE) return "";
+   string pub="";
+   bool firstLine=true;
+   while(!FileIsEnding(h))
+     {
+      string line=CopierTrim(FileReadString(h));
+      if(StringLen(line)==0) continue;
+      if(firstLine)
+        {
+         firstLine=false;
+         // First non-empty line must match magic header
+         if(line!=CP_HUB_KEY_LINE_MAGIC)
+           {
+            FileClose(h);
+            return "";
+           }
+         continue;
+        }
+      if(StringGetCharacter(line,0)=='#') continue;
+      string p=CopierKeyExtractField(line,"PUBLIC");
+      if(StringLen(p)>0) pub=p;
+      else if(StringLen(line)==CP_KEY_LEN) pub=line; // fallback: naked 40-char key
+     }
+   FileClose(h);
+   if(StringLen(pub)==CP_KEY_LEN) return pub;
+   return "";
+  }
+
+//+------------------------------------------------------------------+
+//| Load Hub public key from file or input fallback                  |
+//| Precedence:                                                      |
+//| 1. Terminal-local Files\copier_hub.key                           |
+//| 2. Shared Common Files\copier_hub.key (FILE_COMMON)              |
+//| 3. Input parameter (HubPublicKey) fallback                       |
+//+------------------------------------------------------------------+
+string CopierLoadHubPublicKey(const string inputKey,CopierLog *log,string &outSource)
+  {
+   outSource="none";
+
+   // 1. Check local terminal MQLx\Files\copier_hub.key
+   int hLocal=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI);
+   if(hLocal!=INVALID_HANDLE)
+     {
+      string k=CopierParseHubKeyFileHandle(hLocal);
+      if(StringLen(k)==CP_KEY_LEN)
+        {
+         outSource="file:local (MQL\\Files\\"+CP_HUB_KEY_FILE+")";
+         if(CheckPointer(log)!=POINTER_INVALID)
+            log.Info("Hub Public Key: loaded from "+outSource+" ("+k+")");
+         return k;
+        }
+      else
+        {
+         if(CheckPointer(log)!=POINTER_INVALID)
+            log.Warn("Hub Public Key: local "+CP_HUB_KEY_FILE+" exists but is invalid (corrupt or wrong version).");
+        }
+     }
+
+   // 2. Check shared Terminal\Common\Files\copier_hub.key
+   int hCommon=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(hCommon!=INVALID_HANDLE)
+     {
+      string k=CopierParseHubKeyFileHandle(hCommon);
+      if(StringLen(k)==CP_KEY_LEN)
+        {
+         outSource="file:common (Terminal\\Common\\Files\\"+CP_HUB_KEY_FILE+")";
+         if(CheckPointer(log)!=POINTER_INVALID)
+            log.Info("Hub Public Key: loaded from "+outSource+" ("+k+")");
+         return k;
+        }
+      else
+        {
+         if(CheckPointer(log)!=POINTER_INVALID)
+            log.Warn("Hub Public Key: common "+CP_HUB_KEY_FILE+" exists but is invalid (corrupt or wrong version).");
+        }
+     }
+
+   // 3. Fallback to input string
+   string trimmedInput=CopierTrim(inputKey);
+   if(StringLen(trimmedInput)==CP_KEY_LEN)
+     {
+      outSource="input:HubPublicKey";
+      if(CheckPointer(log)!=POINTER_INVALID)
+         log.Info("Hub Public Key: using EA input parameter HubPublicKey ("+trimmedInput+")");
+      return trimmedInput;
+     }
+
+   if(StringLen(trimmedInput)>0)
+     {
+      if(CheckPointer(log)!=POINTER_INVALID)
+         log.Error("Hub Public Key: input HubPublicKey has invalid length ("+
+                   (string)StringLen(trimmedInput)+", expected "+(string)CP_KEY_LEN+").");
+     }
+
+   return "";
+  }
 
 #endif
 //+------------------------------------------------------------------+

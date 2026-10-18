@@ -84,6 +84,12 @@ tools/                  copier.bat   <- the Windows entry point for all of these
                         hub_curve_test.py          <- CURVE: the hub link is
                                                       encrypted and only listed
                                                       keys get in (§19.1)
+                        hub_notifications_test.py  <- M6+ external notifications
+                                                      (Telegram, WeCom, DingTalk)
+                        hub_audit_rotation_test.py <- bounded audit log rotation
+                                                      and gzip compression
+                        reset_password.bat, reset_password.py <- one-click password
+                                                      reset helper for admin
                         hub_proto.py, hub_proto_test.py, hub.sh, hub.bat,
                         hubrs.bat    <- run the RUST hub (see hub/)
                         hublog.bat   <- run the hub with stdout also going to
@@ -241,16 +247,21 @@ MinGW-w64 build that imports only system DLLs, and it has no separate
 Attach `CopierSender` to one chart on the account you want to copy **from**.  
 It never trades, so it can run on a read-only *investor* password.
 
-Key inputs: `BindAddress`, `EventsPort`, `SnapshotSeconds`, `CurveSecretKey`  
-(when `UseCurve` is on).
+Key inputs: `EventsPort`, `BindAddress`, `SnapshotSeconds`, `UseCurve`  
+(CURVE keypair generation is fully automatic — no secret key to paste).
 
-There is **no `SenderId`**: the sender's identity is its `EventsPort`. A port  
-cannot be bound twice on one machine, so it is already unique there, and both  
-ends derive the same string from it — one less input, and no way to mistype one  
-side into silence (a receiver ignores an SID it does not recognise, without  
-saying so). On a multi-host setup, where two senders may legitimately share a  
-port, give them different ports or use `copier.ini`, which still accepts an  
-explicit `id=` per sender.
+**EventsPort (default: blank / auto)**:
+In direct mode, leaving `EventsPort` blank (or `"0"`) automatically derives a deterministic port from the
+account number using `5000 + (MathAbs(account) % 1000)` (range 5000..5999). If
+the port is already bound locally, it fails fast with a desktop `Alert(...)`
+dialog and stops, asking the operator to configure an explicit manual `EventsPort` (1024-49151). This avoids race conditions and dynamic port drift across
+restarts.
+
+There is **no `SenderId`**: the sender's identity is its derived `EventsPort`
+(or `NID` under Central Hub mode). State persistence is decoupled from ports
+and safely keyed to account number (`copier_sender_<account>.st`), preventing
+duplicate broadcasts across port changes while maintaining 100% namespace
+isolation during same-terminal loopback self-copying.
 
 `EventsPort` is the **only** port bound — events and snapshots share it, so  
 there is no second port to set. (An older build had a `SnapPort` input for a  
@@ -267,12 +278,23 @@ outright rather than kept as decoration.)
 
 ### Receiver
 
-1. Copy `config/copier.ini.example` to `<terminal>\MQL4\Files\copier.ini`  
-   (or `MQL5\Files\`).
-2. Fill in one `[senderN]` section per sender: `id`, `events`, `snap`,  
-   optional `serverkey`, `lotmode`/`lotparam`, `magic`, and any  
-   `symbol.SenderName=YourName` mappings.
-3. Attach `CopierReceiver` to one chart. **One instance handles all senders.**
+The receiver operates in two modes:
+
+1. **Direct Mode (no ini needed):**
+   - Attach `CopierReceiver` to one chart.
+   - Configure directly via inputs: `SenderIP`, `SenderPort`, `InpMagic`, `SenderLotMode`, `SenderLotParam`.
+   - **Auto Magic (`InpMagic`, default: blank)**: Leaving `InpMagic` blank `""` (or `"0"`) automatically uses `(long)SenderPort` as the Magic Number. If a specific number is typed, that number is used as the custom Magic. The receiver state file (`copier_receiver_<magic>.st`) and instance mutex lock (`CP_LOCK_RCV_D_<magic>`) are strictly partitioned by this Magic number.
+   - To mirror multiple senders directly, attach one receiver instance per sender to separate charts.
+
+2. **Central (Hub) Mode:**
+   - Set `HubEndpoint = <hub_ip>:<hub_port>` (e.g. `127.0.0.1:6000`).
+   - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
+   - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
+   - Live settings sync: The receiver reports its active configuration (`CFGRPT` / `REG`) so operators can inspect and clone running settings in the Web Dashboard via **📥 Load Current Setting from Node**.
+
+**Cross-platform parameter grouping in MetaTrader**:
+- **MT5**: Uses native `input group "--- Group Name ---"` rendering full-width grey category section banners.
+- **MT4**: MetaTrader 4's 32-bit property dialog lacks group rendering. Clean cross-platform categorization is achieved via header placeholders (`input string _g_xxx_ = ""; // --- Group Name ---`), displaying clean section titles in the `Variable` column with empty `Value` fields, providing clean 8-group browsing without cluttering trade logic.
 
 Three behaviours worth knowing before you go live:
 
@@ -284,12 +306,103 @@ Three behaviours worth knowing before you go live:
 - **One UID maps to one position, and the receiver enforces it.** If two  
   positions ever end up sharing a UID, the extra one is invisible to every  
   other loop, so it is removed rather than left doubling the exposure.  
-  `DedupDuplicates` (default `true`) turns the removal off, leaving a warning.  
+  `DedupDuplicates` (default `true`) is what removes it; set it `false` to keep  
+  the extra position and leave a warning instead.  
   The survivor is the one matching the sender's volume, else the one whose  
   comment is still readable, else the older one.
 - **SL/TP is mirrored as a distance from the entry**, not as a price, and  
   removal propagates. `MirrorStops` (default `true`) turns it off entirely.  
   See *How SL/TP is mirrored* below for the consequences.
+
+### Receiver input reference
+
+Every input below is settable in two places: the EA's own inputs dialog, and the
+hub's **Visual Editor** (`Nodes → Configure → Load Current Setting`). The
+editor writes the same keys into `copier.ini`, so the two cannot drift — the
+tables below are the file format, not a separate description of it.
+
+`0` / `false` means **off** everywhere; nothing is on by default except where a
+default is named.
+
+**[common] — Account Circuit Breakers**
+
+| key | default | meaning |
+| --- | --- | --- |
+| `maxlotsperposition` | 0 | Cap on ONE mirrored position (lots) |
+| `maxtotallots` | 0 | Cap on TOTAL mirrored volume |
+| `maxopenpositions` | 0 | Cap on concurrent mirrored positions |
+| `dailylosspct` | 0 | Stop new entries for the rest of the server day after this % loss (measured on **equity**, from the day's opening equity) |
+| `maxdrawdownpct` | 0 | Stop new entries after this % fall from the session peak. Latched until reload — and the peak is persisted, so a terminal restart does **not** forgive it |
+| `riskcloseallontrip` | false | When a percentage switch trips, also close the positions already held (queued, paced by `maxactionspertick`) |
+
+**[common] — Global Fallbacks** (per-sender sections may override each one)
+
+| key | default | meaning |
+| --- | --- | --- |
+| `deviationpoints` | 30 | Slippage allowed, in points |
+| `emergencyslpips` | 0 | Local stop-loss placed at open (pips from entry) |
+| `emergencytppips` | 0 | Local take-profit placed at open (pips from entry) |
+| `mirrorstops` | true | Copy the sender's SL/TP, as a distance from entry |
+| `stopsthrottleseconds` | 2 | Minimum gap between two stop edits on one position |
+| `reopenclosedmirrors` | false | Re-open a mirror that vanished while the sender still holds it |
+| `dedupduplicates` | true | Remove a second position sharing one UID |
+| `inverttrades` | false | Mirror the opposite direction |
+| `staleseconds` | 15 | Silence from a sender stops NEW entries for it (closes and stop edits continue) |
+
+**[common] — Filters & Gates**
+
+| key | default | meaning |
+| --- | --- | --- |
+| `permittedsymbols` | — | `(A,B)` accept only these; `(!A,B)` reject these |
+| `permittedmagic` | — | `5,6` only these sender magics; `!5,6` all but these |
+| `ignoreuids` | — | UIDs to leave alone (comma-separated) |
+| `nobuy` | false | Refuse Buy entries |
+| `nosell` | false | Refuse Sell entries |
+| `ignorenewentrysignals` | false | Open nothing new; keep managing what exists |
+| `ignoreallexitsignals` | false | Close nothing; manage by hand |
+| `minsenderlotsize` | 0 | Skip entries whose **sender** volume is below this |
+| `maxsenderlotsize` | 0 | Skip entries whose **sender** volume is above this |
+| `checkforexistingposition` | 0 | `0` off, `1` skip if the symbol is already held, `2` skip if the same side is already held |
+
+**[common] — Anti-stack & Delays**
+
+| key | default | meaning |
+| --- | --- | --- |
+| `waitforseconds` / `waitforminutes` / `waitforhours` | 0 | Delay before mirroring an entry (summed) |
+| `waitforprofitpips` | 0 | Wait for `+N` profit (or `-N` dip) on the sender before entering |
+| `waitforminutesbar` | 0 | Delay this many M1 bars |
+| `requirepositionfillwithinseconds` / `...minutes` / `...hours` | 0 | Skip entries whose sender order is older than this (summed) |
+| `fillwithinminutesbar` | 0 | Skip after this many M1 bars since the sender filled |
+
+**[common] — Schedule & System**
+
+| key | default | meaning |
+| --- | --- | --- |
+| `includetradingtimes` | — | `HH:MM-HH:MM,...` in **server** time |
+| `daytradingtimes` | — | `Mon=08:00-17:00`; a day left out is closed |
+| `pollms` | 100 | Timer interval, milliseconds |
+| `maxactionspertick` | 5 | Trade operations executed per timer tick |
+| `loglevel` | 2 | `0` errors, `1` warnings, `2` info, `3` debug |
+| `statusenabled` | true | Send the once-a-minute `STAT` report |
+| `syncheartbeatseconds` | 1 | Snapshot-receipt heartbeat; `0` = off |
+| `showpanel` | true | Draw the status panel |
+| `showorphanedlist` | false | List orphaned positions on the panel |
+
+**[senderN] — one section per mirrored sender**
+
+| key | required | meaning |
+| --- | --- | --- |
+| `id` | **yes** | The SENDER's NID (the number it prints as `nid=`). Not its port |
+| `magic` | **yes** | The magic that sender pins. A guess would orphan real orders, so there is no fallback |
+| `lotmode` | — | `multiplier` (default) / `fixed` / `off`, or the codes `0` / `1` / `2` |
+| `lotparam` | 1.0 | The multiplier, or the fixed lot size |
+| `suffix` | — | Appended to symbols that are not mapped |
+| `symbol.FROM` | — | Map one symbol: `symbol.GOLD=XAUUSD` |
+
+Every `[common]` key can also appear inside a `[senderN]` section, where it
+applies to **that sender only** and falls back to the `[common]` value when
+absent. That is what makes per-source risk limits possible: one account, three
+senders, three different `maxlotsperposition` values.
 
 ### CURVE keys
 
@@ -365,12 +478,15 @@ never disagree.
 > **allow-list** (`curve_clients.txt`), enforced by a **ZAP handler** during
 > the handshake. A node whose key is not listed never completes the handshake,
 > so it cannot subscribe — which matters more here than on the direct channel,
-> because a hub subscriber is handed *every* sender's position stream. The two
-> switches are separate (`HubUseCurve` + `HubPublicKey` on the EAs, `--curve`
-> on the hub) because the roles are inverted: on the direct channel the sender
-> is the server; on the hub link the hub is. **Both default ON now** (2026-10-15,
-> the owner's test campaign): the EAs ship `HubUseCurve=true` with this hub's key
-> in `HubPublicKey`, and the hub defaults to `--curve on`. The order still
+> because a hub subscriber is handed *every* sender's position stream. The
+> hub's switch is `--curve`; the EAs no longer have one — since 2026-10-16 the
+> hub link's CURVE is a hard-coded `HubUseCurve=true` and the hub's public key
+> is loaded from a **file** (`MQL<4|5>\Files\copier_hub.key`, falling back to
+> the shared `Terminal\Common\Files\copier_hub.key`), never typed into a
+> dialog. The roles are inverted on purpose: on the direct channel the sender
+> is the server; on the hub link the hub is. **Both default ON** (the hub
+> since 2026-10-15, the EAs permanently since 2026-10-16): the hub defaults to
+> `--curve on`. The order still
 > matters — a node must not be attached against a hub that is not yet in CURVE
 > mode (it completes no handshake and goes blind) — and bring-up uses
 > `--curve-learn on`: the hub accepts any authenticated keypair and records its
@@ -433,23 +549,28 @@ which the hub learns as a by-product of relaying snapshot receipts.
 | Method | Path | Answers |
 |---|---|---|
 | GET | `/` | the dashboard — one self-contained HTML file, compiled into the binary |
-| POST | `/api/v1/login` · `/logout` | M9: session cookie in, session out |
+| POST | `/api/v1/auth/nonce` | `{id}` → `{nonce, salt, rounds}`; single-use 10s nonce for salted challenge-response auth; **429** once the hub is holding its maximum number of live challenges |
+| POST | `/api/v1/login` · `/logout` | M9: Scheme B challenge-response or legacy login; session cookie in, session out; **429 + `Retry-After`** during a failed-login flood, and repeated failures against one name get a growing delay |
 | POST | `/api/v1/password` | M9: change your OWN password (any role, old one required) |
 | GET | `/api/v1/whoami` | the caller's id and role (the dashboard's login probe) |
 | GET | `/api/v1/nodes` · `/nodes/{id}` | nodes, and one node with its positions |
 | GET | `/api/v1/topology` | senders, receivers, and the edges between them |
 | GET | `/api/v1/positions` | the M3 position view as data |
 | GET | `/api/v1/alerts` | the M6 alert ring |
-| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only** |
+| GET · POST | `/api/v1/notifications` · `DELETE /notifications/{id}` · `POST /notifications/test` | external alert channels (Telegram / WeCom / DingTalk / webhook); secrets masked on read, operator to add/change/remove or to test a channel |
+| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only**; answers from the active file plus `.gz` archives when `limit` reaches past a rotation |
 | GET · POST · DELETE | `/api/v1/users` | M9 user management; **admin only** |
 | GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **403 with `--writes off`** |
 | POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
 | POST | `/api/v1/commands` | G10 global: one command per known receiver → **202** + counts + per-command ids; **403 with `--writes off`**, same **400** door |
+| GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — the 40-char key with nothing to transcribe by hand (session required; 404 when `--curve off`) |
 | GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
 | WS | `/api/v1/stream` | a full snapshot on connect, and one per change (session cookie required) |
 
-**M9 puts a login in front of everything but `/`, the health probes and
-`/login`.** A missing session answers **401**; a session whose role is below
+**M9 puts a login in front of everything but `/`, the health probes,
+`/api/v1/auth/nonce`, `/login`, `/logout` and `/whoami`** (the last two answer
+before a session exists by design: `whoami` is the dashboard's pre-login probe,
+`logout` can only ever end the caller's own session). A missing session answers **401**; a session whose role is below
 the endpoint's bar answers **403** and is audited. The matrix is the plan's
 §17.2 — `viewer` reads, `operator` may command and configure, `admin` manages
 users and reads the audit log — so the write path now has *two* gates
@@ -457,6 +578,16 @@ users and reads the audit log — so the write path now has *two* gates
 bootstraps user `admin` and prints its password **once**; it is stored only as
 a salted hash. `--users none` skips the login entirely for throwaway local
 runs: every request is an anonymous viewer, and writes still 403.
+
+**Failed logins are throttled in two different ways, on purpose.** A name that
+keeps failing gets a growing DELAY (250 ms per failure past the third, capped at
+4 s) — never a lockout, because a per-name lockout would let anyone who knows
+the admin's id keep the operator out of their own hub. Only the GLOBAL rate is
+refused outright (40 failures in 60 s → **429** for 10 s), and that refusal
+exists to stop a password spray from making the hub burn 4096 SHA-256 rounds per
+request. The unauthenticated `/auth/nonce` endpoint is capped at 512 live
+challenges for the same reason: without a cap a request loop grows that map
+faster than its 10-second expiry drains it.
 
 **CURVE is ON for the ZMQ link** (§19.1, default since 2026-10-15). The link is
 encrypted and every node must present a keypair listed in the hub's
@@ -466,8 +597,10 @@ hub never authorises would otherwise still be handed every position the hub
 publishes, because publishing is libzmq's job, not the application's.
 
 **Both sides default ON**, so a fresh deployment needs no key transcription:
-the EAs ship `HubUseCurve=true` with this hub's public key in `HubPublicKey`,
-and the hub defaults to `--curve on`. Bring-up uses `--curve-learn on`: the
+the EAs' hub link runs CURVE unconditionally and reads the hub's public key
+from `copier_hub.key` (terminal `Files\`, falling back to the shared
+`Common\Files\` — one file serves every terminal on the machine), and the hub
+defaults to `--curve on`. Bring-up uses `--curve-learn on`: the
 hub accepts any authenticated keypair and writes its key into
 `curve_clients.txt` itself (marked `# learned`), so the fleet registers
 itself; restart without learn once every node has joined and the list is
@@ -481,8 +614,10 @@ Append-only is the whole design, and three consequences are worth knowing: it is
 greppable and `tail -f`-able by hand; every record carries a monotonic `seq` so a
 *missing* one is detectable; and if it cannot be opened the hub **refuses to
 start** rather than run unaudited — `--audit none` is the explicit way to turn it
-off. (SQLite is M11: `rusqlite` does not build here yet, and the audit needs the
-property, not the engine — see `hub/README.md`.)
+off. It also rotates itself at **10 MB** into gzipped archives (`.1.gz` …
+`.10.gz`, oldest pruned), without ever blocking a write or resetting `seq` —
+see `hub/README.md`. (SQLite is M11: `rusqlite` does not build here yet, and the
+audit needs the property, not the engine — see `hub/README.md`.)
 
 > **The default `--http` is loopback while the ZMQ port's is not, and that
 > difference is the whole point.** The hub's `--port` binds `0.0.0.0` and the
@@ -526,8 +661,8 @@ pause survives a receiver restart).
 M4/M5, with their `202` + `command_id` semantics and their audit trail; the
 audit log landed first (M7) so that those have somewhere to be recorded, and
 the config store landed next (M4a) so that they have something to act on. See `hub/README.md`, and `tools/hub_api_test.py` plus `tools/hub_config_test.py` /
-`tools/hub_commands_test.py` for what is asserted about all of the above (the API
-suite plus 54 + 37 checks, against the real binary).
+`tools/hub_commands_test.py` for what is asserted about all of the above (~170
+checks across the three suites, against the real binary).
 
 ---
 
@@ -782,9 +917,9 @@ array that grows with time:
 
 | structure              | bound                                                                                                                                                             |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| open-position table    | 512, slots reused immediately                                                                                                                                     |
+| open-position table    | `CP_MAX_POSITIONS` (2048), slots reused immediately                                                                                                              |
 | dedup ring             | 4096 keys, TTL-expired                                                                                                                                            |
-| per-sender desired set | 512 × `CP_MAX_SENDERS`                                                                                                                                            |
+| per-sender desired set | `CP_MAX_SENDERS` × `CP_MAX_POSITIONS`                                                                                                                                            |
 | action queue           | 256                                                                                                                                                               |
 | log files              | 1 MB × 3, oldest recycled                                                                                                                                         |
 | state file             | 256 lines, rewritten whole, never appended                                                                                                                        |
@@ -878,7 +1013,7 @@ torn-state-file rejection, and duplicate-survivor selection (including an
 antisymmetry check, because the caller folds that predicate over a group).  
 Run it as a script after any change to those layers. It writes  
 `copier_selftest.log` and prints a pass/fail summary; it should end with  
-`ALL PASS` on **both** platforms — currently **452 assertion call sites**
+`ALL PASS` on **both** platforms — currently **405 assertion call sites**
 (counted with `grep -c 'Ok(' src/Scripts/CopierSelfTest.mq4`-style, so it is
 checkable rather than remembered).
 
@@ -967,7 +1102,7 @@ a burst of routine `STAT` must write **zero** lines, and an unrecognised
 control type must still write one, so widening the suppression list can never
 silently become a mode. Run it after any change to the hub's logging rule.
 
-`bash hub/build.sh --test` runs the 88 hub unit tests. Not `cargo test` — Rust
+`bash hub/build.sh --test` runs the 104 hub unit tests. Not `cargo test` — Rust
 lives in an **isolated** toolchain and is not on `PATH`, so a bare `cargo` is
 just `command not found`; `hub/build.sh` sets `RUSTUP_HOME` / `CARGO_HOME` /
 `LIBZMQ_PREFIX` / `PATH` in one place. Its header explains why that is
@@ -1266,3 +1401,13 @@ MT5 build in `C:\Program Files\MetaTrader 5`.
 `<Angle/Bracket.mqh>` includes against **its own** data folder (so `/include:`
 is mandatory when the editor and the terminal are different installs), and
 `/log:` needs an explicit file path.
+
+---
+
+## Documentation Index & Handoff
+
+- **System Handoff & Operations Manual**: [`doc/HANDOFF.md`](doc/HANDOFF.md) — Comprehensive handoff guide, live architecture, waiting telemetry pipeline, mobile dashboard redesign, operations, and QA record.
+- **Central Hub Implementation Plan**: [`doc/CENTRAL-HUB-PLAN.md`](doc/CENTRAL-HUB-PLAN.md) — Complete plan for the central hub architecture, topics, and RBAC matrix.
+- **Protocol Specification**: [`doc/PROTOCOL.md`](doc/PROTOCOL.md) — Complete wire protocol definitions, snapshot formats, and hashing algorithms.
+- **Pilot Acceptance Guides**: [`doc/PILOT.md`](doc/PILOT.md) (MT5), [`doc/PILOT-MT4.md`](doc/PILOT-MT4.md) (MT4 cross-platform pilot).
+

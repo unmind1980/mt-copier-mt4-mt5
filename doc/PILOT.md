@@ -51,26 +51,26 @@ In the **E:\MetaTrader 5** terminal:
    the chart).
 2. Drag `CopierSender` from the Navigator onto the chart.
 3. In the Common tab tick **Allow DLL imports**.
-4. Inputs — only the first two actually need changing:
-   * `SenderId` = `sender01` (the default; **must match `id=` in the
-     receiver's `copier.ini`** — it is the routing key, and a receiver
-     ignores any message whose SID it does not recognise, silently)
-   * `BindAddress` = `tcp://127.0.0.1`  ← loopback only; `tcp://*` exposes it
-   * `EventsPort` = `5555` — the only port bound
-   * `UseCurve` = `false` (default)
+4. Inputs — only the network inputs need verifying:
+   * `BindAddress` = `tcp://127.0.0.1`  ← loopback only; `*` exposes it to all NICs
+   * `EventsPort` = `""` (blank = AutoPort: deterministically computes `5000 + acc % 1000`; or manual port e.g. `5555`)
+   * `UseCurve` = `false` (default for local loopback)
    * `LogLevel` = `2` (the default; INFO level is event-driven — startup,
      open, close — not per-tick, so it is safe to leave on)
 
+   > The sender's identity is its derived port (or NID in central mode). There is no separate `SenderId`
+   > input — both ends derive the ID string directly. State persistence is decoupled by account into
+   > `copier_sender_<account>.st`.
+
    > If you turn `UseCurve` on, there is no key to paste: this EA generates
    > its own keypair into `MQL5\Files\copier_curve.key` on first start and
-   > prints the public key in the Experts log, ready to copy into the
-   > receiver's `SenderServerKey`. See *CURVE keys* in the README.
+   > prints the public key in the Experts log. See *CURVE keys* in the README.
 5. Make sure **AutoTrading** is on.
 
-Expected in the Experts log **and** in `MQL5\Files\copier_sender_sender01.0.log`:
+Expected in the Experts log **and** in `MQL5\Files\copier_sender_<port>.0.log`:
 
 ```
-sender sender01 listening on port 5555 ssid=XXXXXX
+sender <port> listening on port <port> (AutoPort active) ssid=XXXXXX
 ```
 
 If that file stays empty, `LogLevel` is still 1 (warnings only) and the
@@ -88,12 +88,14 @@ In the **C:\Program Files\MetaTrader 5** terminal:
 2. Common tab → **Allow DLL imports**.
 3. Tick **Allow live trading** (the receiver places orders).
 4. Make sure **AutoTrading** is on.
-5. Inputs: `ConfigFile` = `copier.ini`, `LogLevel` = `2`.
+5. Inputs:
+   * Direct mode: `SenderIP` = `127.0.0.1`, `SenderPort` = `<sender_port>` (matching sender's AutoPort or 5555), `InpMagic` = `""` (blank = Auto: adopts `SenderPort`; or enter custom magic e.g. `770000`), `LogLevel` = `2`.
+   * Central mode (if using Hub): `HubEndpoint` = `127.0.0.1:6000` (which takes precedence and loads `copier.ini` pushed by the Hub; one receiver mirrors all senders).
 
 Expected in the Experts log:
 
 ```
-receiver up, 1 sender(s), magic base=770000
+receiver up, 1 sender(s), magic=<magic>
 ```
 
 The receiver does **nothing** until it has seen a snapshot — that guard is

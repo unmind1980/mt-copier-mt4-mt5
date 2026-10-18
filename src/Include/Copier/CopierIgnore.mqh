@@ -103,6 +103,8 @@ private:
       //--- uid off a chart or out of the log will not reliably reproduce the
       //--- case. Rejecting a correctly-spelled uid over case would be pure
       //--- friction, and there is nothing to be ambiguous about.
+      //---
+      //--- StringToUpper modifies the string in-place by reference in MQL4/MQL5.
       StringToUpper(u);
 
       if(!CopierUidValid(u))

@@ -21,7 +21,7 @@ untouched.
 ## Envelope
 
 ```
-V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|T=<TYPE>|P=<payload>
+V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE>|P=<payload>
 ```
 
 `P=` is always last and is parsed by finding the **first** occurrence of  
@@ -34,6 +34,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|T=<TYPE>|P=<pay
 | `SSID` | session id, regenerated on every `OnInit`. A change means the sender restarted: the receiver throws away its idea of that sender's state and resyncs from the next snapshot.                                        |
 | `SEQ`  | monotonic per session. Idempotency key is `SID:SSID:SEQ`. The receiver keeps **one `last_seq` per sender** — never a shared counter, or one sender's sequence would poison another's. `SEQ <= last_seq` is dropped. |
 | `TS`   | **broker server time**, never wall clock. VPS clocks drift; nothing is ever ordered by timestamp. Latency is measured by round trip instead.                                                                        |
+| `MS`   | the sender's **monotonic** millisecond clock (`GetTickCount`). `TS` is whole seconds — far too coarse for a link that is usually sub-millisecond — so this rides along on messages that are being sent anyway. Two machines' tick counters differ by an arbitrary constant, so it is **not** comparable across hosts on its own: the receiver derives the offset from the best round trip it has ever seen (`CopierPeers.mqh`). |
 | `T`    | message type.                                                                                                                                                                                                       |
 
 ## Message types
@@ -43,15 +44,21 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|T=<TYPE>|P=<pay
 | `SNAP`    | every `SnapshotSeconds` (default 10), implicitly on (re)connect, and on a targeted repair | `N=<count>;R=<rec>~<rec>...;H=<8 hex>`                                                                      |
 | `OPEN`    | event, immediate                                                                          | `UID=..;TKT=..;SYM=..;SIDE=..;LOTS=..;OPN=..;SL=..;TP=..;OTS=..`                                            |
 | `CLOSE`   | event, immediate                                                                          | `UID=..;TKT=..;LOTS=..;PX=..`                                                                               |
-| `HBT`     | every `HeartbeatSeconds` (default 1)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..`                                                                        |
+| `HBT`     | every `HeartbeatSeconds` (default 1)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..;ACC=..`                                                                        |
 | `PARTIAL` | reserved (P4)                                                                             |                                                                                                             |
 | `MODIFY`  | event, immediate — a stop moved                                                           | `UID=..;OPN=..;SL=..;TP=..`                                                                                 |
 | `STAT`    | Position summary on every `SyncHeartbeatSeconds` (default 1); monitoring once a minute | `LOGIN=..;SID=..;H=..` always, plus `HELD=..;LOTS=..;ORPHAN=..` on the sync cadence and `EQ=..;BL=..;NSEND=..;BLOCKED=..;RISK=..` once a minute |
 | `RCPT`    | hub → sender, on every receipt a receiver reports                                         | `LOGIN=..;SID=..;H=..`                                                                                      |
 | `CFG`     | hub → node, on a config change and on the retry ladder                                    | `ID=..;REV=..;INI=<escaped ini>`                                                                            |
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
-| `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..` or `ID=..;OK=0;ERR=..`                                                                  |
 | `CFGR`    | node → hub, when a node wants its config again                                            | `REQ=1;ROLE=..;ACC=..;REV=..`                                                                               |
+| `CFGRPT`  | node → hub, reports active running configuration (inputs & senders) to hub                | `ROLE=..;ACC=..;REV=..;INI=<escaped ini>`                                                                  |
+| `REG`     | node → hub, on connect (×3) — "here I am"                                                | `ROLE=sender\|receiver;ACC=<acc>;VER=..;NAME=..;UP=..;REV=..` — a receiver's `REG` also carries `INI=<escaped ini>` and `PAUSED=0\|1` |
+| `HBT2`    | node → hub, every 5 s (central channel only)                                              | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..;REV=..;PAUSED=0\|1` |
+| `WHO`     | hub → all nodes, every 5 s while the table is empty, then every 60 s                       | `NONCE=<n>`                                                                                                  |
+| `PING`    | every 10 s on the peer channel (direct or the hub channel)                               | `MS=..;FROM=..`                                                                                              |
+| `PONG`    | in reply to a `PING`, or to a `WHO`                                                      | `MS=..;FROM=..;TO=hub`                                                                                       |
+| `CMD`     | hub → node, on an operator action                                                         | `ID=..;OP=pause\|resume\|closeall\|reload[;ARGS=..]`                                                         |
 
 ### `CFG` / `ACK` / `CFGR` — config push
 
@@ -68,13 +75,11 @@ one that has been edited by hand:
 **`INI` is percent-escaped.** An ini contains `;`, `=`, `|` and newlines, every  
 one of which the payload format uses as a delimiter — dropped in raw, the field  
 would end at the first `;` of the first comment and the node would receive a  
-truncated config. The escape is `%25 %7C %3B %7E %2C %3D %0A %0D`, applied to  
-\`% | ; ~ , =
-
-` respectively; everything else passes through. It is **not** idempotent (`%`is escaped and also appears in the output), so it is
-applied exactly once on each side.`hub/src/config.rs`is the reference
-implementation and`tools/hub_config_test.py\` asserts a real ini survives it  
-byte for byte.
+truncated config. The escape is `%25 %7C %3B %7E %2C %3D %0A %0D`, applied to
+`% | ; ~ , = \n \r` respectively; everything else passes through. It is **not**
+idempotent (`%` is escaped and also appears in the output), so it is applied
+exactly once on each side. `hub/src/config.rs` is the reference implementation
+and `tools/hub_config_test.py` asserts a real ini survives it byte for byte.
 
 **`ID` is derived from `(node, rev)`, not a counter.** §5.4 requires a node to be  
 idempotent by `ID`, and says why: under §11 primary/standby two hubs may push  
@@ -91,15 +96,20 @@ layer 2): a changed `magic`, or a changed sender set. A config that applies
 cleanly can still leave positions nothing manages any more, and that is worth  
 saying in the same breath as the success.
 
-> **State: both halves are implemented (M4a hub, M4b EA), and BOTH default to  
-> off.** The hub refuses to write without `--writes on`; the receiver refuses to  
-> apply without `AcceptConfigPush=true`, and answers `OK=0` when it refuses  
-> rather than staying silent (silence would leave the hub walking its retry  
-> ladder for a refusal it could have been told about at once).
->
-> Two gates because this is the only operation in the system that can stop a  
-> receiver from starting, and §19.1 makes the firewall the only trust boundary  
-> on the hub port. See `hub/README.md`.
+> **State: both halves are implemented (M4a hub, M4b EA).** For the active test
+> campaign (since 2026-10-14), the hub's write gate defaults to ON (`writes: true`,
+> override with `--writes off`), and the receiver's `AcceptConfigPush` /
+> `AcceptCommands` are hardcoded to `true` (see `CopierReceiver.mq4`). If refused,
+> the receiver answers `OK=0` immediately rather than staying silent, preventing
+> the hub from fruitlessly walking its retry ladder. See `hub/README.md`.
+
+### `CFGRPT` & `REG` INI reporting — live running configuration
+
+To allow the Central Hub to observe and manage all runtime parameters without blind guesses, the receiver EA serialises its full active configuration (including the `[common]` section with all ~45 EA inputs and all configured `[senderN]` mapping sections) into INI format:
+
+1. **On `REG` registration**: The receiver appends `INI=<escaped ini>` to its `REG` message. The hub unescapes this payload and saves it into `s.node_current_ini` with the current timestamp.
+2. **On configuration application (`CFGRPT`)**: After accepting a config push via `ACK`, the receiver EA broadcasts a `CFGRPT` message to `@hub` containing `ROLE=receiver;ACC=<acc>;REV=<rev>;INI=<escaped ini>`.
+3. **Hub API & Dashboard**: `GET /api/v1/nodes/:id/config` returns `current_setting` and `current_setting_ts`. The dashboard provides a one-click button `📥 Load Current Setting from Node` that populates all form fields and the raw INI editor from the live node configuration.
 
 ### `RCPT` — how the receipt reaches a sender in central mode
 
@@ -656,9 +666,12 @@ which is not what a copier is for.
 
 ### Removal propagates
 
-A sender that clears its stop clears the mirror's. This is deliberate  
-faithful convergence: the snapshot is authoritative and re-sent every 2 s, so  
-a transient sender-side glitch is corrected within one period.
+A sender that clears its stop clears the mirror's. This is deliberate
+faithful convergence: the snapshot is authoritative and re-sent every
+`SnapshotSeconds` (default 10 s) at the outside, while a `MODIFY` event
+carries a stop change on the fast path (measured sub-second) — so a
+transient sender-side glitch is corrected within one period of the slower
+path.
 
 ### The one-tick window at open
 

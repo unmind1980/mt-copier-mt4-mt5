@@ -19,6 +19,12 @@ hub/target/
 # ---- Runtime data / logs ----
 *.log
 *.jsonl
+# Atomic-write temps carry a pid suffix (e.g. users.json.tmp.1234,
+# audit.jsonl.gz.tmp.1234) - the exact name alone does not match them.
+*.tmp.*
+# Audit rotation archives: audit.jsonl.1.gz .. audit.jsonl.10.gz do NOT match
+# *.jsonl (they end in .gz), so they would appear untracked after a rotation.
+*.jsonl.*
 # Test scratch: the Python suites write these next to themselves and clean
 # them up on success; a crashed run leaves them behind, never to be tracked.
 tools/_hub_*
@@ -28,6 +34,10 @@ audit.jsonl
 # M9 user table: holds salted password hashes, never belongs in git.
 users.json
 users.json.tmp
+# Notification channel store: holds PLAINTEXT bot tokens / webhook secrets
+# (Telegram bot_token, WeCom/DingTalk secrets). Same reason as users.json.
+alert_channels.json
+alert_channels.json.tmp
 # CURVE (§19.1): the hub keypair holds a SECRET - never versioned, never
 # shared. The allow-list is per-deployment config, not source, so it is not
 # versioned either (a committed allow-list is a list somebody forgets to edit).
