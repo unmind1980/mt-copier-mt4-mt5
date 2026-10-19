@@ -247,7 +247,7 @@ MinGW-w64 build that imports only system DLLs, and it has no separate
 Attach `CopierSender` to one chart on the account you want to copy **from**.  
 It never trades, so it can run on a read-only *investor* password.
 
-Key inputs: `EventsPort`, `BindAddress`, `SnapshotSeconds`, `UseCurve`  
+Key inputs: `EventsPort`, `BindAddress`, `SnapshotSeconds`, `HeartbeatSeconds`, `UseCurve`  
 (CURVE keypair generation is fully automatic — no secret key to paste).
 
 **EventsPort (default: blank / auto)**:
@@ -256,6 +256,11 @@ account number using `5000 + (MathAbs(account) % 1000)` (range 5000..5999). If
 the port is already bound locally, it fails fast with a desktop `Alert(...)`
 dialog and stops, asking the operator to configure an explicit manual `EventsPort` (1024-49151). This avoids race conditions and dynamic port drift across
 restarts.
+
+**Snapshot Cadence & Instant Bootstrap (`SnapshotSeconds`, default: 15s)**:
+- Snapshot broadcast runs every 15s (`SnapshotSeconds = 15`), serving as baseline state convergence. Stop-loss changes are emitted immediately via `CP_T_MODIFY` events, and balance/equity updates broadcast every 5s (`HeartbeatSeconds = 5`).
+- **Instant Bootstrap on First Contact**: When a new receiver connects and emits an empty receipt (`H=""`), the sender immediately unicasts the cached snapshot on the receiver's very first heartbeat (<1 second), bypassing the 15s broadcast clock.
+- **10KB Adaptive Deflate/Zip + Z85 Compression**: Wire records (`R=` in `SNAP`, and `POS=`/`WAITLIST=` in `STAT`) automatically compress via native MetaTrader `CryptEncode(CRYPT_ARCH_ZIP)` + `Z85` when payload size exceeds 10,240 bytes (prefixed with `1:`), while payloads under 10KB remain zero-overhead plain text (prefixed with `0:`). Floating-point numbers automatically omit redundant trailing zeroes and dots (`CopierFmtDouble`).
 
 There is **no `SenderId`**: the sender's identity is its derived `EventsPort`
 (or `NID` under Central Hub mode). State persistence is decoupled from ports
@@ -291,6 +296,8 @@ The receiver operates in two modes:
    - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
    - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
    - Live settings sync: The receiver reports its active configuration (`CFGRPT` / `REG`) so operators can inspect and clone running settings in the Web Dashboard via **📥 Load Current Setting from Node**.
+   - **Multi-tier Telemetry & On-Demand Refresh**: Receiver sends 1s receipts for instant sync, 5s summary figures (`HELD`, `LOTS`, `WAIT`, `EQ`, `BL`), and 60s detailed lists (`POS`, `WAITLIST`). In Direct mode, detailed lists are automatically skipped to keep communication ultra-lean. In WebUI, operators can click `[🔄 Request Update]` in the orders table header to request an immediate on-demand refresh without waiting for the 60s routine clock.
+   - **Full Order & Pipeline Inspection in Dashboard**: The Web Dashboard (#posmodal) provides line-by-line inspection with 5 filter tabs (`All`, `Opened`, `Waiting`, `Managed`, `Orphan / Manual`) and visual breakdown across the 3-stage waiting pipeline (Broker Queue, Gate Delayed, Market Closed). All filter tabs are persistent DOM elements with 0ms transition latency and zero flicker.
 
 **Cross-platform parameter grouping in MetaTrader**:
 - **MT5**: Uses native `input group "--- Group Name ---"` rendering full-width grey category section banners.

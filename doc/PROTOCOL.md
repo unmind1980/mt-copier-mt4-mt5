@@ -195,6 +195,15 @@ Re-sending the same bytes cannot do that, because the hash does not move.
 The division of labour is the point: **content changes are the periodic  
 broadcast's job; a repair only fixes delivery.**
 
+### Instant Bootstrap Snapshot on first contact (`H=""`)
+
+When a newly attached or restarted receiver first connects, its initial `STAT` carries `H=""` (empty receipt).
+Rather than forcing the new receiver to wait for the next periodic `SnapshotSeconds` broadcast (e.g. 15s),
+the sender recognises `H=""` as a newly joined node needing initialization:
+- **Debounce bypass**: It skips the 2-second stale debounce window and immediately transmits the cached `g_snapPayload` on the receiver's very first heartbeat (<1 second).
+- **Targeted delivery**: In Central Hub mode, it unicasts directly to the receiver's dedicated NID topic (`<rnid>`), causing zero disturbance or traffic to other receivers. In Direct mode, it broadcasts on the direct XPUB socket.
+- **Flood guard**: The minimum re-send floor (`SnapshotSeconds`) still guards against runaway retries if a malfunctioning node persistently reports `H=""`.
+
 
 ### SNAP receipt (`H`) — delivery tracking, not state comparison
 
