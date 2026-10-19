@@ -430,6 +430,8 @@ bool    g_srvEverMoved=false;
 #define CP_SYM_STALL_MS 60000
 long    g_lastStatusMs=0;            // STAT cadence
 long    g_lastSyncMs=0;              // snapshot-receipt cadence (SyncHeartbeatSeconds)
+long    g_lastPosDetailMs=0;         // detailed position/waitlist table cadence (routine 60s)
+bool    g_forcePosReport=false;      // WebUI on-demand position update request
 long    g_lastPruneMs=0;             // stop-override table sweep
 long    g_statusSeq=0;
 int     g_riskBlocked=0;             // entries refused by a risk switch since the last STAT
@@ -4261,6 +4263,16 @@ void HandleCmd(const CopierEnv &e)
       return;
      }
 
+   if(op=="reqpos" || op=="refreshpos" || op=="refresh")
+     {
+      g_forcePosReport=true;
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      g_log.Info("CMD "+id+": position table update requested by WebUI");
+      return;
+     }
+
    //--- The hub validates OP at the door, so reaching this line means a hub
    //--- a version apart, or a hand-crafted frame. Answer rather than leave
    //--- the ladder running against an op that will never become known.
@@ -5634,13 +5646,15 @@ void OnTimer()
    bool dueStatus=(StatusEnabled && now-g_lastStatusMs>=60000);
    bool dueSync  =(SyncHeartbeatSeconds>0
                    && now-g_lastSyncMs>=(long)SyncHeartbeatSeconds*1000);
+   bool dueDetail=(g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000));
 
-   if(dueStatus || dueSync)
+   if(dueStatus || dueSync || g_forcePosReport)
      {
       if(dueStatus) g_lastStatusMs=now;
-      if(dueSync)   g_lastSyncMs=now;
+      if(dueSync || g_forcePosReport) g_lastSyncMs=now;
+      if(dueDetail) g_lastPosDetailMs=now;
 
-      bool putPositionSummary=(dueSync || dueStatus);
+      bool putPositionSummary=(dueSync || dueStatus || g_forcePosReport);
       bool putFigures=dueStatus;
       for(int i=0;i<g_nSenders;i++)
         {
@@ -5669,10 +5683,15 @@ void OnTimer()
                +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
 
-            string posEnc=EncodeReceiverPositions();
-            string waitEnc=EncodeReceiverWaitList();
-            st+=CP_SEP_KV+"POS="+posEnc
-               +CP_SEP_KV+"WAITLIST="+waitEnc;
+            //--- Detailed position & waiting item lists are transmitted once a minute
+            //--- or on-demand when requested by WebUI (g_forcePosReport) to save bandwidth
+            if(dueDetail)
+              {
+               string posEnc=EncodeReceiverPositions();
+               string waitEnc=EncodeReceiverWaitList();
+               st+=CP_SEP_KV+"POS="+posEnc
+                  +CP_SEP_KV+"WAITLIST="+waitEnc;
+              }
 
             putPositionSummary=false;  // once per batch, not per sender
            }
@@ -5688,6 +5707,7 @@ void OnTimer()
          CopierSendStatus(CP_T_STAT,st);
         }
       if(dueStatus) g_riskBlocked=0;     // reported; start the next window
+      if(dueDetail) g_forcePosReport=false;
      }
 
    //--- peers and the panel, last so the figures shown are this pass's

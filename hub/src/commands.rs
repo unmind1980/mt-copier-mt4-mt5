@@ -95,7 +95,7 @@ pub const REVIVE_COOLDOWN_SECS: u64 = 60;
 /// a command: `POST {"op":"paus"}` that were accepted would sit on the ladder
 /// for 82 seconds and then be reported as `unknown`, which reads like "the
 /// node did not answer" rather than "you misspelled it".
-pub const OPS: [&str; 4] = ["pause", "resume", "closeall", "reload"];
+pub const OPS: [&str; 5] = ["pause", "resume", "closeall", "reload", "reqpos"];
 
 pub fn is_known_op(op: &str) -> bool {
     OPS.contains(&op)

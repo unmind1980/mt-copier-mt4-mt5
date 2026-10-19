@@ -1941,8 +1941,25 @@ async fn post_command(
     body: String,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // M9: operator or admin (the plan's §17.2 matrix).
-    if sess.role < UserRole::Operator {
+
+    //--- Parse the operation. Accept either `{"op":"pause"}` or the bare word
+    //--- `pause`, because a CLI or a curl one-liner should not have to wrap it.
+    let op = {
+        let body = body.trim();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            v.get("op")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| body.to_string())
+        } else {
+            body.to_string()
+        }
+    };
+
+    let is_read_only = op == "reqpos";
+
+    // M9: operator or admin (the plan's §17.2 matrix), unless read-only telemetry request.
+    if !is_read_only && sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
     }
 
@@ -1956,7 +1973,7 @@ async fn post_command(
     //--- The gate. Off by default, and the refusal says why rather than just
     //--- 403-ing: an operator who set this up and forgot the flag should be
     //--- able to read the fix off the response.
-    if !writes {
+    if !is_read_only && !writes {
         return (
             axum::http::StatusCode::FORBIDDEN,
             Json(json!({
@@ -1979,20 +1996,6 @@ async fn post_command(
         )
             .into_response();
     }
-
-    //--- Parse the operation. Accept either `{"op":"pause"}` or the bare word
-    //--- `pause`, because a CLI or a curl one-liner should not have to wrap it.
-    let op = {
-        let body = body.trim();
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-            v.get("op")
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| body.to_string())
-        } else {
-            body.to_string()
-        }
-    };
     if !crate::commands::is_known_op(&op) {
         return (
             axum::http::StatusCode::BAD_REQUEST,

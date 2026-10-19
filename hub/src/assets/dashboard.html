@@ -1149,6 +1149,7 @@
       <div class="pos-node-nav">
         <button type="button" id="pos_prev_btn" class="opbtn" title="Previous node">◀ Prev</button>
         <button type="button" id="pos_next_btn" class="opbtn" title="Next node">Next ▶</button>
+        <button type="button" id="pos_refresh_btn" class="opbtn" title="Request immediate position table update from receiver terminal" style="margin-left:8px;font-weight:600">🔄 Request Update</button>
       </div>
     </div>
     <div class="posbody" id="pos_detail_body">
@@ -1850,12 +1851,21 @@ function renderPosNodeDetail(){
       out += '</div>';
     }
 
+    var rBtn = $("pos_refresh_btn");
+    if(rBtn){
+      rBtn.style.display = "";
+      rBtn.title = "Request immediate position table update from receiver terminal " + n.key;
+    }
     if($("pos_foot_msg")){
-      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Real-time telemetry streamed via STAT heartbeat";
+      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
     }
 
   } else {
     // ================= SENDER VIEW =================
+    var sBtn = $("pos_refresh_btn");
+    if(sBtn){
+      sBtn.style.display = "none";
+    }
     var p = findPosBySender(n.key, n.acc);
     var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
     var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
@@ -1972,6 +1982,32 @@ function openPositionsModal(focusKey){
 
 function closePositionsModal(){
   $("posmodal").classList.add("hidden");
+}
+
+function requestPosUpdate(){
+  var k = s.selectedPosNode || ($("pos_node_select") ? $("pos_node_select").value : "");
+  if(!k) return;
+  var btn = $("pos_refresh_btn");
+  var msg = $("pos_foot_msg");
+  if(!k.startsWith("receiver:")){
+    if(msg) msg.textContent = "Sender orders are auto-synced with market snapshots";
+    return;
+  }
+  if(btn){
+    btn.disabled = true;
+    btn.textContent = "⏳ Requesting…";
+  }
+  if(msg){
+    msg.className = "opmsg";
+    msg.textContent = "Requesting immediate position table from " + k + "…";
+  }
+  sendCommand(k, "reqpos", msg);
+  setTimeout(function(){
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = "🔄 Request Update";
+    }
+  }, 3000);
 }
 
 function renderRecPositions(){
@@ -2624,6 +2660,9 @@ function startDashboard(){
   });
   $("pos_next_btn").addEventListener("click", function(){
     navPosNode(1);
+  });
+  $("pos_refresh_btn").addEventListener("click", function(){
+    requestPosUpdate();
   });
   $("alerts").addEventListener("click", function(ev){
     var btn = ev.target.closest("button");

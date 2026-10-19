@@ -2305,13 +2305,13 @@ fn main() {
         //--- command out, so a node that never answers walks 2 → 5 → 15 → 60 →
         //--- unknown without needing anything else to happen.
         //---
-        //--- Gated on `writes` as well as on there being a command: with writes
-        //--- off the queue is never filled in the first place, but a command
-        //--- left over from a run with writes on must not be sent by a hub that
-        //--- was started with them off.
-        if args.writes {
-            for c in cmds.due(Instant::now()) {
-                match c.kind.as_str() {
+        //--- Gated on `writes` as well as on there being a command, except for
+        //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
+        for c in cmds.due(Instant::now()) {
+            if !args.writes && c.op != "reqpos" {
+                continue;
+            }
+            match c.kind.as_str() {
                     commands::KIND_CONFIG => {
                         match cfg.current(&c.node) {
                             Some(r) if r.rev == c.rev => {
@@ -2365,7 +2365,6 @@ fn main() {
                     );
                 }
             }
-        }
 
         if args.duration > 0.0 && started.elapsed().as_secs_f64() >= args.duration {
             println!("[hub] duration reached, exiting");
