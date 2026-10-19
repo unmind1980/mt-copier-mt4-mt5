@@ -164,6 +164,22 @@ void TestSnapshot()
    ArrayResize(small,2);
    int n2=CopierDecodeSnapshot("N=9999;R="+CopierEncodeRec(arr[0])+"~"+CopierEncodeRec(arr[1]),small,2);
    Ok("snapshot: clamps to buffer size",n2==2);
+
+   //--- 10KB threshold adaptive compression test
+   CopierPos bigArr[];
+   ArrayResize(bigArr,300);
+   for(int i=0;i<300;i++)
+     {
+      bigArr[i]=MakePos("U"+IntegerToString(10000000+i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
+     }
+   string bigPayload=CopierEncodeSnapshot(bigArr,300);
+   Ok("snapshot: big payload uses compression prefix R=1:",StringFind(bigPayload,";R=1:")>0);
+   CopierPos bigOut[];
+   ArrayResize(bigOut,CP_MAX_POSITIONS);
+   int bigN=CopierDecodeSnapshot(bigPayload,bigOut,CP_MAX_POSITIONS);
+   Ok("snapshot: big payload decodes all 300 positions",bigN==300);
+   Ok("snapshot: big payload ticket 1 matches",bigOut[0].ticket==1);
+   Ok("snapshot: big payload ticket 300 matches",bigOut[299].ticket==300);
   }
 
 void TestUid()

@@ -3047,7 +3047,7 @@ string EncodeReceiverPositions()
       count++;
       if(count>=128) break;
      }
-   return out;
+   return CopierCompressField(out);
   }
 
 string EncodeReceiverWaitList()
@@ -3081,7 +3081,7 @@ string EncodeReceiverWaitList()
           +CopierSanitize(g_waitItems[i].reason,48);
       count++;
      }
-   return out;
+   return CopierCompressField(out);
   }
 
 void RefreshRisk()

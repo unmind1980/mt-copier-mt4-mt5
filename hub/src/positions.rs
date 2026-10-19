@@ -238,10 +238,12 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         Some(x) => x,
         None => return v, // N=0, or not a snapshot at all
     };
-    let body = &payload[rs..re];
-    if body.is_empty() {
+    let body_raw = &payload[rs..re];
+    if body_raw.is_empty() {
         return v;
     }
+    let body_str = crate::envelope::decompress_field(body_raw);
+    let body = body_str.as_bytes();
 
     let mut order: Vec<String> = Vec::new();
     for rec in body.split(|b| *b == b'~') {

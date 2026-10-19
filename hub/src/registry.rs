@@ -160,6 +160,11 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
     if pos_str.is_empty() {
         return Vec::new();
     }
+    let decomp = crate::envelope::decompress_field(pos_str.as_bytes());
+    let pos_str = decomp.as_str();
+    if pos_str.is_empty() {
+        return Vec::new();
+    }
     let mut items = Vec::new();
     for rec in pos_str.split('~') {
         if rec.is_empty() {
@@ -201,6 +206,11 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
 }
 
 pub fn parse_receiver_waitlist(wait_str: &str) -> Vec<ReceiverWaitItem> {
+    if wait_str.is_empty() {
+        return Vec::new();
+    }
+    let decomp = crate::envelope::decompress_field(wait_str.as_bytes());
+    let wait_str = decomp.as_str();
     if wait_str.is_empty() {
         return Vec::new();
     }

@@ -21,6 +21,7 @@
 #define __COPIER_CODEC_MQH__
 
 #include "CopierDefs.mqh"
+#include <Zmq/Z85.mqh>
 
 struct CopierEnv
   {
@@ -269,17 +270,86 @@ string CopierHashHex(const long h)
    return out;
   }
 
+//=====================================================================
+// Adaptive compression for large payload fields (R=, POS=, WAITLIST=).
+// Threshold: 10KB (10240 bytes).
+//   < 10KB: prefixed with "0:" (uncompressed raw text).
+//  >= 10KB: compressed via native CryptEncode(CRYPT_ARCH_ZIP),
+//           padded to multiple of 4, encoded with Z85, prefixed with "1:".
+//=====================================================================
+#define CP_COMPRESS_THRESHOLD 10240
+
+string CopierCompressField(const string src)
+  {
+   int len=StringLen(src);
+   if(len<CP_COMPRESS_THRESHOLD)
+     {
+      return "0:"+src;
+     }
+
+   uchar data[];
+   StringToCharArray(src,data,0,len,CP_UTF8);
+
+   uchar key[];
+   ArrayResize(key,0);
+   uchar comp[];
+   int compLen=CryptEncode(CRYPT_ARCH_ZIP,data,key,comp);
+   if(compLen<=0) return "0:"+src;
+
+   // Z85 requires binary input size to be a multiple of 4
+   int pad=(4-(compLen%4))%4;
+   for(int p=0;p<pad;p++)
+     {
+      int sz=ArraySize(comp);
+      ArrayResize(comp,sz+1);
+      comp[sz]=0;
+     }
+
+   string z85Str="";
+   if(!Z85::encode(z85Str,comp)) return "0:"+src;
+
+   return "1:"+z85Str;
+  }
+
+string CopierDecompressField(const string field)
+  {
+   if(StringSubstr(field,0,2)=="0:")
+     {
+      return StringSubstr(field,2);
+     }
+   if(StringSubstr(field,0,2)=="1:")
+     {
+      string z85Str=StringSubstr(field,2);
+      uchar comp[];
+      if(Z85::decode(z85Str,comp))
+        {
+         uchar key[];
+         ArrayResize(key,0);
+         uchar decomp[];
+         int decompLen=CryptDecode(CRYPT_ARCH_ZIP,comp,key,decomp);
+         if(decompLen>0)
+           {
+            return CharArrayToString(decomp,0,decompLen,CP_UTF8);
+           }
+        }
+      return "";
+     }
+   // Backward compatibility: un-prefixed legacy string
+   return field;
+  }
+
 string CopierEncodeSnapshot(const CopierPos &pos[],const int count)
   {
    string payload="N="+(string)count;
    if(count>0)
      {
-      payload+=CP_SEP_KV+"R=";
+      string recs="";
       for(int i=0;i<count;i++)
         {
-         if(i>0) payload+=CP_SEP_REC;
-         payload+=CopierEncodeRec(pos[i]);
+         if(i>0) recs+=CP_SEP_REC;
+         recs+=CopierEncodeRec(pos[i]);
         }
+      payload+=CP_SEP_KV+"R="+CopierCompressField(recs);
      }
    //--- Hash the payload as built SO FAR, then append. Hashing after
    //--- appending would make the value depend on itself.
@@ -309,6 +379,9 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
 
    string recs="";
    CopierKvGet(payload,"R",recs);
+   if(StringLen(recs)==0) return 0;
+
+   recs=CopierDecompressField(recs);
    if(StringLen(recs)==0) return 0;
 
    string arr[];

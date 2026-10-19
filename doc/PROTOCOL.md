@@ -219,6 +219,16 @@ put on the wire.
 - the detailed position/waitlist items (`POS`, `WAITLIST`) & monitoring figures (`NSEND`, `BLOCKED`, `RISK`) — once a
   minute (or on-demand when requested by WebUI).
 
+### Adaptive compression on large telemetry fields (`R=`, `POS=`, `WAITLIST=`)
+
+To cut network bandwidth and string memory on accounts with hundreds of open positions,
+the payload fields carrying repeated item lists (`R=` in `SNAP`, and `POS=` / `WAITLIST=` in `STAT`)
+use an adaptive 10KB threshold:
+
+- **Length < 10,240 bytes**: prefixed with `0:` (uncompressed UTF-8 plain text).
+- **Length >= 10,240 bytes**: compressed using native Deflate (`CryptEncode(CRYPT_ARCH_ZIP)` in MQL / `flate2` in Rust), padded with null bytes to a multiple of 4, encoded with `Z85`, and prefixed with `1:`.
+- **Legacy un-prefixed text**: transparently parsed as raw text for backward compatibility.
+
 **These cadences produce different STAT payload shapes, which a reader must tell
 apart by CONTENT, not by type** — all are `T=STAT`:
 
@@ -357,10 +367,10 @@ with `.` as the decimal separator and 8 decimals, locale-independent.
 Example:
 
 ```
-V=1|SID=alpari01|SSID=a1b2c3|SEQ=17|TS=1780000000|T=SNAP|P=N=2;R=ABCD1234,9918271,EURUSD,1,0.50000000,1.08450000,1.08000000,1.09000000,0,1780000000~EFGH5678,9918275,XAUUSD,-1,0.10000000,2350.10000000,0.00000000,0.00000000,0,1780000005;H=13b2bc5c
+V=1|SID=alpari01|SSID=a1b2c3|SEQ=17|TS=1780000000|T=SNAP|P=N=2;R=0:ABCD1234,9918271,EURUSD,1,0.5,1.0845,1.08,1.09,0,1780000000~EFGH5678,9918275,XAUUSD,-1,0.1,2350.1,0,0,0,1780000005;H=7c315c76
 ```
 
-`H=13b2bc5c` is the **actual** FNV-1a 32-bit hash of everything between `N=`  
+`H=7c315c76` is the **actual** FNV-1a 32-bit hash of everything between `N=`  
 and `;H=` in that line, so the example can be verified rather than taken on  
 trust. Being a value the sender stamps over the bytes it is about to send, it  
 is the **same** number for every receiver of that snapshot.
@@ -368,7 +378,7 @@ is the **same** number for every receiver of that snapshot.
 A `STAT` receipt for the same snapshot, sent back upwards:
 
 ```
-V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=13b2bc5c;HELD=2;LOTS=0.60;ORPHAN=0;EQ=10042.11;BL=10000.00;NSEND=1;BLOCKED=0;RISK=ok
+V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=7c315c76;HELD=2;LOTS=0.60;ORPHAN=0;EQ=10042.11;BL=10000.00;NSEND=1;BLOCKED=0;RISK=ok
 ```
 
 ## Socket topology

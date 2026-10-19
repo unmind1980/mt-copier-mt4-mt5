@@ -83,7 +83,17 @@ def encode_snapshot(records):
     """Mirror of CopierEncodeSnapshot(): build N/R, hash what was built, append."""
     payload = "N=" + str(len(records))
     if records:
-        payload += CP_SEP_KV + "R=" + CP_SEP_REC.join(records)
+        recs = CP_SEP_REC.join(records)
+        if len(recs) >= 10240:
+            import zmq.utils.z85 as z85
+            import zlib
+            comp = zlib.compress(recs.encode('utf-8'))
+            pad = (4 - (len(comp) % 4)) % 4
+            padded = comp + b'\x00' * pad
+            r_val = "1:" + z85.encode(padded).decode('ascii')
+        else:
+            r_val = "0:" + recs
+        payload += CP_SEP_KV + "R=" + r_val
     return payload + CP_SEP_KV + "H=" + hash_hex(payload)
 
 
@@ -197,14 +207,14 @@ def main():
     # reader would verify against it, see a mismatch, and go hunting in the
     # code for a bug that is actually in the doc.
     doc_payload = (
-        "N=2;R=ABCD1234,9918271,EURUSD,1,0.50000000,1.08450000,1.08000000,"
-        "1.09000000,0,1780000000~EFGH5678,9918275,XAUUSD,-1,0.10000000,"
-        "2350.10000000,0.00000000,0.00000000,0,1780000005"
+        "N=2;R=0:ABCD1234,9918271,EURUSD,1,0.5,1.0845,1.08,"
+        "1.09,0,1780000000~EFGH5678,9918275,XAUUSD,-1,0.1,"
+        "2350.1,0,0,0,1780000005"
     )
     check("PROTOCOL.md's SNAP example hash is the real one",
-          hash_hex(doc_payload) == "13b2bc5c", hash_hex(doc_payload))
+          hash_hex(doc_payload) == "7c315c76", hash_hex(doc_payload))
     check("PROTOCOL.md's example line carries that hash",
-          (";H=13b2bc5c" in open(_protocol_md(), encoding="utf-8").read()))
+          (";H=7c315c76" in open(_protocol_md(), encoding="utf-8").read()))
 
     print()
     print("== the TWO shapes of STAT must stay distinguishable ==")
@@ -234,6 +244,24 @@ def main():
           kv(full_report).get("H") == "13b2bc5c")
     check("EQ is therefore a sound discriminator",
           ("EQ" in kv(full_report)) and ("EQ" not in kv(receipt_only)))
+
+    print()
+    print("== 10KB adaptive compression ==")
+    # 300 records exceed 10KB and trigger Z85+zlib compression
+    recs300 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 301)]
+    big_p = encode_snapshot(recs300)
+    check("300 raw records exceed 10KB threshold", len(CP_SEP_REC.join(recs300)) >= 10240)
+    check("compressed snapshot is under 5KB (massive reduction)", len(big_p) < 5000)
+    check("big snapshot uses compression prefix R=1:", ";R=1:" in big_p)
+    r_val = re.search(r";R=1:([^;]+)", big_p).group(1)
+    import zmq.utils.z85 as z85
+    import zlib
+    raw = z85.decode(r_val)
+    decomp = zlib.decompress(raw).decode("utf-8")
+    decomp_recs = decomp.split("~")
+    check("decompressed length is 300 records", len(decomp_recs) == 300)
+    check("first record ticket is 1", decomp_recs[0].split(",")[1] == "1")
+    check("last record ticket is 300", decomp_recs[299].split(",")[1] == "300")
 
     print()
     print("== result ==")
