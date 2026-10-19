@@ -1153,7 +1153,47 @@
       </div>
     </div>
     <div class="posbody" id="pos_detail_body">
-      <div id="pos_node_content"></div>
+      <div id="pos_node_content">
+        <div id="pos_node_banner"></div>
+
+        <div id="pos_rec_view">
+          <div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>
+          <div id="pos_rec_held_cards" class="pos-card-grid"></div>
+
+          <div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>
+          <div id="pos_rec_waiting_wrap"></div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
+            <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>
+              <button type="button" id="pos_refresh_btn" class="opbtn" onclick="requestPosUpdate()" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:4px 11px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer">🔄 Request Update</button>
+            </div>
+          </div>
+
+          <div class="pos-filter-toolbar">
+            <button type="button" id="pos_filter_all" class="pos-filter-btn active" onclick="setPosDetailFilter('all')">All (0)</button>
+            <button type="button" id="pos_filter_opened" class="pos-filter-btn" onclick="setPosDetailFilter('opened')">Opened (0)</button>
+            <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
+            <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
+            <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
+          </div>
+
+          <div id="pos_rec_table_wrap" class="pos-table-wrap">
+            <table id="pos_rec_table">
+              <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>
+              <tbody id="pos_rec_tbody"></tbody>
+            </table>
+            <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
+          </div>
+        </div>
+
+        <div id="pos_snd_view" style="display:none">
+          <div id="pos_snd_content"></div>
+        </div>
+
+        <div id="pos_empty_view" class="empty hidden">Please select a node above to inspect its positions and waiting telemetry.</div>
+      </div>
       <div id="pos" class="hidden"></div>
       <div id="recposbody" class="hidden"></div>
     </div>
@@ -1204,12 +1244,20 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           dismissedAlerts:{},
           selectedPosNode: null,
           posDetailFilter: "all",
+          lastPosNodeKey: null,
+          lastPosRowsHtml: null,
+          lastHeldHtml: null,
+          lastWaitingHtml: null,
+          lastBannerHtml: null,
+          lastSndHtml: null,
+          lastPosNodeSelectHtml: null,
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
           nodeKeys:null, nodeRows:null, posKeys:null, posRows:null };
 
 function setPosDetailFilter(f){
+  if(s.posDetailFilter === f) return;
   s.posDetailFilter = f;
   renderPosNodeDetail();
 }
@@ -1581,8 +1629,13 @@ function updatePosNodeSelector(){
     html += '</optgroup>';
   }
 
-  sel.innerHTML = html;
-  if(s.selectedPosNode){
+  if(s.lastPosNodeSelectHtml !== html){
+    sel.innerHTML = html;
+    s.lastPosNodeSelectHtml = html;
+    if(s.selectedPosNode){
+      sel.value = s.selectedPosNode;
+    }
+  } else if(s.selectedPosNode && sel.value !== s.selectedPosNode){
     sel.value = s.selectedPosNode;
   }
 }
@@ -1607,18 +1660,33 @@ function navPosNode(step){
 }
 
 function renderPosNodeDetail(){
-  var container = $("pos_node_content");
-  if(!container) return;
-
   var n = findNodeByKey(s.selectedPosNode);
+  var elRec = $("pos_rec_view");
+  var elSnd = $("pos_snd_view");
+  var elEmpty = $("pos_empty_view");
+  var elBanner = $("pos_node_banner");
+  if(!elRec || !elSnd || !elEmpty || !elBanner) return;
+
   if(!n){
-    container.innerHTML = '<div class="empty">Please select a node above to inspect its positions and waiting telemetry.</div>';
+    elRec.style.display = "none";
+    elSnd.style.display = "none";
+    elEmpty.classList.remove("hidden");
+    elBanner.innerHTML = "";
     if($("pos_foot_msg")) $("pos_foot_msg").textContent = "No node currently selected.";
+    s.lastPosNodeKey = null;
     return;
   }
+  elEmpty.classList.add("hidden");
 
-  var isRec = (n.role === "receiver");
-  var out = "";
+  // Reset caches if switching to a different node
+  if(s.lastPosNodeKey !== n.key){
+    s.lastPosNodeKey = n.key;
+    s.lastPosRowsHtml = null;
+    s.lastHeldHtml = null;
+    s.lastWaitingHtml = null;
+    s.lastBannerHtml = null;
+    s.lastSndHtml = null;
+  }
 
   // 1. Node Banner
   var dotClass = "dot " + (n.liveness || "offline");
@@ -1626,29 +1694,37 @@ function renderPosNodeDetail(){
   var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">PAUSED (No new mirrors)</span>' : '';
   var riskBadge = (n.risk && n.risk !== "ok") ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px" title="Risk limit tripped: ' + esc(n.risk) + '">⚠️ ' + esc(n.risk) + '</span>' : '';
 
-  out += '<div class="node-banner">';
-  out += '  <div class="node-banner-info">';
-  out += '    <div class="node-banner-title">';
-  out += '      <span class="role-pill ' + esc(n.role) + '">' + esc(n.role).toUpperCase() + '</span>';
-  out += '      <span class="' + dotClass + '"></span>';
-  out += '      <span>' + esc(n.key) + '</span>';
-  if(n.name) out += '      <span style="font-weight:normal;color:var(--dim)">(' + esc(n.name) + ')</span>';
-  if(n.ver) out += '      <span class="ver-tag">v' + esc(n.ver) + '</span>';
-  out += '    </div>';
-  out += '    <div class="node-banner-sub">';
-  out += '      <span>Account: <strong>' + esc(n.acc || "-") + '</strong></span>';
-  out += '      <span>· Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>';
-  if(finStr) out += '      <span>· ' + finStr + '</span>';
-  out += '    </div>';
-  out += '  </div>';
-  out += '  <div class="node-banner-meta">';
-  if(pausedBadge) out += pausedBadge;
-  if(riskBadge) out += riskBadge;
-  out += '  </div>';
-  out += '</div>';
+  var bannerHtml =
+    '<div class="node-banner">' +
+    '  <div class="node-banner-info">' +
+    '    <div class="node-banner-title">' +
+    '      <span class="role-pill ' + esc(n.role) + '">' + esc(n.role).toUpperCase() + '</span>' +
+    '      <span class="' + dotClass + '"></span>' +
+    '      <span>' + esc(n.key) + '</span>' +
+    (n.name ? ('      <span style="font-weight:normal;color:var(--dim)">(' + esc(n.name) + ')</span>') : '') +
+    (n.ver ? ('      <span class="ver-tag">v' + esc(n.ver) + '</span>') : '') +
+    '    </div>' +
+    '    <div class="node-banner-sub">' +
+    '      <span>Account: <strong>' + esc(n.acc || "-") + '</strong></span>' +
+    '      <span>· Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>' +
+    (finStr ? ('      <span>· ' + finStr + '</span>') : '') +
+    '    </div>' +
+    '  </div>' +
+    '  <div class="node-banner-meta">' +
+    pausedBadge + riskBadge +
+    '  </div>' +
+    '</div>';
 
+  if(s.lastBannerHtml !== bannerHtml){
+    elBanner.innerHTML = bannerHtml;
+    s.lastBannerHtml = bannerHtml;
+  }
+
+  var isRec = (n.role === "receiver");
   if(isRec){
-    // ================= RECEIVER VIEW =================
+    elRec.style.display = "";
+    elSnd.style.display = "none";
+
     var posCount = (n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0;
     var posLots = (n.positions && n.positions.lots !== undefined) ? n.positions.lots : 0;
     var orphan = (n.positions && typeof n.positions.orphaned === "number") ? n.positions.orphaned : 0;
@@ -1661,92 +1737,91 @@ function renderPosNodeDetail(){
     var mktClosed = (wt.mkt_closed !== undefined) ? Number(wt.mkt_closed) : 0;
 
     // A. Currently Held Positions Cards
-    out += '<div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>';
-    out += '<div class="pos-card-grid">';
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Managed Mirrors</div>';
-    out += '    <div class="pos-card-val">' + posCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">(' + esc(posLots) + ' lots)</span></div>';
-    out += '    <div class="pos-card-sub">Active copier mirror positions managed by engine</div>';
-    out += '  </div>';
+    var heldHtml =
+      '<div class="pos-card">' +
+      '  <div class="pos-card-label">Managed Mirrors</div>' +
+      '  <div class="pos-card-val">' + posCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">(' + esc(posLots) + ' lots)</span></div>' +
+      '  <div class="pos-card-sub">Active copier mirror positions managed by engine</div>' +
+      '</div>' +
+      '<div class="pos-card">' +
+      '  <div class="pos-card-label">Orphan / Manual Positions</div>' +
+      '  <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">orders</span></div>' +
+      '  <div class="pos-card-sub">' + (orphan > 0 ? 'External or manual orders with non-copier magic' : 'No untracked or manual positions') + '</div>' +
+      '</div>' +
+      '<div class="pos-card">' +
+      '  <div class="pos-card-label">Gross Account Open</div>' +
+      '  <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>' +
+      '  <div class="pos-card-sub">Total open positions currently active on this terminal</div>' +
+      '</div>';
 
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Orphan / Manual Positions</div>';
-    out += '    <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">orders</span></div>';
-    out += '    <div class="pos-card-sub">' + (orphan > 0 ? 'External or manual orders with non-copier magic' : 'No untracked or manual positions') + '</div>';
-    out += '  </div>';
-
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Gross Account Open</div>';
-    out += '    <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
-    out += '    <div class="pos-card-sub">Total open positions currently active on this terminal</div>';
-    out += '  </div>';
-    out += '</div>';
-
-    // B. Waiting Orders in Progress
-    out += '<div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>';
-
-    if(totalWait > 0){
-      out += '<div class="waiting-banner active">';
-      out += '  <div class="waiting-banner-icon">⏳</div>';
-      out += '  <div class="waiting-banner-text">';
-      out += '    <div class="waiting-banner-title">';
-      out += '      <span>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots)</span>';
-      out += '      <span class="waiting-stage-badge active">IN PROGRESS</span>';
-      out += '    </div>';
-      out += '    <div class="waiting-banner-desc">';
-      out += '      These orders were signaled by Senders and are actively held in the receiver execution pipeline under broker queuing, timing gates, or market closed filters.';
-      out += '    </div>';
-      out += '  </div>';
-      out += '</div>';
-    } else {
-      out += '<div class="waiting-banner clear">';
-      out += '  <div class="waiting-banner-icon">✅</div>';
-      out += '  <div class="waiting-banner-text">';
-      out += '    <div class="waiting-banner-title">';
-      out += '      <span>All Orders Executed (No Waiting in Progress)</span>';
-      out += '      <span class="waiting-stage-badge idle">CLEAR</span>';
-      out += '    </div>';
-      out += '    <div class="waiting-banner-desc">';
-      out += '      Receiver is in sync with signals. There are currently zero pending, delayed, or market-closed orders waiting in queue.';
-      out += '    </div>';
-      out += '  </div>';
-      out += '</div>';
+    if(s.lastHeldHtml !== heldHtml){
+      $("pos_rec_held_cards").innerHTML = heldHtml;
+      s.lastHeldHtml = heldHtml;
     }
 
-    // 3-Stage Waiting Pipeline Grid
-    out += '<div class="waiting-pipeline-grid">';
+    // B. Waiting Orders in Progress
+    var waitHtml = "";
+    if(totalWait > 0){
+      waitHtml += '<div class="waiting-banner active">';
+      waitHtml += '  <div class="waiting-banner-icon">⏳</div>';
+      waitHtml += '  <div class="waiting-banner-text">';
+      waitHtml += '    <div class="waiting-banner-title">';
+      waitHtml += '      <span>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots)</span>';
+      waitHtml += '      <span class="waiting-stage-badge active">IN PROGRESS</span>';
+      waitHtml += '    </div>';
+      waitHtml += '    <div class="waiting-banner-desc">';
+      waitHtml += '      These orders were signaled by Senders and are actively held in the receiver execution pipeline under broker queuing, timing gates, or market closed filters.';
+      waitHtml += '    </div>';
+      waitHtml += '  </div>';
+      waitHtml += '</div>';
+    } else {
+      waitHtml += '<div class="waiting-banner clear">';
+      waitHtml += '  <div class="waiting-banner-icon">✅</div>';
+      waitHtml += '  <div class="waiting-banner-text">';
+      waitHtml += '    <div class="waiting-banner-title">';
+      waitHtml += '      <span>All Orders Executed (No Waiting in Progress)</span>';
+      waitHtml += '      <span class="waiting-stage-badge idle">CLEAR</span>';
+      waitHtml += '    </div>';
+      waitHtml += '    <div class="waiting-banner-desc">';
+      waitHtml += '      Receiver is in sync with signals. There are currently zero pending, delayed, or market-closed orders waiting in queue.';
+      waitHtml += '    </div>';
+      waitHtml += '  </div>';
+      waitHtml += '</div>';
+    }
 
-    // Stage 1: Broker Queue
-    out += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
-    out += '    <div class="waiting-stage-head">';
-    out += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
-    out += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
-    out += '    </div>';
-    out += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
-    out += '    <div class="waiting-stage-desc">Trade instruction generated, waiting in local broker dispatch queue for order filling / network socket.</div>';
-    out += '  </div>';
+    waitHtml += '<div class="waiting-pipeline-grid">';
+    waitHtml += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
+    waitHtml += '    <div class="waiting-stage-head">';
+    waitHtml += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
+    waitHtml += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
+    waitHtml += '    </div>';
+    waitHtml += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
+    waitHtml += '    <div class="waiting-stage-desc">Trade instruction generated, waiting in local broker dispatch queue for order filling / network socket.</div>';
+    waitHtml += '  </div>';
 
-    // Stage 2: Gate Delayed
-    out += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
-    out += '    <div class="waiting-stage-head">';
-    out += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
-    out += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
-    out += '    </div>';
-    out += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
-    out += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, M1 bar completion filter, or pullback/spread safety gates.</div>';
-    out += '  </div>';
+    waitHtml += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
+    waitHtml += '    <div class="waiting-stage-head">';
+    waitHtml += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
+    waitHtml += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
+    waitHtml += '    </div>';
+    waitHtml += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
+    waitHtml += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, M1 bar completion filter, or pullback/spread safety gates.</div>';
+    waitHtml += '  </div>';
 
-    // Stage 3: Market Closed
-    out += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
-    out += '    <div class="waiting-stage-head">';
-    out += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
-    out += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
-    out += '    </div>';
-    out += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
-    out += '    <div class="waiting-stage-desc">Market is closed (weekend/holiday), quotes halted, or outside configured trading schedule. Monitored until session opens.</div>';
-    out += '  </div>';
+    waitHtml += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
+    waitHtml += '    <div class="waiting-stage-head">';
+    waitHtml += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
+    waitHtml += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
+    waitHtml += '    </div>';
+    waitHtml += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
+    waitHtml += '    <div class="waiting-stage-desc">Market is closed (weekend/holiday), quotes halted, or outside configured trading schedule. Monitored until session opens.</div>';
+    waitHtml += '  </div>';
+    waitHtml += '</div>';
 
-    out += '</div>';
+    if(s.lastWaitingHtml !== waitHtml){
+      $("pos_rec_waiting_wrap").innerHTML = waitHtml;
+      s.lastWaitingHtml = waitHtml;
+    }
 
     // C. Detailed Line-by-Line Order & Position Table
     var opened = n.positions_detail || [];
@@ -1758,21 +1833,40 @@ function renderPosNodeDetail(){
     var curFilter = s.posDetailFilter || "all";
     var inFlight = !!s.posRequestInFlight;
 
-    out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
-    out += '  <div class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions (' + totalOrders + ' total)</div>';
-    out += '  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
-    out += '    <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>';
-    out += '    <button type="button" id="pos_refresh_btn" class="opbtn" onclick="requestPosUpdate()" title="Request immediate position table update from receiver terminal ' + esc(n.key) + '" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:4px 11px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer"' + (inFlight ? ' disabled' : '') + '>' + (inFlight ? '⏳ Requesting…' : '🔄 Request Update') + '</button>';
-    out += '  </div>';
-    out += '</div>';
+    $("pos_rec_table_title").textContent = "📋 Line-by-Line Orders & Positions (" + totalOrders + " total)";
+    var rBtn = $("pos_refresh_btn");
+    if(rBtn){
+      rBtn.disabled = inFlight;
+      rBtn.textContent = inFlight ? "⏳ Requesting…" : "🔄 Request Update";
+      rBtn.title = "Request immediate position table update from receiver terminal " + esc(n.key);
+    }
 
-    out += '<div class="pos-filter-toolbar">';
-    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "all" ? "active" : "") + '" onclick="setPosDetailFilter(\'all\')">All (' + totalOrders + ')</button>';
-    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "opened" ? "active" : "") + '" onclick="setPosDetailFilter(\'opened\')">Opened (' + opened.length + ')</button>';
-    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "waiting" ? "active" : "") + '" onclick="setPosDetailFilter(\'waiting\')">Waiting (' + waiting.length + ')</button>';
-    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "managed" ? "active" : "") + '" onclick="setPosDetailFilter(\'managed\')">Managed (' + managedOrders.length + ')</button>';
-    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "unmanaged" ? "active" : "") + '" onclick="setPosDetailFilter(\'unmanaged\')">Orphan / Manual (' + unmanagedOrders.length + ')</button>';
-    out += '</div>';
+    // Update filter toolbar buttons in-place (no DOM destruction, smooth hover & instant clicks)
+    var bAll = $("pos_filter_all");
+    if(bAll){
+      bAll.textContent = "All (" + totalOrders + ")";
+      bAll.className = "pos-filter-btn" + (curFilter === "all" ? " active" : "");
+    }
+    var bOp = $("pos_filter_opened");
+    if(bOp){
+      bOp.textContent = "Opened (" + opened.length + ")";
+      bOp.className = "pos-filter-btn" + (curFilter === "opened" ? " active" : "");
+    }
+    var bWait = $("pos_filter_waiting");
+    if(bWait){
+      bWait.textContent = "Waiting (" + waiting.length + ")";
+      bWait.className = "pos-filter-btn" + (curFilter === "waiting" ? " active" : "");
+    }
+    var bMan = $("pos_filter_managed");
+    if(bMan){
+      bMan.textContent = "Managed (" + managedOrders.length + ")";
+      bMan.className = "pos-filter-btn" + (curFilter === "managed" ? " active" : "");
+    }
+    var bUnman = $("pos_filter_unmanaged");
+    if(bUnman){
+      bUnman.textContent = "Orphan / Manual (" + unmanagedOrders.length + ")";
+      bUnman.className = "pos-filter-btn" + (curFilter === "unmanaged" ? " active" : "");
+    }
 
     var displayItems = [];
     if(curFilter === "all"){
@@ -1842,130 +1936,142 @@ function renderPosNodeDetail(){
         }
       }).join("");
 
-      out += '<div class="pos-table-wrap">';
-      out += '  <table>';
-      out += '    <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>';
-      out += '    <tbody>' + dRows + '</tbody>';
-      out += '  </table>';
-      out += '</div>';
+      var tableEl = $("pos_rec_table");
+      var emptyEl = $("pos_rec_empty");
+      if(displayItems.length > 0){
+        if(tableEl) tableEl.style.display = "";
+        if(emptyEl) emptyEl.style.display = "none";
+        if(s.lastPosRowsHtml !== dRows){
+          $("pos_rec_tbody").innerHTML = dRows;
+          s.lastPosRowsHtml = dRows;
+        }
+      } else {
+        if(tableEl) tableEl.style.display = "none";
+        if(emptyEl){
+          emptyEl.style.display = "";
+          emptyEl.innerHTML =
+            '<div class="waiting-banner-icon">ℹ️</div>' +
+            '<div class="waiting-banner-text">' +
+            '  <div class="waiting-banner-title">No Orders Matching Filter (' + esc(curFilter) + ')</div>' +
+            '  <div class="waiting-banner-desc">There are currently zero open orders or waiting items matching the selected category.</div>' +
+            '</div>';
+        }
+        s.lastPosRowsHtml = "";
+      }
+
+      if($("pos_foot_msg")){
+        $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
+      }
+
     } else {
-      out += '<div class="waiting-banner clear" style="margin-top:10px">';
-      out += '  <div class="waiting-banner-icon">ℹ️</div>';
-      out += '  <div class="waiting-banner-text">';
-      out += '    <div class="waiting-banner-title">No Orders Matching Filter (' + esc(curFilter) + ')</div>';
-      out += '    <div class="waiting-banner-desc">There are currently zero open orders or waiting items matching the selected category.</div>';
-      out += '  </div>';
-      out += '</div>';
-    }
+      // ================= SENDER VIEW =================
+      elRec.style.display = "none";
+      elSnd.style.display = "";
 
-    if($("pos_foot_msg")){
-      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
-    }
+      var p = findPosBySender(n.key, n.acc);
+      var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
+      var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
+      var receipt = (p && p.receipt) ? p.receipt : ((n.positions && n.positions.receipt) ? n.positions.receipt : "-");
+      var symbols = (p && p.symbols) ? p.symbols : [];
+      var snaps = (p && p.snaps) ? p.snaps : "-";
 
-  } else {
-    // ================= SENDER VIEW =================
-    var p = findPosBySender(n.key, n.acc);
-    var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
-    var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
-    var receipt = (p && p.receipt) ? p.receipt : ((n.positions && n.positions.receipt) ? n.positions.receipt : "-");
-    var symbols = (p && p.symbols) ? p.symbols : [];
-    var snaps = (p && p.snaps) ? p.snaps : "-";
+      var sndHtml = '<div class="pos-section-title">📊 Open Positions Summary</div>';
+      sndHtml += '<div class="pos-card-grid">';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">Open Positions</div>';
+      sndHtml += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
+      sndHtml += '    <div class="pos-card-sub">Active open tickets reported by Sender terminal</div>';
+      sndHtml += '  </div>';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">Total Volume</div>';
+      sndHtml += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">lots</span></div>';
+      sndHtml += '    <div class="pos-card-sub">Sum of lot sizes across all open tickets</div>';
+      sndHtml += '  </div>';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">Snapshot State</div>';
+      sndHtml += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
+      sndHtml += '    <div class="pos-card-sub">' + (snaps !== "-" ? (snaps + " snapshots received") : "Live snapshot broadcast") + '</div>';
+      sndHtml += '  </div>';
+      sndHtml += '</div>';
 
-    out += '<div class="pos-section-title">📊 Open Positions Summary</div>';
-    out += '<div class="pos-card-grid">';
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Open Positions</div>';
-    out += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
-    out += '    <div class="pos-card-sub">Active open tickets reported by Sender terminal</div>';
-    out += '  </div>';
+      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📈 Positions Breakdown by Symbol</div>';
+      if(symbols.length > 0){
+        var maxSymLots = 0;
+        symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
+        if(maxSymLots <= 0) maxSymLots = 1;
 
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Total Volume</div>';
-    out += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">lots</span></div>';
-    out += '    <div class="pos-card-sub">Sum of lot sizes across all open tickets</div>';
-    out += '  </div>';
+        var symRows = symbols.map(function(s){
+          var pct = Math.min(100, Math.round((Number(s.lots) / maxSymLots) * 100));
+          return '<tr>' +
+                 '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
+                 '  <td class="num">' + esc(s.count) + '</td>' +
+                 '  <td class="num">' + esc(s.lots) + '</td>' +
+                 '  <td style="width:40%">' +
+                 '    <div class="pos-bar-container">' +
+                 '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
+                 '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
+                 '    </div>' +
+                 '  </td>' +
+                 '</tr>';
+        }).join("");
 
-    out += '  <div class="pos-card">';
-    out += '    <div class="pos-card-label">Snapshot State</div>';
-    out += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
-    out += '    <div class="pos-card-sub">' + (snaps !== "-" ? (snaps + " snapshots received") : "Live snapshot broadcast") + '</div>';
-    out += '  </div>';
-    out += '</div>';
+        sndHtml += '<div class="pos-table-wrap">';
+        sndHtml += '  <table>';
+        sndHtml += '    <thead><tr><th>Symbol</th><th class="num">Positions</th><th class="num">Volume (Lots)</th><th>Relative Exposure</th></tr></thead>';
+        sndHtml += '    <tbody>' + symRows + '</tbody>';
+        sndHtml += '  </table>';
+        sndHtml += '</div>';
+      } else {
+        sndHtml += '<div class="waiting-banner clear">';
+        sndHtml += '  <div class="waiting-banner-icon">✅</div>';
+        sndHtml += '  <div class="waiting-banner-text">';
+        sndHtml += '    <div class="waiting-banner-title">No Open Positions Reported</div>';
+        sndHtml += '    <div class="waiting-banner-desc">Sender account is currently flat. No active open tickets or market risk exposure.</div>';
+        sndHtml += '  </div>';
+        sndHtml += '</div>';
+      }
 
-    out += '<div class="pos-section-title" style="margin-top:20px">📈 Positions Breakdown by Symbol</div>';
-    if(symbols.length > 0){
-      var maxSymLots = 0;
-      symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
-      if(maxSymLots <= 0) maxSymLots = 1;
+      var sItems = (p && p.items) ? p.items : ((n.positions && n.positions.items) ? n.positions.items : []);
+      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
+      if(sItems.length > 0){
+        var sRows = sItems.map(function(item){
+          var sideClass = (item.side === 0 || String(item.side) === "0" || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideText = sideClass.toUpperCase();
+          var priceStr = (item.open_px && Number(item.open_px) > 0) ? Number(item.open_px).toFixed(5) : "-";
+          var slStr = (item.sl && Number(item.sl) > 0) ? Number(item.sl).toFixed(5) : "-";
+          var tpStr = (item.tp && Number(item.tp) > 0) ? Number(item.tp).toFixed(5) : "-";
+          var ageStr = (item.open_time && item.open_time > 0) ? fmtAge((Date.now()/1000) - item.open_time) : "-";
+          return '<tr>' +
+                 '  <td><span class="pos-badge sender">OPENED</span></td>' +
+                 '  <td><strong style="font-family:var(--mono)">#' + esc(item.ticket) + '</strong></td>' +
+                 '  <td><span style="font-family:var(--mono);color:var(--dim)">UID: ' + esc(item.uid || "-") + '</span></td>' +
+                 '  <td><strong>' + esc(item.symbol) + '</strong></td>' +
+                 '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + esc(item.lots) + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
+                 '  <td style="font-size:12px;color:var(--dim)">Magic: #' + esc(item.magic) + ' · ' + ageStr + '</td>' +
+                 '</tr>';
+        }).join("");
 
-      var symRows = symbols.map(function(s){
-        var pct = Math.min(100, Math.round((Number(s.lots) / maxSymLots) * 100));
-        return '<tr>' +
-               '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
-               '  <td class="num">' + esc(s.count) + '</td>' +
-               '  <td class="num">' + esc(s.lots) + '</td>' +
-               '  <td style="width:40%">' +
-               '    <div class="pos-bar-container">' +
-               '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
-               '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
-               '    </div>' +
-               '  </td>' +
-               '</tr>';
-      }).join("");
+        sndHtml += '<div class="pos-table-wrap">';
+        sndHtml += '  <table>';
+        sndHtml += '    <thead><tr><th>Status</th><th>Ticket</th><th>UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Open Price</th><th class="num">SL / TP</th><th>Details</th></tr></thead>';
+        sndHtml += '    <tbody>' + sRows + '</tbody>';
+        sndHtml += '  </table>';
+        sndHtml += '</div>';
+      }
 
-      out += '<div class="pos-table-wrap">';
-      out += '  <table>';
-      out += '    <thead><tr><th>Symbol</th><th class="num">Positions</th><th class="num">Volume (Lots)</th><th>Relative Exposure</th></tr></thead>';
-      out += '    <tbody>' + symRows + '</tbody>';
-      out += '  </table>';
-      out += '</div>';
-    } else {
-      out += '<div class="waiting-banner clear">';
-      out += '  <div class="waiting-banner-icon">✅</div>';
-      out += '  <div class="waiting-banner-text">';
-      out += '    <div class="waiting-banner-title">No Open Positions Reported</div>';
-      out += '    <div class="waiting-banner-desc">Sender account is currently flat. No active open tickets or market risk exposure.</div>';
-      out += '  </div>';
-      out += '</div>';
-    }
+      if(s.lastSndHtml !== sndHtml){
+        $("pos_snd_content").innerHTML = sndHtml;
+        s.lastSndHtml = sndHtml;
+      }
 
-    var sItems = (p && p.items) ? p.items : ((n.positions && n.positions.items) ? n.positions.items : []);
-    out += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
-    if(sItems.length > 0){
-      var sRows = sItems.map(function(item){
-        var sideClass = (item.side === 0 || String(item.side) === "0" || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
-        var sideText = sideClass.toUpperCase();
-        var priceStr = (item.open_px && Number(item.open_px) > 0) ? Number(item.open_px).toFixed(5) : "-";
-        var slStr = (item.sl && Number(item.sl) > 0) ? Number(item.sl).toFixed(5) : "-";
-        var tpStr = (item.tp && Number(item.tp) > 0) ? Number(item.tp).toFixed(5) : "-";
-        var ageStr = (item.open_time && item.open_time > 0) ? fmtAge((Date.now()/1000) - item.open_time) : "-";
-        return '<tr>' +
-               '  <td><span class="pos-badge sender">OPENED</span></td>' +
-               '  <td><strong style="font-family:var(--mono)">#' + esc(item.ticket) + '</strong></td>' +
-               '  <td><span style="font-family:var(--mono);color:var(--dim)">UID: ' + esc(item.uid || "-") + '</span></td>' +
-               '  <td><strong>' + esc(item.symbol) + '</strong></td>' +
-               '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
-               '  <td class="num" style="font-family:var(--mono)">' + esc(item.lots) + '</td>' +
-               '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
-               '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
-               '  <td style="font-size:12px;color:var(--dim)">Magic: #' + esc(item.magic) + ' · ' + ageStr + '</td>' +
-               '</tr>';
-      }).join("");
-
-      out += '<div class="pos-table-wrap">';
-      out += '  <table>';
-      out += '    <thead><tr><th>Status</th><th>Ticket</th><th>UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Open Price</th><th class="num">SL / TP</th><th>Details</th></tr></thead>';
-      out += '    <tbody>' + sRows + '</tbody>';
-      out += '  </table>';
-      out += '</div>';
-    }
-
-    if($("pos_foot_msg")){
-      $("pos_foot_msg").textContent = "Sender: " + n.key + " · Broadcasted via ZeroMQ SNAP · Receipt H=" + receipt;
+      if($("pos_foot_msg")){
+        $("pos_foot_msg").textContent = "Sender: " + n.key + " · Broadcasted via ZeroMQ SNAP · Receipt H=" + receipt;
+      }
     }
   }
-
-  container.innerHTML = out;
 }
 
 function openPositionsModal(focusKey){
@@ -1973,6 +2079,13 @@ function openPositionsModal(focusKey){
   if(focusKey){
     s.selectedPosNode = focusKey;
   }
+  s.lastPosNodeKey = null;
+  s.lastPosRowsHtml = null;
+  s.lastHeldHtml = null;
+  s.lastWaitingHtml = null;
+  s.lastBannerHtml = null;
+  s.lastSndHtml = null;
+  s.lastPosNodeSelectHtml = null;
   updatePosNodeSelector();
   renderPosNodeDetail();
   renderRecPositions();
@@ -1980,6 +2093,13 @@ function openPositionsModal(focusKey){
 
 function closePositionsModal(){
   $("posmodal").classList.add("hidden");
+  s.lastPosNodeKey = null;
+  s.lastPosRowsHtml = null;
+  s.lastHeldHtml = null;
+  s.lastWaitingHtml = null;
+  s.lastBannerHtml = null;
+  s.lastSndHtml = null;
+  s.lastPosNodeSelectHtml = null;
 }
 
 function requestPosUpdate(){
