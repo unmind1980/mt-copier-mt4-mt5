@@ -66,20 +66,23 @@ pub fn envelope_payload(payload: &[u8]) -> &[u8] {
     }
 }
 
-/// First `key=value` in the payload section. Logging and PONG only.
-pub fn envelope_kv(payload: &[u8], key: &str) -> String {
-    let p = match find(payload, b"|P=") {
-        Some(p) => p,
-        None => return String::new(),
-    };
+/// First `key=value` in the payload section as Option. Returns Some(value) if
+/// the key exists (even if empty, like "KEY=" -> Some("")), or None if absent.
+pub fn envelope_kv_opt(payload: &[u8], key: &str) -> Option<String> {
+    let p = find(payload, b"|P=")?;
     let want = format!("{}=", key);
     let want = want.as_bytes();
     for item in payload[p + 3..].split(|b| *b == b';') {
         if item.starts_with(want) {
-            return latin1(&item[want.len()..]);
+            return Some(latin1(&item[want.len()..]));
         }
     }
-    String::new()
+    None
+}
+
+/// First `key=value` in the payload section. Logging and PONG only.
+pub fn envelope_kv(payload: &[u8], key: &str) -> String {
+    envelope_kv_opt(payload, key).unwrap_or_default()
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {

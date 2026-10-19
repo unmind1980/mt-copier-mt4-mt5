@@ -83,7 +83,7 @@ mod stats;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use envelope::{envelope_hdr, envelope_kv, envelope_payload, envelope_type};
+use envelope::{envelope_hdr, envelope_kv, envelope_kv_opt, envelope_payload, envelope_type};
 use positions::{parse_snap, Positions};
 use registry::Liveness;
 use stats::Stats;
@@ -1905,6 +1905,10 @@ fn main() {
                                     envelope_kv(&payload, "EQ").parse().ok();
                                 let balance: Option<f64> =
                                     envelope_kv(&payload, "BL").parse().ok();
+                                let held_items = envelope_kv_opt(&payload, "POS")
+                                    .map(|s| registry::parse_receiver_positions(&s));
+                                let wait_items = envelope_kv_opt(&payload, "WAITLIST")
+                                    .map(|s| registry::parse_receiver_waitlist(&s));
                                 //--- One lock for both: note_stat and the
                                 //--- mirror edge are written by the same
                                 //--- frame, and acquiring the shared mutex
@@ -1929,6 +1933,8 @@ fn main() {
                                             wait_mkt,
                                             equity,
                                             balance,
+                                            held_items,
+                                            wait_items,
                                         );
                                     }
                                     //--- LOGIN is the receiver's own account

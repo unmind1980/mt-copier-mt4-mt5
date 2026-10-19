@@ -192,6 +192,24 @@
   .pos-bar-bg{flex:1;background:var(--line);height:6px;border-radius:3px;overflow:hidden}
   .pos-bar-fill{background:var(--primary);height:100%;border-radius:3px}
 
+  /* Detailed Position & Order Badges */
+  .pos-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;font:11px/1.2 var(--mono);font-weight:600;text-transform:uppercase;letter-spacing:.02em;white-space:nowrap}
+  .pos-badge.managed{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}
+  .pos-badge.unmanaged{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+  .pos-badge.queued{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+  .pos-badge.delayed{background:#fdf4ff;color:#86198f;border:1px solid #f5d0fe}
+  .pos-badge.mktclosed{background:#f1f5f9;color:#475569;border:1px solid #cbd5e1}
+  .pos-badge.sender{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+
+  .side-badge{display:inline-block;padding:2px 6px;border-radius:4px;font:11px/1.2 var(--mono);font-weight:700;text-align:center}
+  .side-badge.buy{background:#eff6ff;color:#2563eb;border:1px solid #dbeafe}
+  .side-badge.sell{background:#fef2f2;color:#dc2626;border:1px solid #fee2e2}
+
+  .pos-filter-toolbar{display:flex;align-items:center;gap:6px;margin:12px 0;flex-wrap:wrap}
+  .pos-filter-btn{padding:5px 12px;font-size:12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--dim);cursor:pointer;font-weight:500;transition:all .15s ease}
+  .pos-filter-btn:hover{background:var(--panel);color:var(--ink);border-color:var(--dim)}
+  .pos-filter-btn.active{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:600}
+
   /* Responsive Mobile Layout (@media max-width: 768px) */
   @media(max-width:768px){
     header{padding:10px 14px}
@@ -1184,10 +1202,17 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           userRole:"",
           dismissedAlerts:{},
           selectedPosNode: null,
+          posDetailFilter: "all",
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
           nodeKeys:null, nodeRows:null, posKeys:null, posRows:null };
+
+function setPosDetailFilter(f){
+  s.posDetailFilter = f;
+  renderPosNodeDetail();
+}
+window.setPosDetailFilter = setPosDetailFilter;
 
 function $(id){ return document.getElementById(id); }
 function esc(x){
@@ -1722,6 +1747,109 @@ function renderPosNodeDetail(){
 
     out += '</div>';
 
+    // C. Detailed Line-by-Line Order & Position Table
+    var opened = n.positions_detail || [];
+    var waiting = n.waiting_detail || [];
+    var managedOrders = opened.filter(function(p){ return p.managed; });
+    var unmanagedOrders = opened.filter(function(p){ return !p.managed; });
+    var totalOrders = opened.length + waiting.length;
+
+    var curFilter = s.posDetailFilter || "all";
+
+    out += '<div class="pos-section-title" style="margin-top:20px">📋 Line-by-Line Orders &amp; Positions (' + totalOrders + ' total)</div>';
+
+    out += '<div class="pos-filter-toolbar">';
+    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "all" ? "active" : "") + '" onclick="setPosDetailFilter(\'all\')">All (' + totalOrders + ')</button>';
+    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "opened" ? "active" : "") + '" onclick="setPosDetailFilter(\'opened\')">Opened (' + opened.length + ')</button>';
+    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "waiting" ? "active" : "") + '" onclick="setPosDetailFilter(\'waiting\')">Waiting (' + waiting.length + ')</button>';
+    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "managed" ? "active" : "") + '" onclick="setPosDetailFilter(\'managed\')">Managed (' + managedOrders.length + ')</button>';
+    out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "unmanaged" ? "active" : "") + '" onclick="setPosDetailFilter(\'unmanaged\')">Orphan / Manual (' + unmanagedOrders.length + ')</button>';
+    out += '</div>';
+
+    var displayItems = [];
+    if(curFilter === "all"){
+      displayItems = opened.map(function(p){ return { type:"opened", item:p }; })
+                           .concat(waiting.map(function(w){ return { type:"waiting", item:w }; }));
+    } else if(curFilter === "opened"){
+      displayItems = opened.map(function(p){ return { type:"opened", item:p }; });
+    } else if(curFilter === "waiting"){
+      displayItems = waiting.map(function(w){ return { type:"waiting", item:w }; });
+    } else if(curFilter === "managed"){
+      displayItems = managedOrders.map(function(p){ return { type:"opened", item:p }; });
+    } else if(curFilter === "unmanaged"){
+      displayItems = unmanagedOrders.map(function(p){ return { type:"opened", item:p }; });
+    }
+
+    if(displayItems.length > 0){
+      var dRows = displayItems.map(function(entry){
+        if(entry.type === "opened"){
+          var p = entry.item;
+          var badge = p.managed
+            ? '<span class="pos-badge managed">OPENED · MANAGED</span>'
+            : '<span class="pos-badge unmanaged">OPENED · UNMANAGED</span>';
+          var sideClass = (p.side === 0 || String(p.side) === "0" || String(p.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideText = sideClass.toUpperCase();
+          var priceStr = (p.open_px && Number(p.open_px) > 0) ? Number(p.open_px).toFixed(5) : "-";
+          var slStr = (p.sl && Number(p.sl) > 0) ? Number(p.sl).toFixed(5) : "-";
+          var tpStr = (p.tp && Number(p.tp) > 0) ? Number(p.tp).toFixed(5) : "-";
+          var details = p.managed
+            ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
+            : ('Manual / External (Magic: #' + p.magic + ')' + (p.comment ? (' · ' + esc(p.comment)) : ''));
+          return '<tr>' +
+                 '  <td>' + badge + '</td>' +
+                 '  <td><strong style="font-family:var(--mono)">#' + esc(p.ticket) + '</strong></td>' +
+                 '  <td><strong>' + esc(p.symbol) + '</strong></td>' +
+                 '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + esc(p.lots) + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
+                 '  <td style="font-size:12px;color:var(--dim)">' + details + '</td>' +
+                 '</tr>';
+        } else {
+          var w = entry.item;
+          var stageBadge = "";
+          if(w.stage === "queued"){
+            stageBadge = '<span class="pos-badge queued">WAITING · QUEUED</span>';
+          } else if(w.stage === "gate_delayed"){
+            stageBadge = '<span class="pos-badge delayed">WAITING · DELAYED</span>';
+          } else if(w.stage === "market_closed"){
+            stageBadge = '<span class="pos-badge mktclosed">WAITING · MKT CLOSED</span>';
+          } else {
+            stageBadge = '<span class="pos-badge queued">WAITING</span>';
+          }
+          var sideClass = (w.side === 0 || String(w.side) === "0" || String(w.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideText = sideClass.toUpperCase();
+          var priceStr = (w.open_px && Number(w.open_px) > 0) ? Number(w.open_px).toFixed(5) : "-";
+          var icon = (w.stage === "queued") ? "⚡ " : ((w.stage === "gate_delayed") ? "⏱️ " : "🔒 ");
+          return '<tr>' +
+                 '  <td>' + stageBadge + '</td>' +
+                 '  <td><span style="font-family:var(--mono);color:var(--dim)">UID: ' + esc(w.uid || "-") + '</span></td>' +
+                 '  <td><strong>' + esc(w.symbol) + '</strong></td>' +
+                 '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + esc(w.lots) + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
+                 '  <td class="num" style="font-family:var(--mono);color:var(--dim)">- / -</td>' +
+                 '  <td style="font-size:12px;font-weight:600;color:var(--ink)">' + icon + esc(w.reason || "-") + '</td>' +
+                 '</tr>';
+        }
+      }).join("");
+
+      out += '<div class="pos-table-wrap">';
+      out += '  <table>';
+      out += '    <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>';
+      out += '    <tbody>' + dRows + '</tbody>';
+      out += '  </table>';
+      out += '</div>';
+    } else {
+      out += '<div class="waiting-banner clear" style="margin-top:10px">';
+      out += '  <div class="waiting-banner-icon">ℹ️</div>';
+      out += '  <div class="waiting-banner-text">';
+      out += '    <div class="waiting-banner-title">No Orders Matching Filter (' + esc(curFilter) + ')</div>';
+      out += '    <div class="waiting-banner-desc">There are currently zero open orders or waiting items matching the selected category.</div>';
+      out += '  </div>';
+      out += '</div>';
+    }
+
     if($("pos_foot_msg")){
       $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Real-time telemetry streamed via STAT heartbeat";
     }
@@ -1790,6 +1918,37 @@ function renderPosNodeDetail(){
       out += '    <div class="waiting-banner-title">No Open Positions Reported</div>';
       out += '    <div class="waiting-banner-desc">Sender account is currently flat. No active open tickets or market risk exposure.</div>';
       out += '  </div>';
+      out += '</div>';
+    }
+
+    var sItems = (p && p.items) ? p.items : ((n.positions && n.positions.items) ? n.positions.items : []);
+    out += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
+    if(sItems.length > 0){
+      var sRows = sItems.map(function(item){
+        var sideClass = (item.side === 0 || String(item.side) === "0" || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
+        var sideText = sideClass.toUpperCase();
+        var priceStr = (item.open_px && Number(item.open_px) > 0) ? Number(item.open_px).toFixed(5) : "-";
+        var slStr = (item.sl && Number(item.sl) > 0) ? Number(item.sl).toFixed(5) : "-";
+        var tpStr = (item.tp && Number(item.tp) > 0) ? Number(item.tp).toFixed(5) : "-";
+        var ageStr = (item.open_time && item.open_time > 0) ? fmtAge((Date.now()/1000) - item.open_time) : "-";
+        return '<tr>' +
+               '  <td><span class="pos-badge sender">OPENED</span></td>' +
+               '  <td><strong style="font-family:var(--mono)">#' + esc(item.ticket) + '</strong></td>' +
+               '  <td><span style="font-family:var(--mono);color:var(--dim)">UID: ' + esc(item.uid || "-") + '</span></td>' +
+               '  <td><strong>' + esc(item.symbol) + '</strong></td>' +
+               '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
+               '  <td class="num" style="font-family:var(--mono)">' + esc(item.lots) + '</td>' +
+               '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
+               '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
+               '  <td style="font-size:12px;color:var(--dim)">Magic: #' + esc(item.magic) + ' · ' + ageStr + '</td>' +
+               '</tr>';
+      }).join("");
+
+      out += '<div class="pos-table-wrap">';
+      out += '  <table>';
+      out += '    <thead><tr><th>Status</th><th>Ticket</th><th>UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Open Price</th><th class="num">SL / TP</th><th>Details</th></tr></thead>';
+      out += '    <tbody>' + sRows + '</tbody>';
+      out += '  </table>';
       out += '</div>';
     }
 

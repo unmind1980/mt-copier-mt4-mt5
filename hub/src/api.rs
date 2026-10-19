@@ -232,6 +232,35 @@ fn node_json(n: &Node, now: Instant) -> Value {
         "waiting": waiting,
         "risk": if n.risk.is_empty() { Value::Null } else { Value::String(n.risk.clone()) },
         "blocked": n.blocked,
+        "positions_detail": if n.role == Role::Receiver {
+            Value::Array(n.held_items.iter().map(|p| json!({
+                "ticket": p.ticket,
+                "symbol": p.symbol,
+                "side": p.side,
+                "lots": trim_lots(p.lots),
+                "open_px": p.open_px,
+                "sl": p.sl,
+                "tp": p.tp,
+                "magic": p.magic,
+                "managed": p.managed,
+                "comment": p.comment,
+            })).collect())
+        } else {
+            Value::Null
+        },
+        "waiting_detail": if n.role == Role::Receiver {
+            Value::Array(n.wait_items.iter().map(|w| json!({
+                "uid": w.uid,
+                "symbol": w.symbol,
+                "side": w.side,
+                "lots": trim_lots(w.lots),
+                "open_px": w.open_px,
+                "stage": w.stage,
+                "reason": w.reason,
+            })).collect())
+        } else {
+            Value::Null
+        },
     })
 }
 
@@ -307,6 +336,18 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
                             "lots": trim_lots(v.lots),
                             "receipt": v.receipt,
                             "orphaned": Value::Null,
+                            "items": v.items.iter().map(|p| json!({
+                                "ticket": p.ticket,
+                                "uid": p.uid,
+                                "symbol": p.symbol,
+                                "side": p.side,
+                                "lots": trim_lots(p.lots),
+                                "open_px": p.open_px,
+                                "sl": p.sl,
+                                "tp": p.tp,
+                                "magic": p.magic,
+                                "open_time": p.open_time,
+                            })).collect::<Vec<_>>(),
                         })
                     })
             } else {
@@ -344,6 +385,18 @@ fn positions_json_list(pos: &Positions) -> Vec<Value> {
                 "receipt": v.receipt,
                 "snaps": v.snaps,
                 "symbols": symbols_json(v),
+                "items": v.items.iter().map(|p| json!({
+                    "ticket": p.ticket,
+                    "uid": p.uid,
+                    "symbol": p.symbol,
+                    "side": p.side,
+                    "lots": trim_lots(p.lots),
+                    "open_px": p.open_px,
+                    "sl": p.sl,
+                    "tp": p.tp,
+                    "magic": p.magic,
+                    "open_time": p.open_time,
+                })).collect::<Vec<_>>(),
             })
         })
         .collect()
@@ -406,6 +459,18 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
                                 "receipt": v.receipt,
                                 "symbols": symbols_json(v),
                                 "snaps": v.snaps,
+                                "items": v.items.iter().map(|p| json!({
+                                    "ticket": p.ticket,
+                                    "uid": p.uid,
+                                    "symbol": p.symbol,
+                                    "side": p.side,
+                                    "lots": trim_lots(p.lots),
+                                    "open_px": p.open_px,
+                                    "sl": p.sl,
+                                    "tp": p.tp,
+                                    "magic": p.magic,
+                                    "open_time": p.open_time,
+                                })).collect::<Vec<_>>(),
                             }),
                         );
                     } else {

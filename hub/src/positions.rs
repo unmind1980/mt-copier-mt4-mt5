@@ -48,6 +48,21 @@ const MAX_SYMBOLS: usize = 64;
 /// weeks does not accumulate a row per sender that ever existed.
 pub const POSITIONS_TTL: Duration = Duration::from_secs(600);
 
+/// One position record parsed from a sender's snapshot.
+#[derive(Default, Debug, PartialEq, Clone)]
+pub struct PositionItem {
+    pub ticket: u64,
+    pub uid: String,
+    pub symbol: String,
+    pub side: u8,
+    pub lots: f64,
+    pub open_px: f64,
+    pub sl: f64,
+    pub tp: f64,
+    pub magic: i64,
+    pub open_time: u64,
+}
+
 /// What one snapshot said, read-only.
 #[derive(Default, Debug, PartialEq, Clone)]
 pub struct SnapView {
@@ -62,6 +77,8 @@ pub struct SnapView {
     pub symbols: Vec<(String, usize, f64)>,
     /// The `H=` receipt, so the hub can show which state a sender is at.
     pub receipt: String,
+    /// Detailed position records.
+    pub items: Vec<PositionItem>,
 }
 
 /// One sender's last known book.
@@ -75,6 +92,8 @@ pub struct SenderView {
     /// Snapshots seen from this sender, so a view that is one snapshot old can
     /// be told from one that has been steady for an hour.
     pub snaps: u64,
+    /// Detailed position records.
+    pub items: Vec<PositionItem>,
 }
 
 #[derive(Default, Clone)]
@@ -113,6 +132,7 @@ impl Positions {
             receipt: String::new(),
             updated: now,
             snaps: 0,
+            items: Vec::new(),
         });
         e.count = v.records;
         e.lots = v.lots;
@@ -120,6 +140,7 @@ impl Positions {
         e.receipt = v.receipt.clone();
         e.updated = now;
         e.snaps += 1;
+        e.items = v.items.clone();
     }
 
     /// Forget senders whose view has not been refreshed.
@@ -231,9 +252,30 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         if sym.is_empty() {
             continue; // a record without a symbol is not a position
         }
+        let uid = latin1(rec_field(rec, 0));
+        let ticket = parse_u64(rec_field(rec, 1));
+        let side = parse_u8(rec_field(rec, 3));
         let lots = parse_f64(rec_field(rec, 4));
+        let open_px = parse_f64(rec_field(rec, 5));
+        let sl = parse_f64(rec_field(rec, 6));
+        let tp = parse_f64(rec_field(rec, 7));
+        let magic = parse_i64(rec_field(rec, 8));
+        let open_time = parse_u64(rec_field(rec, 9));
+
         v.records += 1;
         v.lots += lots;
+        v.items.push(PositionItem {
+            ticket,
+            uid,
+            symbol: sym.clone(),
+            side,
+            lots,
+            open_px,
+            sl,
+            tp,
+            magic,
+            open_time,
+        });
 
         if let Some(slot) = v.symbols.iter_mut().find(|(s, _, _)| *s == sym) {
             slot.1 += 1;
@@ -303,6 +345,25 @@ fn parse_usize(b: &[u8]) -> usize {
         n = n.saturating_mul(10).saturating_add((c - b'0') as usize);
     }
     n
+}
+
+fn parse_u64(b: &[u8]) -> u64 {
+    let mut n: u64 = 0;
+    for c in b {
+        if !c.is_ascii_digit() {
+            return n;
+        }
+        n = n.saturating_mul(10).saturating_add((c - b'0') as u64);
+    }
+    n
+}
+
+fn parse_i64(b: &[u8]) -> i64 {
+    std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
+}
+
+fn parse_u8(b: &[u8]) -> u8 {
+    parse_usize(b) as u8
 }
 
 fn parse_f64(b: &[u8]) -> f64 {

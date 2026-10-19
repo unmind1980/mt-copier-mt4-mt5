@@ -437,6 +437,42 @@ long    g_lastMapSave=0;
 bool    g_stateSaveOk=false;   // announced the identity store once per session
 int     g_nSenders=0;
 
+struct CopierWaitItem
+  {
+   string uid;
+   string sym;
+   int    side;
+   double lots;
+   double openPx;
+   long   magic;
+   string stage;
+   string reason;
+  };
+
+CopierWaitItem g_waitItems[];
+int            g_waitItemsCount=0;
+
+void ClearWaitItems()
+  {
+   g_waitItemsCount=0;
+   ArrayResize(g_waitItems,0,64);
+  }
+
+void AddWaitItem(const string uid,const string sym,const int side,const double lots,const double openPx,const long magic,const string stage,const string reason)
+  {
+   if(g_waitItemsCount>=128) return;
+   ArrayResize(g_waitItems,g_waitItemsCount+1,64);
+   g_waitItems[g_waitItemsCount].uid=uid;
+   g_waitItems[g_waitItemsCount].sym=sym;
+   g_waitItems[g_waitItemsCount].side=side;
+   g_waitItems[g_waitItemsCount].lots=lots;
+   g_waitItems[g_waitItemsCount].openPx=openPx;
+   g_waitItems[g_waitItemsCount].magic=magic;
+   g_waitItems[g_waitItemsCount].stage=stage;
+   g_waitItems[g_waitItemsCount].reason=reason;
+   g_waitItemsCount++;
+  }
+
 //--- flattened per-sender symbol maps -------------------------------
 string  g_mapFrom[];
 string  g_mapTo[];
@@ -2978,10 +3014,80 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
 // immediately on a server-day change, where the cached value would be
 // yesterday's and would mis-trip the daily switch for up to a minute.
 //=====================================================================
+CopierPos g_acctAllPos[];
+int       g_acctAllPosCount=0;
+
+string EncodeReceiverPositions()
+  {
+   if(g_acctAllPosCount<=0) return "";
+   string out="";
+   int count=0;
+   for(int i=0;i<g_acctAllPosCount;i++)
+     {
+      bool ours=false;
+      for(int k=0;k<g_nSenders;k++)
+        {
+         if(g_acctAllPos[i].magic==g_magic[k]) { ours=true; break; }
+        }
+      int isManaged=ours?1:0;
+      if(count>0) out+=CP_SEP_REC;
+      out+=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
+          +g_acctAllPos[i].sym+CP_SEP_ITEM
+          +(string)g_acctAllPos[i].side+CP_SEP_ITEM
+          +DoubleToString(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
+          +DoubleToString(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
+          +DoubleToString(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
+          +DoubleToString(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
+          +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
+          +(string)isManaged+CP_SEP_ITEM
+          +CopierSanitizeComment(g_acctAllPos[i].cmt);
+      count++;
+      if(count>=128) break;
+     }
+   return out;
+  }
+
+string EncodeReceiverWaitList()
+  {
+   string out="";
+   int count=0;
+   for(int i=0;i<g_qn;i++)
+     {
+      if(g_q[i].kind!=CP_ACT_OPEN) continue;
+      if(count>0) out+=CP_SEP_REC;
+      out+=g_q[i].uid+CP_SEP_ITEM
+          +g_q[i].sym+CP_SEP_ITEM
+          +(string)g_q[i].side+CP_SEP_ITEM
+          +DoubleToString(g_q[i].lots,2)+CP_SEP_ITEM
+          +DoubleToString(g_q[i].pprice>0.0?g_q[i].pprice:0.0,5)+CP_SEP_ITEM
+          +"queued"+CP_SEP_ITEM
+          +"Queued in broker dispatch";
+      count++;
+      if(count>=128) break;
+     }
+   for(int i=0;i<g_waitItemsCount;i++)
+     {
+      if(count>=128) break;
+      if(count>0) out+=CP_SEP_REC;
+      out+=g_waitItems[i].uid+CP_SEP_ITEM
+          +g_waitItems[i].sym+CP_SEP_ITEM
+          +(string)g_waitItems[i].side+CP_SEP_ITEM
+          +DoubleToString(g_waitItems[i].lots,2)+CP_SEP_ITEM
+          +DoubleToString(g_waitItems[i].openPx,5)+CP_SEP_ITEM
+          +g_waitItems[i].stage+CP_SEP_ITEM
+          +CopierSanitize(g_waitItems[i].reason,48);
+      count++;
+     }
+   return out;
+  }
+
 void RefreshRisk()
   {
    CopierPos all[];
    int an=CopierReadPositions(all,CP_MAX_POSITIONS);
+   g_acctAllPosCount=an;
+   ArrayResize(g_acctAllPos,an,64);
+   for(int i=0;i<an;i++) g_acctAllPos[i]=all[i];
    int cnt=0;
    int orphan=0;
    double lots=0.0;
@@ -3361,6 +3467,7 @@ void ConvergeSender(const int si)
                        +" be priced from a stale clock.");
          g_mktHeld++;
          g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Server clock halted / feed stall");
          continue;
         }
 
@@ -3374,6 +3481,7 @@ void ConvergeSender(const int si)
                        +" quotes again.");
          g_mktHeld++;
          g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Symbol feed stale");
          continue;
         }
 
@@ -3384,6 +3492,7 @@ void ConvergeSender(const int si)
                        +" entries for it until the session opens");
          g_mktHeld++;
          g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside trading hours");
          continue;
         }
 
@@ -3394,6 +3503,7 @@ void ConvergeSender(const int si)
                        +" for it; they will go through when it reopens");
          g_mktHeld++;
          g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Market closed");
          continue;
         }
 
@@ -3405,6 +3515,9 @@ void ConvergeSender(const int si)
                        +") - new entries are held back. Existing mirrors are"
                        +" still managed and still close when the sender"
                        +" closes them.");
+         g_mktHeld++;
+         g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside sender trading window");
          continue;
         }
 
@@ -3456,6 +3569,7 @@ void ConvergeSender(const int si)
                         +" "+CopierSecText(waitSec-ageSec));
           g_waitHeld++;
           g_waitLots+=lots;
+          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Wait open delay ("+CopierSecText(waitSec-ageSec)+")");
           continue;
          }
       }
@@ -3473,6 +3587,7 @@ void ConvergeSender(const int si)
                           +" it");
             g_waitHeld++;
             g_waitLots+=lots;
+            AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for M1 bars ("+(string)bars+"/"+(string)g_senderCfg[si].waitforminutesbar+")");
             continue;
            }
         }
@@ -3501,6 +3616,7 @@ void ConvergeSender(const int si)
                                 +" pips before entering");
                   g_waitHeld++;
                   g_waitLots+=lots;
+                  AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for profit pullback ("+CopierFmtDouble(profitPips,1)+"/"+CopierFmtDouble(g_senderCfg[si].waitforprofitpips,1)+" pips)");
                   continue;
                  }
               }
@@ -5396,6 +5512,7 @@ void OnTimer()
    g_waitLots=0.0;
    g_mktHeld=0;
    g_mktHeldLots=0.0;
+   ClearWaitItems();
 
    //--- feed liveness, measured on the clock that ALWAYS moves. See the note
    //--- on g_srvChangedMs: the server clock stopping is the signal, and
@@ -5551,6 +5668,12 @@ void OnTimer()
                +CP_SEP_KV+"WMKT="+(string)g_mktHeld
                +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
+
+            string posEnc=EncodeReceiverPositions();
+            string waitEnc=EncodeReceiverWaitList();
+            st+=CP_SEP_KV+"POS="+posEnc
+               +CP_SEP_KV+"WAITLIST="+waitEnc;
+
             putPositionSummary=false;  // once per batch, not per sender
            }
          if(putFigures)

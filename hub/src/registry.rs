@@ -123,6 +123,115 @@ pub struct Node {
     /// Receiver financial snapshot: equity and balance reported by the terminal.
     pub equity: Option<f64>,
     pub balance: Option<f64>,
+    /// Itemized open positions on the receiver terminal (Managed & Orphan).
+    pub held_items: Vec<ReceiverPositionItem>,
+    /// Itemized waiting orders in the receiver pipeline (Queued, Delayed, Market Closed).
+    pub wait_items: Vec<ReceiverWaitItem>,
+}
+
+/// One open position record reported by a receiver.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct ReceiverPositionItem {
+    pub ticket: u64,
+    pub symbol: String,
+    pub side: u8,
+    pub lots: f64,
+    pub open_px: f64,
+    pub sl: f64,
+    pub tp: f64,
+    pub magic: i64,
+    pub managed: bool,
+    pub comment: String,
+}
+
+/// One waiting order in the receiver execution pipeline.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct ReceiverWaitItem {
+    pub uid: String,
+    pub symbol: String,
+    pub side: u8,
+    pub lots: f64,
+    pub open_px: f64,
+    pub stage: String,
+    pub reason: String,
+}
+
+pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
+    if pos_str.is_empty() {
+        return Vec::new();
+    }
+    let mut items = Vec::new();
+    for rec in pos_str.split('~') {
+        if rec.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = rec.split(',').collect();
+        if fields.len() < 9 {
+            continue;
+        }
+        // ticket,sym,side,lots,openPx,sl,tp,magic,managed,cmt
+        let ticket: u64 = fields[0].parse().unwrap_or(0);
+        let symbol = fields[1].to_string();
+        let side: u8 = fields[2].parse().unwrap_or(0);
+        let lots: f64 = fields[3].parse().unwrap_or(0.0);
+        let open_px: f64 = fields[4].parse().unwrap_or(0.0);
+        let sl: f64 = fields[5].parse().unwrap_or(0.0);
+        let tp: f64 = fields[6].parse().unwrap_or(0.0);
+        let magic: i64 = fields[7].parse().unwrap_or(0);
+        let managed = fields[8] == "1";
+        let comment = if fields.len() >= 10 {
+            fields[9].to_string()
+        } else {
+            String::new()
+        };
+        items.push(ReceiverPositionItem {
+            ticket,
+            symbol,
+            side,
+            lots,
+            open_px,
+            sl,
+            tp,
+            magic,
+            managed,
+            comment,
+        });
+    }
+    items
+}
+
+pub fn parse_receiver_waitlist(wait_str: &str) -> Vec<ReceiverWaitItem> {
+    if wait_str.is_empty() {
+        return Vec::new();
+    }
+    let mut items = Vec::new();
+    for rec in wait_str.split('~') {
+        if rec.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = rec.split(',').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        // uid,sym,side,lots,openPx,stage,reason
+        let uid = fields[0].to_string();
+        let symbol = fields[1].to_string();
+        let side: u8 = fields[2].parse().unwrap_or(0);
+        let lots: f64 = fields[3].parse().unwrap_or(0.0);
+        let open_px: f64 = fields[4].parse().unwrap_or(0.0);
+        let stage = fields[5].to_string();
+        let reason = fields[6].to_string();
+        items.push(ReceiverWaitItem {
+            uid,
+            symbol,
+            side,
+            lots,
+            open_px,
+            stage,
+            reason,
+        });
+    }
+    items
 }
 
 impl Node {
@@ -287,6 +396,8 @@ impl Registry {
         wait_mkt: Option<u32>,
         equity: Option<f64>,
         balance: Option<f64>,
+        held_items: Option<Vec<ReceiverPositionItem>>,
+        wait_items: Option<Vec<ReceiverWaitItem>>,
     ) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
             if !risk.is_empty() {
@@ -313,6 +424,12 @@ impl Registry {
             }
             if let Some(bl) = balance {
                 e.balance = Some(bl);
+            }
+            if let Some(hi) = held_items {
+                e.held_items = hi;
+            }
+            if let Some(wi) = wait_items {
+                e.wait_items = wi;
             }
         }
     }
@@ -355,6 +472,8 @@ impl Registry {
             wait_mkt: None,
             equity: None,
             balance: None,
+            held_items: Vec::new(),
+            wait_items: Vec::new(),
         })
     }
 
@@ -473,6 +592,7 @@ mod tests {
             Some(4), 0.87, Some(1),
             Some(3), 0.30, Some(1), Some(0), Some(2),
             Some(10050.25), Some(10000.00),
+            None, None,
         );
         // More frequent sync heartbeat carries counts and waiting figures, preserving risk.
         r.note_stat(
@@ -480,6 +600,7 @@ mod tests {
             Some(5), 1.12, Some(2),
             Some(9), 0.09, Some(0), Some(0), Some(9),
             Some(10015.99), Some(10022.01),
+            None, None,
         );
 
         let n = &r.nodes()[0];
