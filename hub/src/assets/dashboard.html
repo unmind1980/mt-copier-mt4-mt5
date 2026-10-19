@@ -1882,6 +1882,9 @@ function renderPosNodeDetail(){
       displayItems = unmanagedOrders.map(function(p){ return { type:"opened", item:p }; });
     }
 
+    var tableEl = $("pos_rec_table");
+    var emptyEl = $("pos_rec_empty");
+
     if(displayItems.length > 0){
       var dRows = displayItems.map(function(entry){
         if(entry.type === "opened"){
@@ -1936,35 +1939,32 @@ function renderPosNodeDetail(){
         }
       }).join("");
 
-      var tableEl = $("pos_rec_table");
-      var emptyEl = $("pos_rec_empty");
-      if(displayItems.length > 0){
-        if(tableEl) tableEl.style.display = "";
-        if(emptyEl) emptyEl.style.display = "none";
-        if(s.lastPosRowsHtml !== dRows){
-          $("pos_rec_tbody").innerHTML = dRows;
-          s.lastPosRowsHtml = dRows;
-        }
-      } else {
-        if(tableEl) tableEl.style.display = "none";
-        if(emptyEl){
-          emptyEl.style.display = "";
-          emptyEl.innerHTML =
-            '<div class="waiting-banner-icon">ℹ️</div>' +
-            '<div class="waiting-banner-text">' +
-            '  <div class="waiting-banner-title">No Orders Matching Filter (' + esc(curFilter) + ')</div>' +
-            '  <div class="waiting-banner-desc">There are currently zero open orders or waiting items matching the selected category.</div>' +
-            '</div>';
-        }
-        s.lastPosRowsHtml = "";
+      if(tableEl) tableEl.style.display = "";
+      if(emptyEl) emptyEl.style.display = "none";
+      if(s.lastPosRowsHtml !== dRows){
+        $("pos_rec_tbody").innerHTML = dRows;
+        s.lastPosRowsHtml = dRows;
       }
-
-      if($("pos_foot_msg")){
-        $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
-      }
-
     } else {
-      // ================= SENDER VIEW =================
+      if(tableEl) tableEl.style.display = "none";
+      if(emptyEl){
+        emptyEl.style.display = "";
+        emptyEl.innerHTML =
+          '<div class="waiting-banner-icon">ℹ️</div>' +
+          '<div class="waiting-banner-text">' +
+          '  <div class="waiting-banner-title">No Orders Matching Filter (' + esc(curFilter) + ')</div>' +
+          '  <div class="waiting-banner-desc">There are currently zero open orders or waiting items matching the selected category.</div>' +
+          '</div>';
+      }
+      s.lastPosRowsHtml = "";
+    }
+
+    if($("pos_foot_msg")){
+      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
+    }
+
+  } else {
+    // ================= SENDER VIEW =================
       elRec.style.display = "none";
       elSnd.style.display = "";
 
@@ -2070,7 +2070,6 @@ function renderPosNodeDetail(){
       if($("pos_foot_msg")){
         $("pos_foot_msg").textContent = "Sender: " + n.key + " · Broadcasted via ZeroMQ SNAP · Receipt H=" + receipt;
       }
-    }
   }
 }
 
