@@ -945,12 +945,14 @@ void SnapTrack(const string who,const string reported)
 
    if(StringLen(reported)==0)
      {
-      //--- nothing to compare against; a sender that has not yet sent its
-      //--- first snapshot also has no g_snapHash
-      if(StringLen(g_snapHash)==0) return;
+      //--- A receiver that reports "" has no snapshot yet (newly attached node).
+      //--- If we have a snapshot ready, bootstrap it immediately on first contact
+      //--- without waiting for the SnapshotSeconds periodic broadcast clock.
+      if(StringLen(g_snapHash)==0 || StringLen(g_snapPayload)==0) return;
       if(g_once.ShouldEmit("snaph|none|"+who))
          g_log.Info("receiver "+who+" reports NO snapshot receipt yet"
-                    +" (it has not confirmed any snapshot)");
+                    +" (bootstrapping snapshot on first contact)");
+      SnapRepairMaybe(who,idx,now,true);
       return;
      }
 
@@ -968,7 +970,7 @@ void SnapTrack(const string who,const string reported)
                     +" but the current snapshot is H="+g_snapHash
                     +" (stale for "+IntegerToString(g_snapStaleN[idx])
                     +" heartbeat(s))");
-      SnapRepairMaybe(who,idx,now);
+      SnapRepairMaybe(who,idx,now,false);
       return;
      }
 
@@ -990,13 +992,20 @@ void SnapTrack(const string who,const string reported)
 //--- reason re-sending cannot fix - a broken socket, a rejected subscription -
 //--- would be fed a full snapshot on every heartbeat forever, which is the
 //--- original traffic problem with the blame moved.
-void SnapRepairMaybe(const string who,const int idx,const long now)
+//---
+//--- `isBootstrap` is true when a newly connected receiver reports H="" - it
+//--- bypasses the debounce so the new receiver receives the snapshot on its
+//--- very first heartbeat (<1s) rather than waiting for SnapshotSeconds.
+void SnapRepairMaybe(const string who,const int idx,const long now,const bool isBootstrap=false)
   {
-   long est=g_snapIntMs[idx];
-   if(est<=0) est=2000;                          // no measurement yet
-   long waitMs=(est<=2000)? 2*est : est;
+   if(!isBootstrap)
+     {
+      long est=g_snapIntMs[idx];
+      if(est<=0) est=2000;                          // no measurement yet
+      long waitMs=(est<=2000)? 2*est : est;
 
-   if(now-g_snapStaleMs[idx]<waitMs) return;
+      if(now-g_snapStaleMs[idx]<waitMs) return;
+     }
 
    //--- Q5: at most one repair per receiver per SnapshotSeconds. When
    //--- SnapshotSeconds is 0 the periodic broadcast is off, so repairs are the
@@ -1015,9 +1024,13 @@ void SnapRepairMaybe(const string who,const int idx,const long now)
      {
       long rnid=CopierNid(CopierParseLong(who));
       EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
-      g_log.Warn("re-sent the snapshot to receiver "+who+" (NID "
-                 +IntegerToString(rnid)+") - it had been behind for "
-                 +IntegerToString(staleFor)+"ms");
+      if(isBootstrap)
+         g_log.Info("bootstrapped snapshot to new receiver "+who+" (NID "
+                    +IntegerToString(rnid)+") on first contact");
+      else
+         g_log.Warn("re-sent the snapshot to receiver "+who+" (NID "
+                    +IntegerToString(rnid)+") - it had been behind for "
+                    +IntegerToString(staleFor)+"ms");
      }
    else
      {
@@ -1027,9 +1040,12 @@ void SnapRepairMaybe(const string who,const int idx,const long now)
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
       Emit(CP_T_SNAP,g_snapPayload,true);
-      g_log.Warn("re-sent the snapshot for "+who+" (behind for "
-                 +IntegerToString(staleFor)+"ms) - broadcast, because the"
-                 +" direct channel cannot address a single receiver");
+      if(isBootstrap)
+         g_log.Info("bootstrapped snapshot for new receiver "+who+" (direct channel)");
+      else
+         g_log.Warn("re-sent the snapshot for "+who+" (behind for "
+                    +IntegerToString(staleFor)+"ms) - broadcast, because the"
+                    +" direct channel cannot address a single receiver");
      }
   }
 

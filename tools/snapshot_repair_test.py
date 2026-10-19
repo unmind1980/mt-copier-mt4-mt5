@@ -48,7 +48,7 @@ class Receiver:
         self.stale_ms = 0
         self.rcpt_ms = 0
         self.int_ms = 0
-        self.repair_ms = 0
+        self.repair_ms = None
         self.repairs = []
 
     def track(self, now, reported, sender_hash, payload_present=True):
@@ -64,7 +64,9 @@ class Receiver:
         self.rcpt_ms = now
 
         if reported == "":
-            return False
+            if sender_hash == "":
+                return False
+            return self.maybe_repair(now, payload_present, is_bootstrap=True)
         if sender_hash == "":
             return False
 
@@ -72,22 +74,23 @@ class Receiver:
             if self.stale_n == 0:
                 self.stale_ms = now
             self.stale_n += 1
-            return self.maybe_repair(now, payload_present)
+            return self.maybe_repair(now, payload_present, is_bootstrap=False)
 
         self.stale_n = 0
         self.stale_ms = 0
         return False
 
-    def maybe_repair(self, now, payload_present):
+    def maybe_repair(self, now, payload_present, is_bootstrap=False):
         """Mirror of SnapRepairMaybe()."""
-        est = self.int_ms if self.int_ms > 0 else 2000
-        wait_ms = 2 * est if est <= 2000 else est
+        if not is_bootstrap:
+            est = self.int_ms if self.int_ms > 0 else 2000
+            wait_ms = 2 * est if est <= 2000 else est
 
-        if now - self.stale_ms < wait_ms:
-            return False
+            if now - self.stale_ms < wait_ms:
+                return False
 
         floor_sec = self.snapshot_seconds if self.snapshot_seconds > 0 else 1
-        if self.repair_ms > 0 and now - self.repair_ms < floor_sec * 1000:
+        if self.repair_ms is not None and now - self.repair_ms < floor_sec * 1000:
             return False
 
         if not payload_present:
@@ -173,12 +176,18 @@ def main():
           sender_hash == "H2", sender_hash)
 
     print()
-    print("== 7. no receipt at all is not a mismatch ==")
-    # An older receiver reports ""; that is "no receipt", not "wrong receipt".
-    # Treating it as stale would feed it a full snapshot forever.
+    print("== 7. empty receipt bootstraps immediately on first contact ==")
+    # A new receiver reports "" on its first heartbeat; the sender bootstraps it
+    # immediately (<1s) rather than making it wait for SnapshotSeconds, but respects
+    # the rate limit so it does not flood if the receiver cannot ingest.
     r = Receiver(snapshot_seconds=10)
     fired = [r.track(t, "", "H2") for t in range(0, 11000, 1000)]
-    check("an empty receipt never triggers a repair", not any(fired))
+    check("an empty receipt triggers an immediate bootstrap repair on first contact",
+          fired[0] and r.repairs[:1] == [0], str(r.repairs))
+    check("subsequent empty reports inside the floor do not fire",
+          not any(fired[1:10]), str(fired))
+    check("it re-attempts only after SnapshotSeconds floor expires",
+          fired[10] and r.repairs == [0, 10000], str(r.repairs))
 
     print()
     print("== result ==")
