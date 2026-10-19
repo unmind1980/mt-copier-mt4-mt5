@@ -40,6 +40,17 @@ input group "--- Connectivity & Mode ---"
 #else
 input string _g_conn_ = ""; // --- Connectivity & Mode ---
 #endif
+//--- The CENTRAL CHANNEL (Tier 2). Leave empty for the normal direct setup.
+//---
+//--- Fill it in to ALSO publish through a central hub, for receivers that are
+//--- spread across machines and cannot each be pointed at this one. Both
+//--- channels run at once: the direct one keeps working exactly as before, so
+//--- nothing that already mirrors this sender is affected.
+//---
+//--- On the central channel this sender is identified by its ACCOUNT NUMBER,
+//--- not by its port - and the account number is what the receiver puts in its
+//--- ini as `id=`. The NID in the startup line below is that value.
+input string HubEndpoint     = "";          // HubEndpoint - e.g. 10.8.0.1:6000; empty = direct only
 input string BindAddress     = "*";         // BindAddress - "*" = all NICs, or one IP like 10.0.0.5
 input string EventsPort      = "";          // EventsPort - blank=Auto; or manual 1024-49151
 
@@ -92,17 +103,6 @@ int EffectivePort(bool &isAuto,string &errDesc)
 //--- and would then share an id. On a multi-host setup give them different
 //--- ports, or use copier.ini, which still accepts an explicit id= per sender.
 string SenderId() { return (string)g_effectivePort; }
-//--- The CENTRAL CHANNEL (Tier 2). Leave empty for the normal direct setup.
-//---
-//--- Fill it in to ALSO publish through a central hub, for receivers that are
-//--- spread across machines and cannot each be pointed at this one. Both
-//--- channels run at once: the direct one keeps working exactly as before, so
-//--- nothing that already mirrors this sender is affected.
-//---
-//--- On the central channel this sender is identified by its ACCOUNT NUMBER,
-//--- not by its port - and the account number is what the receiver puts in its
-//--- ini as `id=`. The NID in the startup line below is that value.
-input string HubEndpoint     = "";   // HubEndpoint - e.g. 10.8.0.1:6000; empty = direct only
 
 //--- security (ZMQ CURVE) -------------------------------------------
 //---
@@ -176,7 +176,7 @@ input group "--- Cadence & Performance ---"
 #else
 input string _g_cadence_ = ""; // --- Cadence & Performance ---
 #endif
-input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0 = off (default 15s)
+input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0=off
 input int    HeartbeatSeconds= 5;   // HeartbeatSeconds - account state interval (default 5s)
 input int    PollMs          = 100;         // PollMs - MT4 scan interval; <50 wastes CPU
 

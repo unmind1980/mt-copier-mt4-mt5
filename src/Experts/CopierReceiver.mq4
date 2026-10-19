@@ -80,7 +80,7 @@ input string SenderIP        = "127.0.0.1";    // SenderIP - the sender's addres
 input int    SenderPort      = 5555;           // SenderPort - the sender's EventsPort (1024-49151)
 input bool   UseCurve        = false;          // UseCurve - turn Curve encryption on (key is automatic)
 input string SenderServerKey = "";            // SenderServerKey - SENDER public key; needs UseCurve ON
-input string InpMagic        = "";            // Magic Number - blank=Auto (uses SenderPort)
+input string InpMagic        = "";            // InpMagic - blank=Auto (uses SenderPort)
 
 //--- Direct mode runtime magic (resolved from InpMagic or SenderPort)
 long         Magic           = 0;
