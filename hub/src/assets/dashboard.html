@@ -138,6 +138,60 @@
            justify-content:space-between;align-items:center;background:var(--bg);gap:12px;flex-wrap:wrap}
   .pos-section-title{font-size:11.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
 
+  /* Pos Modal Node Inspection & Drilldown */
+  .pos-node-toolbar{padding:10px 18px;border-bottom:1px solid var(--line);background:var(--bg);
+                    display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .pos-node-selector-wrap{display:flex;align-items:center;gap:10px;flex:1;min-width:260px}
+  .pos-select-label{font-size:12px;font-weight:600;color:var(--dim);white-space:nowrap}
+  .pos-node-select{flex:1;max-width:480px;padding:6px 10px;font:13px var(--mono);border:1px solid var(--line);
+                   border-radius:6px;background:var(--panel);color:var(--ink);cursor:pointer}
+  .pos-node-select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+  .pos-node-nav{display:flex;gap:6px}
+
+  .node-banner{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
+               background:var(--bg);border:1px solid var(--line);border-radius:8px;margin-bottom:16px;gap:12px;flex-wrap:wrap}
+  .node-banner-info{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .node-banner-title{font-size:15px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .node-banner-sub{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .node-banner-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  .pos-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+  .pos-card{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+  .pos-card-label{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+  .pos-card-val{font-size:18px;font-weight:700;font-family:var(--mono);color:var(--ink)}
+  .pos-card-sub{font-size:11px;color:var(--dim)}
+
+  /* Waiting Highlight Banner */
+  .waiting-banner{border-radius:8px;padding:14px 16px;margin-bottom:16px;border:1px solid transparent;display:flex;align-items:flex-start;gap:12px}
+  .waiting-banner.active{background:#fffdf0;border-color:#fde68a}
+  .waiting-banner.clear{background:var(--ok-bg);border-color:#bbf7d0}
+  .waiting-banner-icon{font-size:20px;line-height:1}
+  .waiting-banner-text{flex:1}
+  .waiting-banner-title{font-size:14px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:8px}
+  .waiting-banner.active .waiting-banner-title{color:var(--warn)}
+  .waiting-banner.clear .waiting-banner-title{color:var(--ok)}
+  .waiting-banner-desc{font-size:12px;color:var(--dim);line-height:1.4}
+
+  /* 3-Stage Waiting Pipeline */
+  .waiting-pipeline-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:16px}
+  .waiting-stage-card{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;transition:all .15s ease}
+  .waiting-stage-card.has-items{border-color:var(--warn);background:#fffdf7;box-shadow:0 1px 4px rgba(217,119,6,0.08)}
+  .waiting-stage-head{display:flex;justify-content:space-between;align-items:center}
+  .waiting-stage-name{font-size:11.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.03em;display:flex;align-items:center;gap:6px}
+  .waiting-stage-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;text-transform:uppercase;font-family:var(--mono)}
+  .waiting-stage-badge.idle{background:var(--panel);color:var(--dim);border:1px solid var(--line)}
+  .waiting-stage-badge.active{background:#fef3c7;color:#b45309;border:1px solid #fde68a}
+  .waiting-stage-count{font-size:20px;font-weight:700;font-family:var(--mono);color:var(--ink)}
+  .waiting-stage-card.has-items .waiting-stage-count{color:var(--warn)}
+  .waiting-stage-desc{font-size:11px;color:var(--dim);line-height:1.35}
+
+  .pos-table-wrap{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel);margin-bottom:16px}
+  .pos-table-wrap table{margin:0;border:none}
+  .pos-table-wrap th{background:var(--bg)}
+  .pos-bar-container{display:flex;align-items:center;gap:8px}
+  .pos-bar-bg{flex:1;background:var(--line);height:6px;border-radius:3px;overflow:hidden}
+  .pos-bar-fill{background:var(--primary);height:100%;border-radius:3px}
+
   /* Responsive Mobile Layout (@media max-width: 768px) */
   @media(max-width:768px){
     header{padding:10px 14px}
@@ -162,6 +216,14 @@
     #nodes td.ops::before{margin-bottom:6px}
     .ops-btn-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(75px,1fr));gap:6px;width:100%}
     .ops-btn-group .opbtn{padding:8px 6px;font-size:12px;text-align:center;min-height:36px}
+
+    .pos-node-toolbar{flex-direction:column;align-items:stretch}
+    .pos-node-selector-wrap{width:100%}
+    .pos-node-select{max-width:100%}
+    .pos-node-nav{width:100%;display:grid;grid-template-columns:1fr 1fr}
+    .pos-node-nav .opbtn{padding:8px;text-align:center}
+    .waiting-pipeline-grid{grid-template-columns:1fr}
+    .pos-card-grid{grid-template-columns:1fr}
   }
 
   /* M6 alert bar. Hidden when there is nothing to say - an alert that is
@@ -1058,18 +1120,26 @@
 <div id="posmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="postitle">
   <div class="posbox">
     <div class="poshead">
-      <h2 id="postitle">📊 Positions &amp; Mirrors Telemetry <span id="pcount"></span></h2>
+      <h2 id="postitle">📊 Positions &amp; Waiting Inspection <span id="pcount"></span></h2>
       <button type="button" id="posclose_x" style="background:none;border:none;font-size:22px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
-    <div class="posbody">
-      <div class="pos-section-title">📡 Senders Broadcasting to Hub</div>
-      <div id="pos"><div class="empty">loading</div></div>
-
-      <div class="pos-section-title" style="margin-top:20px">🎯 Receivers Mirrors &amp; Waiting Breakdown</div>
-      <div id="recposbody"><div class="empty">loading</div></div>
+    <div class="pos-node-toolbar">
+      <div class="pos-node-selector-wrap">
+        <label for="pos_node_select" class="pos-select-label">Select Node:</label>
+        <select id="pos_node_select" class="pos-node-select"></select>
+      </div>
+      <div class="pos-node-nav">
+        <button type="button" id="pos_prev_btn" class="opbtn" title="Previous node">◀ Prev</button>
+        <button type="button" id="pos_next_btn" class="opbtn" title="Next node">Next ▶</button>
+      </div>
+    </div>
+    <div class="posbody" id="pos_detail_body">
+      <div id="pos_node_content"></div>
+      <div id="pos" class="hidden"></div>
+      <div id="recposbody" class="hidden"></div>
     </div>
     <div class="posfoot">
-      <span class="opmsg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
+      <span class="opmsg" id="pos_foot_msg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
       <button type="button" id="posclose_btn" class="btn-sec">Close</button>
     </div>
   </div>
@@ -1113,6 +1183,7 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           channels:[],
           userRole:"",
           dismissedAlerts:{},
+          selectedPosNode: null,
           // What the two tables currently show. Compared rather than
           // assumed, so a change of SET rebuilds and a change of VALUES
           // does not - see renderNodes/renderPositions.
@@ -1411,18 +1482,333 @@ function updateKpiCards(nodes, pos, d){
   }
 }
 
-function openPositionsModal(focusKey){
-  $("posmodal").classList.remove("hidden");
-  renderRecPositions();
-  if(focusKey){
-    var row = document.querySelector("#pos tr[data-s='" + focusKey + "']") ||
-              document.querySelector("#recposbody tr[data-k='" + focusKey + "']");
-    if(row){
-      row.scrollIntoView({ behavior: "smooth", block: "center" });
-      row.style.background = "var(--ok-bg)";
-      setTimeout(function(){ row.style.background = ""; }, 2000);
+function findNodeByKey(key){
+  if(!key || !s.data || !s.data.nodes) return null;
+  var nodes = s.data.nodes;
+  for(var i = 0; i < nodes.length; i++){
+    var n = nodes[i];
+    if(n.key === key || n.acc === key || (n.role + ":" + n.acc) === key){
+      return n;
     }
   }
+  return null;
+}
+
+function findPosBySender(sid, acc){
+  if(!s.data || !s.data.positions) return null;
+  var pos = s.data.positions;
+  for(var i = 0; i < pos.length; i++){
+    var p = pos[i];
+    if(p.sid === sid || p.sid === acc || ("sender:" + p.sid) === sid){
+      return p;
+    }
+  }
+  return null;
+}
+
+function updatePosNodeSelector(){
+  var sel = $("pos_node_select");
+  if(!sel) return;
+  var d = s.data;
+  if(!d || !d.nodes || !d.nodes.length){
+    sel.innerHTML = '<option value="">No nodes available</option>';
+    s.selectedPosNode = null;
+    return;
+  }
+
+  var nodes = sortNodes(d.nodes.slice());
+  var receivers = nodes.filter(function(n){ return n.role === "receiver"; });
+  var senders = nodes.filter(function(n){ return n.role === "sender"; });
+
+  var currentSelected = findNodeByKey(s.selectedPosNode);
+  if(!currentSelected){
+    if(receivers.length > 0){
+      currentSelected = receivers[0];
+    } else if(senders.length > 0){
+      currentSelected = senders[0];
+    }
+    s.selectedPosNode = currentSelected ? currentSelected.key : null;
+  }
+
+  var html = "";
+  if(receivers.length > 0){
+    html += '<optgroup label="🎯 Receivers (' + receivers.length + ')">';
+    receivers.forEach(function(n){
+      var heldStr = (n.positions && n.positions.count !== undefined) ? n.positions.count : "0";
+      var waitStr = (n.waiting && n.waiting.total !== undefined) ? n.waiting.total : "0";
+      var waitText = (Number(waitStr) > 0) ? (" · ⏳ " + waitStr + " waiting") : " · clear";
+      var nameStr = n.name ? (" (" + n.name + ")") : "";
+      html += '<option value="' + esc(n.key) + '">' + esc(n.key) + esc(nameStr) + ' — Held: ' + esc(heldStr) + waitText + '</option>';
+    });
+    html += '</optgroup>';
+  }
+
+  if(senders.length > 0){
+    html += '<optgroup label="📡 Senders (' + senders.length + ')">';
+    senders.forEach(function(n){
+      var p = findPosBySender(n.key, n.acc);
+      var posCount = p ? p.count : ((n.positions && n.positions.count !== undefined) ? n.positions.count : "0");
+      var lotsCount = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
+      var nameStr = n.name ? (" (" + n.name + ")") : "";
+      html += '<option value="' + esc(n.key) + '">' + esc(n.key) + esc(nameStr) + ' — Open: ' + esc(posCount) + ' (' + esc(lotsCount) + ' lots)</option>';
+    });
+    html += '</optgroup>';
+  }
+
+  sel.innerHTML = html;
+  if(s.selectedPosNode){
+    sel.value = s.selectedPosNode;
+  }
+}
+
+function selectPosNode(key){
+  s.selectedPosNode = key;
+  var sel = $("pos_node_select");
+  if(sel && sel.value !== key){
+    sel.value = key;
+  }
+  renderPosNodeDetail();
+}
+
+function navPosNode(step){
+  var sel = $("pos_node_select");
+  if(!sel || !sel.options.length) return;
+  var idx = sel.selectedIndex + step;
+  if(idx < 0) idx = sel.options.length - 1;
+  if(idx >= sel.options.length) idx = 0;
+  sel.selectedIndex = idx;
+  selectPosNode(sel.value);
+}
+
+function renderPosNodeDetail(){
+  var container = $("pos_node_content");
+  if(!container) return;
+
+  var n = findNodeByKey(s.selectedPosNode);
+  if(!n){
+    container.innerHTML = '<div class="empty">Please select a node above to inspect its positions and waiting telemetry.</div>';
+    if($("pos_foot_msg")) $("pos_foot_msg").textContent = "No node currently selected.";
+    return;
+  }
+
+  var isRec = (n.role === "receiver");
+  var out = "";
+
+  // 1. Node Banner
+  var dotClass = "dot " + (n.liveness || "offline");
+  var finStr = formatFinancials(n);
+  var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">PAUSED (No new mirrors)</span>' : '';
+  var riskBadge = n.risk ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px">⚠️ ' + esc(n.risk) + '</span>' : '';
+
+  out += '<div class="node-banner">';
+  out += '  <div class="node-banner-info">';
+  out += '    <div class="node-banner-title">';
+  out += '      <span class="role-pill ' + esc(n.role) + '">' + esc(n.role).toUpperCase() + '</span>';
+  out += '      <span class="' + dotClass + '"></span>';
+  out += '      <span>' + esc(n.key) + '</span>';
+  if(n.name) out += '      <span style="font-weight:normal;color:var(--dim)">(' + esc(n.name) + ')</span>';
+  if(n.ver) out += '      <span class="ver-tag">v' + esc(n.ver) + '</span>';
+  out += '    </div>';
+  out += '    <div class="node-banner-sub">';
+  out += '      <span>Account: <strong>' + esc(n.acc || "-") + '</strong></span>';
+  out += '      <span>· Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>';
+  if(finStr) out += '      <span>· ' + finStr + '</span>';
+  out += '    </div>';
+  out += '  </div>';
+  out += '  <div class="node-banner-meta">';
+  if(pausedBadge) out += pausedBadge;
+  if(riskBadge) out += riskBadge;
+  out += '  </div>';
+  out += '</div>';
+
+  if(isRec){
+    // ================= RECEIVER VIEW =================
+    var posCount = (n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0;
+    var posLots = (n.positions && n.positions.lots !== undefined) ? n.positions.lots : 0;
+    var orphan = (n.positions && typeof n.positions.orphaned === "number") ? n.positions.orphaned : 0;
+
+    var wt = n.waiting || { total: 0, lots: 0, queued: 0, delayed: 0, mkt_closed: 0 };
+    var totalWait = (wt.total !== undefined) ? Number(wt.total) : 0;
+    var waitLots = (wt.lots !== undefined) ? Number(wt.lots) : 0;
+    var queued = (wt.queued !== undefined) ? Number(wt.queued) : 0;
+    var delayed = (wt.delayed !== undefined) ? Number(wt.delayed) : 0;
+    var mktClosed = (wt.mkt_closed !== undefined) ? Number(wt.mkt_closed) : 0;
+
+    // A. Currently Held Positions Cards
+    out += '<div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>';
+    out += '<div class="pos-card-grid">';
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Managed Mirrors</div>';
+    out += '    <div class="pos-card-val">' + posCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">(' + esc(posLots) + ' lots)</span></div>';
+    out += '    <div class="pos-card-sub">Active copier mirror positions managed by engine</div>';
+    out += '  </div>';
+
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Orphan / Manual Positions</div>';
+    out += '    <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">orders</span></div>';
+    out += '    <div class="pos-card-sub">' + (orphan > 0 ? 'External or manual orders with non-copier magic' : 'No untracked or manual positions') + '</div>';
+    out += '  </div>';
+
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Gross Account Open</div>';
+    out += '    <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
+    out += '    <div class="pos-card-sub">Total open positions currently active on this terminal</div>';
+    out += '  </div>';
+    out += '</div>';
+
+    // B. Waiting Orders in Progress
+    out += '<div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>';
+
+    if(totalWait > 0){
+      out += '<div class="waiting-banner active">';
+      out += '  <div class="waiting-banner-icon">⏳</div>';
+      out += '  <div class="waiting-banner-text">';
+      out += '    <div class="waiting-banner-title">';
+      out += '      <span>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots)</span>';
+      out += '      <span class="waiting-stage-badge active">IN PROGRESS</span>';
+      out += '    </div>';
+      out += '    <div class="waiting-banner-desc">';
+      out += '      These orders were signaled by Senders and are actively held in the receiver execution pipeline under broker queuing, timing gates, or market closed filters.';
+      out += '    </div>';
+      out += '  </div>';
+      out += '</div>';
+    } else {
+      out += '<div class="waiting-banner clear">';
+      out += '  <div class="waiting-banner-icon">✅</div>';
+      out += '  <div class="waiting-banner-text">';
+      out += '    <div class="waiting-banner-title">';
+      out += '      <span>All Orders Executed (No Waiting in Progress)</span>';
+      out += '      <span class="waiting-stage-badge idle">CLEAR</span>';
+      out += '    </div>';
+      out += '    <div class="waiting-banner-desc">';
+      out += '      Receiver is in sync with signals. There are currently zero pending, delayed, or market-closed orders waiting in queue.';
+      out += '    </div>';
+      out += '  </div>';
+      out += '</div>';
+    }
+
+    // 3-Stage Waiting Pipeline Grid
+    out += '<div class="waiting-pipeline-grid">';
+
+    // Stage 1: Broker Queue
+    out += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
+    out += '    <div class="waiting-stage-head">';
+    out += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
+    out += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
+    out += '    </div>';
+    out += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
+    out += '    <div class="waiting-stage-desc">Trade instruction generated, waiting in local broker dispatch queue for order filling / network socket.</div>';
+    out += '  </div>';
+
+    // Stage 2: Gate Delayed
+    out += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
+    out += '    <div class="waiting-stage-head">';
+    out += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
+    out += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
+    out += '    </div>';
+    out += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
+    out += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, M1 bar completion filter, or pullback/spread safety gates.</div>';
+    out += '  </div>';
+
+    // Stage 3: Market Closed
+    out += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
+    out += '    <div class="waiting-stage-head">';
+    out += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
+    out += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
+    out += '    </div>';
+    out += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
+    out += '    <div class="waiting-stage-desc">Market is closed (weekend/holiday), quotes halted, or outside configured trading schedule. Monitored until session opens.</div>';
+    out += '  </div>';
+
+    out += '</div>';
+
+    if($("pos_foot_msg")){
+      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Real-time telemetry streamed via STAT heartbeat";
+    }
+
+  } else {
+    // ================= SENDER VIEW =================
+    var p = findPosBySender(n.key, n.acc);
+    var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
+    var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
+    var receipt = (p && p.receipt) ? p.receipt : ((n.positions && n.positions.receipt) ? n.positions.receipt : "-");
+    var symbols = (p && p.symbols) ? p.symbols : [];
+    var snaps = (p && p.snaps) ? p.snaps : "-";
+
+    out += '<div class="pos-section-title">📊 Open Positions Summary</div>';
+    out += '<div class="pos-card-grid">';
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Open Positions</div>';
+    out += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
+    out += '    <div class="pos-card-sub">Active open tickets reported by Sender terminal</div>';
+    out += '  </div>';
+
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Total Volume</div>';
+    out += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">lots</span></div>';
+    out += '    <div class="pos-card-sub">Sum of lot sizes across all open tickets</div>';
+    out += '  </div>';
+
+    out += '  <div class="pos-card">';
+    out += '    <div class="pos-card-label">Snapshot State</div>';
+    out += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
+    out += '    <div class="pos-card-sub">' + (snaps !== "-" ? (snaps + " snapshots received") : "Live snapshot broadcast") + '</div>';
+    out += '  </div>';
+    out += '</div>';
+
+    out += '<div class="pos-section-title" style="margin-top:20px">📈 Positions Breakdown by Symbol</div>';
+    if(symbols.length > 0){
+      var maxSymLots = 0;
+      symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
+      if(maxSymLots <= 0) maxSymLots = 1;
+
+      var symRows = symbols.map(function(s){
+        var pct = Math.min(100, Math.round((Number(s.lots) / maxSymLots) * 100));
+        return '<tr>' +
+               '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
+               '  <td class="num">' + esc(s.count) + '</td>' +
+               '  <td class="num">' + esc(s.lots) + '</td>' +
+               '  <td style="width:40%">' +
+               '    <div class="pos-bar-container">' +
+               '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
+               '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
+               '    </div>' +
+               '  </td>' +
+               '</tr>';
+      }).join("");
+
+      out += '<div class="pos-table-wrap">';
+      out += '  <table>';
+      out += '    <thead><tr><th>Symbol</th><th class="num">Positions</th><th class="num">Volume (Lots)</th><th>Relative Exposure</th></tr></thead>';
+      out += '    <tbody>' + symRows + '</tbody>';
+      out += '  </table>';
+      out += '</div>';
+    } else {
+      out += '<div class="waiting-banner clear">';
+      out += '  <div class="waiting-banner-icon">✅</div>';
+      out += '  <div class="waiting-banner-text">';
+      out += '    <div class="waiting-banner-title">No Open Positions Reported</div>';
+      out += '    <div class="waiting-banner-desc">Sender account is currently flat. No active open tickets or market risk exposure.</div>';
+      out += '  </div>';
+      out += '</div>';
+    }
+
+    if($("pos_foot_msg")){
+      $("pos_foot_msg").textContent = "Sender: " + n.key + " · Broadcasted via ZeroMQ SNAP · Receipt H=" + receipt;
+    }
+  }
+
+  container.innerHTML = out;
+}
+
+function openPositionsModal(focusKey){
+  $("posmodal").classList.remove("hidden");
+  if(focusKey){
+    s.selectedPosNode = focusKey;
+  }
+  updatePosNodeSelector();
+  renderPosNodeDetail();
+  renderRecPositions();
 }
 
 function closePositionsModal(){
@@ -1479,6 +1865,11 @@ function render(){
   updateKpiCards(nodes, pos, d);
   drawTopology(nodes);
   renderCurveKey(d.curve || null);
+
+  if(!$("posmodal").classList.contains("hidden")){
+    updatePosNodeSelector();
+    renderPosNodeDetail();
+  }
 }
 
 // M9/§19.1: the hub's CURVE public key lives in the footer, because it is
@@ -2066,6 +2457,15 @@ function startDashboard(){
   $("kpi_card_wait").addEventListener("click", function(){ openPositionsModal(); });
   $("posclose_x").addEventListener("click", closePositionsModal);
   $("posclose_btn").addEventListener("click", closePositionsModal);
+  $("pos_node_select").addEventListener("change", function(){
+    selectPosNode(this.value);
+  });
+  $("pos_prev_btn").addEventListener("click", function(){
+    navPosNode(-1);
+  });
+  $("pos_next_btn").addEventListener("click", function(){
+    navPosNode(1);
+  });
   $("alerts").addEventListener("click", function(ev){
     var btn = ev.target.closest("button");
     if(!btn) return;
