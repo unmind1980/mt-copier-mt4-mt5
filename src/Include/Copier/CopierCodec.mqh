@@ -272,12 +272,12 @@ string CopierHashHex(const long h)
 
 //=====================================================================
 // Adaptive compression for large payload fields (R=, POS=, WAITLIST=).
-// Threshold: 10KB (10240 bytes).
-//   < 10KB: prefixed with "0:" (uncompressed raw text).
-//  >= 10KB: compressed via native CryptEncode(CRYPT_ARCH_ZIP),
-//           padded to multiple of 4, encoded with Z85, prefixed with "1:".
+// Threshold: 500 bytes (~8-9 orders).
+//   < 500 B: prefixed with "0:" (uncompressed raw text).
+//  >= 500 B: compressed via native CryptEncode(CRYPT_ARCH_ZIP),
+//            padded to multiple of 4, encoded with Z85, prefixed with "1:".
 //=====================================================================
-#define CP_COMPRESS_THRESHOLD 10240
+#define CP_COMPRESS_THRESHOLD 500
 
 string CopierCompressField(const string src)
   {

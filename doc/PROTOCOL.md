@@ -230,12 +230,12 @@ put on the wire.
 
 ### Adaptive compression on large telemetry fields (`R=`, `POS=`, `WAITLIST=`)
 
-To cut network bandwidth and string memory on accounts with hundreds of open positions,
+To cut network bandwidth and string memory on accounts with open positions,
 the payload fields carrying repeated item lists (`R=` in `SNAP`, and `POS=` / `WAITLIST=` in `STAT`)
-use an adaptive 10KB threshold:
+use an adaptive 500-byte threshold (~8-9 orders):
 
-- **Length < 10,240 bytes**: prefixed with `0:` (uncompressed UTF-8 plain text).
-- **Length >= 10,240 bytes**: compressed using native Deflate (`CryptEncode(CRYPT_ARCH_ZIP)` in MQL / `flate2` in Rust), padded with null bytes to a multiple of 4, encoded with `Z85`, and prefixed with `1:`.
+- **Length < 500 bytes**: prefixed with `0:` (uncompressed UTF-8 plain text).
+- **Length >= 500 bytes**: compressed using native Deflate (`CryptEncode(CRYPT_ARCH_ZIP)` in MQL / `flate2` in Rust), padded with null bytes to a multiple of 4, encoded with `Z85`, and prefixed with `1:`.
 - **Legacy un-prefixed text**: transparently parsed as raw text for backward compatibility.
 
 **These cadences produce different STAT payload shapes, which a reader must tell

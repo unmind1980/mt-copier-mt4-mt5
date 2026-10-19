@@ -165,7 +165,16 @@ void TestSnapshot()
    int n2=CopierDecodeSnapshot("N=9999;R="+CopierEncodeRec(arr[0])+"~"+CopierEncodeRec(arr[1]),small,2);
    Ok("snapshot: clamps to buffer size",n2==2);
 
-   //--- 10KB threshold adaptive compression test
+   //--- 500-byte threshold adaptive compression test
+   CopierPos smallArr[];
+   ArrayResize(smallArr,3);
+   for(int i=0;i<3;i++)
+     {
+      smallArr[i]=MakePos("U"+IntegerToString(10000000+i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
+     }
+   string smallPayload=CopierEncodeSnapshot(smallArr,3);
+   Ok("snapshot: small payload (<500B) uses uncompressed prefix R=0:",StringFind(smallPayload,";R=0:")>0);
+
    CopierPos bigArr[];
    ArrayResize(bigArr,300);
    for(int i=0;i<300;i++)
@@ -173,7 +182,7 @@ void TestSnapshot()
       bigArr[i]=MakePos("U"+IntegerToString(10000000+i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
      }
    string bigPayload=CopierEncodeSnapshot(bigArr,300);
-   Ok("snapshot: big payload uses compression prefix R=1:",StringFind(bigPayload,";R=1:")>0);
+   Ok("snapshot: big payload (>=500B) uses compression prefix R=1:",StringFind(bigPayload,";R=1:")>0);
    CopierPos bigOut[];
    ArrayResize(bigOut,CP_MAX_POSITIONS);
    int bigN=CopierDecodeSnapshot(bigPayload,bigOut,CP_MAX_POSITIONS);

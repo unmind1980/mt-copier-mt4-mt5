@@ -260,7 +260,7 @@ restarts.
 **Snapshot Cadence & Instant Bootstrap (`SnapshotSeconds`, default: 15s)**:
 - Snapshot broadcast runs every 15s (`SnapshotSeconds = 15`), serving as baseline state convergence. Stop-loss changes are emitted immediately via `CP_T_MODIFY` events, and balance/equity updates broadcast every 5s (`HeartbeatSeconds = 5`).
 - **Instant Bootstrap on First Contact**: When a new receiver connects and emits an empty receipt (`H=""`), the sender immediately unicasts the cached snapshot on the receiver's very first heartbeat (<1 second), bypassing the 15s broadcast clock.
-- **10KB Adaptive Deflate/Zip + Z85 Compression**: Wire records (`R=` in `SNAP`, and `POS=`/`WAITLIST=` in `STAT`) automatically compress via native MetaTrader `CryptEncode(CRYPT_ARCH_ZIP)` + `Z85` when payload size exceeds 10,240 bytes (prefixed with `1:`), while payloads under 10KB remain zero-overhead plain text (prefixed with `0:`). Floating-point numbers automatically omit redundant trailing zeroes and dots (`CopierFmtDouble`).
+- **500-Byte Adaptive Deflate/Zip + Z85 Compression**: Wire records (`R=` in `SNAP`, and `POS=`/`WAITLIST=` in `STAT`) automatically compress via native MetaTrader `CryptEncode(CRYPT_ARCH_ZIP)` + `Z85` when payload size reaches 500 bytes (~8-9 orders, prefixed with `1:`), while small payloads under 500 bytes remain zero-overhead plain text (prefixed with `0:`). Floating-point numbers automatically omit redundant trailing zeroes and dots (`CopierFmtDouble`).
 
 There is **no `SenderId`**: the sender's identity is its derived `EventsPort`
 (or `NID` under Central Hub mode). State persistence is decoupled from ports

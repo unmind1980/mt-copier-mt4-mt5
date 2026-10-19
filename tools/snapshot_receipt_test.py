@@ -84,7 +84,7 @@ def encode_snapshot(records):
     payload = "N=" + str(len(records))
     if records:
         recs = CP_SEP_REC.join(records)
-        if len(recs) >= 10240:
+        if len(recs) >= 500:
             import zmq.utils.z85 as z85
             import zlib
             comp = zlib.compress(recs.encode('utf-8'))
@@ -246,11 +246,23 @@ def main():
           ("EQ" in kv(full_report)) and ("EQ" not in kv(receipt_only)))
 
     print()
-    print("== 10KB adaptive compression ==")
-    # 300 records exceed 10KB and trigger Z85+zlib compression
+    print("== 500-byte adaptive compression ==")
+    # 5 records (~300B) are below 500 bytes -> raw uncompressed with R=0:
+    recs5 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 6)]
+    small_p = encode_snapshot(recs5)
+    check("5 records are under 500-byte threshold", len(CP_SEP_REC.join(recs5)) < 500)
+    check("5 records use uncompressed prefix R=0:", ";R=0:" in small_p)
+
+    # 10 records (~600B) exceed 500-byte threshold -> trigger Z85+zlib with R=1:
+    recs10 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 11)]
+    med_p = encode_snapshot(recs10)
+    check("10 records exceed 500-byte threshold", len(CP_SEP_REC.join(recs10)) >= 500)
+    check("10 records trigger compression prefix R=1:", ";R=1:" in med_p)
+
+    # 300 records exceed threshold and compress to under 5KB
     recs300 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 301)]
     big_p = encode_snapshot(recs300)
-    check("300 raw records exceed 10KB threshold", len(CP_SEP_REC.join(recs300)) >= 10240)
+    check("300 raw records exceed 500-byte threshold", len(CP_SEP_REC.join(recs300)) >= 500)
     check("compressed snapshot is under 5KB (massive reduction)", len(big_p) < 5000)
     check("big snapshot uses compression prefix R=1:", ";R=1:" in big_p)
     r_val = re.search(r";R=1:([^;]+)", big_p).group(1)

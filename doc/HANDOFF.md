@@ -133,10 +133,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 - **绕过防抖与定向单播**：绕过 2 秒的 Stale 防抖等待期，在第 1 秒心跳直接触发补发；
 - **成效**：新节点上线全仓同步等待时间从 15 秒压缩至 1 秒以内，Hub 模式下对专有 NID 主题精准单播，全网其余 Receiver 0 扰动。
 
-### 2.12 大数据自适应 Deflate/Zip + Z85 压缩机制 (10KB Adaptive Compression)
-- **10 KB 门限自适应分水岭**：
-  - 数据 `< 10KB`：直接输出原文字符串，加前缀 `0:`（零 CPU 与解包开销）；
-  - 数据 `≥ 10KB`：触发 MetaTrader 内核级 `CryptEncode(CRYPT_ARCH_ZIP)` 压缩，按 4 字节补齐后经 `Z85::encode` 文本化并加前缀 `1:`；
+### 2.12 自适应 Deflate/Zip + Z85 压缩机制 (500-Byte Adaptive Compression)
+- **500 字节门限自适应分水岭 (~8-9 单)**：
+  - 数据 `< 500 B`：直接输出原文字符串，加前缀 `0:`（极小单量零 CPU 与编解码开销，抓包直观）；
+  - 数据 `≥ 500 B`：触发 MetaTrader 内核级 `CryptEncode(CRYPT_ARCH_ZIP)` 压缩，按 4 字节补齐后经 `Z85::encode` 文本化并加前缀 `1:`；
 - **应用范围**：Sender 端的 `SNAP` 全量快照 `R=`，以及 Receiver 端的 `STAT` 逐单列表 `POS=` 与 `WAITLIST=`；
 - **Rust Hub 原生透明解压**：通过 `flate2::read::ZlibDecoder`（带 Deflate 兜底）实现 WebUI 透明下钻，300 单大持仓网络包从 25.5 KB 降至 2.69 KB（单包压缩率达 82.7%）。
 
@@ -154,12 +154,12 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
 | **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包 |
 | **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s |
-| **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 10KB 门限自适应 Zip+Z85 编解码 |
+| **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |
 | **风控头文件** | `src/Include/Copier/CopierRisk.mqh` | 信号源级与账户级双层风控守卫模型 |
 | **运维脚本** | `tools/hublog.bat` / `hubrs.bat` | 启动前多实例进程查验，冲突友好报警 |
-| **测试套件** | `tools/` | `snapshot_receipt_test.py` (43 pass), `snapshot_repair_test.py` (19 pass), `dash_check.py` (166 IDs) |
+| **测试套件** | `tools/` | `snapshot_receipt_test.py` (47 pass), `snapshot_repair_test.py` (19 pass), `dash_check.py` (166 IDs) |
 | **部署与编译** | `tools/deploy.sh` / `compile.sh` | 部署清理通配符精细化、支持 4 大目标跨架构全自动编译 |
 
 ---
