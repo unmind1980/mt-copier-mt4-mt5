@@ -1432,12 +1432,12 @@ function formatWaiting(n){
 
   if(total > 0){
     var text = "Waiting " + total + " to open (" + q + " queued, " + d + " delayed, " + m + " mkt closed)" + lots;
-    var riskNote = (n.blocked && n.risk) ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
+    var riskNote = (n.blocked && n.risk && n.risk !== "ok") ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
     return '<span class="wait-chip warn" title="Orders held waiting for filters, queues, or market open">' +
            '<span class="wait-icon">⏳</span> <strong>' + esc(text) + '</strong>' + riskNote +
            '</span>';
   } else {
-    var riskNote = (n.blocked && n.risk) ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
+    var riskNote = (n.blocked && n.risk && n.risk !== "ok") ? ' <span class="wait-blocked">🚫 ' + esc(n.risk) + '</span>' : '';
     return '<span class="wait-chip ok"><span class="wait-icon">✓</span> 0 waiting' + riskNote + '</span>';
   }
 }
@@ -1624,7 +1624,7 @@ function renderPosNodeDetail(){
   var dotClass = "dot " + (n.liveness || "offline");
   var finStr = formatFinancials(n);
   var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">PAUSED (No new mirrors)</span>' : '';
-  var riskBadge = n.risk ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px">⚠️ ' + esc(n.risk) + '</span>' : '';
+  var riskBadge = (n.risk && n.risk !== "ok") ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px" title="Risk limit tripped: ' + esc(n.risk) + '">⚠️ ' + esc(n.risk) + '</span>' : '';
 
   out += '<div class="node-banner">';
   out += '  <div class="node-banner-info">';
