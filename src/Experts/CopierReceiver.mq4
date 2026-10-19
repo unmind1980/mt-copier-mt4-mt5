@@ -5648,7 +5648,7 @@ void OnTimer()
    bool dueSync   =(SyncHeartbeatSeconds>0
                     && now-g_lastSyncMs>=(long)SyncHeartbeatSeconds*1000);
    bool dueSummary=(g_forcePosReport || (g_lastSummaryMs==0) || (now-g_lastSummaryMs>=5000));
-   bool dueDetail =(g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000));
+   bool dueDetail =(g_hubOn && (g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000)));
 
    if(dueStatus || dueSync || dueSummary || g_forcePosReport)
      {
@@ -5687,8 +5687,8 @@ void OnTimer()
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
 
             //--- Detailed position & waiting item lists are transmitted once a minute
-            //--- or on-demand when requested by WebUI (g_forcePosReport) to save bandwidth
-            if(dueDetail)
+            //--- or on-demand when requested by WebUI (g_forcePosReport) in Hub mode
+            if(dueDetail && g_hubOn)
               {
                string posEnc=EncodeReceiverPositions();
                string waitEnc=EncodeReceiverWaitList();
