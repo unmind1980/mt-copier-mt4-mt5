@@ -3037,10 +3037,10 @@ string EncodeReceiverPositions()
       out+=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
           +g_acctAllPos[i].sym+CP_SEP_ITEM
           +(string)g_acctAllPos[i].side+CP_SEP_ITEM
-          +DoubleToString(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
-          +DoubleToString(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
-          +DoubleToString(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
-          +DoubleToString(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
+          +CopierFmtDouble(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
+          +CopierFmtDouble(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
+          +CopierFmtDouble(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
+          +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
           +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
           +(string)isManaged+CP_SEP_ITEM
           +CopierSanitizeComment(g_acctAllPos[i].cmt);
@@ -3061,8 +3061,8 @@ string EncodeReceiverWaitList()
       out+=g_q[i].uid+CP_SEP_ITEM
           +g_q[i].sym+CP_SEP_ITEM
           +(string)g_q[i].side+CP_SEP_ITEM
-          +DoubleToString(g_q[i].lots,2)+CP_SEP_ITEM
-          +DoubleToString(g_q[i].pprice>0.0?g_q[i].pprice:0.0,5)+CP_SEP_ITEM
+          +CopierFmtDouble(g_q[i].lots,2)+CP_SEP_ITEM
+          +CopierFmtDouble(g_q[i].pprice>0.0?g_q[i].pprice:0.0,5)+CP_SEP_ITEM
           +"queued"+CP_SEP_ITEM
           +"Queued in broker dispatch";
       count++;
@@ -3075,8 +3075,8 @@ string EncodeReceiverWaitList()
       out+=g_waitItems[i].uid+CP_SEP_ITEM
           +g_waitItems[i].sym+CP_SEP_ITEM
           +(string)g_waitItems[i].side+CP_SEP_ITEM
-          +DoubleToString(g_waitItems[i].lots,2)+CP_SEP_ITEM
-          +DoubleToString(g_waitItems[i].openPx,5)+CP_SEP_ITEM
+          +CopierFmtDouble(g_waitItems[i].lots,2)+CP_SEP_ITEM
+          +CopierFmtDouble(g_waitItems[i].openPx,5)+CP_SEP_ITEM
           +g_waitItems[i].stage+CP_SEP_ITEM
           +CopierSanitize(g_waitItems[i].reason,48);
       count++;

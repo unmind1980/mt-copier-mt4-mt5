@@ -743,11 +743,19 @@ int CopierKvGetInt(const string payload,const string key,const int deflt)
   }
 
 //=====================================================================
-// Number formatting: always invariant ('.'), never locale dependent
+// Number formatting: always invariant ('.'), never locale dependent.
+// Strips unnecessary trailing zeroes and trailing dot to cut wire bandwidth.
 //=====================================================================
 string CopierFmtDouble(const double v,const int digits)
   {
-   return DoubleToString(v,digits);
+   if(MathAbs(v)<0.000000001) return "0";
+   string s=DoubleToString(v,digits);
+   int dot=StringFind(s,".");
+   if(dot<0) return s;
+   int len=StringLen(s);
+   while(len>dot+1 && StringGetCharacter(s,len-1)=='0') len--;
+   if(len==dot+1) len--; // remove dot if integer
+   return StringSubstr(s,0,len);
   }
 
 //=====================================================================

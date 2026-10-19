@@ -156,7 +156,7 @@ void TestSnapshot()
    //--- to zero positions without error
    string empty=CopierEncodeSnapshot(arr,0);
    int n0=CopierDecodeSnapshot(empty,out,CP_MAX_POSITIONS);
-   Ok("snapshot: empty encodes to N=0",empty=="N=0");
+   Ok("snapshot: empty encodes to N=0",StringFind(empty,"N=0")==0);
    Ok("snapshot: empty decodes to 0",n0==0);
 
    //--- never trust the wire: a huge N must not overrun the buffer

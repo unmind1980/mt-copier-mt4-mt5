@@ -176,7 +176,7 @@ input group "--- Cadence & Performance ---"
 #else
 input string _g_cadence_ = ""; // --- Cadence & Performance ---
 #endif
-input int    SnapshotSeconds = 10;          // SnapshotSeconds - baseline push interval; 0 = off
+input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0 = off (default 15s)
 input int    HeartbeatSeconds= 5;   // HeartbeatSeconds - account state interval (default 5s)
 input int    PollMs          = 100;         // PollMs - MT4 scan interval; <50 wastes CPU
 

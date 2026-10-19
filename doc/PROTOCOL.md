@@ -41,7 +41,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 
 | T         | frequency                                                                                 | payload                                                                                                     |
 | --------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `SNAP`    | every `SnapshotSeconds` (default 10), implicitly on (re)connect, and on a targeted repair | `N=<count>;R=<rec>~<rec>...;H=<8 hex>`                                                                      |
+| `SNAP`    | every `SnapshotSeconds` (default 15), implicitly on (re)connect, and on a targeted repair | `N=<count>;R=<rec>~<rec>...;H=<8 hex>`                                                                      |
 | `OPEN`    | event, immediate                                                                          | `UID=..;TKT=..;SYM=..;SIDE=..;LOTS=..;OPN=..;SL=..;TP=..;OTS=..`                                            |
 | `CLOSE`   | event, immediate                                                                          | `UID=..;TKT=..;LOTS=..;PX=..`                                                                               |
 | `HBT`     | every `HeartbeatSeconds` (default 5)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..;ACC=..`                                                                        |
