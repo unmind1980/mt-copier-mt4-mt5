@@ -1150,7 +1150,6 @@
       <div class="pos-node-nav">
         <button type="button" id="pos_prev_btn" class="opbtn" title="Previous node">◀ Prev</button>
         <button type="button" id="pos_next_btn" class="opbtn" title="Next node">Next ▶</button>
-        <button type="button" id="pos_refresh_btn" class="opbtn" title="Request immediate position table update from receiver terminal" style="margin-left:8px;font-weight:600">🔄 Request Update</button>
       </div>
     </div>
     <div class="posbody" id="pos_detail_body">
@@ -1757,8 +1756,15 @@ function renderPosNodeDetail(){
     var totalOrders = opened.length + waiting.length;
 
     var curFilter = s.posDetailFilter || "all";
+    var inFlight = !!s.posRequestInFlight;
 
-    out += '<div class="pos-section-title" style="margin-top:20px">📋 Line-by-Line Orders &amp; Positions (' + totalOrders + ' total)</div>';
+    out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
+    out += '  <div class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions (' + totalOrders + ' total)</div>';
+    out += '  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+    out += '    <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>';
+    out += '    <button type="button" id="pos_refresh_btn" class="opbtn" onclick="requestPosUpdate()" title="Request immediate position table update from receiver terminal ' + esc(n.key) + '" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:4px 11px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer"' + (inFlight ? ' disabled' : '') + '>' + (inFlight ? '⏳ Requesting…' : '🔄 Request Update') + '</button>';
+    out += '  </div>';
+    out += '</div>';
 
     out += '<div class="pos-filter-toolbar">';
     out += '  <button type="button" class="pos-filter-btn ' + (curFilter === "all" ? "active" : "") + '" onclick="setPosDetailFilter(\'all\')">All (' + totalOrders + ')</button>';
@@ -1852,21 +1858,12 @@ function renderPosNodeDetail(){
       out += '</div>';
     }
 
-    var rBtn = $("pos_refresh_btn");
-    if(rBtn){
-      rBtn.style.display = "";
-      rBtn.title = "Request immediate position table update from receiver terminal " + n.key;
-    }
     if($("pos_foot_msg")){
       $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
     }
 
   } else {
     // ================= SENDER VIEW =================
-    var sBtn = $("pos_refresh_btn");
-    if(sBtn){
-      sBtn.style.display = "none";
-    }
     var p = findPosBySender(n.key, n.acc);
     var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
     var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
@@ -1994,6 +1991,7 @@ function requestPosUpdate(){
     if(msg) msg.textContent = "Sender orders are auto-synced with market snapshots";
     return;
   }
+  s.posRequestInFlight = true;
   if(btn){
     btn.disabled = true;
     btn.textContent = "⏳ Requesting…";
@@ -2004,9 +2002,11 @@ function requestPosUpdate(){
   }
   sendCommand(k, "reqpos", msg);
   setTimeout(function(){
-    if(btn){
-      btn.disabled = false;
-      btn.textContent = "🔄 Request Update";
+    s.posRequestInFlight = false;
+    var b = $("pos_refresh_btn");
+    if(b){
+      b.disabled = false;
+      b.textContent = "🔄 Request Update";
     }
   }, 3000);
 }
@@ -2661,9 +2661,6 @@ function startDashboard(){
   });
   $("pos_next_btn").addEventListener("click", function(){
     navPosNode(1);
-  });
-  $("pos_refresh_btn").addEventListener("click", function(){
-    requestPosUpdate();
   });
   $("alerts").addEventListener("click", function(ev){
     var btn = ev.target.closest("button");
