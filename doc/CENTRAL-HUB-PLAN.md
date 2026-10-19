@@ -157,7 +157,7 @@ Socket::isReceiveMore(bool&)   // == ZMQ_RCVMORE
 - 信封：`V=1|SID=<id>|SSID=<session>|SEQ=<n>|TS=<server s>|MS=<monotonic ms>|T=<TYPE>|P=<payload>`
 - `SID` 是路由键；receiver 对不认识的 SID **静默丢弃**。
 - `SSID` 每次 `OnInit` 重生成 → **中枢必须原样透传**，否则每次中枢重启都会让所有 receiver 重新同步。
-- 频率：`SNAP` 全量推送最短间隔 10s（`SnapshotSeconds`，按需补发另计）/ `HBT` 1s / `STAT` 收据 1s（`SyncHeartbeatSeconds`）+ 监控报告 60s；`PING` 每 10s（`CP_PING_MS`）/`PONG` 应答。
+- 频率：`SNAP` 全量推送最短间隔 10s（`SnapshotSeconds`，按需补发另计）/ `HBT` 5s（`HeartbeatSeconds`）/ `STAT` 收据 1s（`SyncHeartbeatSeconds`）+ 摘要 5s + 详细列表与监控报告 60s；`PING` 每 10s（`CP_PING_MS`）/`PONG` 应答。
 - 容量：`CP_MAX_SENDERS 16`、`CP_MAX_PEERS 16`、`CP_MAX_POSITIONS 2048`。
 - 对端表以**账户号**为键（两端共用）。
 

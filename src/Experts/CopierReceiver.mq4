@@ -430,6 +430,7 @@ bool    g_srvEverMoved=false;
 #define CP_SYM_STALL_MS 60000
 long    g_lastStatusMs=0;            // STAT cadence
 long    g_lastSyncMs=0;              // snapshot-receipt cadence (SyncHeartbeatSeconds)
+long    g_lastSummaryMs=0;           // summary telemetry cadence (routine 5s)
 long    g_lastPosDetailMs=0;         // detailed position/waitlist table cadence (routine 60s)
 bool    g_forcePosReport=false;      // WebUI on-demand position update request
 long    g_lastPruneMs=0;             // stop-override table sweep
@@ -5643,18 +5644,20 @@ void OnTimer()
       StopsPrune(CopierNowMs());
      }
 
-   bool dueStatus=(StatusEnabled && now-g_lastStatusMs>=60000);
-   bool dueSync  =(SyncHeartbeatSeconds>0
-                   && now-g_lastSyncMs>=(long)SyncHeartbeatSeconds*1000);
-   bool dueDetail=(g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000));
+   bool dueStatus =(StatusEnabled && now-g_lastStatusMs>=60000);
+   bool dueSync   =(SyncHeartbeatSeconds>0
+                    && now-g_lastSyncMs>=(long)SyncHeartbeatSeconds*1000);
+   bool dueSummary=(g_forcePosReport || (g_lastSummaryMs==0) || (now-g_lastSummaryMs>=5000));
+   bool dueDetail =(g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000));
 
-   if(dueStatus || dueSync || g_forcePosReport)
+   if(dueStatus || dueSync || dueSummary || g_forcePosReport)
      {
       if(dueStatus) g_lastStatusMs=now;
       if(dueSync || g_forcePosReport) g_lastSyncMs=now;
+      if(dueSummary) g_lastSummaryMs=now;
       if(dueDetail) g_lastPosDetailMs=now;
 
-      bool putPositionSummary=(dueSync || dueStatus || g_forcePosReport);
+      bool putPositionSummary=(dueSummary || dueStatus || g_forcePosReport);
       bool putFigures=dueStatus;
       for(int i=0;i<g_nSenders;i++)
         {

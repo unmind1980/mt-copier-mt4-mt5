@@ -44,10 +44,10 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `SNAP`    | every `SnapshotSeconds` (default 10), implicitly on (re)connect, and on a targeted repair | `N=<count>;R=<rec>~<rec>...;H=<8 hex>`                                                                      |
 | `OPEN`    | event, immediate                                                                          | `UID=..;TKT=..;SYM=..;SIDE=..;LOTS=..;OPN=..;SL=..;TP=..;OTS=..`                                            |
 | `CLOSE`   | event, immediate                                                                          | `UID=..;TKT=..;LOTS=..;PX=..`                                                                               |
-| `HBT`     | every `HeartbeatSeconds` (default 1)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..;ACC=..`                                                                        |
+| `HBT`     | every `HeartbeatSeconds` (default 5)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..;ACC=..`                                                                        |
 | `PARTIAL` | reserved (P4)                                                                             |                                                                                                             |
 | `MODIFY`  | event, immediate — a stop moved                                                           | `UID=..;OPN=..;SL=..;TP=..`                                                                                 |
-| `STAT`    | Position summary on every `SyncHeartbeatSeconds` (default 1); monitoring once a minute | `LOGIN=..;SID=..;H=..` always, plus `HELD=..;LOTS=..;ORPHAN=..` on the sync cadence and `EQ=..;BL=..;NSEND=..;BLOCKED=..;RISK=..` once a minute |
+| `STAT`    | Receipt every `SyncHeartbeatSeconds` (1s); summary every 5s; detail/monitoring 60s/on-demand | `LOGIN=..;SID=..;H=..` always, plus `HELD/LOTS/WAIT/EQ/BL` every 5s, and `POS/WAITLIST` / `NSEND/BLOCKED/RISK` once a minute |
 | `RCPT`    | hub → sender, on every receipt a receiver reports                                         | `LOGIN=..;SID=..;H=..`                                                                                      |
 | `CFG`     | hub → node, on a config change and on the retry ladder                                    | `ID=..;REV=..;INI=<escaped ini>`                                                                            |
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
@@ -207,24 +207,25 @@ fills, rejections, or local risk blocks differ from the sender's book is
 *not* reported as a mismatch. That is the entire reason the field is safe to  
 put on the wire.
 
-`STAT` therefore has **two independent cadences sharing one message**:
+`STAT` therefore has **multi-tier cadences sharing one message**:
 
-- the position summary (`HELD`, `LOTS`, `ORPHAN`) — every
-  `SyncHeartbeatSeconds`, even when `StatusEnabled` is false. This keeps the
-  receiver Pos column responsive; these fields are sent only once per batch.
-- the monitoring figures (`EQ`, `BL`, `NSEND`, `BLOCKED`, `RISK`) — once a
-  minute, only when `StatusEnabled`. Nothing acts on them.
-- the snapshot receipt (`SID`, `H`) — every `SyncHeartbeatSeconds`, and
+- the snapshot receipt (`SID`, `H`) — every `SyncHeartbeatSeconds` (default 1s), and
   **deliberately not gated by `StatusEnabled`**, because it is part of the
   delivery path rather than a report about it. Turning monitoring off must
   not disable delivery.
+- the position summary (`HELD`, `LOTS`, `ORPHAN`, `WAIT`, `EQ`, `BL`) — every
+  5 seconds, even when `StatusEnabled` is false. This keeps the
+  receiver dashboard responsive while cutting high-frequency traffic.
+- the detailed position/waitlist items (`POS`, `WAITLIST`) & monitoring figures (`NSEND`, `BLOCKED`, `RISK`) — once a
+  minute (or on-demand when requested by WebUI).
 
 **These cadences produce different STAT payload shapes, which a reader must tell
 apart by CONTENT, not by type** — all are `T=STAT`:
 
 ```
-receipt + positions   LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..                       every SyncHeartbeatSeconds
-full report           LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;EQ=..;BL=..;NSEND=..;BLOCKED=..;RISK=..   once a minute (StatusEnabled)
+receipt only           LOGIN=..;SID=..;H=..                                                                        every 1s (SyncHeartbeatSeconds)
+receipt + summary      LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;WAIT=..;EQ=..;BL=..                          every 5s
+full report + detail   LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;..;POS=..;WAITLIST=..;NSEND=..;BLOCKED=..;RISK=..     once a minute / on-demand
 ```
 
 The receiver appends the position-summary block together or not at all, and
