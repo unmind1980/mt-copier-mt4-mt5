@@ -447,6 +447,7 @@ long    g_lastPruneMs=0;             // stop-override table sweep
 long    g_statusSeq=0;
 int     g_riskBlocked=0;             // entries refused by a risk switch since the last STAT
 long    g_lastMapSave=0;
+bool    g_mapDirty=false;      // an executed action changed what must persist
 //--- Last time the idempotency rings were swept. See the note in OnTimer.
 long    g_lastSeenPrune=0;
 bool    g_stateSaveOk=false;   // announced the identity store once per session
@@ -2503,6 +2504,16 @@ void ExecuteQueue()
          if(a.kind==CP_ACT_OPEN)
             g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
                              +a.uid);
+         //--- An executed action just changed what the identity file holds:
+         //--- OPEN created a mirror, TRIM moved MT4's remainder onto a new
+         //--- ticket, CLOSE removed one. Mark the map dirty so OnTimer
+         //--- persists it on the NEXT tick (~100 ms) instead of waiting out
+         //--- the 10 s cadence. The window matters since g_stateRestored
+         //--- began suppressing the everOpened backfill: a mirror opened in
+         //--- an unflushed window was never recorded as "opened before", so
+         //--- ReopenClosedMirrors=false could not hold it closed later.
+         //--- MODIFY touches only SL/TP - nothing the file carries.
+         if(a.kind!=CP_ACT_MODIFY) g_mapDirty=true;
          //--- It worked, so the standing condition is gone. Reset the ladder
          //--- rather than leaving a stale count to punish the next, unrelated
          //--- failure with an hours-long park it never earned.
@@ -5856,15 +5867,22 @@ void OnTimer()
       if(RiskCloseAllOnTrip) RiskCloseEverything();
      }
 
-   //--- 4b) persist the UID <-> identifier map (tiny; every 10 s is plenty and
-   //--- keeps the comment-overwritten case recoverable across a restart).
+   //--- 4b) persist the UID <-> identifier map. Two triggers:
+   //---   - a scheduled pass every 10 s, which keeps the comment-overwritten
+   //---     case recoverable across a restart without per-tick writes;
+   //---   - g_mapDirty, set by any executed OPEN/TRIM/CLOSE, which flushes on
+   //---     the next tick. The file is rebuilt from the account scan, so the
+   //---     save only lands one tick after RefreshRisk has seen the change -
+   //---     that is the whole point: a crash right after an open must not
+   //---     leave the new mirror out of the file that seeds g_everOpened.
    //---
    //--- No ignore-list refresh here any more. That list is an INPUT now, and
    //--- changing an input re-runs OnInit, which re-parses it - so the polling
    //--- and the file it polled are both gone.
-   if(now-g_lastMapSave>10000)
+   if(g_mapDirty || now-g_lastMapSave>10000)
      {
       g_lastMapSave=now;
+      g_mapDirty=false;
       SaveReceiverMap();
      }
 
