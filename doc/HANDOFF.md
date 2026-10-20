@@ -162,6 +162,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   3. **同 Tick 读仓合并 (1+N -> 1)**：`RefreshRisk()` 完成快慢扫描后直接输出 `g_acctAllPos`，各 `ConvergeSender(si)` 直接复用，消灭了多 Sender 下重复调用 `CopierReadPositions` 的 N 倍冗余；
   4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴。
 
+### 2.16 Sender 端 CPU 极致减负与零字符串稳态索引 (Ticket-to-Slot Indexing & Selective Comment Reading)
+- **业务痛点**：在持仓 200~300 单大持仓场景下，原版 Sender 每一个 100ms Tick 均执行 4~5 轮针对 2048 槽位定长表的线性字符串比对（opens 查找、stops 修改判断、closes 查找、volume drift 查找、roll-forward 清空重建），单 Tick 产生高达 18 万次 8 字符比较（10Hz 达 180 万次/秒）。同时 `BuildCurrent` 盲目读取 300 笔订单的 `OrderComment()`（而快照根本不需要 comment）。
+- **全方位减负技术落地**：
+  1. **`ticket -> prevSlot` 槽位索引直通**：
+     - `BuildCurrent(cur, prevSlot)` 在利用 ticket 匹配上一轮订单时，将命中的槽位 `prevSlot[i]` 直接输出；
+     - **新单开仓 (`slot < 0`)**：直接判断数值是否小于 0，零字符串查找；
+     - **止损变动 / 手数缩减 / 挂单成交 (`slot >= 0`)**：直接通过 `g_prev.At(slot, prev)` 以 $O(1)$ 常数时间取出上一轮记录比对数值，彻底消除字符串匹配；
+     - **平仓检测 (`closes`)**：在遍历 `cur` 时打上 `seenPrev[slot] = true` 标记，仅需单趟扫描 `g_prev` 槽位即可定位已平仓单，淘汰了 $O(N^2)$ 的 `FindUidIn`；
+     - **就地滚进 (`roll-forward`)**：消除 `g_prev.Clear()` 与全量重插，存量单原位 `UpdateAt`，平仓单 `RemoveAt`，新单 `InsertEmpty`；
+  2. **按需延迟读取 `OrderComment()`**：
+     - `CopierReadPositions` 默认跳过读取 `OrderComment()`（老单 99.9% 零字符串开销）；
+     - 仅当新 Ticket 出现时，才单次读取该单的 comment 以检查 MT4 部分平仓 `"from #<old>"` 链；
+  3. **成效**：Sender 每 Tick 字符串比较从 18 万次彻底归零，稳态下 comment 读取完全归零。
+
 ---
 
 ## 3. 核心文件与改动清单 (Manifest of Modified Components)
@@ -175,8 +189,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
 | **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁、快慢双路径零字符串缓存与 1+N 扫仓合并 |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照 |
-| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()` 方法，提供基于键名的高性能时间戳检索 |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment |
+| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 增加 `readComment` 标志，支持 Sender 跳过无用 comment 读取 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()` 方法；`CopierPosTable` 增加 `UpdateAt`、`RemoveAt`、`InsertEmpty` 槽位原位更新接口 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |

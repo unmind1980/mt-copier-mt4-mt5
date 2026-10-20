@@ -516,12 +516,15 @@ void EmitClose(const CopierPos &p)
 //=====================================================================
 // Scan + UID assignment
 //=====================================================================
-int BuildCurrent(CopierPos &cur[])
+int BuildCurrent(CopierPos &cur[],int &prevSlot[])
   {
    CopierPos raw[];
-   int rn=CopierReadPositions(raw,CP_MAX_POSITIONS);
+   //--- Pass readComment=false: skip reading comments for all orders indiscriminately.
+   //--- Sender only ever needs comment on MT4 for newly appeared tickets to check "from #".
+   int rn=CopierReadPositions(raw,CP_MAX_POSITIONS,false);
    int n=0;
    ArrayResize(cur,0,CP_MAX_POSITIONS);
+   ArrayResize(prevSlot,0,CP_MAX_POSITIONS);
 
    for(int i=0;i<rn;i++)
      {
@@ -531,28 +534,48 @@ int BuildCurrent(CopierPos &cur[])
 
       //--- 1) identity carried over from the previous tick (ticket match)
       string uid="";
+      int slot=-1;
       CopierPos q;
       int idx=g_prev.FindByTicket(p.ticket);
-      if(idx>=0 && g_prev.At(idx,q)) uid=q.uid;
+      if(idx>=0 && g_prev.At(idx,q))
+        {
+         uid=q.uid;
+         slot=idx;
+        }
 
       //--- 2) MT4 partial close: broker re-opens the remainder under a
       //---    new ticket with "from #<old>" in the comment. Inherit.
+      //---    Selectively read comment ONLY for this new ticket!
       if(StringLen(uid)==0)
         {
-         long from=CopierMt4FromTicket(p.cmt);
+#ifndef __MQL5__
+         string cmt="";
+         if(OrderSelect((int)p.ticket,SELECT_BY_TICKET)) cmt=OrderComment();
+         long from=CopierMt4FromTicket(cmt);
          if(from>0)
            {
             int j=g_prev.FindByTicket(from);
-            if(j>=0 && g_prev.At(j,q)) uid=q.uid;
+            if(j>=0 && g_prev.At(j,q))
+              {
+               uid=q.uid;
+               slot=j;
+              }
            }
+#endif
         }
 
       //--- 3) genuinely new
-      if(StringLen(uid)==0) uid=CopierNewUid();
+      if(StringLen(uid)==0)
+        {
+         uid=CopierNewUid();
+         slot=-1;
+        }
 
       p.uid=uid;
       ArrayResize(cur,n+1,CP_MAX_POSITIONS);
+      ArrayResize(prevSlot,n+1,CP_MAX_POSITIONS);
       cur[n]=p;
+      prevSlot[n]=slot;
       n++;
      }
    return n;
@@ -1196,13 +1219,20 @@ void OnTimer()
 
    //--- 1) scan and reconcile against what we saw last tick
    CopierPos cur[];
-   int n=BuildCurrent(cur);
+   int prevSlot[];
+   int n=BuildCurrent(cur,prevSlot);
 
-   //--- 2) emit opens for anything new
+   //--- Track which slots in g_prev are still alive this tick
+   bool seenPrev[CP_MAX_POSITIONS];
+   ArrayInitialize(seenPrev,false);
+
+   //--- 2) emit opens for new UIDs, or check stop/volume/kind changes for existing slots
    for(int i=0;i<n;i++)
      {
-      if(g_prev.Find(cur[i].uid)<0)
+      int slot=prevSlot[i];
+      if(slot<0)
         {
+         //--- NEW POSITION: slot < 0 means no match in previous tick
          EmitOpen(cur[i]);
          //--- log our own ticket alongside the UID: the receiver writes
          //--- both into its order comment, so the two logs line up and you
@@ -1223,26 +1253,11 @@ void OnTimer()
         }
       else
         {
-         //--- STOPS CHANGED. Emit it as an EVENT, not just a log line.
-         //---
-         //--- This used to be log-only: the receiver learned about a stop
-         //--- change from the next snapshot, so the latency was bounded by
-         //--- SnapshotSeconds. That was fine at 2 s and is not fine at 10 or
-         //--- 30 - a stop's whole purpose is to act AT a level, and a stop that
-         //--- arrives late arrives wrong.
-         //---
-         //--- The snapshot still carries SL/TP and remains the convergence
-         //--- source of truth; this only makes the common case fast. A lost
-         //--- MODIFY costs latency, never correctness, because the next
-         //--- snapshot re-derives the same target - which is the same
-         //--- relationship OPEN and CLOSE already have with the snapshot.
-         //---
-         //--- The log line stays: it puts the SOURCE values and the mirrored
-         //--- values in the same pair of logs, which is what any "the stop is
-         //--- on the wrong side" investigation actually needs.
+         seenPrev[slot]=true;
          CopierPos prev;
-         if(g_prev.Get(cur[i].uid,prev))
+         if(g_prev.At(slot,prev))
            {
+            //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(MathAbs(prev.sl-cur[i].sl)>0.0000001
                || MathAbs(prev.tp-cur[i].tp)>0.0000001)
               {
@@ -1255,80 +1270,63 @@ void OnTimer()
                     CopierPayloadModify(cur[i].uid,cur[i].openPx,
                                         cur[i].sl,cur[i].tp),false);
               }
-           }
-        }
-     }
 
-   //--- 3) emit closes for anything that vanished
-   for(int i=0;i<CP_MAX_POSITIONS;i++)
-     {
-      CopierPos q;
-      if(!g_prev.At(i,q)) continue;
-      if(FindUidIn(cur,n,q.uid)>=0) continue;
-      EmitClose(q);
-      g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
-      g_stateDirty=true;
-     }
-
-   //--- 4) volume drift (partial close we do not model in the MVP).
-   //---    We deliberately do NOT close+reopen: that would turn a small
-   //---    partial exit into a full round trip at market.
-   for(int i=0;i<n;i++)
-     {
-      CopierPos q;
-      if(!g_prev.Get(cur[i].uid,q)) continue;
-      if(MathAbs(q.lots-cur[i].lots)>0.0000001)
-        {
-         //--- the saved volume must not go stale: the state file is read
-         //--- back on restart, and a wrong volume there shows up as a
-         //--- spurious "volume changed" on the first scan afterwards
-         g_stateDirty=true;
-
-         //--- a partially closed position keeps its UID, so this would fire
-         //--- on every scan (10 Hz) for as long as the position stays open
-         if(g_once.ShouldEmit("vol|"+cur[i].uid))
-            g_log.Info("partial close on "+cur[i].uid+" "+cur[i].sym
-                       +" "+DoubleToString(q.lots,2)+" -> "+DoubleToString(cur[i].lots,2)
-                       +" (UID carried across the ticket change; the snapshot"
-                       +" now carries the smaller volume)");
-        }
-
-      //--- 4b) the same UID, but its kind or ticket moved underneath it.
-      //---
-      //--- A pending order FILLING looks exactly like this: one identity, now
-      //--- a position. Saying so proves the ticket survived the transition -
-      //--- if POSITION_IDENTIFIER were not the order's ticket, the match in
-      //--- BuildCurrent would have failed, a NEW uid would have been minted,
-      //--- and this line would show a different uid entirely rather than a
-      //--- ticket change.
-      //---
-      //--- It is also the only place a FLAPPING kind is visible. The receiver
-      //--- sees the consequence (cancel and re-open, repeatedly) but cannot
-      //--- tell whether the flap originates here or is something it introduced
-      //--- itself. This line settles that, which is why it is logged every
-      //--- time rather than throttled.
-      if(q.kind!=cur[i].kind || q.ticket!=cur[i].ticket)
-        {
-         g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
-                    +(string)q.kind+" -> "+(string)cur[i].kind+", ticket "
-                    +(string)q.ticket+" -> "+(string)cur[i].ticket
-                    +" (a pending filling looks like this once; a repeat does not)");
-         //--- When a pending order fills into a market position, buffer a 0.5s (500ms)
-         //--- debounce before pushing the snapshot, giving receivers time to fill naturally.
-         if(q.kind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
-           {
-            if(g_fillSnapshotDueMs==0)
+            //--- VOLUME DRIFT (partial close we do not model in the MVP)
+            if(MathAbs(prev.lots-cur[i].lots)>0.0000001)
               {
-               g_fillSnapshotDueMs=now+500;
-               g_log.Info("uid "+cur[i].uid+" pending filled; scheduled buffered snapshot in 500ms");
+               g_stateDirty=true;
+               if(g_once.ShouldEmit("vol|"+cur[i].uid))
+                  g_log.Info("partial close on "+cur[i].uid+" "+cur[i].sym
+                             +" "+DoubleToString(prev.lots,2)+" -> "+DoubleToString(cur[i].lots,2)
+                             +" (UID carried across the ticket change; the snapshot"
+                             +" now carries the smaller volume)");
+              }
+
+            //--- PENDING ORDER FILLING / KIND CHANGED
+            if(prev.kind!=cur[i].kind || prev.ticket!=cur[i].ticket)
+              {
+               g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
+                          +(string)prev.kind+" -> "+(string)cur[i].kind+", ticket "
+                          +(string)prev.ticket+" -> "+(string)cur[i].ticket
+                          +" (a pending filling looks like this once; a repeat does not)");
+               //--- When a pending order fills into a market position, buffer a 0.5s (500ms)
+               //--- debounce before pushing the snapshot, giving receivers time to fill naturally.
+               if(prev.kind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
+                 {
+                  if(g_fillSnapshotDueMs==0)
+                    {
+                     g_fillSnapshotDueMs=now+500;
+                     g_log.Info("uid "+cur[i].uid+" pending filled; scheduled buffered snapshot in 500ms");
+                    }
+                 }
               }
            }
         }
      }
 
-   //--- 5) roll the window forward
-   g_prev.Clear();
-   for(int i=0;i<n;i++) g_prev.Upsert(cur[i]);
+   //--- 3) emit closes for anything that vanished (slot valid but !seenPrev[k], 0 string lookups)
+   for(int k=0;k<CP_MAX_POSITIONS;k++)
+     {
+      if(seenPrev[k]) continue;
+      CopierPos q;
+      if(!g_prev.At(k,q)) continue;
+      EmitClose(q);
+      g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
+      g_stateDirty=true;
+     }
+
+   //--- 5) roll the window forward in-place: update active slots, remove closed slots, insert new
+   for(int k=0;k<CP_MAX_POSITIONS;k++)
+     {
+      if(!seenPrev[k]) g_prev.RemoveAt(k);
+     }
+   for(int i=0;i<n;i++)
+     {
+      if(prevSlot[i]>=0)
+         g_prev.UpdateAt(prevSlot[i],cur[i]);
+      else
+         g_prev.InsertEmpty(cur[i]);
+     }
 
    //--- 6) snapshot
    bool dueSnap=(SnapshotSeconds>0 && now-g_lastSnapMs>=(long)SnapshotSeconds*1000);

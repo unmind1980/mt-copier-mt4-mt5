@@ -175,6 +175,39 @@ public:
       return true;
      }
 
+   bool              UpdateAt(const int i,const CopierPos &p)
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS) return false;
+      m_p[i]=p;
+      m_p[i].used=true;
+      return true;
+     }
+
+   bool              RemoveAt(const int i)
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS) return false;
+      m_p[i].used=false;
+      m_p[i].uid="";
+      m_n=UsedCount();
+      return true;
+     }
+
+   int               InsertEmpty(const CopierPos &p)
+     {
+      if(StringLen(p.uid)!=CP_UID_LEN) return -1;
+      for(int k=0;k<CP_MAX_POSITIONS;k++)
+        {
+         if(!SlotValid(k))
+           {
+            m_p[k]=p;
+            m_p[k].used=true;
+            m_n++;
+            return k;
+           }
+        }
+      return -1;
+     }
+
    //--- export to a dense dynamic array (used for encoding snapshots)
    //--- Export for snapshot encoding. Only well-formed rows leave here:
    //--- anything else would be broadcast to receivers as a position with

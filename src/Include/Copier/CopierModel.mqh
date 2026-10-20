@@ -396,7 +396,7 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
 // identity (sender: from its own table by ticket; receiver: from the order
 // comment).
 //=====================================================================
-int CopierReadPositions(CopierPos &out[],const int maxOut)
+int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment=true)
   {
    int n=0;
 #ifdef __MQL5__
@@ -411,7 +411,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut)
       CopierPos p;
       p.uid="";
       p.sym=PositionGetString(POSITION_SYMBOL);
-      p.cmt=PositionGetString(POSITION_COMMENT);
+      p.cmt=readComment ? PositionGetString(POSITION_COMMENT) : "";
       long type=(long)PositionGetInteger(POSITION_TYPE);
       p.side=(type==POSITION_TYPE_BUY)?CP_SIDE_BUY:CP_SIDE_SELL;
       p.lots=PositionGetDouble(POSITION_VOLUME);
@@ -445,7 +445,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut)
       CopierPos p;
       p.uid="";
       p.sym=OrderGetString(ORDER_SYMBOL);
-      p.cmt=OrderGetString(ORDER_COMMENT);
+      p.cmt=readComment ? OrderGetString(ORDER_COMMENT) : "";
       p.side=CopierPendingSide(pt);
       p.lots=OrderGetDouble(ORDER_VOLUME_CURRENT);
       p.openPx=OrderGetDouble(ORDER_PRICE_OPEN);   // the trigger price
@@ -481,7 +481,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut)
       CopierPos p;
       p.uid="";
       p.sym=OrderSymbol();
-      p.cmt=OrderComment();
+      p.cmt=readComment ? OrderComment() : "";
       p.lots=OrderLots();
       p.openPx=OrderOpenPrice();
       p.sl=OrderStopLoss();
