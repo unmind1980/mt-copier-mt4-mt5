@@ -425,7 +425,9 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.kind=CP_ORD_MARKET;
       p.ptype=0; p.pprice=0.0; p.pstop=0.0; p.pexpire=0;
       p.used=true;
-      ArrayResize(out,n+1,maxOut);
+      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
+      //--- on a busy account, and the array is capped by maxOut anyway
+      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
       out[n]=p;
       n++;
      }
@@ -463,7 +465,9 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.pstop=OrderGetDouble(ORDER_PRICE_STOPLIMIT);
       p.pexpire=(long)OrderGetInteger(ORDER_TIME_EXPIRATION);
       p.used=true;
-      ArrayResize(out,n+1,maxOut);
+      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
+      //--- on a busy account, and the array is capped by maxOut anyway
+      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
       out[n]=p;
       n++;
      }
@@ -508,12 +512,54 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
          p.pexpire=(long)OrderExpiration();
         }
       p.used=true;
-      ArrayResize(out,n+1,maxOut);
+      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
+      //--- on a busy account, and the array is capped by maxOut anyway
+      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
       out[n]=p;
       n++;
      }
 #endif
    return n;
+  }
+
+//=====================================================================
+// The comment of ONE order, addressed by the identifier CopierPos carries.
+//
+// Exists so a caller can skip comments in the bulk scan and pay for them only
+// on the rows that changed. The bulk path reads all of them; this reads one.
+//
+// MT5 needs the scan: CopierPos.ticket is POSITION_IDENTIFIER, which is not
+// what PositionSelectByTicket() takes, and it is not the same number as
+// POSITION_TICKET in general - matching on the identifier is the only correct
+// lookup. Pending orders live in the ORDERS list and are addressed by their
+// own ticket, so they are a direct select.
+//
+// Cost is one scan of the terminal's order list. It is only reached from the
+// receiver's slow path (a row that is new, or whose numbers changed), so it
+// runs for a handful of rows, not for the whole account.
+//=====================================================================
+string CopierReadCommentByTicket(const CopierPos &p)
+  {
+#ifdef __MQL5__
+   if(p.kind==CP_ORD_MARKET)
+     {
+      int total=PositionsTotal();
+      for(int i=0;i<total;i++)
+        {
+         ulong tk=PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_IDENTIFIER)!=p.ticket) continue;
+         return PositionGetString(POSITION_COMMENT);
+        }
+      return "";
+     }
+   if(OrderSelect((ulong)p.ticket)) return OrderGetString(ORDER_COMMENT);
+   return "";
+#else
+   if(OrderSelect((int)p.ticket,SELECT_BY_TICKET)) return OrderComment();
+   return "";
+#endif
   }
 
 //=====================================================================

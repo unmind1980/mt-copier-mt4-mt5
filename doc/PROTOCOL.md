@@ -160,9 +160,10 @@ touching the repair path: a receiver that is *behind* keeps reporting a hash the
 hub has already relayed, but the sender's repair is already in flight and the  
 moment the receiver catches up its hash changes, which is relayed immediately.
 
-One side effect worth knowing when reading the console: the hub's `receipts`  
-counter increments per **relay**, not per received `STAT`, so it now reads lower  
-than the number of receipts the receivers actually sent.
+One side effect worth knowing when reading the console: the hub reports **both**
+numbers — `receipts N of M received` — because the gap between them is exactly
+what the de-duplication saved. A line that showed only the relayed count would
+look like two thirds of the receivers had gone quiet.
 
 ### Addressing on the central channel: `@` is the hub's, and only the hub's
 

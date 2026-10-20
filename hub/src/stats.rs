@@ -52,6 +52,10 @@ pub struct Stats {
     /// relay in a healthy system prints nothing at all.
     pub receipts: u64,
 
+    /// Receipts RECEIVED from receivers, relayed or not. The gap between this
+    /// and `receipts` is exactly what the steady-state de-duplication saved.
+    pub receipts_seen: u64,
+
     //--- WHOLE RUN, kept separately from the window figures above.
     //---
     //--- These used to be the SAME counters, which made the periodic line
@@ -68,6 +72,7 @@ pub struct Stats {
     pub total_dropped: u64,
     pub total_single_dropped: u64,
     pub total_receipts: u64,
+    pub total_receipts_seen: u64,
 
     by_topic: HashMap<String, u64>,
     by_type: HashMap<String, u64>,
@@ -94,11 +99,13 @@ impl Stats {
             dropped: 0,
             single_dropped: 0,
             receipts: 0,
+            receipts_seen: 0,
             total_forwarded: 0,
             total_control: 0,
             total_dropped: 0,
             total_single_dropped: 0,
             total_receipts: 0,
+            total_receipts_seen: 0,
             by_topic: HashMap::new(),
             by_type: HashMap::new(),
             control_by_type: HashMap::new(),
@@ -142,6 +149,17 @@ impl Stats {
         self.total_receipts += 1;
     }
 
+    /// A receipt ARRIVED, whether or not it was relayed.
+    ///
+    /// Kept apart from `note_receipt` because the hub now de-duplicates in the
+    /// steady state (an unchanged hash is relayed at most every 3 s). Reporting
+    /// only the relayed count would make a healthy hub look like it had lost
+    /// two thirds of its receivers' heartbeats.
+    pub fn note_receipt_seen(&mut self) {
+        self.receipts_seen += 1;
+        self.total_receipts_seen += 1;
+    }
+
     /// Print the window and start a new one.
     pub fn print_and_reset(&mut self) {
         let w = self.window_secs();
@@ -168,9 +186,10 @@ impl Stats {
         //--- something once a receiver is actually mirroring through this hub.
         if self.receipts > 0 {
             println!(
-                "[hub]   receipts {} relayed back to senders (snapshot delivery \
-                 receipts; see D13 in CENTRAL-HUB-PLAN.md)",
-                self.receipts
+                "[hub]   receipts {} of {} received relayed back to senders (the rest \
+                 were de-duplicated: an unchanged hash is relayed at most every 3 s; \
+                 see D13 in CENTRAL-HUB-PLAN.md)",
+                self.receipts, self.receipts_seen
             );
         }
 
@@ -252,6 +271,7 @@ impl Stats {
         self.dropped = 0;
         self.single_dropped = 0;
         self.receipts = 0;
+        self.receipts_seen = 0;
         self.by_topic.clear();
         self.by_type.clear();
         self.control_by_type.clear();
@@ -265,12 +285,13 @@ impl Stats {
     /// with one number answers neither.
     pub fn print_totals(&self) {
         println!(
-            "[hub]   totals    forwarded {}   control {}   dropped {}   single-frame {}   receipts {}",
+            "[hub]   totals    forwarded {}   control {}   dropped {}   single-frame {}   receipts {} (of {} received)",
             self.total_forwarded,
             self.total_control,
             self.total_dropped,
             self.total_single_dropped,
-            self.total_receipts
+            self.total_receipts,
+            self.total_receipts_seen
         );
     }
 }

@@ -1274,6 +1274,59 @@ void TestGuardKeyShape()
    ring.ForgetPrefix(prefix);
    Ok("guard: the prefix clears every entry kind for that UID",
       !ring.Has(openPend));
+
+   //--- ForgetUidActions() replaced three ForgetPrefix() calls with ONE walk
+   //--- of the ring, because converge did it for every position on every
+   //--- tick. It has to clear the same set: all three kinds, and both the
+   //--- bare and the suffixed form of each. The suffixed OPEN was the case
+   //--- the first cut missed, and the failure is silent - a guard that never
+   //--- clears means a closed mirror is never restored.
+   ring.Clear();
+   ring.Add("sender01:1:ABCD1234:0");      // market open, entry-kind suffix
+   ring.Add("sender01:2:ABCD1234");        // close, bare
+   ring.Add("sender01:3:ABCD1234:0.05");   // trim, volume suffix
+   ring.Add("sender01:1:ZZZZ9999");        // another uid must survive
+   ring.ForgetUidActions("sender01","ABCD1234");
+   Ok("guard: ForgetUidActions clears every kind and suffix of one uid",
+      !ring.Has("sender01:1:ABCD1234:0")
+      && !ring.Has("sender01:2:ABCD1234")
+      && !ring.Has("sender01:3:ABCD1234:0.05"));
+   Ok("guard: ...and leaves other uids alone",ring.Has("sender01:1:ZZZZ9999"));
+   Ok("guard: ...and its occupied count follows",ring.UsedCount()==1);
+  }
+
+void TestUidIndex()
+  {
+   //--- Converge asks "is this uid local?" and "is it still desired?" once per
+   //--- row per tick. The hash index that answers both replaced two nested
+   //--- string-compare loops, so its edge cases are load-bearing: the FIRST
+   //--- duplicate must win (the old scan returned the first match), an
+   //--- unknown uid must miss, and a base offset must come back absolute.
+   CopierPos arr[];
+   ArrayResize(arr,5);
+   arr[0].uid="ABCD1234";
+   arr[1].uid="EFGH5678";
+   arr[2].uid="ABCD1234";        // duplicate of row 0
+   arr[3].uid="";                // unmanageable row: never indexed
+   arr[4].uid="ZZZZ9999";
+
+   CopierUidIndex idx;
+   idx.Build(arr,0,5);
+   Ok("uid index: finds a uid",idx.Find(arr,"EFGH5678")==1);
+   Ok("uid index: a duplicate resolves to the FIRST row",
+      idx.Find(arr,"ABCD1234")==0);
+   Ok("uid index: an unknown uid is -1",idx.Find(arr,"QQQQ0000")==-1);
+   Ok("uid index: an empty uid is -1",idx.Find(arr,"")==-1);
+   Ok("uid index: count is distinct uids, so it exposes the duplicate",
+      idx.Count()==3);
+
+   //--- built over a slice, it must still return an index into the WHOLE
+   //--- array: converge builds the desired set that way
+   idx.Build(arr,2,3);
+   Ok("uid index: a slice build returns an absolute index",
+      idx.Find(arr,"ZZZZ9999")==4);
+   Ok("uid index: ...and does not see rows before the slice",
+      idx.Find(arr,"EFGH5678")==-1);
   }
 
 void TestSnapshotCapacity()
@@ -2111,6 +2164,7 @@ void OnStart()
    TestDedup();
    TestSeenRingGating();
    TestSeenRingForget();
+   TestUidIndex();
    TestMirrorStop();
    TestFitStop();
    TestRiskThresholds();

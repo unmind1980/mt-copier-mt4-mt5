@@ -24,6 +24,10 @@ class CopierPosTable
 private:
    CopierPos         m_p[CP_MAX_POSITIONS];
    int               m_n;
+   //--- where the last free-slot search stopped. Slots are handed out in
+   //--- order, so starting from 0 every time made a restart that re-adopts
+   //--- 300 positions walk the whole 2048-slot table 300 times.
+   int               m_hint;
 
    //--- A slot only counts when it is marked used AND carries a
    //--- well-formed UID. Never trust `used` on its own: a slot can look
@@ -58,7 +62,6 @@ public:
    //--- The self-test caught exactly this; it was a real production bug,
    //--- not a test artefact.
                      CopierPosTable() { Clear(); }
-
    int               Count() const { return UsedCount(); }
    bool              IsFull() const { return UsedCount()>=CP_MAX_POSITIONS; }
 
@@ -80,6 +83,7 @@ public:
          m_p[i].openTime=0;
         }
       m_n=0;
+      m_hint=0;
      }
 
    int               Find(const string uid) const
@@ -192,21 +196,28 @@ public:
       m_p[i].used=false;
       m_p[i].uid="";
       if(m_n>0) m_n--;
+      //--- a slot just became free: hand it out next rather than searching
+      m_hint=i;
       return true;
      }
 
    int               InsertEmpty(const CopierPos &p)
      {
       if(StringLen(p.uid)!=CP_UID_LEN) return -1;
-      for(int k=0;k<CP_MAX_POSITIONS;k++)
+      int k=m_hint;
+      for(int j=0;j<CP_MAX_POSITIONS;j++)
         {
          if(!SlotValid(k))
            {
             m_p[k]=p;
             m_p[k].used=true;
             m_n++;
+            m_hint=k+1;
+            if(m_hint>=CP_MAX_POSITIONS) m_hint=0;
             return k;
            }
+         k++;
+         if(k>=CP_MAX_POSITIONS) k=0;
         }
       return -1;
      }
@@ -268,23 +279,35 @@ private:
    long              m_t[CP_SEEN_RING];
    int               m_head;
    long              m_ttlMs;
+   //--- How many slots actually hold a key.
+   //---
+   //--- The ring is 4096 slots wide and, in steady state, EMPTY: keys are
+   //--- written when an action executes and cleared as soon as the position
+   //--- shows up. Without this counter every query walked all 4096 slots to
+   //--- discover that, and converge does three such walks per position per
+   //--- tick - 3.7 million iterations per tick at 300 positions, for nothing.
+   int               m_used;
 
 public:
    //--- same reasoning as CopierPosTable: an uncleared array of strings
    //--- may start life holding junk, which would make Has() report a key
    //--- as already processed and silently drop a real trade action.
-                     CopierSeenRing():m_head(0),m_ttlMs(300000) { Clear(); }
+                     CopierSeenRing():m_head(0),m_ttlMs(300000),m_used(0) { Clear(); }
 
    void              SetTtlMs(const long ms) { m_ttlMs=ms; }
+
+   int               UsedCount() const { return m_used; }
 
    void              Clear()
      {
       for(int i=0;i<CP_SEEN_RING;i++) { m_k[i]=""; m_t[i]=0; }
       m_head=0;
+      m_used=0;
      }
 
    bool              Has(const string key) const
      {
+      if(m_used==0) return false;
       long now=CopierNowMs();
       for(int i=0;i<CP_SEEN_RING;i++)
         {
@@ -297,6 +320,7 @@ public:
 
    long              GetTime(const string key) const
      {
+      if(m_used==0) return 0;
       long now=CopierNowMs();
       for(int i=0;i<CP_SEEN_RING;i++)
         {
@@ -309,6 +333,7 @@ public:
 
    void              Add(const string key)
      {
+      if(StringLen(m_k[m_head])==0) m_used++;
       m_k[m_head]=key;
       m_t[m_head]=CopierNowMs();
       m_head++;
@@ -330,7 +355,7 @@ public:
      {
       for(int i=0;i<CP_SEEN_RING;i++)
         {
-         if(m_k[i]==key) { m_k[i]=""; m_t[i]=0; }
+         if(m_k[i]==key) { m_k[i]=""; m_t[i]=0; if(m_used>0) m_used--; }
         }
      }
 
@@ -346,13 +371,171 @@ public:
    //--- is a prefix of another, so "sid:kind:UID" cannot collide.
    void              ForgetPrefix(const string prefix)
      {
+      if(m_used==0) return;
       int n=StringLen(prefix);
       if(n==0) return;
       for(int i=0;i<CP_SEEN_RING;i++)
         {
          if(StringLen(m_k[i])<n) continue;
-         if(StringSubstr(m_k[i],0,n)==prefix) { m_k[i]=""; m_t[i]=0; }
+         if(StringSubstr(m_k[i],0,n)==prefix) { m_k[i]=""; m_t[i]=0; if(m_used>0) m_used--; }
         }
+     }
+
+   //--- Clear the OPEN / CLOSE / TRIM keys of ONE uid in a single pass.
+   //---
+   //--- Converge used to call ForgetPrefix() three times per position per
+   //--- tick. The three prefixes have the same length and differ only in the
+   //--- action digit, so one walk can settle all three: exact match for
+   //--- OPEN and CLOSE (their keys end at the uid), prefix match only for
+   //--- TRIM (its key carries the target volume, so it is strictly longer).
+   void              ForgetUidActions(const string sid,const string uid)
+     {
+      if(m_used==0) return;
+      string pOpen =sid+":"+(string)CP_ACT_OPEN +":"+uid;
+      string pClose=sid+":"+(string)CP_ACT_CLOSE+":"+uid;
+      string pTrim =sid+":"+(string)CP_ACT_TRIM +":"+uid;
+      int    nExact=StringLen(pOpen);
+      for(int i=0;i<CP_SEEN_RING;i++)
+        {
+         int nk=StringLen(m_k[i]);
+         if(nk<nExact) continue;
+         bool hit=false;
+         if(nk==nExact)
+           {
+            //--- the bare form: "sid:kind:uid"
+            hit=(m_k[i]==pOpen || m_k[i]==pClose || m_k[i]==pTrim);
+           }
+         else
+           {
+            //--- a suffixed form. PushAction appends `keyExtra` to the same
+            //--- base - a pending OPEN carries its order kind, a TRIM its
+            //--- target volume - so these must be matched by PREFIX, exactly
+            //--- as the three ForgetPrefix() calls this replaced did.
+            //--- StringFind() == 0 is a prefix test with no allocation.
+            hit=(StringFind(m_k[i],pOpen)==0
+                 || StringFind(m_k[i],pClose)==0
+                 || StringFind(m_k[i],pTrim)==0);
+           }
+         if(!hit) continue;
+         m_k[i]="";
+         m_t[i]=0;
+         if(m_used>0) m_used--;
+        }
+     }
+
+   //--- Recompute m_used and drop entries past their TTL.
+   //---
+   //--- Called once a minute: an expired key is still an occupied slot as far
+   //--- as Add() is concerned, so without this the counter would ratchet up
+   //--- and the cheap "ring is empty" exit would never be taken again.
+   void              PruneExpired()
+     {
+      long now=CopierNowMs();
+      int n=0;
+      for(int i=0;i<CP_SEEN_RING;i++)
+        {
+         if(StringLen(m_k[i])==0) continue;
+         if(now-m_t[i]>m_ttlMs) { m_k[i]=""; m_t[i]=0; continue; }
+         n++;
+        }
+      m_used=n;
+     }
+  };
+
+//=====================================================================
+// uid -> array index, rebuilt once per converge pass.
+//
+// The converge diff is two nested loops - "for each desired, is it local?"
+// and "for each local, is it still desired?" - and both used to answer by
+// scanning the other array with 8-character string compares. At 300
+// positions that is 2 x 90,000 comparisons per tick, per sender.
+//
+// A UID is exactly 8 characters from a 32-letter alphabet, so a hash of it
+// is cheap and collisions are rare enough that one string compare on a hash
+// match settles the question. This is the same "fixed table, no map" shape
+// the rest of the codebase uses; it is rebuilt from scratch every pass so
+// there is nothing to invalidate.
+//=====================================================================
+#define CP_UIDIDX_SLOTS 4096      // power of two; 2048 entries fit at 50% load
+
+class CopierUidIndex
+  {
+private:
+   int               m_slot[CP_UIDIDX_SLOTS];   // array index + 1; 0 = empty
+   uint              m_hash[CP_UIDIDX_SLOTS];
+   int               m_mask;
+   int               m_n;
+
+   uint              HashOf(const string uid) const
+     {
+      uint h=2166136261;                        // FNV-1a
+      int  n=StringLen(uid);
+      for(int i=0;i<n;i++)
+        {
+         h^=(uint)StringGetCharacter(uid,i);
+         h*=16777619;
+        }
+      return h;
+     }
+
+public:
+                     CopierUidIndex():m_mask(CP_UIDIDX_SLOTS-1),m_n(0)
+        { ArrayInitialize(m_slot,0); }
+
+   void              Clear()
+     {
+      ArrayInitialize(m_slot,0);
+      m_n=0;
+     }
+
+   //--- number of DISTINCT uids indexed. A count below the number of rows
+   //--- means at least two rows share a uid - which is how DedupLocal gets
+   //--- to skip its quadratic pass in the normal case.
+   int               Count() const { return m_n; }
+
+   void              Build(const CopierPos &arr[],const int base,const int count)
+     {
+      Clear();
+      for(int i=0;i<count;i++)
+        {
+         string uid=arr[base+i].uid;
+         if(StringLen(uid)!=CP_UID_LEN) continue;
+         uint hf=HashOf(uid);
+         int  s=(int)(hf&m_mask);
+         bool done=false;
+         for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+           {
+            int k=(int)((s+p)&m_mask);
+            if(m_slot[k]==0)
+              {
+               //--- stored ABSOLUTE, so Find() can hand back an index the
+               //--- caller can use directly, whatever base it passed
+               m_slot[k]=base+i+1;
+               m_hash[k]=hf;
+               m_n++;
+               done=true;
+               break;
+              }
+            //--- already present: keep the FIRST row, which is what the
+            //--- linear scan this replaced returned.
+            if(m_hash[k]==hf && arr[m_slot[k]-1].uid==uid) { done=true; break; }
+           }
+         if(!done) return;                       // table full - cannot happen
+        }
+     }
+
+   int               Find(const CopierPos &arr[],const string uid) const
+     {
+      if(StringLen(uid)!=CP_UID_LEN) return -1;
+      uint hf=HashOf(uid);
+      int  s=(int)(hf&m_mask);
+      for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+        {
+         int k=(int)((s+p)&m_mask);
+         if(m_slot[k]==0) return -1;
+         if(m_hash[k]==hf && arr[m_slot[k]-1].uid==uid) return m_slot[k]-1;
+        }
+      return -1;
      }
   };
 

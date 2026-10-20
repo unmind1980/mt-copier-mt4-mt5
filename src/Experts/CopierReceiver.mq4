@@ -440,6 +440,8 @@ long    g_lastPruneMs=0;             // stop-override table sweep
 long    g_statusSeq=0;
 int     g_riskBlocked=0;             // entries refused by a risk switch since the last STAT
 long    g_lastMapSave=0;
+//--- Last time the idempotency rings were swept. See the note in OnTimer.
+long    g_lastSeenPrune=0;
 bool    g_stateSaveOk=false;   // announced the identity store once per session
 int     g_nSenders=0;
 
@@ -665,6 +667,12 @@ long            g_brokerOrdLimit=-1;
 //--- opened by anything else.
 int             g_acctPositions=0;
 int             g_acctOrders=0;
+//--- The same split, restricted to the positions this copier owns (magic
+//--- matches a configured sender). The panel asks "what am I managing", and
+//--- an unrelated EA's position is not part of the answer - the account-wide
+//--- numbers above are what the broker's order limit is measured against.
+int             g_ourPositions=0;
+int             g_ourPending=0;
 //--- Keys that failed and then failed AGAIN. Parked far longer than the
 //--- normal two-second retry, because a broker refusing the same order
 //--- repeatedly is not a transient condition, and retrying it every two
@@ -1500,10 +1508,6 @@ int LocalForSender(const int si,const CopierPos &all[],const int n,CopierPos &ou
       ArrayResize(out,m+1,CP_MAX_POSITIONS);
       out[m]=p;
       m++;
-
-      //--- keep the record current (Upsert is a no-op when nothing changed
-      //--- except lots, so this does not churn)
-      g_recKnown.Upsert(p);
      }
    return m;
   }
@@ -1766,6 +1770,13 @@ void CmdStateLoad()
 
 void SaveReceiverMap()
   {
+   //--- Never save from a cache nobody has filled. OnDeinit runs this, and so
+   //--- did the first timer tick before the order was fixed: an empty
+   //--- g_acctAllPos means "not scanned", not "the account is flat", and
+   //--- writing it out both clears g_recKnown and overwrites the durable
+   //--- identity file with N=0.
+   if(!g_acctScanned) return;
+
    //--- Reuse the account positions resolved during RefreshRisk to avoid
    //--- redundant terminal scans and string parsing every 10 seconds.
    g_saveScratch.Clear();
@@ -1812,12 +1823,6 @@ void SaveReceiverMap()
       g_log.Info("identity store "+ReceiverStatePath()+" written ("
                  +(string)dn+" position(s))");
      }
-  }
-
-int LocalFindUid(const CopierPos &loc[],const int n,const string uid)
-  {
-   for(int i=0;i<n;i++) { if(loc[i].uid==uid) return i; }
-   return -1;
   }
 
 //--- Report orders that carry one of OUR magic numbers but whose comment
@@ -2917,9 +2922,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
 //=====================================================================
 // Duplicate resolution: one UID must map to exactly ONE position.
 //
-// That invariant is what LocalFindUid, the seen-ring and the state file all
-// assume. When it breaks, the extra position is invisible to every other
-// loop - LocalFindUid returns the FIRST match - so the duplicate is never
+// That invariant is what the converge uid index, the seen-ring and the state
+// file all assume. When it breaks, the extra position is invisible to every
+// other loop - the index returns the FIRST match - so the duplicate is never
 // closed, never trimmed and never reported. It just sits there doubling the
 // exposure. That is exactly what the pilot produced: a partial close wiped
 // a comment, the mirror became unrecognisable, converge opened a second one
@@ -3047,10 +3052,23 @@ struct CopierCachedOrder
    double            pprice;
    long              pexpire;
    string            uid;
+   //--- The order comment, carried rather than re-read. Reading it is the
+   //--- expensive half of the scan (a string API call per order per tick) and
+   //--- the fast path has no use for it: identity is already resolved. It is
+   //--- refreshed on the slow path, and it is still what the POS= telemetry
+   //--- reports, so dropping it entirely would blind the dashboard.
+   string            cmt;
    bool              isOrphan;
   };
 
 CopierCachedOrder g_posCache[CP_MAX_POSITIONS];
+//--- Scratch for the next generation of the cache.
+//---
+//--- Global rather than local ON PURPOSE. As a local it was constructed and
+//--- zero-initialised on every 100 ms tick - 2048 structs, strings included,
+//--- ~225 KB of memory traffic per call - and on MT4 it also ate that much
+//--- stack. Only the first `an` entries are ever written or read.
+CopierCachedOrder g_posCacheNext[CP_MAX_POSITIONS];
 int               g_posCacheCount=0;
 long              g_lastFullScanMs=0;
 int               g_lastOrdersTotal=-1;
@@ -3058,6 +3076,18 @@ long              g_lastPanelRenderMs=0;
 
 CopierPos g_acctAllPos[];
 int       g_acctAllPosCount=0;
+//--- Has ScanAndResolveAccountPositions() ever produced a result? Everything
+//--- that consumes g_acctAllPos must know the difference between "the account
+//--- holds nothing" and "nobody has looked yet" - the two are identical in the
+//--- cache, and treating the second as the first is how the identity map got
+//--- wiped on startup.
+bool      g_acctScanned=false;
+
+//--- uid -> index scratch for the converge diff. Global so the 32 KB tables
+//--- are not built on the stack on every call, and so the per-tick cost is a
+//--- rebuild rather than a construction.
+CopierUidIndex g_locIdx;
+CopierUidIndex g_desIdx;
 
 int ScanAndResolveAccountPositions()
   {
@@ -3077,11 +3107,15 @@ int ScanAndResolveAccountPositions()
      }
 
    CopierPos raw[];
-   int an=CopierReadPositions(raw,CP_MAX_POSITIONS);
+   //--- Comments are only read in bulk when this pass is a FULL revalidation
+   //--- (every 30 s, or when the order count changed). A steady-state pass
+   //--- reads the comment for the handful of rows that actually changed,
+   //--- inside the slow path - see CopierReadCommentByTicket().
+   int an=CopierReadPositions(raw,CP_MAX_POSITIONS,forceFullScan);
 
-   CopierCachedOrder newCache[CP_MAX_POSITIONS];
    ArrayResize(g_acctAllPos,an,64);
    g_acctAllPosCount=an;
+   g_acctScanned=true;
 
    for(int i=0;i<an;i++)
      {
@@ -3135,42 +3169,67 @@ int ScanAndResolveAccountPositions()
       if(matchIdx>=0)
         {
          //--- FAST PATH: O(1) hit, zero allocations, reuse cached UID
-         newCache[i]=g_posCache[matchIdx];
+         g_posCacheNext[i]=g_posCache[matchIdx];
          raw[i].uid=g_posCache[matchIdx].uid;
+         raw[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
          g_acctAllPos[i]=raw[i];
         }
       else
         {
          //--- SLOW PATH: resolve UID on ticket change or numeric change
+         if(!forceFullScan) raw[i].cmt=CopierReadCommentByTicket(raw[i]);
          string uid=ResolveUid(raw[i]);
          raw[i].uid=uid;
          g_acctAllPos[i]=raw[i];
 
-         bool isOurs=false;
+         int oursSi=-1;
          for(int k=0;k<g_nSenders;k++)
            {
-            if(raw[i].magic==g_magic[k]) { isOurs=true; break; }
+            if(raw[i].magic==g_magic[k]) { oursSi=k; break; }
            }
+         bool isOurs=(oursSi>=0);
          bool orphan=(!isOurs && StringLen(CopierUidFromComment(raw[i].cmt))>0);
 
-         newCache[i].ticket   =raw[i].ticket;
-         newCache[i].magic    =raw[i].magic;
-         newCache[i].side     =raw[i].side;
-         newCache[i].lots     =raw[i].lots;
-         newCache[i].openPx   =raw[i].openPx;
-         newCache[i].sl       =raw[i].sl;
-         newCache[i].tp       =raw[i].tp;
-         newCache[i].openTime =raw[i].openTime;
-         newCache[i].kind     =raw[i].kind;
-         newCache[i].ptype    =raw[i].ptype;
-         newCache[i].pprice   =raw[i].pprice;
-         newCache[i].pexpire  =raw[i].pexpire;
-         newCache[i].uid      =uid;
-         newCache[i].isOrphan =orphan;
+         //--- Keep the durable UID <-> ticket map current - but only here.
+         //--- LocalForSender used to Upsert every position on every tick,
+         //--- which is a 2048-slot scan per position per tick to write the
+         //--- same values back, and the 10-second SaveReceiverMap rebuilds
+         //--- the whole table anyway. "This row is new or changed" is the only
+         //--- moment the map can actually need an update.
+         if(isOurs && StringLen(uid)==CP_UID_LEN)
+           {
+            CopierPos rec=raw[i];
+            rec.uid=uid;
+            g_recKnown.Upsert(rec);
+
+            //--- A mirror that EXISTS was opened by this receiver, so record
+            //--- it for the ReopenClosedMirrors guard. Guarded by Has() so a
+            //--- 30-second revalidation of 300 unchanged rows does not cycle
+            //--- the ring - which is exactly what the old per-tick Add() did,
+            //--- evicting the entries the guard depends on.
+            string openKey=g_sid[oursSi]+":"+(string)CP_ACT_OPEN+":"+uid;
+            if(!g_everOpened.Has(openKey)) g_everOpened.Add(openKey);
+           }
+
+         g_posCacheNext[i].ticket   =raw[i].ticket;
+         g_posCacheNext[i].magic    =raw[i].magic;
+         g_posCacheNext[i].side     =raw[i].side;
+         g_posCacheNext[i].lots     =raw[i].lots;
+         g_posCacheNext[i].openPx   =raw[i].openPx;
+         g_posCacheNext[i].sl       =raw[i].sl;
+         g_posCacheNext[i].tp       =raw[i].tp;
+         g_posCacheNext[i].openTime =raw[i].openTime;
+         g_posCacheNext[i].kind     =raw[i].kind;
+         g_posCacheNext[i].ptype    =raw[i].ptype;
+         g_posCacheNext[i].pprice   =raw[i].pprice;
+         g_posCacheNext[i].pexpire  =raw[i].pexpire;
+         g_posCacheNext[i].uid      =uid;
+         g_posCacheNext[i].cmt      =raw[i].cmt;
+         g_posCacheNext[i].isOrphan =orphan;
         }
      }
 
-   for(int i=0;i<an;i++) g_posCache[i]=newCache[i];
+   for(int i=0;i<an;i++) g_posCache[i]=g_posCacheNext[i];
    g_posCacheCount=an;
 
    return an;
@@ -3245,6 +3304,7 @@ void RefreshRisk()
    int an=ScanAndResolveAccountPositions();
    int cnt=0;
    int orphan=0;
+   int oursPos=0,oursPend=0;
    double lots=0.0;
    int nPos=0,nOrd=0;
    for(int i=0;i<an;i++)
@@ -3264,11 +3324,14 @@ void RefreshRisk()
          if(g_posCache[i].isOrphan) orphan++;
          continue;
         }
+      if(g_acctAllPos[i].kind==CP_ORD_PENDING) oursPend++; else oursPos++;
       cnt++;
       lots+=g_acctAllPos[i].lots;
      }
    g_acctPositions=nPos;
    g_acctOrders=nOrd;
+   g_ourPositions=oursPos;
+   g_ourPending=oursPend;
    g_ourCount=cnt;
    g_ourLots=lots;
    g_orphanCount=orphan;
@@ -3447,9 +3510,19 @@ void ConvergeSender(const int si)
    for(int k=0;k<ln;k++) sLots+=loc[k].lots;
 
    //--- one UID, one position. Has to run BEFORE the diff below:
-   //--- LocalFindUid returns the first match, so a duplicate left in place
+   //--- the index returns the FIRST match, so a duplicate left in place
    //--- could be the copy chosen for a trim while the real mirror is ignored.
-   ln=DedupLocal(si,base,loc,ln);
+   //---
+   //--- The index answers "does any other row share this uid" in one pass.
+   //--- Only when it does is the quadratic dedup worth running - which, on a
+   //--- normal account, is never: the old code paid 90,000 string compares a
+   //--- tick to discover there were no duplicates.
+   g_locIdx.Build(loc,0,ln);
+   if(g_locIdx.Count()<ln)
+     {
+      ln=DedupLocal(si,base,loc,ln);
+      g_locIdx.Build(loc,0,ln);
+     }
 
    //--- desired but not mirrored -> open
    for(int i=0;i<g_desiredCount[si];i++)
@@ -3459,14 +3532,20 @@ void ConvergeSender(const int si)
       //--- the operator asked us to leave this one alone (IgnoreUids)
       if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
 
-      int li=LocalFindUid(loc,ln,d.uid);
+      int li=g_locIdx.Find(loc,d.uid);
       if(li>=0)
         {
-         g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
-         g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+d.uid);
-         g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_TRIM+":"+d.uid);
+         g_seen.ForgetUidActions(g_sid[si],d.uid);
 
-         g_everOpened.Add(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
+         //--- NOTE: no g_everOpened.Add() here any more.
+         //---
+         //--- It used to run for every matched position on every tick, which
+         //--- is 300 writes at 10 Hz - enough to cycle the whole 4096-slot
+         //--- ring in about 1.4 seconds and evict the very entries the
+         //--- ReopenClosedMirrors guard depends on. The ring is filled where
+         //--- it belongs: when an open actually succeeds (ExecuteQueue), and
+         //--- from the state file at startup for positions that were already
+         //--- open.
 
          if(loc[li].kind!=d.kind)
            {
@@ -3893,14 +3972,15 @@ void ConvergeSender(const int si)
      }
 
    //--- mirrored but no longer desired -> close
+   //---
+   //--- Same index trick in the other direction: "is this local uid still in
+   //--- the desired set" used to be a scan of every desired row for every
+   //--- local row.
+   
+   if(ln>0) g_desIdx.Build(g_desired,base,g_desiredCount[si]);
    for(int i=0;i<ln;i++)
      {
-      bool stillDesired=false;
-      for(int k=0;k<g_desiredCount[si];k++)
-        {
-         if(g_desired[base+k].uid==loc[i].uid) { stillDesired=true; break; }
-        }
-      if(stillDesired) continue;
+      if(g_desIdx.Find(g_desired,loc[i].uid)>=0) continue;
 
       if(g_ignore.Has(loc[i].uid) || g_senderIgnore[si].Has(loc[i].uid)) continue;
 
@@ -3984,18 +4064,36 @@ void HandleSnapshot(const int si,const CopierEnv &e)
 
    string cnt="";
    int sent=0;
-   if(CopierKvGet(e.payload,"N",cnt)) sent=(int)StringToInteger(cnt);
+   bool declared=CopierKvGet(e.payload,"N",cnt);
+   if(declared) sent=(int)StringToInteger(cnt);
 
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
-   //--- If sender explicitly declares N > 0, but decode yielded 0 records (e.g.
-   //--- corrupted transmission or CryptDecode failure), DO NOT overwrite g_desired
-   //--- with 0! Doing so would cause converge to treat all local mirrors as
-   //--- 'no longer desired' and close them all (false close-all disaster).
-   //--- Also DO NOT accept the hash, so sender's repair logic will re-send it.
-   if(sent>0 && n==0)
+   //---
+   //--- The sender declares its own count in N=. If the number of records we
+   //--- actually decoded disagrees with it - zero records, or a partial set
+   //--- from a truncated / half-decodable payload - the snapshot is NOT the
+   //--- state the sender is in, and accepting it is worse than dropping it:
+   //--- every position that failed to decode is simply absent from the
+   //--- desired set, so converge reads that as "the sender closed it" and
+   //--- closes the local mirror. That is a false close-all triggered by a
+   //--- corrupt packet, which is exactly the failure this guard exists for.
+   //---
+   //--- Zero-vs-N was the first version of this check; it caught the total
+   //--- loss but let a HALF-decoded snapshot through, which closes only the
+   //--- missing half - quieter, and no less wrong.
+   //---
+   //--- One case is NOT corruption and must stay accepted: a sender holding
+   //--- more positions than this table can carry. Decode then legitimately
+   //--- stops at CP_MAX_POSITIONS, so that is the count we expect.
+   //---
+   //--- Returning here also leaves g_snapHash untouched, so the sender sees a
+   //--- stale receipt and repairs the snapshot on its next pass.
+   int expected=(sent>CP_MAX_POSITIONS)?CP_MAX_POSITIONS:sent;
+   if(declared && n!=expected)
      {
       g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" declared N="+(string)sent
-                  +" but decoded 0 records (decompression or parse failure)! Rejecting snapshot to prevent false close-all.");
+                  +" but decoded "+(string)n+" record(s) (decompression or parse failure)!"
+                  +" Rejecting snapshot to prevent false close-all.");
       return;
      }
 
@@ -4962,6 +5060,20 @@ int OnInit()
    if(CopierStateFile::Load(ReceiverStatePath(),hdr,saved,savedN))
      {
       for(int i=0;i<savedN;i++) g_recKnown.Upsert(saved[i]);
+      //--- Seed "ever opened" from the same file. These are exactly the
+      //--- mirrors this receiver opened and still holds, which is what the
+      //--- per-tick Add() used to cover - and doing it here costs one pass at
+      //--- startup instead of 300 ring writes every tick.
+      for(int i=0;i<savedN;i++)
+        {
+         if(StringLen(saved[i].uid)!=CP_UID_LEN) continue;
+         for(int k=0;k<g_nSenders;k++)
+           {
+            if(saved[i].magic!=g_magic[k]) continue;
+            g_everOpened.Add(g_sid[k]+":"+(string)CP_ACT_OPEN+":"+saved[i].uid);
+            break;
+           }
+        }
       g_log.Info("restored "+(string)savedN+" known position(s) from state");
      }
    else
@@ -5346,8 +5458,12 @@ void UpdatePanel()
 
    //--- Directly reuse the figures already computed during RefreshRisk!
    //--- ZERO terminal scans and ZERO comment string parsing!
-   int nOpen=g_acctPositions;
-   int nPend=g_acctOrders;
+   //---
+   //--- "Managing" means the positions this copier owns, not everything on
+   //--- the account: another EA's trades are not ours to manage and counting
+   //--- them made the panel disagree with the volume line below it.
+   int nOpen=g_ourPositions;
+   int nPend=g_ourPending;
    int nOrphan=g_orphanCount;
    int orphShown=0;
    string orphLine[CP_PANEL_ORPHAN_SHOW];
@@ -5668,20 +5784,14 @@ void OnTimer()
         }
      }
 
-   //--- 4) persist the UID <-> identifier map (tiny; every 10 s is plenty and
-   //--- keeps the comment-overwritten case recoverable across a restart).
-   //---
-   //--- No ignore-list refresh here any more. That list is an INPUT now, and
-   //--- changing an input re-runs OnInit, which re-parses it - so the polling
-   //--- and the file it polled are both gone.
-   if(now-g_lastMapSave>10000)
-     {
-      g_lastMapSave=now;
-      SaveReceiverMap();
-     }
-
-   //--- 4b) refresh the risk view BEFORE converge, so every sender's opens
+   //--- 4) refresh the risk view BEFORE converge, so every sender's opens
    //--- this tick gate against the same exposure numbers
+   //---
+   //--- It also has to run BEFORE the state save below. SaveReceiverMap()
+   //--- consumes g_acctAllPos, and on the first tick that cache is empty -
+   //--- saving then would rebuild g_recKnown from nothing and overwrite the
+   //--- state file with N=0, throwing away the identity map OnInit had just
+   //--- restored from disk.
    RefreshRisk();
    if(g_risk.TakeJustTripped())
      {
@@ -5696,10 +5806,36 @@ void OnTimer()
       if(RiskCloseAllOnTrip) RiskCloseEverything();
      }
 
+   //--- 4b) persist the UID <-> identifier map (tiny; every 10 s is plenty and
+   //--- keeps the comment-overwritten case recoverable across a restart).
+   //---
+   //--- No ignore-list refresh here any more. That list is an INPUT now, and
+   //--- changing an input re-runs OnInit, which re-parses it - so the polling
+   //--- and the file it polled are both gone.
+   if(now-g_lastMapSave>10000)
+     {
+      g_lastMapSave=now;
+      SaveReceiverMap();
+     }
+
+   //--- 4c) sweep the idempotency rings once a minute.
+   //---
+   //--- An entry that merely EXPIRED still occupies its slot, and the cheap
+   //--- "the ring is empty, nothing to clear" exit depends on the occupied
+   //--- count being truthful. Without this sweep the count would only ever
+   //--- grow and that exit would never be taken again.
+   if(now-g_lastSeenPrune>=60000)
+     {
+      g_lastSeenPrune=now;
+      g_seen.PruneExpired();
+      g_everOpened.PruneExpired();
+      g_reopenExpected.PruneExpired();
+      g_fillGraceRing.PruneExpired();
+     }
+
    //--- 5) converge every sender, then execute queued actions serially
    //--- reset the held-back tally: it is a per-sweep snapshot, not a running
-   //--- total, so an entry that starts moving must stop being counted
-   g_waitHeld=0;
+   //--- total, so an entry that starts moving must stop being counted   g_waitHeld=0;
    g_waitLots=0.0;
    g_mktHeld=0;
    g_mktHeldLots=0.0;

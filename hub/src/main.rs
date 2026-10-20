@@ -1320,6 +1320,7 @@ fn main() {
 
     let mut last_rcpt_relayed: std::collections::HashMap<(String, String), (String, Instant)> =
         std::collections::HashMap::new();
+    let mut last_rcpt_prune = Instant::now();
 
     while !EXIT.load(Ordering::SeqCst) {
         match sock.poll(zmq::POLLIN, POLL_MS) {
@@ -1991,6 +1992,23 @@ fn main() {
                                     )
                                 };
                                 if sid_is_sender || !any_sender_known || warm {
+                                    //--- Count what ARRIVED, before the
+                                    //--- de-duplication decides what to relay:
+                                    //--- the difference between the two is the
+                                    //--- saving, and reporting only the relays
+                                    //--- would look like lost heartbeats.
+                                    st.note_receipt_seen();
+                                    //--- Forget pairs that stopped reporting.
+                                    //--- A receiver that is renamed or moved
+                                    //--- leaves its old key behind forever
+                                    //--- otherwise, and this map has no other
+                                    //--- eviction path.
+                                    if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
+                                        last_rcpt_prune = Instant::now();
+                                        last_rcpt_relayed.retain(|_, (_, t)| {
+                                            t.elapsed() < Duration::from_secs(600)
+                                        });
+                                    }
                                     let rcpt_key = (login.clone(), sid.clone());
                                     let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
                                         Some((prev_h, last_t)) => {
@@ -2027,9 +2045,23 @@ fn main() {
                         }
                     } else {
                         //--- THE FORWARD. Two frames, byte for byte. Zero-copy slice transmission.
+                        //---
+                        //--- Two frames are ONE message to ZeroMQ, which is why a
+                        //--- failure between them cannot be shrugged off: the
+                        //--- first part is already queued, so every later send on
+                        //--- this socket would be appended to that same broken
+                        //--- frame. A blocking send only fails here when the
+                        //--- context is terminating, so the honest response is to
+                        //--- stop rather than to keep writing into a torn message.
                         let fwd_res = sock.send(&topic, zmq::SNDMORE).and_then(|_| sock.send(&payload, 0));
                         if let Err(e) = fwd_res {
-                            eprintln!("[hub] forward failed: {}", e);
+                            eprintln!(
+                                "[hub] FATAL forward failed mid-message ({}): the socket is \
+                                 left inside a multipart message - shutting down rather \
+                                 than forwarding a torn frame",
+                                e
+                            );
+                            EXIT.store(true, Ordering::SeqCst);
                             continue;
                         }
 

@@ -159,10 +159,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - **快路径（稳态 99%）**：每 Tick 读取廉价纯数值字段（`ticket`, `magic`, `side`, `lots`, `openPx`, `sl`, `tp`, `openTime`, `kind` 等），比对上一轮缓存若数值完全一致，直接复用已解析的 UID 与孤儿状态，**跳过 `ResolveUid()` 的字符串解析与堆分配**；
      - **慢路径（变动 1%）**：仅在新单、止损/止盈修改、手数缩减或挂单转成交等数值失配时，精准对单笔订单执行 `ResolveUid()` 并更新缓存；
      - **兜底重验**：每 30 秒或总订单数（`OrdersTotal`）变化时自动强制全量重校验，杜绝任何状态漂移；
-     - **尚未覆盖**：`CopierReadPositions()` 仍在每 Tick 为每笔订单读取一次 `OrderComment()`（`readComment` 默认 true），因此"快路径"目前省掉的是**解析**，不是**读取**。详见 HANDOFF §7 待办第 1 项；
+     - **注释按需读取（§7 B4 修复后）**：稳态调用 `CopierReadPositions(...,false)` 跳过全部 `OrderComment()`，仅慢路径对新/变动行定向读一次；全量重校验仍批量读取；注释缓存在 `CopierCachedOrder.cmt` 供 POS 遥测复用；
   3. **同 Tick 读仓合并 (1+N -> 1)**：`RefreshRisk()` 完成快慢扫描后直接输出 `g_acctAllPos`，各 `ConvergeSender(si)` 直接复用，消灭了多 Sender 下重复调用 `CopierReadPositions` 的 N 倍冗余；
   4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴；
-  5. **消除结构体深拷贝与 $O(N^2)$ 线性循环**：`ScanAndResolveAccountPositions` 引入同下标优先预测 ($O(1)$ 快速命中)，淘汰临时动态数组 `nextCache`，缓存项精简剥离 `sym`/`cmt` 动态字符串深拷贝；
+  5. **消除结构体深拷贝与 $O(N^2)$ 线性循环**：`ScanAndResolveAccountPositions` 引入同下标优先预测 ($O(1)$ 快速命中)，临时数组改为全局 scratch `g_posCacheNext`；converge 的"desired ↔ local"双向比对改用 `CopierUidIndex` 哈希索引，`DedupLocal` 仅在索引发现重复时运行（详见 §7 B3/B5）；
   6. **`UpdatePanel()` 扫仓消灭与刷新节流**：彻底移除 `UpdatePanel` 内部重复的 `CopierReadPositions` 和逐单 `CopierUidFromComment`，并加入 GUI 渲染节流（首版 500ms，随后在 §2.17 统一放宽到 1500ms），彻底消除 10Hz 狂刷 Windows GDI 图表导致的额外 CPU 占用。
 
 ### 2.16 Sender 端 CPU 极致减负与零字符串稳态索引 (Ticket-to-Slot Indexing & Selective Comment Reading)
@@ -206,10 +206,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 持仓** | `hub/src/positions.rs` | 读取 `R=` 时透明解压，解析逐单持仓明细 |
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
-| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁、快慢双路径零字符串缓存与 1+N 扫仓合并 |
+| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`） |
 | **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment |
-| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 增加 `readComment` 标志，支持 Sender 跳过无用 comment 读取 |
-| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()` 方法；`CopierPosTable` 增加 `UpdateAt`、`RemoveAt`、`InsertEmpty` 槽位原位更新接口 |
+| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |
@@ -306,34 +306,43 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-## 7. 待确认的审计发现（2026-10-20，代码未改动）
+## 7. 审计发现与修复记录（2026-10-20）
 
-> 本节记录全量代码审计发现的逻辑问题与性能热点，**均尚未修改**，等确认后逐项落地。
+> 全量代码审计发现的逻辑问题与性能热点，**已全部修复并验证**（4 终端 0 errors / 128 Rust 测试 / 各 Python 合约套件全绿）。
 > 编号 A = 逻辑/正确性，B = 性能。量级按 300 笔持仓、10Hz 估算。
 
-### A. 逻辑与正确性
+### A. 逻辑与正确性（全部已修）
 
-| # | 严重度 | 位置 | 问题 |
+| # | 严重度 | 位置 | 问题与修复 |
 | :--- | :--- | :--- | :--- |
-| **A1** | 高 | `CopierReceiver.mq4` `OnTimer` 步骤 4 / 4b | `SaveReceiverMap()` 排在 `RefreshRisk()` **之前**。启动时 `g_lastMapSave=0`，第一个 100ms tick 就用**尚未填充**的 `g_acctAllPos`（count=0）重建身份表：`g_recKnown` 被清空，磁盘状态文件被写成 `N=0`。OnInit 刚从 `.st` 恢复的映射在 100ms 内丢失，此后 comment 已被终端覆盖的持仓（MT5 部分平仓）再也无法解析，重启后变 `unmanageable`。 |
-| **A2** | 中 | `HandleSnapshot` | 防误清仓锁只在 `sent>0 && n==0` 时拒绝。若 `N=300` 而只解出 150 条（截断/半解析），仍会接受并把 desired 设为 150，剩余 150 笔本地镜像被判定"不再需要"→ 误平。应改为 `sent != n` 即拒绝。 |
-| **A3** | 低 | `UpdatePanel` | 面板 "Managing open/pending" 改用全账户计数 `g_acctPositions/g_acctOrders`（含其他 EA 的单），原实现只统计 magic 匹配的自家单，标签含义已变。 |
-| **A4** | 低-中 | `ConvergeSender` 3469 行 | 每个已匹配 UID **每 tick** 都 `g_everOpened.Add()`。300 单 × 10Hz 会在约 1.4 秒内覆盖完 4096 槽，`ReopenClosedMirrors=false` 的"曾经开过"判断（3862/3887 行）可能因条目被挤掉而失效。 |
-| **A5** | 低 | `hub/src/main.rs` | `Stats.receipts` 现在统计"中继次数"而非"收到条数"，读数比实际收据低约 66%（已在 PROTOCOL.md 说明）。 |
+| **A1** | 高 | `CopierReceiver.mq4` `OnTimer` | `SaveReceiverMap()` 曾排在 `RefreshRisk()` **之前**：启动时 `g_lastMapSave=0`，第一个 100ms tick 就用**尚未填充**的 `g_acctAllPos` 重建身份表，`g_recKnown` 被清空、状态文件被写成 `N=0`，OnInit 刚恢复的映射 100ms 内丢失。**已修**：`RefreshRisk()` 前置，并新增 `g_acctScanned` 标志，`SaveReceiverMap()` 在"从未扫描过"时直接返回（同时覆盖 `OnDeinit` 早退场景）。 |
+| **A2** | 中 | `HandleSnapshot` | 坏快照锁只挡 `n==0`，`0<n<N` 的部分解码仍会把缺失部分误判为"已平仓"。**已修**：改为 `declared && n != min(N, CP_MAX_POSITIONS)` 即拒绝；超出表容量的合法溢出仍放行。 |
+| **A3** | 低 | `UpdatePanel` | "Managing open/pending" 曾用全账户计数，把别的 EA 的单算进来。**已修**：新增 `g_ourPositions/g_ourPending`（仅 magic 匹配），面板恢复自家口径；账户级数字仍供券商单量上限判断使用。 |
+| **A4** | 低-中 | `ConvergeSender` | 每个已匹配 UID 每 tick 都 `g_everOpened.Add()`，300 单时约 1.4 秒转完 4096 槽，`ReopenClosedMirrors=false` 的判据会被挤掉。**已修**：去掉每 tick 写入；改为 ① 开仓成功时写（原有路径）、② OnInit 从状态文件回填、③ 慢路径 `Has()` 后补写。 |
+| **A5** | 低 | `hub/src/stats.rs` | `receipts` 只统计中继次数，3s 去重后读数比实际收据低约 66%。**已修**：新增 `receipts_seen`，输出 `receipts N of M received`，差额即去重节省量。 |
 
-### B. 性能热点（Receiver 仍明显重于 Sender 的主因）
+### B. 性能热点（全部已修）
 
-| # | 量级 | 位置 | 热点与建议 |
+| # | 量级（修复前） | 位置 | 处理 |
 | :--- | :--- | :--- | :--- |
-| **B1** | ~3.7M 次/tick | `ConvergeSender` 3465-3467 | 每笔已匹配单每 tick 调 **3 次 `ForgetPrefix`**，每次扫 4096 槽（含 `StringSubstr` 分配）。建议：只对"有在途动作"的 UID 清前缀；三次合并为一次扫描；给 `CopierSeenRing` 每槽加 32 位 hash 先比 hash。 |
-| **B2** | ~614k 次/tick | `LocalForSender` 1506 行 | 每 tick 对每笔本地单 `g_recKnown.Upsert()` → `Find(uid)` 扫 2048 槽。建议：只在慢路径写入（`SaveReceiverMap` 每 10s 会全量重建）。 |
-| **B3** | ~180k 次/tick | `ConvergeSender` 3455 / 3896、`DedupLocal` 2941 | 三处 O(N²) 字符串比对。建议：converge 前建一次 `uid → index` 索引（开放寻址 1024 桶），三处共用，降到 O(N)。 |
-| **B4** | 300 次/tick | `ScanAndResolveAccountPositions` 3080 行 | 仍以 `readComment=true` 调 `CopierReadPositions`，快路径根本不用 `cmt`。建议：传 `false`，慢路径对新 ticket 定向读一次 comment（与 Sender `BuildCurrent` 同款），POS 遥测每 60s 再按需读。 |
-| **B5** | ~225KB/tick | 3082 行 | 局部 `CopierCachedOrder newCache[CP_MAX_POSITIONS]`（含 string 成员）每次调用重建 2048 项。建议：改为全局 scratch，只写 `0..an-1`。 |
-| **B6** | 300 次/tick | `CopierReadPositions` | 循环内 `ArrayResize(out,n+1,maxOut)`。建议：进循环前预分配、循环后收尾。 |
-| **B7** | 一次性 | `CopierPosTable::InsertEmpty` | 线性找空槽，重启后 300 新单为 300×2048。可维护"首个空槽"游标，收益有限。 |
-| **B8** | — | `hub/src/main.rs` | `last_rcpt_relayed` 无上限，节点改名/重连会留死键。建议加 TTL 或容量上限。 |
-| **B9** | — | `hub/src/main.rs` 2030 行 | 零拷贝转发是两次 `send`：第一帧成功、第二帧失败时 multipart 会残留在队列。阻塞发送下极罕见，可选加固。 |
+| **B1** | ~3.7M 次/tick | `ConvergeSender` | 每笔已匹配单每 tick 调 3 次 `ForgetPrefix`，各扫 4096 槽。**已修**：`CopierSeenRing` 增加 `m_used` 计数与空环快速返回；三次清理合并为 `ForgetUidActions()` 单趟扫描。稳态下环为空，开销趋近 0。 |
+| **B2** | ~614k 次/tick | `LocalForSender` | 每 tick 每单 `g_recKnown.Upsert()`（`Find` 扫 2048 槽）。**已修**：写入移到 `ScanAndResolveAccountPositions` 的慢路径（新增/变动行），每 10 秒的 `SaveReceiverMap` 仍会全量重建。 |
+| **B3** | ~180k 次/tick | `ConvergeSender` / `DedupLocal` | 三处 O(N²) 字符串比对。**已修**：新增 `CopierUidIndex`（4096 槽开放寻址，FNV-1a + 一次字符串确认），converge 前建一次 `uid→index`；`DedupLocal` 只在索引发现重复时运行。 |
+| **B4** | 300 次/tick | `ScanAndResolveAccountPositions` | 稳态仍以 `readComment=true` 读取全部 `OrderComment()`。**已修**：稳态传 `false`，仅慢路径用 `CopierReadCommentByTicket()` 定向读一次；全量重校验（30s / 单量变化）仍批量读；注释缓存在 `CopierCachedOrder.cmt` 供 POS 遥测复用。 |
+| **B5** | ~225KB/tick | 同上 | 局部 `CopierCachedOrder newCache[2048]` 每 tick 重建。**已修**：改全局 `g_posCacheNext`，只写 `0..an-1`。 |
+| **B6** | 300 次/tick | `CopierReadPositions` | 循环内 `ArrayResize`。**已修**：按 32 起倍增批量扩容。 |
+| **B7** | 一次性 | `CopierPosTable::InsertEmpty` | 线性找空槽。**已修**：增加 `m_hint` 游标，`RemoveAt` 释放的槽位优先复用。 |
+| **B8** | — | `hub/src/main.rs` | `last_rcpt_relayed` 无上限。**已修**：每 60 秒清理 10 分钟未更新的配对。 |
+| **B9** | — | `hub/src/main.rs` | 两段式 `send` 失败会留下半个 multipart 帧。**已修**：第二帧失败判定为致命，置 `EXIT` 并明确报错，不再继续往撕裂的帧里写。 |
+
+### 修复后的量级对照（300 单 / 10Hz）
+
+| 指标 | 修复前 | 修复后 |
+| :--- | :--- | :--- |
+| Receiver 每 tick 循环量 | ~4.5M | ~10k（稳态） |
+| 每 tick `OrderComment()` 读取 | 300 | 0（仅变动行） |
+| 每 tick `g_recKnown` 线性查找 | 300 × 2048 | 0 |
+| converge 字符串比对 | ~180k | ~600（哈希 + 命中确认） |
 
 ---
 
