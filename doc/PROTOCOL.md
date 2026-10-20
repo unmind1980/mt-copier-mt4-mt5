@@ -522,9 +522,35 @@ When a pending order fills into a market position on the sender (`CP_ORD_PENDING
 
 ### Corrupt Snapshot Defense (False Close-All Guard)
 
-If an incoming snapshot explicitly declares `N > 0`, but decoding yields `0` valid records (e.g., due to decompression failure, network truncation, or corrupted payload), the receiver **rejects the snapshot**:
-- `g_desired` is **not** overwritten with 0, preventing the convergence loop from interpreting the decode failure as an empty account and closing all legitimate local mirrors ("false close-all disaster").
-- The receipt hash `g_snapHash` is **not** updated, ensuring the receiver continues reporting its previous hash so the sender's repair mechanism will re-transmit the snapshot.
+The snapshot header declares how many records it carries (`N=`). A receiver  
+that decodes a **different** number rejects the whole snapshot:
+
+- **`N > 0`, 0 records decoded** — decompression failure, network truncation,
+  a corrupted payload.
+- **`0 < decoded < N`** — the case the first version of this guard did *not*
+  cover, and the quieter of the two: the records that failed to decode are
+  simply absent from the desired set, so convergence reads "the sender closed
+  it" for each one and closes the mirror. Only half the book is wrongly
+  closed, which is no better than all of it.
+
+Neither is "the account went flat", and both are refused:
+
+- `g_desired` is **not** overwritten, preventing the convergence loop from
+  interpreting the decode failure as an empty account and closing legitimate
+  local mirrors ("false close-all disaster").
+- The receipt hash `g_snapHash` is **not** updated, ensuring the receiver
+  continues reporting its previous hash so the sender's repair mechanism will
+  re-transmit the snapshot.
+
+**One legitimate exception**: a sender holding more positions than the
+receiver's table can carry (`CP_MAX_POSITIONS`) always stops decoding there,
+so a count of exactly `CP_MAX_POSITIONS` against a larger `N=` is accepted —
+with the truncation reported separately, because silently dropping positions
+is the failure this warns about.
+
+A rejected snapshot leaves the desired set at its last accepted state, so the
+receiver stands still rather than diverging; it never acts on half of a
+snapshot.
 
 ## Identity
 

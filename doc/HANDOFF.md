@@ -355,6 +355,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | 每 tick `g_recKnown` 线性查找 | 300 × 2048 | 0 |
 | converge 字符串比对 | ~180k | ~600（哈希 + 命中确认） |
 
+### 二次审计：新增待确认项（2026-10-20 17:25，**代码未改动**）
+
+| # | 级别 | 位置 | 问题与建议 |
+| :--- | :--- | :--- | :--- |
+| **B10** | 高 | `CopierSender.mq4` `BuildCurrent` + `CopierPosTable::FindByTicket` | 每 tick 为**每一笔持仓**调一次 `FindByTicket`，其内部线性扫全部 2048 槽。300 单 = **614k 次整数比较/tick ≈ 6.1M/s**。这是 Receiver B2 的镜像，上一轮只修了 Receiver 侧，Sender 侧漏掉了。建议：新增 ticket → slot 哈希索引（复用 `CopierUidIndex` 的形状），或先用"同下标优先 + 游标"降一档。 |
+| **A6** | 中 | `HandleSnapshot` 拒绝分支 | 强化的坏快照锁**每次都 `g_log.Error`**，无限流。一个持续解析失败的 sender 会让 receiver 每秒刷一条 ERROR（≈3600 行/小时）。建议套用 `g_once.ShouldEmit`。另外：若坏的是 sender **缓存的 payload**，repair 只会重发同样的坏字节，receiver 会永久停在旧 desired 状态；建议连续 N 次拒绝后升级告警并提示" sender 需重建快照"。 |
+| **A7** | 低 | `ScanAndResolveAccountPositions` 快路径 cmt 缓存 | 数值指纹不变则注释不刷新。receiver 自己改写的 comment（`tc\|uid\|senderTicket`）里 senderTicket 若变化，POS 遥测与 trim 日志会显示旧值；UID 解析不受影响。 |
+| **B11** | 低 | `g_prev.At() / UpdateAt()` | 每次把整个 `CopierPos`（含 `sym/cmt/uid` 三个字符串）拷进拷出，每位置每 tick 2 次。可加"只读字段比较"接口避免字符串引用计数操作。 |
+| **B12** | 低-中 | `CopierReceiver` 慢路径 `g_everOpened.Has()` | `Has()` 扫 4096 槽；因 `forceFullScan` 每 30 秒或"单量变化"就对全账户走一遍慢路径，300 单时约 1.2M 次/轮。缓解：OnInit 若已从状态文件回填（已覆盖"账户上现存的镜像"），直接跳过该补写。 |
+| — | 可忽略 | `CopierUidIndex::Build` 的 `ArrayInitialize` | 每 tick 2 次 × 4096 int 清零（8192 写/tick），量级极小，可不改。 |
+
 ---
 
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*
