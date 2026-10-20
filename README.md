@@ -380,6 +380,7 @@ default is named.
 | `waitforminutesbar` | 0 | Delay this many M1 bars |
 | `requirepositionfillwithinseconds` / `...minutes` / `...hours` | 0 | Skip entries whose sender order is older than this (summed) |
 | `fillwithinminutesbar` | 0 | Skip after this many M1 bars since the sender filled |
+| `pendingfillgraceseconds` | 1.5 | Keep local pending order for N seconds to fill naturally when sender fills; 0 = cancel immediately |
 
 **[common] — Schedule & System**
 
