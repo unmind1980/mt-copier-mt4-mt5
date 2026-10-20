@@ -675,6 +675,24 @@ bool CopierIsMarketClosed(const int err)
   }
 
 //=====================================================================
+// "This terminal or account will not send orders right now"
+//
+//   MT4: 4109 (ERR_TRADE_DISABLED: AutoTrading off, or live trading not allowed in EA properties)
+//   MT5: 10027 (TRADE_RETCODE_AUTOTRADING_DISABLED: AutoTrading button off)
+//        10026 (TRADE_RETCODE_CLIENT_DISABLES_AT)
+//        10017 (TRADE_RETCODE_TRADE_DISABLED: Trade disabled by broker/terminal)
+//
+// These represent a local or terminal-level state rather than a broker
+// refusal of this specific order. The order is retried at the base rate
+// without climbing the exponential backoff ladder, so turning AutoTrading
+// back on resumes mirroring promptly rather than waiting out hours of backoff.
+//=====================================================================
+bool CopierIsTradeDisabled(const int err)
+  {
+   return (err==4109 || err==10027 || err==10026 || err==10017);
+  }
+
+//=====================================================================
 // Open a market position.
 // Returns true on success. On failure outErr carries the broker /
 // terminal return code (MT5 retcode, MT4 GetLastError()).

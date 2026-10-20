@@ -1320,6 +1320,7 @@ void OnTimer()
             //--- PENDING ORDER FILLING / KIND CHANGED
             if(kindDiff)
               {
+               g_stateDirty=true;
                g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
                           +(string)prevKind+" -> "+(string)cur[i].kind+", ticket "
                           +(string)prevTicket+" -> "+(string)cur[i].ticket

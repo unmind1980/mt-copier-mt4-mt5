@@ -2447,13 +2447,8 @@ void ExecuteQueue()
            }
          if(emTP>0.0)
            {
-            double px=0.0;
-            if(CopierGetPrice(a.sym,a.side,px))
-              {
-               double pip=PipSize(si);
-               tp=(a.side==CP_SIDE_BUY)?(px+emTP*pip):(px-emTP*pip);
-               tp=NormalizeDouble(tp,si.digits);
-              }
+            int e2=0;
+            tp=CopierEmergencyTp(a.sym,a.side,0.0,emTP,si,e2);
            }
          //--- the comment carries the UID (functional identity) and the
          //--- sender's ticket (so the two orders can be matched by eye)
@@ -2622,14 +2617,13 @@ void ExecuteQueue()
          //--- alert is not optional: a silent 24-hour backoff is just a
          //--- slower way to lose trades. From one hour up it is logged as an
          //--- error and says so explicitly.
-         //--- 4109 is "this terminal will not send" - AutoTrading off, or the
-         //--- trade context busy. It is NOT the broker refusing the order:
-         //--- nothing reaches the broker at all, so there is no request rate
-         //--- to protect, and climbing the ladder would park the mirror for up
-         //--- to 24 hours AFTER the operator has switched AutoTrading back on.
-         //--- Park it at the base rate and leave the ladder alone.
+         //--- AutoTrading off, or the trade context busy (MT4 4109, MT5 10027/10026/10017).
+         //--- It is NOT the broker refusing the order: nothing reaches the broker at all,
+         //--- so there is no request rate to protect, and climbing the ladder would park
+         //--- the mirror for up to 24 hours AFTER the operator has switched AutoTrading
+         //--- back on. Park it at the base rate and leave the ladder alone.
          int fails;
-         if(err==4109)
+         if(CopierIsTradeDisabled(err))
            {
             fails=1;
             g_backoff.Park(a.key,CP_RETRY_BACKOFF_MS);
@@ -2713,7 +2707,8 @@ void ExecuteQueue()
                               +" and it is retried once per cooldown until the"
                               +" market reopens)";
          else if(err==10021) e2="10021 (no quotes for this symbol right now)";
-         else if(err==4109)  e2="4109 (TRADE DISABLED at this terminal -"
+         else if(CopierIsTradeDisabled(err))
+                             e2=(string)err+" (TRADE DISABLED at this terminal -"
                               +" AutoTrading is off, or the trade context is"
                               +" busy. Nothing is reaching the broker, so the"
                               +" order is retried at the base rate and the"
@@ -3496,7 +3491,7 @@ int CloseAllOurs(const string reason)
       if(si<0) continue;                      // not ours
       string uid=ResolveUid(all[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
-      if(g_ignore.Has(uid)) continue;         // handed over to the operator
+      if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
       PushAction(si,CP_ACT_CLOSE,uid,all[i].sym,all[i].side,all[i].lots,
                  all[i].ticket);
       queued++;
@@ -3695,61 +3690,35 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      string rsym=MapSymbol(si,d.sym,g_suffix[si]);
-      if(!CopierSymbolExists(rsym))
+      //--- 1. Base control & signal gates (evaluated FIRST, zero extra computation)
+      if(g_cmdPaused)
         {
-         if(g_once.ShouldEmit(g_sid[si]+"|nosym|"+d.sym))
-            g_log.Warn("sender "+g_sid[si]+" symbol "+d.sym+" -> "+rsym
-                       +" is not available on this account. The copier HAS"
-                       +" already tried adding it to Market Watch, so this is"
-                       +" the broker genuinely not offering it - add the"
-                       +" symbol by hand, or map it with SenderSymbolMap if"
-                       +" your broker calls it something else. Skipped until"
-                       +" this changes (reported at most once per 10 min).");
-         continue;
-        }
-      CopierSymInfo si2;
-      if(!CopierGetSymbolInfo(rsym,si2)) continue;
-
-      bool rejected=false;
-      double lots=CopierComputeLots(d.lots,g_lotMode[si],g_lotParam[si],1.0,si2,
-                                    0.0,0.0,rejected);
-      if(rejected || lots<=0.0)
-        {
-         g_log.Warn("lot sizing rejected "+d.uid+" "+rsym
-                    +" senderLots="+DoubleToString(d.lots,2));
+         if(g_once.ShouldEmit("cmdpause"))
+            g_log.Warn("paused by a hub command - no new mirrors are opened."
+                       +" Existing ones are still managed normally. RESUME"
+                       +" clears this.");
          continue;
         }
 
-      //--- Account-wide risk gate
-      int    pendCount=0;
-      double pendLots=0.0;
-      PendingOpens(pendCount,pendLots);
-      string riskWhy="";
-      if(!g_risk.AllowOpen(lots,g_ourCount,g_ourLots,pendCount,pendLots,riskWhy))
+      if(g_senderCfg[si].ignorenewentrysignals)
         {
-         string blockKey=g_risk.BlockKey();
-         if(StringLen(blockKey)==0) blockKey=riskWhy;
-         g_riskBlocked++;
-         if(g_once.ShouldEmit("risk|"+blockKey))
-            g_log.Warn("risk switch blocked a new entry - "+riskWhy);
+         if(g_once.ShouldEmit("gatenew|"+g_sid[si]))
+            g_log.Info("sender "+g_sid[si]+" IgnoreNewEntrySignals is on - no new mirrors are"
+                       +" opened. Existing ones are still managed normally.");
          continue;
         }
 
-      //--- Per-sender specific risk gate
-      int    sPendCount=0;
-      double sPendLots=0.0;
-      PendingOpensForSender(si,sPendCount,sPendLots);
-      string sRiskWhy="";
-      if(!g_senderRisk[si].AllowOpen(lots,ln,sLots,sPendCount,sPendLots,sRiskWhy))
+      if(!g_senderPermittedMagic[si].Allows((string)d.magic))
         {
-         string sBlockKey=g_senderRisk[si].BlockKey();
-         if(StringLen(sBlockKey)==0) sBlockKey=sRiskWhy;
-         g_riskBlocked++;
-         if(g_once.ShouldEmit("senderrisk|"+g_sid[si]+"|"+sBlockKey))
-            g_log.Warn("sender "+g_sid[si]+" risk switch blocked a new entry - "+sRiskWhy);
+         if(g_once.ShouldEmit("gatemagic|"+g_sid[si]+"|"+(string)d.magic))
+            g_log.Info("sender "+g_sid[si]+" reports magic "+(string)d.magic
+                       +" on "+d.sym+", which is not in PermittedMagic - its"
+                       +" entries are skipped");
          continue;
         }
+
+      if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
+      if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
 
       double osl=(d.kind==CP_ORD_PENDING)?d.sl:0.0;
       double otp=(d.kind==CP_ORD_PENDING)?d.tp:0.0;
@@ -3768,24 +3737,11 @@ void ConvergeSender(const int si)
          d.side=(d.side==CP_SIDE_BUY)?CP_SIDE_SELL:CP_SIDE_BUY;
         }
 
-      if(g_senderCfg[si].ignorenewentrysignals)
-        {
-         if(g_once.ShouldEmit("gatenew|"+g_sid[si]))
-            g_log.Info("sender "+g_sid[si]+" IgnoreNewEntrySignals is on - no new mirrors are"
-                       +" opened. Existing ones are still managed normally.");
-         continue;
-        }
-      if(g_cmdPaused)
-        {
-         if(g_once.ShouldEmit("cmdpause"))
-            g_log.Warn("paused by a hub command - no new mirrors are opened."
-                       +" Existing ones are still managed normally. RESUME"
-                       +" clears this.");
-         continue;
-        }
       if(g_senderCfg[si].nobuy && d.side==CP_SIDE_BUY)   continue;
       if(g_senderCfg[si].nosell && d.side==CP_SIDE_SELL) continue;
 
+      //--- 2. Symbol resolution & permissions
+      string rsym=MapSymbol(si,d.sym,g_suffix[si]);
       if(!g_senderPermitted[si].Allows(rsym))
         {
          if(g_once.ShouldEmit("gatesym|"+g_sid[si]+"|"+rsym))
@@ -3794,18 +3750,33 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      if(!g_senderPermittedMagic[si].Allows((string)d.magic))
+      if(!CopierSymbolExists(rsym))
         {
-         if(g_once.ShouldEmit("gatemagic|"+g_sid[si]+"|"+(string)d.magic))
-            g_log.Info("sender "+g_sid[si]+" reports magic "+(string)d.magic
-                       +" on "+d.sym+", which is not in PermittedMagic - its"
-                       +" entries are skipped");
+         if(g_once.ShouldEmit(g_sid[si]+"|nosym|"+d.sym))
+            g_log.Warn("sender "+g_sid[si]+" symbol "+d.sym+" -> "+rsym
+                       +" is not available on this account. The copier HAS"
+                       +" already tried adding it to Market Watch, so this is"
+                       +" the broker genuinely not offering it - add the"
+                       +" symbol by hand, or map it with SenderSymbolMap if"
+                       +" your broker calls it something else. Skipped until"
+                       +" this changes (reported at most once per 10 min).");
+         continue;
+        }
+      CopierSymInfo si2;
+      if(!CopierGetSymbolInfo(rsym,si2)) continue;
+
+      //--- 3. Lot calculation
+      bool rejected=false;
+      double lots=CopierComputeLots(d.lots,g_lotMode[si],g_lotParam[si],1.0,si2,
+                                    0.0,0.0,rejected);
+      if(rejected || lots<=0.0)
+        {
+         g_log.Warn("lot sizing rejected "+d.uid+" "+rsym
+                    +" senderLots="+DoubleToString(d.lots,2));
          continue;
         }
 
-      if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
-      if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
-
+      //--- 4. Market state, clock & trading hours (holds tracked with calculated lots)
       if(!g_srvEverMoved
          || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS)
         {
@@ -3870,6 +3841,8 @@ void ConvergeSender(const int si)
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside sender trading window");
          continue;
         }
+
+      //--- 5. Existing position & delay/pullback gates
 
       if(g_senderCfg[si].checkforexistingposition!=EXIST_OFF)
         {
@@ -4010,6 +3983,36 @@ void ConvergeSender(const int si)
                         +" timeout, or set it to 0 to keep retrying.");
             continue;
            }
+        }
+
+      //--- 6. Risk limits & broker quota
+      int    pendCount=0;
+      double pendLots=0.0;
+      PendingOpens(pendCount,pendLots);
+      string riskWhy="";
+      if(!g_risk.AllowOpen(lots,g_ourCount,g_ourLots,pendCount,pendLots,riskWhy))
+        {
+         string blockKey=g_risk.BlockKey();
+         if(StringLen(blockKey)==0) blockKey=riskWhy;
+         g_riskBlocked++;
+         if(g_once.ShouldEmit("risk|"+blockKey))
+            g_log.Warn("risk switch blocked a new entry - "+riskWhy);
+         continue;
+        }
+
+      //--- Per-sender specific risk gate
+      int    sPendCount=0;
+      double sPendLots=0.0;
+      PendingOpensForSender(si,sPendCount,sPendLots);
+      string sRiskWhy="";
+      if(!g_senderRisk[si].AllowOpen(lots,ln,sLots,sPendCount,sPendLots,sRiskWhy))
+        {
+         string sBlockKey=g_senderRisk[si].BlockKey();
+         if(StringLen(sBlockKey)==0) sBlockKey=sRiskWhy;
+         g_riskBlocked++;
+         if(g_once.ShouldEmit("senderrisk|"+g_sid[si]+"|"+sBlockKey))
+            g_log.Warn("sender "+g_sid[si]+" risk switch blocked a new entry - "+sRiskWhy);
+         continue;
         }
 
       if(g_brokerOrdLimit>0 && (g_acctPositions+g_acctOrders+pendCount)>=g_brokerOrdLimit)

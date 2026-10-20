@@ -398,6 +398,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A16** | 低 | `hub/src/positions.rs` `evict` | **已修复**：原代码使用裸 `now.duration_since(v.updated)`，在系统发生时钟微小校准时存在 panic 崩溃隐患。**修法**：改为 `now.saturating_duration_since(v.updated)`，与全栈保持一致的溢出保护。 |
 | **B16** | 优化 | `CopierReceiver.mq4` `DedupLocal` | **已修复**：优选存活单（`CopierPreferSurvivor`）比对期望手数时，原代码传入 Sender 原始手数；**修法**：先通过 `CopierComputeLots` 换算为本地目标手数后再行比对，使存活优选在倍率/固定手数下更加精准。 |
 
+### 五次审计与跨平台健壮性闭环（2026-10-21 08:20；A17/A18/A19/A20/B18 全部闭环落地）
+
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A17** | 中-高 | `CopierModel.mqh` + `CopierReceiver.mq4` | **已修复**：原代码针对 AutoTrading 关闭仅识别 MT4 错误码 4109；在 MT5 终端关闭自动交易时报错 10027/10026/10017 会误落入长退避阶梯导致长达数小时锁定。**修法**：新增跨平台函数 `CopierIsTradeDisabled(err)`，统一将 MT4 4109 与 MT5 10027/10026/10017 纳入快速重试保护（`Park(CP_RETRY_BACKOFF_MS)`），不爬升退避阶梯，开启后秒级恢复。 |
+| **A18** | 低-中 | `CopierReceiver.mq4` `ExecuteQueue` | **已修复**：开仓计算 `emTP` 原本裸算未做经纪商最小停止位规整；若设置距离小于 `stopLevel` 会导致 MT5 报错 10016 拒单。**修法**：直接复用 `CopierEmergencyTp(a.sym, a.side, 0.0, emTP, si, e2)`，实现与 `emSL` 对称的最小停止位安全外扩保护。 |
+| **A19** | 低-中 | `CopierSender.mq4` `OnTimer` | **已修复**：Sender 侦测到挂单成交转市价单时（`kindDiff`），原代码仅设置了 500ms 缓冲快照，漏掉了 `g_stateDirty = true;`。**修法**：补充标记 dirty，保障挂单成交后最新 `KIND` 及时持久化到 `copier_sender_<account>.st`。 |
+| **A20** | 低-中 | `CopierReceiver.mq4` `CloseAllOurs` | **已修复**：全平账户镜像时，原代码仅跳过了全局忽略列表 `g_ignore`，遗漏了信号源独立忽略列表 `g_senderIgnore[si]`。**修法**：改为 `if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;`，严格保障各信号源手工接管单不被误平。 |
+| **B18** | 优化 | `CopierReceiver.mq4` `ConvergeSender` | **已修复**：原代码在风控额度检查（`AllowOpen`）之后才判断白名单过滤与原单大小。**修法**：将 `PermittedSymbols`、`PermittedMagic`、`nobuy/nosell`、`minsenderlotsize` 等基础静态过滤前置，避免不符合品种要求的订单误报风控拦截警告与增加 `g_riskBlocked` 计数。 |
+
 ---
 
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*

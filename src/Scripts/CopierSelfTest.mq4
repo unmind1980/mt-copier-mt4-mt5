@@ -1634,6 +1634,14 @@ void TestMarketClosedRetcode()
    Ok("mktclosed: 10021 (no quotes) is NOT market closed",
       !CopierIsMarketClosed(10021));
    Ok("mktclosed: success (0) is NOT market closed",!CopierIsMarketClosed(0));
+
+   //--- CopierIsTradeDisabled: AutoTrading off or trade disabled on either platform
+   Ok("tradedisabled: MT4 4109 recognised",CopierIsTradeDisabled(4109));
+   Ok("tradedisabled: MT5 10027 recognised",CopierIsTradeDisabled(10027));
+   Ok("tradedisabled: MT5 10026 recognised",CopierIsTradeDisabled(10026));
+   Ok("tradedisabled: MT5 10017 recognised",CopierIsTradeDisabled(10017));
+   Ok("tradedisabled: 132 is NOT trade disabled",!CopierIsTradeDisabled(132));
+   Ok("tradedisabled: 0 is NOT trade disabled",!CopierIsTradeDisabled(0));
   }
 
 void TestNodeAnnounce()
