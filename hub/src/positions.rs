@@ -158,7 +158,7 @@ impl Positions {
     pub fn evict(&mut self, now: Instant) -> usize {
         let before = self.by_sender.len();
         self.by_sender
-            .retain(|_, v| now.duration_since(v.updated) < POSITIONS_TTL);
+            .retain(|_, v| now.saturating_duration_since(v.updated) < POSITIONS_TTL);
         before - self.by_sender.len()
     }
 

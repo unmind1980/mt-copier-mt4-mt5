@@ -259,5 +259,19 @@ double CopierEmergencySl(const string sym,const int side,const double openPx,
    return CopierFitStop(NormalizeDouble(sl,si.digits),sym,side,true,si,clamped);
   }
 
+double CopierEmergencyTp(const string sym,const int side,const double openPx,
+                         const double tpPips,const CopierSymInfo &si,int &outErr)
+  {
+   outErr=0;
+   if(tpPips<=0.0) return 0.0;
+   double px=0.0;
+   if(!CopierGetPrice(sym,side,px)) { outErr=-2; return 0.0; }
+   double ref=(openPx>0.0)?openPx:px;
+   double pipSize=(si.digits==3 || si.digits==5)?si.point*10.0:si.point;
+   double tp=(side==CP_SIDE_BUY)?(ref+tpPips*pipSize):(ref-tpPips*pipSize);
+   bool clamped=false;
+   return CopierFitStop(NormalizeDouble(tp,si.digits),sym,side,false,si,clamped);
+  }
+
 #endif
 //+------------------------------------------------------------------+

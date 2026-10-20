@@ -387,6 +387,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A11** | 低-中 | `CopierReceiver.mq4` `ConvergeSender` | **已修复**：开仓前检查券商订单上限时，原代码只统计了在账单量 `(g_acctPositions+g_acctOrders)>=g_brokerOrdLimit`，未包含队列在途单量 `pendCount`。在大持仓突发多笔开仓时可能导致后续单被券商拒单。**修法**：加上 `pendCount` 严格校验，与全局及分层风控口径完全对齐。 |
 | **B14** | 极低 | `CopierSender.mq4` `OnTimer` | **已修复**：挂单成交转持仓缓冲期内，若偶发赶上常规 15s 定时快照到期，原代码未做避让。**修法**：在 `g_fillSnapshotDueMs > 0 && now < g_fillSnapshotDueMs` 期间，常规 15s 快照主动避让，待 500ms 缓冲到期后统一广播，保障平滑过渡。 |
 
+### 四次审计与深度加固（2026-10-21 02:05；A13/A14/A15/A16/B16 全部闭环落地）
+
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A13** | 高 | `CopierReceiver.mq4` `QueueTrimIfNeeded` | **已修复**：原代码 `diff = local.lots - desired.lots` 采用 Sender 原始手数，当跟单倍率大于 1.0 或固定手数大于原单时，开仓下一秒即误判为“本地持仓过多”而强行裁仓。**修法**：先通过 `CopierComputeLots` 将 `desired.lots` 换算为本地目标手数 `targetLots`，再比对差额；动作队列 key 同步携带目标手数，彻底根治非 1:1 跟单误减仓。 |
+| **A14** | 中 | `CopierReceiver.mq4` `QueueModifyIfNeeded` | **已修复**：原代码仅处理了 `EmergencySLPips`，遗漏了 `EmergencyTPPips`；当原单无止盈时，收敛循环误判为“Sender 移除了 TP”而立即将开仓时挂上的应急止盈清空。**修法**：新增 `CopierEmergencyTp` 并在收敛比对中加入后备逻辑，当 `wantTp <= 0.0 && emergencyTPPips > 0.0` 时计算并保留本地应急止盈。 |
+| **A15** | 低-中 | `CopierSender.mq4` `OnDeinit` | **已修复**：Sender 退出时若存在 `g_stateDirty == true`，原代码未刷盘即退出。**修法**：在 `OnDeinit` 退出前强制将最新映射刷入 `StatePath()` 文件，防止重启时遗漏新开或平仓记录。 |
+| **A16** | 低 | `hub/src/positions.rs` `evict` | **已修复**：原代码使用裸 `now.duration_since(v.updated)`，在系统发生时钟微小校准时存在 panic 崩溃隐患。**修法**：改为 `now.saturating_duration_since(v.updated)`，与全栈保持一致的溢出保护。 |
+| **B16** | 优化 | `CopierReceiver.mq4` `DedupLocal` | **已修复**：优选存活单（`CopierPreferSurvivor`）比对期望手数时，原代码传入 Sender 原始手数；**修法**：先通过 `CopierComputeLots` 换算为本地目标手数后再行比对，使存活优选在倍率/固定手数下更加精准。 |
+
 ---
 
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*

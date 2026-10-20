@@ -804,6 +804,15 @@ void OnDeinit(const int reason)
    g_log.Info("sender stopped reason="+(string)reason+" holding "
               +(string)dn+" position(s)"+(dn>0?": "+held:""));
 
+   //--- Persist state on shutdown so any unflushed mutations are not lost
+   //--- across an EA restart or chart timeframe change.
+   if(g_stateDirty)
+     {
+      g_stateDirty=false;
+      string hdr="SEQ="+(string)g_seq+";SSID="+g_ssid;
+      CopierStateFile::Save(StatePath(),hdr,dense,dn);
+     }
+
    g_tp.Close();          // sockets first, then context (LINGER=0 already set)
   }
 

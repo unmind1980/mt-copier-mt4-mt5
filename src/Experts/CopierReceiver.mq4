@@ -2755,11 +2755,20 @@ void ExecuteQueue()
 //=====================================================================
 void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local)
   {
-   double diff=local.lots-desired.lots;
-   if(diff<=0.0) return;                       // sender is not smaller
-
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(local.sym,si2)) return;
+
+   //--- Sizing conversion: desired.lots is the SENDER's raw volume. We must
+   //--- convert it through this receiver's sizing rules (multiplier / fixed / off)
+   //--- to determine the local target volume. Comparing local.lots directly against
+   //--- desired.lots would falsely trim mirrors whenever the sizing multiplier > 1.0.
+   bool rejected=false;
+   double targetLots=CopierComputeLots(desired.lots,g_lotMode[si],g_lotParam[si],1.0,si2,
+                                       0.0,0.0,rejected);
+   if(rejected || targetLots<=0.0) return;
+
+   double diff=local.lots-targetLots;
+   if(diff<=0.0) return;                       // local is not larger than target
 
    double step=si2.lotStep;
    if(step<=0.0) return;
@@ -2793,7 +2802,7 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
    //--- the target volume is part of the dedup key: a SECOND partial close
    //--- on the same UID is a different action, not a duplicate
    PushAction(si,CP_ACT_TRIM,desired.uid,local.sym,local.side,trim,local.ticket,
-              stk,":"+CopierFmtDouble(desired.lots,CP_DIGITS_LOTS));
+              stk,":"+CopierFmtDouble(targetLots,CP_DIGITS_LOTS));
   }
 
 //=====================================================================
@@ -2896,6 +2905,12 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       int e=0;
       wantSl=CopierEmergencySl(local.sym,local.side,local.openPx,
                                g_senderCfg[si].emergencySLPips,si2,e);
+     }
+   if(wantTp<=0.0 && g_senderCfg[si].emergencyTPPips>0.0)
+     {
+      int e=0;
+      wantTp=CopierEmergencyTp(local.sym,local.side,local.openPx,
+                               g_senderCfg[si].emergencyTPPips,si2,e);
      }
 
    //--- clear the broker's minimum distance BEFORE comparing, or a stop
@@ -3005,11 +3020,26 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
          continue;
         }
 
-      //--- what the sender says this UID should be right now
+      //--- what the sender says this UID should be right now, converted through
+      //--- this receiver's sizing rules so the survivor comparison matches local target lots
       double want=-1.0;
       for(int d=0;d<g_desiredCount[si];d++)
         {
-         if(g_desired[base+d].uid==loc[i].uid) { want=g_desired[base+d].lots; break; }
+         if(g_desired[base+d].uid==loc[i].uid)
+           {
+            double rawLots=g_desired[base+d].lots;
+            CopierSymInfo dsi;
+            if(CopierGetSymbolInfo(loc[i].sym,dsi))
+              {
+               bool rej=false;
+               double tLots=CopierComputeLots(rawLots,g_lotMode[si],g_lotParam[si],1.0,dsi,0.0,0.0,rej);
+               if(!rej && tLots>0.0) want=tLots;
+               else                  want=rawLots;
+              }
+            else
+               want=rawLots;
+            break;
+           }
         }
 
       int keep=i;
