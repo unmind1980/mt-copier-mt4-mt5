@@ -527,6 +527,11 @@ int BuildCurrent(CopierPos &cur[],int &prevSlot[])
    ArrayResize(cur,0,CP_MAX_POSITIONS);
    ArrayResize(prevSlot,0,CP_MAX_POSITIONS);
 
+   //--- One pass to rebuild the ticket index, then every lookup below is a
+   //--- hash probe. FindByTicket() without an index walks all 2048 slots, and
+   //--- it used to run once per position per tick.
+   g_prev.RebuildTicketIndex();
+
    for(int i=0;i<rn;i++)
      {
       CopierPos p=raw[i];

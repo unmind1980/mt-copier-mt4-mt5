@@ -329,6 +329,13 @@ string  g_ssidSeen[CP_MAX_SENDERS];
 long    g_lastMsgMs[CP_MAX_SENDERS];
 long    g_firstMsgMs[CP_MAX_SENDERS];   // first message ever heard
 long    g_lastSnapMs[CP_MAX_SENDERS];   // last ACCEPTED snapshot
+//--- Consecutive snapshots REJECTED by the declared-vs-decoded guard.
+//---
+//--- Reset the moment one is accepted, so the number answers "how long has
+//--- this sender been sending unusable snapshots" rather than "how many have
+//--- I ever rejected" - and the count is what turns a silent standstill into
+//--- something a human can tell is still going on. See HandleSnapshot.
+int     g_snapRejectStreak[CP_MAX_SENDERS];
 //--- The receipt hash of the last snapshot RECEIVED from each sender - the
 //--- value that sender put on the wire, stored verbatim and echoed back in our
 //--- status. We never compute one ourselves: it is a delivery receipt, so
@@ -443,6 +450,11 @@ long    g_lastMapSave=0;
 //--- Last time the idempotency rings were swept. See the note in OnTimer.
 long    g_lastSeenPrune=0;
 bool    g_stateSaveOk=false;   // announced the identity store once per session
+//--- Did OnInit restore a state file? Its UIDs are seeded into g_everOpened,
+//--- which is exactly the set the slow-path backfill would otherwise rebuild -
+//--- and that backfill costs a 4096-slot ring scan per row, over every row,
+//--- on every 30-second revalidation.
+bool    g_stateRestored=false;
 int     g_nSenders=0;
 
 struct CopierWaitItem
@@ -3203,12 +3215,20 @@ int ScanAndResolveAccountPositions()
             g_recKnown.Upsert(rec);
 
             //--- A mirror that EXISTS was opened by this receiver, so record
-            //--- it for the ReopenClosedMirrors guard. Guarded by Has() so a
-            //--- 30-second revalidation of 300 unchanged rows does not cycle
-            //--- the ring - which is exactly what the old per-tick Add() did,
-            //--- evicting the entries the guard depends on.
-            string openKey=g_sid[oursSi]+":"+(string)CP_ACT_OPEN+":"+uid;
-            if(!g_everOpened.Has(openKey)) g_everOpened.Add(openKey);
+            //--- it for the ReopenClosedMirrors guard.
+            //---
+            //--- Skipped outright when a state file was restored at startup:
+            //--- OnInit already seeded g_everOpened from it, and that ring IS
+            //--- "the mirrors this receiver holds". Re-checking it here costs
+            //--- a 4096-slot scan per row, over every row, on every 30-second
+            //--- full revalidation - 1.2 million iterations at 300 positions.
+            //--- Without a state file nothing was seeded, so the backfill is
+            //--- the only thing standing in for it and must run.
+            if(!g_stateRestored)
+              {
+               string openKey=g_sid[oursSi]+":"+(string)CP_ACT_OPEN+":"+uid;
+               if(!g_everOpened.Has(openKey)) g_everOpened.Add(openKey);
+              }
            }
 
          g_posCacheNext[i].ticket   =raw[i].ticket;
@@ -4091,11 +4111,40 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    int expected=(sent>CP_MAX_POSITIONS)?CP_MAX_POSITIONS:sent;
    if(declared && n!=expected)
      {
-      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" declared N="+(string)sent
-                  +" but decoded "+(string)n+" record(s) (decompression or parse failure)!"
-                  +" Rejecting snapshot to prevent false close-all.");
+      //--- Rate-limited, and counted.
+      //---
+      //--- A sender whose snapshots keep failing to decode is heard from
+      //--- once a second, so an unthrottled ERROR here is 3,600 lines an
+      //--- hour - which buries everything else in the log, the same trap
+      //--- every other per-tick warning in this file fell into.
+      //---
+      //--- The count matters for a different reason. Rejecting leaves the
+      //--- desired set at its last good state, which is correct, but if the
+      //--- bytes the sender is re-sending are the bad ones (the repair path
+      //--- re-sends the SAME cached payload) then this repeats forever and
+      //--- the receiver stands still with nothing on screen saying so. A
+      //--- rising streak is the signal that a NEW snapshot - not another
+      //--- repair - is required.
+      g_snapRejectStreak[si]++;
+      bool fresh=(g_snapRejectStreak[si]==1);
+      bool milestone=(g_snapRejectStreak[si]%30)==0;
+      if(fresh || g_once.ShouldEmit("snapreject|"+g_sid[si]) || milestone)
+        {
+         string extra=(g_snapRejectStreak[si]>=30)
+            ?(" - "+(string)g_snapRejectStreak[si]+" in a row. The sender is"
+              +" re-sending the same payload, so a repair cannot fix this: it"
+              +" needs to BUILD a new snapshot (restart the sender EA, or"
+              +" clear its state file if it keeps failing)")
+            :"";
+         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" declared N="+(string)sent
+                     +" but decoded "+(string)n+" record(s) (decompression or parse failure)!"
+                     +" Rejecting snapshot to prevent false close-all."+extra);
+        }
       return;
      }
+
+   //--- accepted: the streak only measures CONSECUTIVE failures
+   g_snapRejectStreak[si]=0;
 
    //--- Store this sender's receipt hash once validated.
    g_snapHash[si]=CopierSnapshotHash(e.payload);
@@ -5059,6 +5108,7 @@ int OnInit()
    int savedN=0;
    if(CopierStateFile::Load(ReceiverStatePath(),hdr,saved,savedN))
      {
+      g_stateRestored=true;
       for(int i=0;i<savedN;i++) g_recKnown.Upsert(saved[i]);
       //--- Seed "ever opened" from the same file. These are exactly the
       //--- mirrors this receiver opened and still holds, which is what the

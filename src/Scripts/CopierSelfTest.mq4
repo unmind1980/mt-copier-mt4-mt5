@@ -436,6 +436,65 @@ void TestPosTable()
    OkInt("table: copyTo count",dn,1);
   }
 
+//--- The ticket index is the sender's hottest lookup: one probe per position
+//--- per tick, replacing a 2048-slot walk. Its whole risk is drift, so this
+//--- asserts that a mutation invalidates it rather than leaving it stale.
+//--- Uses the same global tables as TestPosTable - see the stack note there.
+void TestTicketIndex()
+  {
+   g_tA.Clear();
+   g_tA.Upsert(MakePos("AAAA1111",1,"EURUSD",CP_SIDE_BUY,0.1,1.1,0,0,0,1));
+   g_tA.Upsert(MakePos("BBBB2222",2,"GBPUSD",CP_SIDE_SELL,0.2,1.3,0,0,0,2));
+   g_tA.Upsert(MakePos("CCCC3333",3,"USDJPY",CP_SIDE_BUY,0.3,150.0,0,0,0,3));
+
+   //--- before a rebuild the index must not answer, and the linear fallback
+   //--- must still find everything - an unanswered index is a stall, a wrong
+   //--- answer is a duplicate
+   Ok("ticket index: linear fallback works before a rebuild",
+      g_tA.FindByTicket(2)==1);
+
+   g_tA.RebuildTicketIndex();
+   CopierPos q;
+   g_tA.Get("BBBB2222",q);
+   Ok("ticket index: hit resolves to the right slot",
+      g_tA.FindByTicket(2)==g_tA.Find("BBBB2222"));
+   Ok("ticket index: unknown ticket misses",g_tA.FindByTicket(99)<0);
+   Ok("ticket index: zero ticket misses",g_tA.FindByTicket(0)<0);
+
+   //--- a slot written AFTER the rebuild must not be visible through it
+   g_tA.Upsert(MakePos("DDDD4444",4,"XAUUSD",CP_SIDE_BUY,0.1,2000.0,0,0,0,4));
+   Ok("ticket index: a post-rebuild row is NOT seen (index is stale, not wrong)",
+      g_tA.FindByTicket(4)<0);
+   g_tA.RebuildTicketIndex();
+   Ok("ticket index: ...and appears after a rebuild",g_tA.FindByTicket(4)>=0);
+
+   //--- removing a row must also invalidate, or the index keeps handing back
+   //--- a slot the close-detection loop would treat as still open
+   g_tA.Remove("DDDD4444");
+   Ok("ticket index: a removal invalidates it",g_tA.FindByTicket(4)<0);
+   g_tA.RebuildTicketIndex();
+   Ok("ticket index: ...and the survivor still resolves",
+      g_tA.FindByTicket(1)==g_tA.Find("AAAA1111"));
+
+   //--- stress the hash: a block of neighbouring tickets must not collide into
+   //--- a cluster that beats the probe limit. The UID has to stay 8 characters
+   //--- from the valid alphabet or Upsert rejects the row and the test would
+   //--- silently assert on an empty table.
+   long base=1000000000;
+   for(int k=0;k<512;k++)
+      g_tA.Upsert(MakePos("D"+StringFormat("%07d",k),base+k,"EURUSD",
+                          CP_SIDE_BUY,0.1,1.1,0,0,0,base+k));
+   g_tA.RebuildTicketIndex();
+   bool allFound=true;
+   for(int k=0;k<512;k++)
+      if(g_tA.FindByTicket(base+k)<0) { allFound=false; break; }
+   Ok("ticket index: 512 clustered tickets all resolve",allFound);
+   OkInt("ticket index: stress block is really in the table",
+         g_tA.Count(),515);
+
+   g_tA.Clear();
+  }
+
 void TestStateFile()
   {
    string path="copier_selftest_state.st";
@@ -2158,6 +2217,7 @@ void OnStart()
    TestMt4FromTicket();
    TestSeenRing();
    TestPosTable();
+   TestTicketIndex();
    TestStateFile();
    TestSizing();
    TestConfig();

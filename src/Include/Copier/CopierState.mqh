@@ -15,6 +15,17 @@
 #include "CopierCodec.mqh"
 
 //=====================================================================
+// Table sizes. Both MUST be declared before the classes that size an
+// array with them: a #define that appears below its use is simply not
+// there yet, and the error it produces ("invalid index value") points at
+// the array rather than at the missing constant.
+//=====================================================================
+#define CP_UIDIDX_SLOTS 4096      // power of two; 2048 entries fit at 50% load
+//--- Ticket index. Half the size is enough: tickets are 64-bit integers, so
+//--- collisions are rarer, and the sender's table is already keyed on uid.
+#define CP_TICKIDX_SLOTS 2048     // power of two
+
+//=====================================================================
 // Fixed-size table of currently open positions.
 // Capacity is CP_MAX_POSITIONS. Slots are reused immediately when a
 // position disappears from the snapshot.
@@ -28,6 +39,46 @@ private:
    //--- order, so starting from 0 every time made a restart that re-adopts
    //--- 300 positions walk the whole 2048-slot table 300 times.
    int               m_hint;
+
+   //--- ticket -> slot index.
+   //---
+   //--- FindByTicket() is a linear scan of all 2048 slots, and the sender
+   //--- calls it once per position per tick to attach a UID: 300 positions
+   //--- is 614,000 integer comparisons a tick, ~6 million a second, to answer
+   //--- a question a hash answers in one probe.
+   //---
+   //--- REBUILT, never maintained incrementally. Every mutation point would
+   //--- have to keep it in step - Clear, Upsert, UpdateAt, RemoveAt,
+   //--- CopyFrom, PruneTo - and one missed path is silent corruption. A
+   //--- rebuild is 2048 integer reads once a tick, which is 300x cheaper than
+   //--- what it replaces, and it cannot drift.
+   //
+   //--- m_tkValid=false simply means "stale": the indexed lookup then falls
+   //--- back to the linear scan, so a caller that forgot to rebuild is slow
+   //--- rather than wrong.
+   uint              m_tkHash[CP_TICKIDX_SLOTS];
+   int               m_tkSlot[CP_TICKIDX_SLOTS];   // slot index + 1; 0 = empty
+   int               m_tkMask;
+   bool              m_tkValid;
+
+   uint              TicketHash(const long ticket) const
+     {
+      //--- Constants that fit a SIGNED 32-bit int, deliberately. An `u`
+      //--- suffix on a literal is accepted by one compiler and rejected with
+      //--- "some operator expected" by the other, and a header that only
+      //--- compiles on MT5 is not a header.
+      //
+      //--- Tickets are also masked in 16-bit halves rather than shifted by 32,
+      //--- because 0xFFFFFFFF as a literal is -1 on a 32-bit int and relying
+      //--- on how that converts is a coin toss.
+      uint h=(uint)(ticket & 0xFFFF);
+      h^=(uint)((ticket>>16) & 0xFFFF);
+      h*=16777619;                       // FNV-32 prime
+      h^=(h>>13);
+      h*=16777619;
+      h^=(h>>7);
+      return h & 0x7FFFFFFF;
+     }
 
    //--- A slot only counts when it is marked used AND carries a
    //--- well-formed UID. Never trust `used` on its own: a slot can look
@@ -65,6 +116,38 @@ public:
    int               Count() const { return UsedCount(); }
    bool              IsFull() const { return UsedCount()>=CP_MAX_POSITIONS; }
 
+   //--- Rebuild the ticket index. One pass, once per tick.
+   void              RebuildTicketIndex()
+     {
+      m_tkValid=false;
+      ArrayInitialize(m_tkSlot,0);
+      int n=0;
+      for(int i=0;i<CP_MAX_POSITIONS;i++)
+        {
+         if(!SlotValid(i)) continue;
+         uint h=TicketHash(m_p[i].ticket);
+         int  s=(int)(h&m_tkMask);
+         bool placed=false;
+         for(int p=0;p<CP_TICKIDX_SLOTS;p++)
+           {
+            int k=(int)((s+p)&m_tkMask);
+            if(m_tkSlot[k]==0)
+              {
+               m_tkSlot[k]=i+1;
+               m_tkHash[k]=h;
+               n++;
+               placed=true;
+               break;
+              }
+            //--- same ticket twice: keep the FIRST, like the linear scan
+            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==m_p[i].ticket)
+              { placed=true; break; }
+           }
+         if(!placed) return;                  // table full - cannot happen
+        }
+      m_tkValid=true;
+     }
+
    void              Clear()
      {
       for(int i=0;i<CP_MAX_POSITIONS;i++)
@@ -84,6 +167,9 @@ public:
         }
       m_n=0;
       m_hint=0;
+      m_tkMask=CP_TICKIDX_SLOTS-1;
+      ArrayInitialize(m_tkSlot,0);
+      m_tkValid=false;
      }
 
    int               Find(const string uid) const
@@ -99,6 +185,20 @@ public:
    int               FindByTicket(const long ticket) const
      {
       if(ticket==0) return -1;
+      //--- indexed when one has been built this tick, linear otherwise
+      if(m_tkValid)
+        {
+         uint h=TicketHash(ticket);
+         int  s=(int)(h&m_tkMask);
+         for(int p=0;p<CP_TICKIDX_SLOTS;p++)
+           {
+            int k=(int)((s+p)&m_tkMask);
+            if(m_tkSlot[k]==0) return -1;
+            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==ticket)
+               return m_tkSlot[k]-1;
+           }
+         return -1;
+        }
       for(int i=0;i<CP_MAX_POSITIONS;i++)
         {
          if(SlotValid(i) && m_p[i].ticket==ticket) return i;
@@ -154,6 +254,7 @@ public:
         {
          m_p[i]=p;
          m_p[i].used=true;
+         m_tkValid=false;
          return true;
         }
       for(int k=0;k<CP_MAX_POSITIONS;k++)
@@ -163,6 +264,7 @@ public:
             m_p[k]=p;
             m_p[k].used=true;
             m_n++;
+            m_tkValid=false;
             return true;
            }
         }
@@ -176,6 +278,7 @@ public:
       m_p[i].used=false;
       m_p[i].uid="";
       m_n=UsedCount();          // resync, never trust the arithmetic
+      m_tkValid=false;
       return true;
      }
 
@@ -186,6 +289,7 @@ public:
       m_p[i]=p;
       m_p[i].used=true;
       if(!wasValid) m_n++;
+      m_tkValid=false;
       return true;
      }
 
@@ -198,6 +302,7 @@ public:
       if(m_n>0) m_n--;
       //--- a slot just became free: hand it out next rather than searching
       m_hint=i;
+      m_tkValid=false;
       return true;
      }
 
@@ -214,6 +319,7 @@ public:
             m_n++;
             m_hint=k+1;
             if(m_hint>=CP_MAX_POSITIONS) m_hint=0;
+            m_tkValid=false;
             return k;
            }
          k++;
@@ -260,6 +366,7 @@ public:
             m_p[i].used=false;
             m_p[i].uid="";
             removed++;
+            m_tkValid=false;
            }
         }
       m_n=UsedCount();          // derived, so Count() can never disagree
@@ -456,7 +563,8 @@ public:
 // the rest of the codebase uses; it is rebuilt from scratch every pass so
 // there is nothing to invalidate.
 //=====================================================================
-#define CP_UIDIDX_SLOTS 4096      // power of two; 2048 entries fit at 50% load
+//--- (CP_UIDIDX_SLOTS and CP_TICKIDX_SLOTS are declared at the top of this
+//--- file, because CopierPosTable sizes an array with them.)
 
 class CopierUidIndex
   {

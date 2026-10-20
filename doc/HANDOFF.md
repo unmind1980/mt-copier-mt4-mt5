@@ -206,10 +206,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 持仓** | `hub/src/positions.rs` | 读取 `R=` 时透明解压，解析逐单持仓明细 |
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
-| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`） |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment |
+| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝并限制日志/计数升级告警）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`）、状态已恢复时跳过慢路径 `everOpened` 冗余扫描 |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫 |
 | **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取 |
-| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |
@@ -355,16 +355,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | 每 tick `g_recKnown` 线性查找 | 300 × 2048 | 0 |
 | converge 字符串比对 | ~180k | ~600（哈希 + 命中确认） |
 
-### 二次审计：新增待确认项（2026-10-20 17:25，**代码未改动**）
+### 二次审计：修复记录与后续储备（2026-10-20 18:45，已修复 B10/A6/B12）
 
-| # | 级别 | 位置 | 问题与建议 |
+| # | 级别 | 位置 | 问题与修复实现 |
 | :--- | :--- | :--- | :--- |
-| **B10** | 高 | `CopierSender.mq4` `BuildCurrent` + `CopierPosTable::FindByTicket` | 每 tick 为**每一笔持仓**调一次 `FindByTicket`，其内部线性扫全部 2048 槽。300 单 = **614k 次整数比较/tick ≈ 6.1M/s**。这是 Receiver B2 的镜像，上一轮只修了 Receiver 侧，Sender 侧漏掉了。建议：新增 ticket → slot 哈希索引（复用 `CopierUidIndex` 的形状），或先用"同下标优先 + 游标"降一档。 |
-| **A6** | 中 | `HandleSnapshot` 拒绝分支 | 强化的坏快照锁**每次都 `g_log.Error`**，无限流。一个持续解析失败的 sender 会让 receiver 每秒刷一条 ERROR（≈3600 行/小时）。建议套用 `g_once.ShouldEmit`。另外：若坏的是 sender **缓存的 payload**，repair 只会重发同样的坏字节，receiver 会永久停在旧 desired 状态；建议连续 N 次拒绝后升级告警并提示" sender 需重建快照"。 |
-| **A7** | 低 | `ScanAndResolveAccountPositions` 快路径 cmt 缓存 | 数值指纹不变则注释不刷新。receiver 自己改写的 comment（`tc\|uid\|senderTicket`）里 senderTicket 若变化，POS 遥测与 trim 日志会显示旧值；UID 解析不受影响。 |
-| **B11** | 低 | `g_prev.At() / UpdateAt()` | 每次把整个 `CopierPos`（含 `sym/cmt/uid` 三个字符串）拷进拷出，每位置每 tick 2 次。可加"只读字段比较"接口避免字符串引用计数操作。 |
-| **B12** | 低-中 | `CopierReceiver` 慢路径 `g_everOpened.Has()` | `Has()` 扫 4096 槽；因 `forceFullScan` 每 30 秒或"单量变化"就对全账户走一遍慢路径，300 单时约 1.2M 次/轮。缓解：OnInit 若已从状态文件回填（已覆盖"账户上现存的镜像"），直接跳过该补写。 |
-| — | 可忽略 | `CopierUidIndex::Build` 的 `ArrayInitialize` | 每 tick 2 次 × 4096 int 清零（8192 写/tick），量级极小，可不改。 |
+| **B10** | 高 | `CopierSender.mq4` `BuildCurrent` + `CopierPosTable::FindByTicket` | **已修复**：在 `CopierPosTable` 内部引入 2048 槽开放寻址的 `TicketHash` 哈希索引（`m_tkSlot` + `m_tkHash`）。`BuildCurrent` 开头单趟重建索引，随后 300 笔订单全部走 $O(1)$ 哈希命中，所有增删改就地置 `m_tkValid=false` 防漂移。消灭了每 tick 61.4 万次线性槽扫描（约 610 万次/秒）。 |
+| **A6** | 中 | `HandleSnapshot` 拒绝分支 | **已修复**：引入 `g_snapRejectStreak[si]` 连续拒绝计数。首次失败或被 `g_once` 允许时报警，常规静默防刷屏；连续失败达到 30 次（约 30 秒）里程碑时升级告警，明确提示"发送端缓存坏字节，需重建快照（重启 Sender 或清理状态文件）"；成功接收快照时即刻清零 streak。 |
+| **B12** | 低-中 | `CopierReceiver` 慢路径 `g_everOpened` 补写 | **已修复**：新增 `g_stateRestored` 标志。若 OnInit 成功从 `.st` 恢复历史持仓（已全量预填 `g_everOpened`），则慢路径彻底跳过 `Has()` 4096 槽扫描；仅在冷启动无状态文件时才做首轮补填。消灭了 `forceFullScan` 时 120 万次冗余遍历。 |
+| **A7** | 低 | `ScanAndResolveAccountPositions` 快路径 cmt 缓存 | *后续储备*：数值指纹不变则注释不刷新。receiver 自己改写的 comment（`tc\|uid\|senderTicket`）里 senderTicket 若变化，POS 遥测与 trim 日志会显示旧值；UID 解析不受影响。 |
+| **B11** | 低 | `g_prev.At() / UpdateAt()` | *后续储备*：每次把整个 `CopierPos`（含 `sym/cmt/uid` 三个字符串）拷进拷出，每位置每 tick 2 次。可加"只读字段比较"接口避免字符串引用计数操作。 |
+| — | 可忽略 | `CopierUidIndex::Build` 的 `ArrayInitialize` | 每 tick 2 次 × 4096 int 清零（8192 写/tick），量级极小，不需改动。 |
 
 ---
 
