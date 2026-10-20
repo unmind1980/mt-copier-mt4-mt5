@@ -140,6 +140,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 - **应用范围**：Sender 端的 `SNAP` 全量快照 `R=`，以及 Receiver 端的 `STAT` 逐单列表 `POS=` 与 `WAITLIST=`；
 - **Rust Hub 原生透明解压**：通过 `flate2::read::ZlibDecoder`（带 Deflate 兜底）实现 WebUI 透明下钻，300 单大持仓网络包从 25.5 KB 降至 2.69 KB（单包压缩率达 82.7%）。
 
+### 2.13 挂单成交平滑过渡机制 (Sender 0.5s Debounce + Receiver 1.5s Grace Window)
+- **业务痛点**：Master 端挂单成交转持仓（`PENDING -> MARKET`）时，若 0ms 瞬间广播通知，Receiver 会立即取消本地挂单并以市价追单。但在跨经纪商点差与行情延迟下，Receiver 的挂单本来马上就要在原位成交，结果被自己下发的撤单指令误取消，转而市价追单吃进巨大滑点。
+- **两端协同平滑机制**：
+  - **Sender 0.5s 缓冲**：Master 挂单触发成交后，缓冲 500ms 再广播最新快照，给予价格自然传导时间，避免 0ms 瞬间冲突；
+  - **Receiver 1.5s 宽限期 (`PendingFillGraceSeconds`, 默认 1.5s)**：Receiver 收到状态变为 `MARKET` 但本地仍为挂单时，不立即撤单，而是保持本地挂单等待 1.5 秒自然撮合。若在宽限期内本地经纪商价格到达自然成交，则 0 撤单、0 追单、0 滑点无缝对齐；若满 1.5s 仍未成交，才安全撤单补仓。
+
+### 2.14 坏快照防误清仓锁 (Corrupt Snapshot Defense & False Close-All Guard)
+- **安全防线**：在 `HandleSnapshot` 中严密校验，若快照报文明确声明持仓数 `N > 0`，但因网络损坏或解压失败导致解析出有效记录数为 0 时，判定为非法坏快照并直接拒绝：
+  - 严禁将本地期望持仓 `g_desired` 清空为 0，彻底根除“收到坏快照导致本地持仓被误全平”的致命隐患；
+  - 拒绝更新 `g_snapHash`，迫使 Sender 在后续周期自动触发快照修复补发。
+
 ---
 
 ## 3. 核心文件与改动清单 (Manifest of Modified Components)
@@ -152,8 +163,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 持仓** | `hub/src/positions.rs` | 读取 `R=` 时透明解压，解析逐单持仓明细 |
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
-| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包 |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s |
+| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁 |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()` 方法，提供基于键名的高性能时间戳检索 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |

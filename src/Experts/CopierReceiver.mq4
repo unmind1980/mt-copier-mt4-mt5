@@ -201,6 +201,8 @@ input int    InpRequirePositionFillWithinHours   = 0;   // FillWithinHours - add
 int          RequirePositionFillWithinHours      = 0;
 input int    InpFillWithinMinutesBar             = 0;   // FillWithinMinutesBar - drop after this many M1 bars
 int          FillWithinMinutesBar                = 0;
+input double InpPendingFillGraceSeconds          = 1.5; // PendingFillGraceSec - wait local fill, 0=cancel
+double       PendingFillGraceSeconds             = 1.5;
 
 #ifdef __MQL5__
 input group "--- Schedule & Timeout ---"
@@ -273,6 +275,7 @@ struct CopierSenderSettings
    double              maxTotalLots;
    int                 maxOpenPositions;
    int                 staleSeconds;
+   double              pendingfillgraceseconds;
   };
 
 CopierSenderSettings g_senderCfg[CP_MAX_SENDERS];
@@ -707,6 +710,11 @@ CopierSeenRing  g_reopenExpected;
                              // so ReopenClosedMirrors=false must not block
                              // the follow-up open: doing so would drop the
                              // mirror entirely, which no one asked for.
+CopierSeenRing  g_fillGraceRing;
+                             // UIDs currently in pending-fill grace window:
+                             // when sender fills, receiver waits up to
+                             // PendingFillGraceSeconds for its own pending order
+                             // to fill naturally before cancelling and re-opening.
 
 //=====================================================================
 // Symbol map (flattened)
@@ -886,6 +894,7 @@ void ResetRuntimeInputsFromInputs()
    RequirePositionFillWithinMinutes = InpRequirePositionFillWithinMinutes;
    RequirePositionFillWithinHours   = InpRequirePositionFillWithinHours;
    FillWithinMinutesBar             = InpFillWithinMinutesBar;
+   PendingFillGraceSeconds          = InpPendingFillGraceSeconds;
    WaitForSeconds                   = InpWaitForSeconds;
    WaitForMinutes                   = InpWaitForMinutes;
    WaitForHours                     = InpWaitForHours;
@@ -957,6 +966,8 @@ void ApplyCommonConfig(const CopierIni &ini)
       RequirePositionFillWithinHours = ini.GetInt("common","requirepositionfillwithinhours",RequirePositionFillWithinHours);
    if(ini.Has("common","fillwithinminutesbar"))
       FillWithinMinutesBar = ini.GetInt("common","fillwithinminutesbar",FillWithinMinutesBar);
+   if(ini.Has("common","pendingfillgraceseconds"))
+      PendingFillGraceSeconds = ini.GetDouble("common","pendingfillgraceseconds",PendingFillGraceSeconds);
    if(ini.Has("common","waitforseconds"))
       WaitForSeconds = ini.GetInt("common","waitforseconds",WaitForSeconds);
    if(ini.Has("common","waitforminutes"))
@@ -1052,6 +1063,7 @@ void InitSenderSettings(const int si, const CopierIni &ini, const string sec)
    g_senderCfg[si].requirepositionfillwithinminutes = ini.GetInt(sec, "requirepositionfillwithinminutes", RequirePositionFillWithinMinutes);
    g_senderCfg[si].requirepositionfillwithinhours   = ini.GetInt(sec, "requirepositionfillwithinhours", RequirePositionFillWithinHours);
    g_senderCfg[si].fillwithinminutesbar             = ini.GetInt(sec, "fillwithinminutesbar", FillWithinMinutesBar);
+   g_senderCfg[si].pendingfillgraceseconds          = ini.GetDouble(sec, "pendingfillgraceseconds", PendingFillGraceSeconds);
    g_senderCfg[si].waitforseconds                   = ini.GetInt(sec, "waitforseconds", WaitForSeconds);
    g_senderCfg[si].waitforminutes                   = ini.GetInt(sec, "waitforminutes", WaitForMinutes);
    g_senderCfg[si].waitforhours                     = ini.GetInt(sec, "waitforhours", WaitForHours);
@@ -1178,6 +1190,7 @@ string SerializeCurrentConfigToIni()
          out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[i].requirepositionfillwithinminutes + "\n";
          out += "requirepositionfillwithinhours=" + (string)g_senderCfg[i].requirepositionfillwithinhours + "\n";
          out += "fillwithinminutesbar=" + (string)g_senderCfg[i].fillwithinminutesbar + "\n";
+         out += "pendingfillgraceseconds=" + DoubleToString(g_senderCfg[i].pendingfillgraceseconds, 1) + "\n";
          out += "waitforseconds=" + (string)g_senderCfg[i].waitforseconds + "\n";
          out += "waitforminutes=" + (string)g_senderCfg[i].waitforminutes + "\n";
          out += "waitforhours=" + (string)g_senderCfg[i].waitforhours + "\n";
@@ -1222,6 +1235,7 @@ string SerializeCurrentConfigToIni()
       out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[0].requirepositionfillwithinminutes + "\n";
       out += "requirepositionfillwithinhours=" + (string)g_senderCfg[0].requirepositionfillwithinhours + "\n";
       out += "fillwithinminutesbar=" + (string)g_senderCfg[0].fillwithinminutesbar + "\n";
+      out += "pendingfillgraceseconds=" + DoubleToString(g_senderCfg[0].pendingfillgraceseconds, 1) + "\n";
       out += "waitforseconds=" + (string)g_senderCfg[0].waitforseconds + "\n";
       out += "waitforminutes=" + (string)g_senderCfg[0].waitforminutes + "\n";
       out += "waitforhours=" + (string)g_senderCfg[0].waitforhours + "\n";
@@ -3320,6 +3334,35 @@ void ConvergeSender(const int si)
 
          if(loc[li].kind!=d.kind)
            {
+            //--- PENDING on local, but MARKET on sender: sender's pending order filled.
+            //--- Give local pending order up to PendingFillGraceSeconds to fill naturally
+            //--- before cancelling and re-opening, avoiding unnecessary cancellation & chase slippage.
+            if(loc[li].kind==CP_ORD_PENDING && d.kind==CP_ORD_MARKET)
+              {
+               double graceSec=g_senderCfg[si].pendingfillgraceseconds;
+               if(graceSec>0.0)
+                 {
+                  string graceKey=g_sid[si]+":fillgrace:"+d.uid;
+                  long firstMs=g_fillGraceRing.GetTime(graceKey);
+                  long nowMs=CopierNowMs();
+                  if(firstMs==0)
+                    {
+                     g_fillGraceRing.Add(graceKey);
+                     g_log.Info("uid "+d.uid+" "+d.sym+" filled on sender; waiting up to "
+                                +DoubleToString(graceSec,1)+"s for local pending order to fill naturally");
+                     continue;
+                    }
+                  else if(nowMs-firstMs < (long)(graceSec*1000.0))
+                    {
+                     continue; // still within grace window; let broker fill it naturally
+                    }
+                  // Grace period expired without filling naturally
+                  g_fillGraceRing.Forget(graceKey);
+                  g_log.Warn("uid "+d.uid+" "+d.sym+" fill grace expired ("
+                             +DoubleToString(graceSec,1)+"s) - cancelling pending mirror and re-opening as market");
+                 }
+              }
+
             g_log.Info("uid "+d.uid+" changed kind on the sender ("
                        +(string)loc[li].kind+" -> "+(string)d.kind
                        +"); cancelling the mirror and re-opening it");
@@ -3328,6 +3371,8 @@ void ConvergeSender(const int si)
                        loc[li].lots,loc[li].ticket);
             continue;
            }
+
+         g_fillGraceRing.Forget(g_sid[si]+":fillgrace:"+d.uid);
 
          QueueModifyIfNeeded(si,d,loc[li]);
          QueueTrimIfNeeded(si,d,loc[li]);
@@ -3752,19 +3797,6 @@ void HandleSnapshot(const int si,const CopierEnv &e)
   {
    g_lastSnapMs[si]=CopierNowMs();
 
-   //--- Store this sender's receipt hash BEFORE anything can fail below.
-   //---
-   //--- "Before anything can fail" is the whole point: the receipt means "I
-   //--- received these bytes", and we HAVE received them - they are in
-   //--- e.payload. A record that fails to decode is the sender's problem to
-   //--- fix, not a reason to claim we never got the message. Reporting a
-   //--- stale hash because one record was malformed would make the sender
-   //--- re-send the same snapshot forever.
-   //---
-   //--- Per sender, because this receiver may mirror several: a single shared
-   //--- variable would let one sender's hash answer for another's.
-   g_snapHash[si]=CopierSnapshotHash(e.payload);
-
    //--- Learn the sender's clock offset. Taken here rather than on every
    //--- message because this is the snapshot that survived conflation - the
    //--- newest of its batch, so the one least delayed in the queue. A message
@@ -3814,6 +3846,26 @@ void HandleSnapshot(const int si,const CopierEnv &e)
 
    int n=CopierDecodeSnapshot(e.payload,g_scratch,CP_MAX_POSITIONS);
 
+   string cnt="";
+   int sent=0;
+   if(CopierKvGet(e.payload,"N",cnt)) sent=(int)StringToInteger(cnt);
+
+   //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
+   //--- If sender explicitly declares N > 0, but decode yielded 0 records (e.g.
+   //--- corrupted transmission or CryptDecode failure), DO NOT overwrite g_desired
+   //--- with 0! Doing so would cause converge to treat all local mirrors as
+   //--- 'no longer desired' and close them all (false close-all disaster).
+   //--- Also DO NOT accept the hash, so sender's repair logic will re-send it.
+   if(sent>0 && n==0)
+     {
+      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" declared N="+(string)sent
+                  +" but decoded 0 records (decompression or parse failure)! Rejecting snapshot to prevent false close-all.");
+      return;
+     }
+
+   //--- Store this sender's receipt hash once validated.
+   g_snapHash[si]=CopierSnapshotHash(e.payload);
+
    //--- A sender can hold more than our table. Decode caps at
    //--- CP_MAX_POSITIONS and drops the remainder SILENTLY - the worst
    //--- possible outcome, because the receiver then believes it holds the
@@ -3823,19 +3875,16 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //---
    //--- So compare the sender's own count against what we actually took and
    //--- say so. Rate-limited because it is true on every snapshot.
-   string cnt="";
-   if(CopierKvGet(e.payload,"N",cnt))
+   if(sent>n && g_once.ShouldEmit("overflow|"+g_sid[si]))
      {
-      int sent=(int)StringToInteger(cnt);
-      if(sent>n && g_once.ShouldEmit("overflow|"+g_sid[si]))
-         g_log.Error("sender "+g_sid[si]+" holds "+(string)sent
-                     +" position(s) but this receiver can only track "
-                     +(string)CP_MAX_POSITIONS+". The remaining "
-                     +(string)(sent-n)+" are DROPPED - not queued, not"
-                     +" deferred, simply unknown - so this account will not"
-                     +" mirror them. Raise CP_MAX_POSITIONS, or the two"
-                     +" accounts will differ with nothing in the log saying"
-                     +" why.");
+      g_log.Error("sender "+g_sid[si]+" holds "+(string)sent
+                  +" position(s) but this receiver can only track "
+                  +(string)CP_MAX_POSITIONS+". The remaining "
+                  +(string)(sent-n)+" are DROPPED - not queued, not"
+                  +" deferred, simply unknown - so this account will not"
+                  +" mirror them. Raise CP_MAX_POSITIONS, or the two"
+                  +" accounts will differ with nothing in the log saying"
+                  +" why.");
      }
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<n;i++) g_desired[base+i]=g_scratch[i];
@@ -4711,6 +4760,7 @@ int OnInit()
    //--- enough to survive a retrying close without letting the exemption
    //--- linger into a genuinely separate event.
    g_reopenExpected.SetTtlMs(5*60*1000);
+   g_fillGraceRing.SetTtlMs(60000);
    //--- A dropped UID is abandoned for the session, effectively: the TTL only
    //--- exists because the ring is fixed-size. Re-deriving it sooner would
    //--- undo the give-up and re-alert on every pass.

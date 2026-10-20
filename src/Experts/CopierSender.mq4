@@ -253,6 +253,7 @@ bool             g_magicFilterActive=false;
 
 long             g_lastSnapMs=0;
 long             g_lastHbtMs=0;
+long             g_fillSnapshotDueMs=0; // 500ms buffered snapshot deadline after pending fill
 
 //--- SNAPSHOT RECEIPT (slice A: observe; slice B: repair).
 //---
@@ -1307,10 +1308,22 @@ void OnTimer()
       //--- itself. This line settles that, which is why it is logged every
       //--- time rather than throttled.
       if(q.kind!=cur[i].kind || q.ticket!=cur[i].ticket)
+        {
          g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
                     +(string)q.kind+" -> "+(string)cur[i].kind+", ticket "
                     +(string)q.ticket+" -> "+(string)cur[i].ticket
                     +" (a pending filling looks like this once; a repeat does not)");
+         //--- When a pending order fills into a market position, buffer a 0.5s (500ms)
+         //--- debounce before pushing the snapshot, giving receivers time to fill naturally.
+         if(q.kind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
+           {
+            if(g_fillSnapshotDueMs==0)
+              {
+               g_fillSnapshotDueMs=now+500;
+               g_log.Info("uid "+cur[i].uid+" pending filled; scheduled buffered snapshot in 500ms");
+              }
+           }
+        }
      }
 
    //--- 5) roll the window forward
@@ -1318,7 +1331,15 @@ void OnTimer()
    for(int i=0;i<n;i++) g_prev.Upsert(cur[i]);
 
    //--- 6) snapshot
-   if(SnapshotSeconds>0 && now-g_lastSnapMs>=(long)SnapshotSeconds*1000)
+   bool dueSnap=(SnapshotSeconds>0 && now-g_lastSnapMs>=(long)SnapshotSeconds*1000);
+   if(g_fillSnapshotDueMs>0 && now>=g_fillSnapshotDueMs)
+     {
+      dueSnap=true;
+      g_fillSnapshotDueMs=0;
+      g_log.Info("buffered snapshot fired after pending fill (0.5s buffer elapsed)");
+     }
+
+   if(dueSnap)
      {
       g_lastSnapMs=now;
       CopierPos dense[];

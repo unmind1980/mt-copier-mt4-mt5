@@ -278,8 +278,7 @@ receipt from **either** path, and must recognise itself in **either** id: a
 direct receiver names it by its **port**, a central one by its **account  
 number**. Accepting only the port silently discards every central-mode receipt.
 
-The sender currently only **logs** a receipt that is behind (`slice A`, see  
-`doc/SNAPSHOT-DEMAND-PLAN.md`); nothing is re-sent yet.
+When a receipt is behind, the sender repairs it via **Slice B** targeted re-send (debounced by 2× heartbeat interval and rate-limited by `SnapshotSeconds`). A newly connected receiver with `H=""` triggers an **instant bootstrap snapshot** (< 1s) on first contact.
 
 `STAT` is the only message that travels **backwards**, and it needs no extra  
 socket. PUB and SUB are each strictly one-way, which makes "the receiver  
@@ -491,6 +490,20 @@ Startup behaviour: the receiver does **not** act on a sender until it
 has received at least one snapshot (`ready=false`). Without that guard,  
 a restarting receiver would see "local positions I don't know about"  
 and start closing them.
+
+### Pending Order Fill Transition & Grace Window (Sender 0.5s + Receiver 1.5s)
+
+When a pending order fills into a market position on the sender (`CP_ORD_PENDING -> CP_ORD_MARKET`):
+1. **Sender 0.5s Debounce Buffer**: The sender does not immediately broadcast at 0ms. It buffers 500ms before pushing the snapshot with the updated `MARKET` kind, allowing network propagation and broker quote feeds to reach the receiver.
+2. **Receiver 1.5s Fill Grace Window (`PendingFillGraceSeconds`, default 1.5s)**: When the receiver learns that the sender's pending order filled into a market position while its local mirror is still a pending order, it **does not cancel immediately**. Instead, it keeps the local pending order in place for up to 1.5 seconds, giving the receiver's local broker time to match and fill the pending order naturally at the original trigger price.
+   - If the local pending order fills naturally within the window, the local position becomes a market position with zero cancel/re-open overhead and zero chase slippage.
+   - If 1.5s elapses without filling, the receiver cancels the pending mirror and re-opens it as a market position to converge state. Setting `PendingFillGraceSeconds=0` restores immediate cancellation.
+
+### Corrupt Snapshot Defense (False Close-All Guard)
+
+If an incoming snapshot explicitly declares `N > 0`, but decoding yields `0` valid records (e.g., due to decompression failure, network truncation, or corrupted payload), the receiver **rejects the snapshot**:
+- `g_desired` is **not** overwritten with 0, preventing the convergence loop from interpreting the decode failure as an empty account and closing all legitimate local mirrors ("false close-all disaster").
+- The receipt hash `g_snapHash` is **not** updated, ensuring the receiver continues reporting its previous hash so the sender's repair mechanism will re-transmit the snapshot.
 
 ## Identity
 

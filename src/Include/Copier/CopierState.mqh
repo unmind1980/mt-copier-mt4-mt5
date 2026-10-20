@@ -259,6 +259,18 @@ public:
       return false;
      }
 
+   long              GetTime(const string key) const
+     {
+      long now=CopierNowMs();
+      for(int i=0;i<CP_SEEN_RING;i++)
+        {
+         if(StringLen(m_k[i])==0) continue;
+         if(now-m_t[i]>m_ttlMs) continue;
+         if(m_k[i]==key) return m_t[i];
+        }
+      return 0;
+     }
+
    void              Add(const string key)
      {
       m_k[m_head]=key;
