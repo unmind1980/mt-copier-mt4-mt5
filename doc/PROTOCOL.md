@@ -407,7 +407,7 @@ is the **same** number for every receiver of that snapshot.
 A `STAT` receipt for the same snapshot, sent back upwards:
 
 ```
-V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=7c315c76;HELD=2;LOTS=0.60;ORPHAN=0;EQ=10042.11;BL=10000.00;NSEND=1;BLOCKED=0;RISK=ok
+V=1|SID=receiver|SSID=d9e8f7|SEQ=4|TS=1780000001|T=STAT|P=LOGIN=9918271;SID=alpari01;H=7c315c76;HELD=2;LOTS=0.60;ORPHAN=0;EQ=10042.11;BL=10000.00;PING=8;NSEND=1;BLOCKED=0;RISK=ok
 ```
 
 ## Socket topology
