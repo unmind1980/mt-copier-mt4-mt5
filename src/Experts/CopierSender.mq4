@@ -401,6 +401,10 @@ void HubAnnounce(const bool isReg)
                                CopierTerminalName(),up)
              :CopierPayloadHbt2("sender",CopierAccountLogin(),
                                 CopierTerminalName(),up);
+
+   long rtt=g_peers.RttFor(g_hubPeerName);
+   if(rtt>=0) e.payload+=CP_SEP_KV+"PING="+(string)rtt;
+
    //--- Dropped silently on purpose. Losing one heartbeat is nothing, and a
    //--- log line per failure would be a line per five seconds on a hub that is
    //--- simply not running yet. The hub's own WHO sweep is the recovery path.

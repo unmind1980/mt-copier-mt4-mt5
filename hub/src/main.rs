@@ -1648,6 +1648,10 @@ fn main() {
                                         s.reg.note_paused(&role, &acc, paused == "1");
                                     }
                                 }
+                                if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
+                                    let mut s = shared.lock().unwrap();
+                                    s.reg.note_ping(&role, &acc, ping_ms);
+                                }
 
                                 //--- THE CONFIG COMPARISON (§7.3). Only for a
                                 //--- receiver: a sender has no ini to manage.
@@ -1940,6 +1944,9 @@ fn main() {
                                             held_items,
                                             wait_items,
                                         );
+                                    }
+                                    if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
+                                        s.reg.note_ping("receiver", &login, ping_ms);
                                     }
                                     //--- LOGIN is the receiver's own account
                                     //--- and must be PRESENT: a STAT without

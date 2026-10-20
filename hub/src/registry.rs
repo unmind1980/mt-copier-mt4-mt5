@@ -96,6 +96,9 @@ pub struct Node {
     /// `pause` landed; the operator should be able to SEE that a node is
     /// paused without grepping a log. A sender never sets it.
     pub paused: bool,
+    /// Round-trip ping latency measured by the node against the hub in milliseconds
+    /// (PING= on REG/HBT2/STAT), or None if not measured yet.
+    pub ping_ms: Option<u64>,
     /// The receiver's own held-mirror count, from the `HELD=`/`LOTS=` fields
     /// of its STAT. `None` until the first STAT with figures arrives - which
     /// is "nothing to report yet", not zero, exactly like a sender whose
@@ -453,6 +456,13 @@ impl Registry {
         }
     }
 
+    /// Record the node's own ping round-trip latency against the hub in ms.
+    pub fn note_ping(&mut self, role: &str, acc: &str, ping_ms: u64) {
+        if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.ping_ms = Some(ping_ms);
+        }
+    }
+
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {
         let key = key_of(role, acc);
         self.nodes.entry(key.clone()).or_insert_with(|| Node {
@@ -470,6 +480,7 @@ impl Registry {
             drift_secs: None,
             drift_prev_secs: None,
             paused: false,
+            ping_ms: None,
             held: None,
             held_lots: 0.0,
             orphaned: None,
@@ -664,6 +675,16 @@ mod tests {
         r.on_reg("sender", "888888", "2.0", "A", 1, now);
         r.on_reg("receiver", "888888", "2.0", "B", 1, now);
         assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn ping_latency_is_recorded_and_retained() {
+        let mut r = Registry::new();
+        let now = t0();
+        r.on_reg("receiver", "123456", "2.0", "Node1", 1, now);
+        assert_eq!(r.get("receiver:123456").unwrap().ping_ms, None);
+        r.note_ping("receiver", "123456", 18);
+        assert_eq!(r.get("receiver:123456").unwrap().ping_ms, Some(18));
     }
 
     #[test]

@@ -194,6 +194,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **图表面板刷新统一 1.5 秒节流（EA 端改动，与 Hub 进程无关）**：
      - Sender 和 Receiver 两端的 `UpdatePanel()` 统一采用 1500ms（1.5秒）节流刷新，彻底消除 10Hz 频繁重绘导致的 Windows GDI 渲染负担。
 
+### 2.18 全网终端往返延迟 (Ping/RTT) 遥测穿透与四色健康度渲染 (Latency Telemetry & 4-Tier Health Badges)
+- **底层探针复用**：复用 Sender 与 Receiver 原生每 10 秒向 Hub 发送的 `@hub` `CP_T_PING` 探针（`now - echoed_ms`），微秒级回环得出真实单向往返 RTT；
+- **全链路心跳上报**：在每 5 秒的 `HubAnnounce`（`REG` / `HBT2`）以及 Receiver 的 `STAT` 汇总中携带 `PING=<ms>`；
+- **Hub 注册表更新与输出**：Hub `registry.rs` 保存 `ping_ms` 并通过 `/api/v1/nodes` 序列化输出；
+- **WebUI 紧凑呈现与四色阈值**：
+  - 完美融入 `Terminals & Nodes` 表格的 `STATE` 列（例如 `online · 2ms · quiet 0s ago`），零破坏移动端自适应布局；
+  - **绿 (<120ms)**：低延迟优质网络；
+  - **黄 (120ms~250ms)**：中等跨区机房延迟；
+  - **红 (>250ms)**：高延迟警示；
+  - **灰 (-)**：断开或未测出。
+
 ---
 
 ## 3. 核心文件与改动清单 (Manifest of Modified Components)

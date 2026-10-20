@@ -4800,6 +4800,8 @@ void HubAnnounce(const bool isReg)
    //--- The hub ignores the field from a sender, and an OLD hub ignores it
    //--- entirely - unknown payload fields are skipped by design.
    e.payload+=CP_SEP_KV+"PAUSED="+(g_cmdPaused?"1":"0");
+   long rtt=g_peers.RttFor(g_hubPeerName);
+   if(rtt>=0) e.payload+=CP_SEP_KV+"PING="+(string)rtt;
    if(isReg)
       e.payload+=CP_SEP_KV+"INI="+CopierIniEscape(SerializeCurrentConfigToIni());
    //--- Dropped silently on purpose: one lost heartbeat is nothing, and a log
@@ -6094,6 +6096,9 @@ void OnTimer()
                +CP_SEP_KV+"WMKT="+(string)g_mktHeld
                +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
+
+            long rtt=g_peers.RttFor(g_hubPeerName);
+            if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
 
             //--- Detailed position & waiting item lists are transmitted once a minute
             //--- or on-demand when requested by WebUI (g_forcePosReport) in Hub mode

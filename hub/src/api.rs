@@ -227,6 +227,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
         //--- hub pause - the flag exists so the dashboard can badge the row
         //--- without the operator reading the hub log.
         "paused": n.paused,
+        "ping_ms": n.ping_ms,
         "equity": n.equity,
         "balance": n.balance,
         "waiting": waiting,

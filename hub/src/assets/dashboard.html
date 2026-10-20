@@ -101,6 +101,12 @@
   .role-pill.receiver{background:#fdf4ff;color:#86198f;border:1px solid #f5d0fe}
   .ver-tag{font-size:11px;color:var(--dim);margin-left:4px;font-weight:normal}
 
+  .ping-tag{display:inline-block;padding:0 5px;border-radius:4px;font-family:var(--mono);font-size:11px;font-weight:600;margin:0 1px;line-height:1.4}
+  .ping-tag.ping-ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-border)}
+  .ping-tag.ping-warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-border)}
+  .ping-tag.ping-bad{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-border)}
+  .ping-tag.ping-none{background:var(--bg);color:var(--dim);border:1px solid var(--line)}
+
   .wait-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;font-family:var(--mono);font-size:11.5px;line-height:1.35;white-space:normal}
   .wait-chip.warn{background:#fff7e0;color:#92400e;border:1px solid #ecd9a0}
   .wait-chip.ok{background:#e8f5e9;color:#1e5e34;border:1px solid #b7ddc2}
@@ -1463,7 +1469,20 @@ function sortPos(n){ return n.slice().sort(function(x, y){ return cmp(x.sid, y.s
 // and disappears is not.
 function stateText(n){
   var q = Math.max(0, Math.round(n.quiet_secs || 0));
-  return n.liveness + " \u00b7 quiet " + q + "s ago";
+  var pingHtml = "";
+  if(typeof n.ping_ms === "number" && n.ping_ms >= 0 && n.liveness === "online"){
+    var p = n.ping_ms;
+    var cls = "ping-ok";
+    if(p > 250){
+      cls = "ping-bad";
+    } else if(p >= 120){
+      cls = "ping-warn";
+    }
+    pingHtml = " \u00b7 <span class=\"ping-tag " + cls + "\" title=\"Hub round-trip ping latency: " + p + "ms\">" + p + "ms</span>";
+  } else {
+    pingHtml = " \u00b7 <span class=\"ping-tag ping-none\" title=\"Ping latency not measured yet or node offline\">-</span>";
+  }
+  return esc(n.liveness) + pingHtml + " \u00b7 quiet " + q + "s ago";
 }
 
 function formatWaiting(n){
@@ -2350,7 +2369,7 @@ function renderNodes(nodes){
       r.wt.innerHTML = formatWaiting(n);
     }
 
-    r.st.textContent = stateText(n);
+    r.st.innerHTML = stateText(n);
   });
 }
 
