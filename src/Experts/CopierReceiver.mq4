@@ -1491,7 +1491,8 @@ int LocalForSender(const int si,const CopierPos &all[],const int n,CopierPos &ou
      {
       if(all[i].magic!=g_magic[si]) continue;
 
-      string uid=ResolveUid(all[i]);
+      string uid=all[i].uid;
+      if(StringLen(uid)==0) uid=ResolveUid(all[i]);
       if(StringLen(uid)==0) continue;
 
       CopierPos p=all[i];
@@ -1765,24 +1766,24 @@ void CmdStateLoad()
 
 void SaveReceiverMap()
   {
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
-   //--- cleared per use: see the note on g_saveScratch
+   //--- Reuse the account positions resolved during RefreshRisk to avoid
+   //--- redundant terminal scans and string parsing every 10 seconds.
    g_saveScratch.Clear();
 
-   for(int i=0;i<an;i++)
+   for(int i=0;i<g_acctAllPosCount;i++)
      {
       int si=-1;
       for(int k=0;k<g_nSenders;k++)
         {
-         if(all[i].magic==g_magic[k]) { si=k; break; }
+         if(g_acctAllPos[i].magic==g_magic[k]) { si=k; break; }
         }
       if(si<0) continue;                        // not ours
 
-      string uid=ResolveUid(all[i]);
+      string uid=g_acctAllPos[i].uid;
+      if(StringLen(uid)==0) uid=ResolveUid(g_acctAllPos[i]);
       if(StringLen(uid)==0) continue;           // unmanageable; reported elsewhere
 
-      CopierPos p=all[i];
+      CopierPos p=g_acctAllPos[i];
       p.uid=uid;
       g_saveScratch.Upsert(p);
      }
@@ -3031,8 +3032,134 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
 // immediately on a server-day change, where the cached value would be
 // yesterday's and would mis-trip the daily switch for up to a minute.
 //=====================================================================
+struct CopierCachedOrder
+  {
+   long              ticket;
+   long              magic;
+   int               side;
+   double            lots;
+   double            openPx;
+   double            sl;
+   double            tp;
+   long              openTime;
+   int               kind;
+   int               ptype;
+   double            pprice;
+   long              pexpire;
+   string            sym;
+   string            cmt;
+   string            uid;
+   bool              isOrphan;
+  };
+
+CopierCachedOrder g_posCache[];
+int               g_posCacheCount=0;
+long              g_lastFullScanMs=0;
+int               g_lastOrdersTotal=-1;
+
 CopierPos g_acctAllPos[];
 int       g_acctAllPosCount=0;
+
+int ScanAndResolveAccountPositions()
+  {
+   long now=CopierNowMs();
+   int currentTotal=0;
+#ifdef __MQL5__
+   currentTotal=PositionsTotal()+OrdersTotal();
+#else
+   currentTotal=OrdersTotal();
+#endif
+   //--- Fallback full scan every 30s or whenever total order count changes
+   bool forceFullScan=(now-g_lastFullScanMs>=30000) || (currentTotal!=g_lastOrdersTotal);
+   if(forceFullScan)
+     {
+      g_lastFullScanMs=now;
+      g_lastOrdersTotal=currentTotal;
+     }
+
+   CopierPos raw[];
+   int an=CopierReadPositions(raw,CP_MAX_POSITIONS);
+
+   CopierCachedOrder nextCache[];
+   ArrayResize(nextCache,an,64);
+   ArrayResize(g_acctAllPos,an,64);
+   g_acctAllPosCount=an;
+
+   for(int i=0;i<an;i++)
+     {
+      int matchIdx=-1;
+      if(!forceFullScan)
+        {
+         for(int c=0;c<g_posCacheCount;c++)
+           {
+            if(g_posCache[c].ticket==raw[i].ticket
+               && g_posCache[c].magic==raw[i].magic
+               && g_posCache[c].side==raw[i].side
+               && g_posCache[c].kind==raw[i].kind
+               && g_posCache[c].ptype==raw[i].ptype
+               && g_posCache[c].openTime==raw[i].openTime
+               && g_posCache[c].pexpire==raw[i].pexpire
+               && g_posCache[c].lots==raw[i].lots
+               && g_posCache[c].openPx==raw[i].openPx
+               && g_posCache[c].sl==raw[i].sl
+               && g_posCache[c].tp==raw[i].tp
+               && g_posCache[c].pprice==raw[i].pprice)
+              {
+               matchIdx=c;
+               break;
+              }
+           }
+        }
+
+      if(matchIdx>=0)
+        {
+         //--- FAST PATH: all numeric fields matched perfectly!
+         //--- Zero string allocations; reuse cached UID and orphan flag.
+         nextCache[i]=g_posCache[matchIdx];
+         raw[i].uid=g_posCache[matchIdx].uid;
+         g_acctAllPos[i]=raw[i];
+        }
+      else
+        {
+         //--- SLOW PATH: new ticket or numeric fields changed (SL/TP/lots/kind).
+         //--- Read comment, resolve UID, update cached fields.
+         string uid=ResolveUid(raw[i]);
+         raw[i].uid=uid;
+         g_acctAllPos[i]=raw[i];
+
+         bool isOurs=false;
+         for(int k=0;k<g_nSenders;k++)
+           {
+            if(raw[i].magic==g_magic[k]) { isOurs=true; break; }
+           }
+         bool orphan=(!isOurs && StringLen(CopierUidFromComment(raw[i].cmt))>0);
+
+         nextCache[i].ticket   =raw[i].ticket;
+         nextCache[i].magic    =raw[i].magic;
+         nextCache[i].side     =raw[i].side;
+         nextCache[i].lots     =raw[i].lots;
+         nextCache[i].openPx   =raw[i].openPx;
+         nextCache[i].sl       =raw[i].sl;
+         nextCache[i].tp       =raw[i].tp;
+         nextCache[i].openTime =raw[i].openTime;
+         nextCache[i].kind     =raw[i].kind;
+         nextCache[i].ptype    =raw[i].ptype;
+         nextCache[i].pprice   =raw[i].pprice;
+         nextCache[i].pexpire  =raw[i].pexpire;
+         nextCache[i].sym      =raw[i].sym;
+         nextCache[i].cmt      =raw[i].cmt;
+         nextCache[i].uid      =uid;
+         nextCache[i].isOrphan =orphan;
+        }
+     }
+
+   // Commit nextCache to g_posCache
+   ArrayResize(g_posCache,an,64);
+   for(int i=0;i<an;i++) g_posCache[i]=nextCache[i];
+   g_posCacheCount=an;
+
+   return an;
+  }
 
 string EncodeReceiverPositions()
   {
@@ -3100,11 +3227,7 @@ string EncodeReceiverWaitList()
 
 void RefreshRisk()
   {
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
-   g_acctAllPosCount=an;
-   ArrayResize(g_acctAllPos,an,64);
-   for(int i=0;i<an;i++) g_acctAllPos[i]=all[i];
+   int an=ScanAndResolveAccountPositions();
    int cnt=0;
    int orphan=0;
    double lots=0.0;
@@ -3113,21 +3236,21 @@ void RefreshRisk()
      {
       //--- counted for EVERYTHING on the account, not just ours: a broker's
       //--- position cap does not care who opened the position
-      if(all[i].kind==CP_ORD_PENDING) nOrd++; else nPos++;
+      if(g_acctAllPos[i].kind==CP_ORD_PENDING) nOrd++; else nPos++;
       bool ours=false;
       for(int k=0;k<g_nSenders;k++)
         {
-         if(all[i].magic==g_magic[k]) { ours=true; break; }
+         if(g_acctAllPos[i].magic==g_magic[k]) { ours=true; break; }
         }
       if(!ours)
         {
          //--- Match the dashboard panel's orphan definition: only positions
          //--- carrying our copier UID comment count, never another EA's trades.
-         if(StringLen(CopierUidFromComment(all[i].cmt))>0) orphan++;
+         if(g_posCache[i].isOrphan) orphan++;
          continue;
         }
       cnt++;
-      lots+=all[i].lots;
+      lots+=g_acctAllPos[i].lots;
      }
    g_acctPositions=nPos;
    g_acctOrders=nOrd;
@@ -3301,10 +3424,8 @@ void ConvergeSender(const int si)
    //--- act on positions this account already holds.
    bool mayOpen=!g_stale[si];
 
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
    CopierPos loc[];
-   int ln=LocalForSender(si,all,an,loc);
+   int ln=LocalForSender(si,g_acctAllPos,g_acctAllPosCount,loc);
    int base=si*CP_MAX_POSITIONS;
 
    double sLots=0.0;
@@ -3572,7 +3693,7 @@ void ConvergeSender(const int si)
       if(g_senderCfg[si].checkforexistingposition!=EXIST_OFF)
         {
          bool sameDirOnly=(g_senderCfg[si].checkforexistingposition==EXIST_SAME_DIR);
-         if(AccountExposure(all,an,rsym,d.side,sameDirOnly)>0)
+         if(AccountExposure(g_acctAllPos,g_acctAllPosCount,rsym,d.side,sameDirOnly)>0)
            {
             if(g_once.ShouldEmit("gateexist|"+g_sid[si]+"|"+rsym))
                g_log.Info("sender "+g_sid[si]+" CheckForExistingPosition: account already holds"

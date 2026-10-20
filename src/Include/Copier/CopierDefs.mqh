@@ -874,7 +874,10 @@ bool CopierUidValid(const string uid)
    if(StringLen(uid)!=CP_UID_LEN) return false;
    for(int i=0;i<CP_UID_LEN;i++)
      {
-      if(StringFind(CP_UID_ALPHA,StringSubstr(uid,i,1))<0) return false;
+      ushort c=StringGetCharacter(uid,i);
+      if((c>='0' && c<='9') || (c>='A' && c<='Z' && c!='I' && c!='L' && c!='O' && c!='U'))
+         continue;
+      return false;
      }
    return true;
   }

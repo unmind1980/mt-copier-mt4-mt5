@@ -151,6 +151,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - 严禁将本地期望持仓 `g_desired` 清空为 0，彻底根除“收到坏快照导致本地持仓被误全平”的致命隐患；
   - 拒绝更新 `g_snapHash`，迫使 Sender 在后续周期自动触发快照修复补发。
 
+### 2.15 Client 端持仓巡仓 CPU 极致减负与零字符串稳态缓存 (Zero-Allocation Fast/Slow Path Cache & Scan Consolidation)
+- **业务痛点**：在持仓 200~300 单大持仓场景下，原版每个 100ms Tick 均执行 1+N 次 `CopierReadPositions` 全量扫描，并对每一笔订单反复调用 `OrderComment()` 和 `ResolveUid()`（内部包含大量 `StringSubstr` 堆分配与字符串线性匹配），在单核低配 VPS 上带来不必要的 CPU 消耗。
+- **全方位减负技术落地**：
+  1. **`CopierUidValid()` 单字符零分配优化**：改写为 `StringGetCharacter()` 寄存器级单字符区间直接判断，单次调用消除 8 次动态堆内存分配；
+  2. **数值快扫 + Ticket 指纹缓存（快/慢双路径）**：
+     - **快路径（稳态 99%）**：每 Tick 读取廉价纯数值字段（`ticket`, `magic`, `side`, `lots`, `openPx`, `sl`, `tp`, `openTime`, `kind` 等），比对上一轮缓存若数值完全一致，直接复用已解析的 UID 与孤儿状态，**彻底实现零字符串读取、零堆内存分配**；
+     - **慢路径（变动 1%）**：仅在新单、止损/止盈修改、手数缩减或挂单转成交等数值失配时，精准对单笔订单执行 `OrderComment()` 读取与 `ResolveUid()`，并更新缓存；
+     - **兜底重验**：每 30 秒或总订单数（`OrdersTotal`）变化时自动强制全量重校验，杜绝任何状态漂移；
+  3. **同 Tick 读仓合并 (1+N -> 1)**：`RefreshRisk()` 完成快慢扫描后直接输出 `g_acctAllPos`，各 `ConvergeSender(si)` 直接复用，消灭了多 Sender 下重复调用 `CopierReadPositions` 的 N 倍冗余；
+  4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴。
+
 ---
 
 ## 3. 核心文件与改动清单 (Manifest of Modified Components)
@@ -163,11 +174,11 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 持仓** | `hub/src/positions.rs` | 读取 `R=` 时透明解压，解析逐单持仓明细 |
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、只读 `reqpos` 命令放行 |
-| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁 |
+| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁、快慢双路径零字符串缓存与 1+N 扫仓合并 |
 | **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照 |
 | **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()` 方法，提供基于键名的高性能时间戳检索 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
-| **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化 |
+| **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |
 | **风控头文件** | `src/Include/Copier/CopierRisk.mqh` | 信号源级与账户级双层风控守卫模型 |
 | **运维脚本** | `tools/hublog.bat` / `hubrs.bat` | 启动前多实例进程查验，冲突友好报警 |
