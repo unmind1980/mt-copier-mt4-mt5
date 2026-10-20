@@ -707,6 +707,32 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    if(ticket<0)
      {
       outErr=GetLastError();
+      //--- ECN broker / Market Execution fallback: on ECN brokers, OrderSend
+      //--- forbids non-zero SL/TP on market entry and returns err 130 (ERR_INVALID_STOPS).
+      //--- Fall back to opening with SL=0, TP=0, then apply stops via OrderModify.
+      if(outErr==130 && (sl>0.0 || tp>0.0))
+        {
+         RefreshRates();
+         if(CopierGetPrice(sym,side,px))
+           {
+            ticket=OrderSend(sym,cmd,lots,px,deviationPoints,0.0,0.0,comment,(int)magic,0,clrNONE);
+            if(ticket>=0)
+              {
+               outErr=0;
+               //--- Apply the stops immediately on the newly opened position
+               if(OrderSelect(ticket,SELECT_BY_TICKET))
+                 {
+                  int mErr=0;
+                  CopierModifyStops((long)ticket,sym,sl,tp,mErr);
+                 }
+               return true;
+              }
+            else
+              {
+               outErr=GetLastError();
+              }
+           }
+        }
       return false;
      }
    return true;

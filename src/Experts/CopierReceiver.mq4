@@ -2502,8 +2502,14 @@ void ExecuteQueue()
          //--- The key matches the one converge tests, WITHOUT the entry-kind
          //--- suffix the action's own key carries.
          if(a.kind==CP_ACT_OPEN)
+           {
             g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
                              +a.uid);
+            //--- Consumed: the expected re-open has now landed. Clear it so a
+            //--- subsequent manual close within the 5-minute TTL is not
+            //--- mistakenly re-opened under ReopenClosedMirrors=false.
+            g_reopenExpected.Forget(g_sid[a.senderIdx]+":"+a.uid);
+           }
          //--- An executed action just changed what the identity file holds:
          //--- OPEN created a mirror, TRIM moved MT4's remainder onto a new
          //--- ticket, CLOSE removed one. Mark the map dirty so OnTimer
@@ -3976,13 +3982,14 @@ void ConvergeSender(const int si)
            }
         }
 
-      if(g_brokerOrdLimit>0 && (g_acctPositions+g_acctOrders)>=g_brokerOrdLimit)
+      if(g_brokerOrdLimit>0 && (g_acctPositions+g_acctOrders+pendCount)>=g_brokerOrdLimit)
         {
          if(g_once.ShouldEmit("brokerlimit|any"))
             g_log.Warn("at this broker's order limit of "
                        +(string)g_brokerOrdLimit+" (positions "
                        +(string)g_acctPositions+" + pending "
-                       +(string)g_acctOrders+") - not sending more. Skipped,"
+                       +(string)g_acctOrders+" + queued "
+                       +(string)pendCount+") - not sending more. Skipped,"
                        +" not queued, so NOT ONE refused order is produced."
                        +" The sender holds more than this account may carry;"
                        +" the accounts will differ until room appears.");

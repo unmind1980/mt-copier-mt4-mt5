@@ -1355,11 +1355,22 @@ void OnTimer()
 
    //--- 6) snapshot
    bool dueSnap=(SnapshotSeconds>0 && now-g_lastSnapMs>=(long)SnapshotSeconds*1000);
-   if(g_fillSnapshotDueMs>0 && now>=g_fillSnapshotDueMs)
+   //--- If a pending order just filled into a market position, give the receiver
+   //--- the full 500ms debounce before pushing the snapshot. Even if the routine
+   //--- 15s timer happens to elapse during this window, defer it until the
+   //--- buffer expires so the receiver is not rushed into an early cancel.
+   if(g_fillSnapshotDueMs>0)
      {
-      dueSnap=true;
-      g_fillSnapshotDueMs=0;
-      g_log.Info("buffered snapshot fired after pending fill (0.5s buffer elapsed)");
+      if(now>=g_fillSnapshotDueMs)
+        {
+         dueSnap=true;
+         g_fillSnapshotDueMs=0;
+         g_log.Info("buffered snapshot fired after pending fill (0.5s buffer elapsed)");
+        }
+      else
+        {
+         dueSnap=false; // defer routine snapshot until 500ms buffer completes
+        }
      }
 
    if(dueSnap)

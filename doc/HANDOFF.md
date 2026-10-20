@@ -367,6 +367,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **B11** | 低 | `CopierSender.mq4` `OnTimer` + `CopierPosTable` | **已修复**：`CopierPosTable` 新增 `CheckSlot()` 纯数值比对（原位比对 `sl`, `tp`, `lots`, `kind`, `ticket`, `openPx`, `pprice`, `pexpire`）与 `UpdateNumericAt()` 原位更新；稳态（99.9% 的 tick）完全跳过 `g_prev.At()` 的临时结构体构造与第 5 步的 `UpdateAt`，消灭了每 tick 600 次包含 3 个字符串的结构体全量深拷贝；稳态下 `m_tkValid` 保持有效，`BuildCurrent` 跳过 2048 整数清零，彻底实现稳态零深拷贝与索引免重建。 |
 | — | 可忽略 | `CopierUidIndex::Build` 的 `ArrayInitialize` | 每 tick 2 次 × 4096 int 清零（8192 写/tick），量级极小，不需改动。 |
 
+### 三次审计与全面加固（2026-10-20 21:10；A9/A10/A11/B14 全部闭环落地）
+
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A9** | 低-中 | `CopierReceiver.mq4` `ExecuteQueue` | **已修复**：`g_reopenExpected` 原本仅在挂单转市价单撤单时 `Add`，但在随后市价单开仓成功后从未调用 `Forget()`。在 5 分钟 TTL 内若该仓位被手动平掉，`ReopenClosedMirrors=false` 会因其残留而被绕过导致误重开。**修法**：在 `ExecuteQueue` 开仓成功时立即调用 `g_reopenExpected.Forget(g_sid[a.senderIdx]+":"+a.uid)` 消费清除，杜绝误重开。 |
+| **A10** | 低 | `CopierModel.mqh` `CopierOpenMarket` | **已修复**：在 MT4 的 ECN/STP 账户（Market Execution）上，`OrderSend` 直接带非 0 止损止盈会被券商拒单并返回 130（`ERR_INVALID_STOPS`）。**修法**：在 MT4 分支中捕获 130 错误且 `sl/tp > 0` 时，自动降级为以 `sl=0, tp=0` 提交开仓，成交后再调用 `CopierModifyStops` 补充止损止盈。 |
+| **A11** | 低-中 | `CopierReceiver.mq4` `ConvergeSender` | **已修复**：开仓前检查券商订单上限时，原代码只统计了在账单量 `(g_acctPositions+g_acctOrders)>=g_brokerOrdLimit`，未包含队列在途单量 `pendCount`。在大持仓突发多笔开仓时可能导致后续单被券商拒单。**修法**：加上 `pendCount` 严格校验，与全局及分层风控口径完全对齐。 |
+| **B14** | 极低 | `CopierSender.mq4` `OnTimer` | **已修复**：挂单成交转持仓缓冲期内，若偶发赶上常规 15s 定时快照到期，原代码未做避让。**修法**：在 `g_fillSnapshotDueMs > 0 && now < g_fillSnapshotDueMs` 期间，常规 15s 快照主动避让，待 500ms 缓冲到期后统一广播，保障平滑过渡。 |
+
 ---
 
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*
