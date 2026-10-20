@@ -446,8 +446,8 @@ ZmqMsg m1; sub.recv(m1,true);
 
 | T      | 方向       | 主题       | 载荷                                                            | 说明                            |
 | ------ | -------- | -------- | ------------------------------------------------------------- | ----------------------------- |
-| `REG`  | node→hub | `@hub`   | `ROLE=sender\|receiver;ACC=888888;VER=2.0;NAME=MT5-A;UP=1234` | 上线注册；中枢重启后靠它重建注册表             |
-| `HBT2` | node→hub | `@hub`   | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..`                         | 心跳扩展（**不改 `HBT`**，避免破坏 v1 解析）。`NAME` 于 2026-10-13 补上，见下 |
+| `REG`  | node→hub | `@hub`   | `ROLE=sender\|receiver;ACC=888888;VER=2.0;NAME=MT5-A;UP=1234;REV=..;PAUSED=0\|1;PING=..` | 上线注册；中枢重启后靠它重建注册表             |
+| `HBT2` | node→hub | `@hub`   | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..;REV=..;PAUSED=0\|1;PING=..`                         | 心跳扩展（**不改 `HBT`**，避免破坏 v1 解析）。`NAME` 于 2026-10-13 补上，见下 |
 | `CFG`  | hub→node | `@<acc>` | `ID=AA2026;REV=12;INI=<整份 ini 文本>`                            | 配置下发                          |
 | `ACK`  | node→hub | `@hub`   | `ID=AA2026;OK=1;REV=12` 或 `ID=AA2026;OK=0;ERR=...`            | 命令结果                          |
 | `CFGR` | node→hub | `@hub`   | `REQ=1;ACC=..;REV=..`                                         | 节点请求重发配置（自愈 / 漂移修复）           |

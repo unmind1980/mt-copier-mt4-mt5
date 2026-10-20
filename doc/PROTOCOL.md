@@ -47,14 +47,14 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `HBT`     | every `HeartbeatSeconds` (default 5)                                                      | `BAL=..;EQ=..;MGN=..;FRM=..;NPOS=..;ACC=..`                                                                        |
 | `PARTIAL` | reserved (P4)                                                                             |                                                                                                             |
 | `MODIFY`  | event, immediate — a stop moved                                                           | `UID=..;OPN=..;SL=..;TP=..`                                                                                 |
-| `STAT`    | Receipt every `SyncHeartbeatSeconds` (1s); summary every 5s; detail/monitoring 60s/on-demand | `LOGIN=..;SID=..;H=..` always, plus `HELD/LOTS/WAIT/EQ/BL` every 5s, and `POS/WAITLIST` / `NSEND/BLOCKED/RISK` once a minute |
+| `STAT`    | Receipt every `SyncHeartbeatSeconds` (1s); summary every 5s; detail/monitoring 60s/on-demand | `LOGIN=..;SID=..;H=..` always, plus `HELD/LOTS/WAIT/EQ/BL/PING` every 5s, and `POS/WAITLIST` / `NSEND/BLOCKED/RISK` once a minute |
 | `RCPT`    | hub → sender, immediately when the receipt changes, else at most every 3 s (dedup)        | `LOGIN=..;SID=..;H=..`                                                                                      |
 | `CFG`     | hub → node, on a config change and on the retry ladder                                    | `ID=..;REV=..;INI=<escaped ini>`                                                                            |
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
 | `CFGR`    | node → hub, when a node wants its config again                                            | `REQ=1;ROLE=..;ACC=..;REV=..`                                                                               |
 | `CFGRPT`  | node → hub, reports active running configuration (inputs & senders) to hub                | `ROLE=..;ACC=..;REV=..;INI=<escaped ini>`                                                                  |
-| `REG`     | node → hub, on connect (×3) — "here I am"                                                | `ROLE=sender\|receiver;ACC=<acc>;VER=..;NAME=..;UP=..;REV=..` — a receiver's `REG` also carries `INI=<escaped ini>` and `PAUSED=0\|1` |
-| `HBT2`    | node → hub, every 5 s (central channel only)                                              | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..;REV=..;PAUSED=0\|1` |
+| `REG`     | node → hub, on connect (×3) — "here I am"                                                | `ROLE=sender\|receiver;ACC=<acc>;VER=..;NAME=..;UP=..;REV=..;PING=..` — a receiver's `REG` also carries `INI=<escaped ini>` and `PAUSED=0\|1` |
+| `HBT2`    | node → hub, every 5 s (central channel only)                                              | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..;REV=..;PAUSED=0\|1;PING=..` |
 | `WHO`     | hub → all nodes, every 5 s while the table is empty, then every 60 s                       | `NONCE=<n>`                                                                                                  |
 | `PING`    | every 10 s on the peer channel (direct or the hub channel)                               | `MS=..;FROM=..`                                                                                              |
 | `PONG`    | in reply to a `PING`, or to a `WHO`                                                      | `MS=..;FROM=..;TO=hub`                                                                                       |
@@ -264,7 +264,7 @@ apart by CONTENT, not by type** — all are `T=STAT`:
 
 ```
 receipt only           LOGIN=..;SID=..;H=..                                                                        every 1s (SyncHeartbeatSeconds)
-receipt + summary      LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;WAIT=..;EQ=..;BL=..                          every 5s
+receipt + summary      LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;WAIT=..;EQ=..;BL=..;PING=..                  every 5s
 full report + detail   LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;..;POS=..;WAITLIST=..;NSEND=..;BLOCKED=..;RISK=..     once a minute / on-demand
 ```
 
