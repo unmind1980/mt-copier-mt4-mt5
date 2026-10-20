@@ -254,6 +254,7 @@ bool             g_magicFilterActive=false;
 long             g_lastSnapMs=0;
 long             g_lastHbtMs=0;
 long             g_fillSnapshotDueMs=0; // 500ms buffered snapshot deadline after pending fill
+long             g_lastPanelRenderMs=0;
 
 //--- SNAPSHOT RECEIPT (slice A: observe; slice B: repair).
 //---
@@ -1129,6 +1130,12 @@ bool SenderAnswersTo(const string id)
 void UpdatePanel()
   {
    if(!ShowPanel) { return; }
+
+   //--- Throttle GUI panel redraws to at most once per 1.5 seconds (1500ms).
+   //--- Redrawing heavy on-chart objects at 10 Hz burns massive Windows GDI CPU for nothing.
+   long now=CopierNowMs();
+   if(now-g_lastPanelRenderMs<1500) return;
+   g_lastPanelRenderMs=now;
 
    int npos=0,nord=0;
    double lots=0.0;

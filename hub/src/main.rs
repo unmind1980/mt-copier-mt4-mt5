@@ -1318,6 +1318,9 @@ fn main() {
         shared.lock().unwrap().users = store;
     } //--- end of the M9 bootstrap (or its --users none bypass)
 
+    let mut last_rcpt_relayed: std::collections::HashMap<(String, String), (String, Instant)> =
+        std::collections::HashMap::new();
+
     while !EXIT.load(Ordering::SeqCst) {
         match sock.poll(zmq::POLLIN, POLL_MS) {
             Ok(0) => {} // timeout - nothing to do, fall through to stats
@@ -1988,12 +1991,24 @@ fn main() {
                                     )
                                 };
                                 if sid_is_sender || !any_sender_known || warm {
-                                    if let Err(e) =
-                                        send_receipt(&sock, &sid, &login, &h, &mut state)
-                                    {
-                                        eprintln!("[hub] receipt relay failed: {}", e);
-                                    } else {
-                                        st.note_receipt();
+                                    let rcpt_key = (login.clone(), sid.clone());
+                                    let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
+                                        Some((prev_h, last_t)) => {
+                                            // Relay immediately if hash changed or empty (new node/change), or throttle to 3s in steady state
+                                            prev_h != &h || h.is_empty() || last_t.elapsed() >= Duration::from_secs(3)
+                                        }
+                                        None => true, // First time seen
+                                    };
+
+                                    if should_relay {
+                                        if let Err(e) =
+                                            send_receipt(&sock, &sid, &login, &h, &mut state)
+                                        {
+                                            eprintln!("[hub] receipt relay failed: {}", e);
+                                        } else {
+                                            st.note_receipt();
+                                            last_rcpt_relayed.insert(rcpt_key, (h.clone(), Instant::now()));
+                                        }
                                     }
                                 } else if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
                                     //--- Rate-limited: a misconfigured receiver
@@ -2011,11 +2026,9 @@ fn main() {
                             }
                         }
                     } else {
-                        //--- THE FORWARD. Two frames, byte for byte. No parsing
-                        //--- of frame 1 beyond reading T= for the log, and
-                        //--- nothing rebuilt: SEQ, SSID and TS are whatever the
-                        //--- sender sent.
-                        if let Err(e) = sock.send_multipart(vec![topic, payload.clone()], 0) {
+                        //--- THE FORWARD. Two frames, byte for byte. Zero-copy slice transmission.
+                        let fwd_res = sock.send(&topic, zmq::SNDMORE).and_then(|_| sock.send(&payload, 0));
+                        if let Err(e) = fwd_res {
                             eprintln!("[hub] forward failed: {}", e);
                             continue;
                         }
@@ -2026,53 +2039,63 @@ fn main() {
                         //--- M3 POSITION VIEW - read-only, and deliberately
                         //--- AFTER the forward above.
                         //---
-                        //--- The ordering is the point, not an accident. The
-                        //--- bytes are already gone before anything looks at
-                        //--- them, so no bug in the parser can change what a
-                        //--- receiver gets. That is the hub's whole safety
-                        //--- argument and this is the one place that could
-                        //--- have weakened it.
-                        //---
                         //--- Keyed by the envelope's SID, never by the topic:
                         //--- a targeted repair is published on the RECEIVER's
                         //--- nid, and keying by topic would file that receiver
                         //--- as a sender holding somebody else's positions.
                         if ty == "SNAP" {
                             let sid = envelope_hdr(&payload, "SID");
-                            let view = parse_snap(envelope_payload(&payload));
+                            let snap_payload = envelope_payload(&payload);
+                            let new_receipt = crate::positions::extract_receipt(snap_payload);
                             let pos_now = Instant::now();
-                            let (declared, carried, mismatched_now) = {
-                                let mut s = shared.lock().unwrap();
-                                let before = s.pos.mismatched;
-                                s.pos.on_snap(&sid, &view, pos_now);
-                                (view.declared, view.records, s.pos.mismatched - before)
-                            };
-                            if mismatched_now > 0 {
-                                //--- A snapshot whose N= disagreed with what
-                                //--- arrived. This is a DATA-INTEGRITY event,
-                                //--- not a transport one - the frame was
-                                //--- whole, its own header was wrong - so it
-                                //--- belongs in the audit rather than in a
-                                //--- counter nobody watches.
-                                let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
-                                let should_audit = match wire_audit_throttle.get(&throttle_key) {
-                                    Some(t) => t.elapsed() >= Duration::from_secs(10),
-                                    None => true,
-                                };
-                                if should_audit {
-                                    wire_audit_throttle.insert(throttle_key, Instant::now());
-                                    audit.record(
-                                        "", "",
-                                        "snapshot.mismatch",
-                                        &format!("sender:{}", sid),
-                                        None,
-                                        Some(serde_json::json!({
-                                            "declared": declared,
-                                            "carried": carried,
-                                        })),
-                                        "mismatch",
-                                    );
+
+                            let should_parse = {
+                                let s = shared.lock().unwrap();
+                                match s.pos.view_for(&sid) {
+                                    Some(existing) => existing.receipt != new_receipt || new_receipt.is_empty(),
+                                    None => true, // First snapshot seen from this sender
                                 }
+                            };
+
+                            if should_parse {
+                                let view = parse_snap(snap_payload);
+                                let (declared, carried, mismatched_now) = {
+                                    let mut s = shared.lock().unwrap();
+                                    let before = s.pos.mismatched;
+                                    s.pos.on_snap(&sid, &view, pos_now);
+                                    (view.declared, view.records, s.pos.mismatched - before)
+                                };
+                                if mismatched_now > 0 {
+                                    //--- A snapshot whose N= disagreed with what
+                                    //--- arrived. This is a DATA-INTEGRITY event,
+                                    //--- not a transport one - the frame was
+                                    //--- whole, its own header was wrong - so it
+                                    //--- belongs in the audit rather than in a
+                                    //--- counter nobody watches.
+                                    let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
+                                    let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                        Some(t) => t.elapsed() >= Duration::from_secs(10),
+                                        None => true,
+                                    };
+                                    if should_audit {
+                                        wire_audit_throttle.insert(throttle_key, Instant::now());
+                                        audit.record(
+                                            "", "",
+                                            "snapshot.mismatch",
+                                            &format!("sender:{}", sid),
+                                            None,
+                                            Some(serde_json::json!({
+                                                "declared": declared,
+                                                "carried": carried,
+                                            })),
+                                            "mismatch",
+                                        );
+                                    }
+                                }
+                            } else {
+                                // Touch timestamp so eviction does not prune it while unchanged
+                                let mut s = shared.lock().unwrap();
+                                s.pos.touch(&sid, pos_now);
                             }
                             poke();
                         }

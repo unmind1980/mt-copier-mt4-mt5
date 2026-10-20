@@ -5338,10 +5338,10 @@ void UpdatePanel()
   {
    if(!ShowPanel) return;
 
-   //--- Throttle GUI panel redraws to at most twice a second (500ms).
+   //--- Throttle GUI panel redraws to at most once per 1.5 seconds (1500ms).
    //--- Redrawing heavy on-chart objects at 10 Hz burns massive Windows GDI CPU for nothing.
    long now=CopierNowMs();
-   if(now-g_lastPanelRenderMs<500) return;
+   if(now-g_lastPanelRenderMs<1500) return;
    g_lastPanelRenderMs=now;
 
    //--- Directly reuse the figures already computed during RefreshRisk!

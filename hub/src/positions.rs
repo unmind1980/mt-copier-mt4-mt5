@@ -143,6 +143,17 @@ impl Positions {
         e.items = v.items.clone();
     }
 
+    pub fn view_for(&self, sid: &str) -> Option<&SenderView> {
+        self.by_sender.get(sid)
+    }
+
+    pub fn touch(&mut self, sid: &str, now: Instant) {
+        if let Some(e) = self.by_sender.get_mut(sid) {
+            e.updated = now;
+            e.snaps += 1;
+        }
+    }
+
     /// Forget senders whose view has not been refreshed.
     pub fn evict(&mut self, now: Instant) -> usize {
         let before = self.by_sender.len();
@@ -219,6 +230,15 @@ impl Positions {
 pub fn lots_str(l: f64) -> String {
     let s = format!("{:.2}", l);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Extract only the receipt hash (H=) without decompressing or parsing the body.
+pub fn extract_receipt(payload: &[u8]) -> String {
+    if let Some((s, e)) = value_span(payload, b"H") {
+        latin1(&payload[s..e])
+    } else {
+        String::new()
+    }
 }
 
 /// Read one snapshot payload. Never panics; malformed input yields what could be

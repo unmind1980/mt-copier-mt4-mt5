@@ -179,6 +179,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 仅当新 Ticket 出现时，才单次读取该单的 comment 以检查 MT4 部分平仓 `"from #<old>"` 链；
   3. **成效**：Sender 每 Tick 字符串比较从 18 万次彻底归零，稳态下 comment 读取完全归零，彻底根治 CPU 异常翻倍问题。
 
+### 2.17 Hub 端进阶性能优化 (Receipt De-duplication, Parse-on-Change, and Zero-Copy Relay)
+- **业务背景**：随着全网节点增多（几十个 Receiver 订阅同一 Hub 时），Receiver 每秒上报的 `STAT` 转化为 `T=RCPT` 会对 Sender 形成持续灌包；同时 Sender 每 15 秒广播的快照包在稳态无变动时，Hub 重复解压解析属于纯 CPU 浪费。
+- **三大进阶优化技术落地**：
+  1. **收据去重中继 (`T=RCPT` 3s 稳态节流)**：
+     - Hub 在内存中记录 `(receiver, sender)` 上次中继的 Hash 与时间戳；
+     - 当 Hash 改变或为空时，**0 毫秒即刻中继**保证漏单补发不受任何影响；在稳态下相同 Hash 节流至每 3 秒一次，向 Sender 的灌包流量锐减 66%；
+  2. **快照按需解压解析 (`Parse-on-Change`)**：
+     - 快照到达时，Hub 仅轻量提取末尾的 `H=<hash>`（微秒级）；
+     - 若该 Sender 的当前 Hash 与内存中上一版完全一致，判定持仓零变动，直接 `touch()` 刷新活跃时间戳，**彻底跳过 CPU 密集型的 Zlib 解压与逐单解析**；仅在 Hash 变化时才触发完整解压；
+  3. **转发数据零拷贝传输 (`Zero-Copy Relay`)**：
+     - 采用 `sock.send(&topic, zmq::SNDMORE).and_then(|_| sock.send(&payload, 0))` 替代原本的 `vec![topic, payload.clone()]`，直接传递切片指针，消灭了数据通道中大包的堆内存分配与深度克隆。
+  4. **图表面板刷新统一 1.5 秒节流**：
+     - Sender 和 Receiver 两端的 `UpdatePanel()` 统一采用 1500ms（1.5秒）节流刷新，彻底消除 10Hz 频繁重绘导致的 Windows GDI 渲染负担。
+
 ---
 
 ## 3. 核心文件与改动清单 (Manifest of Modified Components)
