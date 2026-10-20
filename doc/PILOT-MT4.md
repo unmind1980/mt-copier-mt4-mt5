@@ -261,7 +261,7 @@ running. Set a stop-loss and a take-profit on the sender, then:
 |---|---|
 | mirror carries both | receiver `exec set-stops <sid> <uid> <sym> sl=.. tp=..` |
 | the value is a **distance**, not a price | the mirror's stop is the same number of points from **its own** entry, which will be a different absolute price |
-| the sender moves its stop | the receiver follows on the `MODIFY` event, sub-second; the snapshot (default 10 s) is the fallback that converges it either way |
+| the sender moves its stop | the receiver follows on the `MODIFY` event, sub-second; the snapshot (default 15 s) is the fallback that converges it either way |
 | the sender **removes** its stop | the receiver removes its own too — faithful convergence, not a bug |
 | the stop is inside this broker's minimum distance | one warning that it was widened; the mirror is **wider** than the sender's |
 | timing at open | the mirror appears ~100 ms after the position, not with it |

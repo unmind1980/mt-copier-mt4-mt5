@@ -156,13 +156,14 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 - **全方位减负技术落地**：
   1. **`CopierUidValid()` 单字符零分配优化**：改写为 `StringGetCharacter()` 寄存器级单字符区间直接判断，单次调用消除 8 次动态堆内存分配；
   2. **数值快扫 + Ticket 指纹缓存（快/慢双路径）**：
-     - **快路径（稳态 99%）**：每 Tick 读取廉价纯数值字段（`ticket`, `magic`, `side`, `lots`, `openPx`, `sl`, `tp`, `openTime`, `kind` 等），比对上一轮缓存若数值完全一致，直接复用已解析的 UID 与孤儿状态，**彻底实现零字符串读取、零堆内存分配**；
-     - **慢路径（变动 1%）**：仅在新单、止损/止盈修改、手数缩减或挂单转成交等数值失配时，精准对单笔订单执行 `OrderComment()` 读取与 `ResolveUid()`，并更新缓存；
+     - **快路径（稳态 99%）**：每 Tick 读取廉价纯数值字段（`ticket`, `magic`, `side`, `lots`, `openPx`, `sl`, `tp`, `openTime`, `kind` 等），比对上一轮缓存若数值完全一致，直接复用已解析的 UID 与孤儿状态，**跳过 `ResolveUid()` 的字符串解析与堆分配**；
+     - **慢路径（变动 1%）**：仅在新单、止损/止盈修改、手数缩减或挂单转成交等数值失配时，精准对单笔订单执行 `ResolveUid()` 并更新缓存；
      - **兜底重验**：每 30 秒或总订单数（`OrdersTotal`）变化时自动强制全量重校验，杜绝任何状态漂移；
+     - **尚未覆盖**：`CopierReadPositions()` 仍在每 Tick 为每笔订单读取一次 `OrderComment()`（`readComment` 默认 true），因此"快路径"目前省掉的是**解析**，不是**读取**。详见 HANDOFF §7 待办第 1 项；
   3. **同 Tick 读仓合并 (1+N -> 1)**：`RefreshRisk()` 完成快慢扫描后直接输出 `g_acctAllPos`，各 `ConvergeSender(si)` 直接复用，消灭了多 Sender 下重复调用 `CopierReadPositions` 的 N 倍冗余；
   4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴；
   5. **消除结构体深拷贝与 $O(N^2)$ 线性循环**：`ScanAndResolveAccountPositions` 引入同下标优先预测 ($O(1)$ 快速命中)，淘汰临时动态数组 `nextCache`，缓存项精简剥离 `sym`/`cmt` 动态字符串深拷贝；
-  6. **`UpdatePanel()` 扫仓消灭与 500ms 刷新节流**：彻底移除 `UpdatePanel` 内部重复的 `CopierReadPositions` 和逐单 `CopierUidFromComment`，并增加 500ms GUI 渲染节流，彻底消除 10Hz 狂刷 Windows GDI 图表导致的额外 CPU 占用。
+  6. **`UpdatePanel()` 扫仓消灭与刷新节流**：彻底移除 `UpdatePanel` 内部重复的 `CopierReadPositions` 和逐单 `CopierUidFromComment`，并加入 GUI 渲染节流（首版 500ms，随后在 §2.17 统一放宽到 1500ms），彻底消除 10Hz 狂刷 Windows GDI 图表导致的额外 CPU 占用。
 
 ### 2.16 Sender 端 CPU 极致减负与零字符串稳态索引 (Ticket-to-Slot Indexing & Selective Comment Reading)
 - **业务痛点**：在持仓 200~300 单大持仓场景下，原版 Sender 每一个 100ms Tick 均执行 4~5 轮针对 2048 槽位定长表的线性字符串比对（opens 查找、stops 修改判断、closes 查找、volume drift 查找、roll-forward 清空重建），单 Tick 产生高达 18 万次 8 字符比较（10Hz 达 180 万次/秒）。同时 `BuildCurrent` 盲目读取 300 笔订单的 `OrderComment()`（而快照根本不需要 comment）。
@@ -190,7 +191,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 若该 Sender 的当前 Hash 与内存中上一版完全一致，判定持仓零变动，直接 `touch()` 刷新活跃时间戳，**彻底跳过 CPU 密集型的 Zlib 解压与逐单解析**；仅在 Hash 变化时才触发完整解压；
   3. **转发数据零拷贝传输 (`Zero-Copy Relay`)**：
      - 采用 `sock.send(&topic, zmq::SNDMORE).and_then(|_| sock.send(&payload, 0))` 替代原本的 `vec![topic, payload.clone()]`，直接传递切片指针，消灭了数据通道中大包的堆内存分配与深度克隆。
-  4. **图表面板刷新统一 1.5 秒节流**：
+  4. **图表面板刷新统一 1.5 秒节流（EA 端改动，与 Hub 进程无关）**：
      - Sender 和 Receiver 两端的 `UpdatePanel()` 统一采用 1500ms（1.5秒）节流刷新，彻底消除 10Hz 频繁重绘导致的 Windows GDI 渲染负担。
 
 ---
@@ -304,4 +305,36 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
    - 当前已打通 Telegram 与本地 WebHook 告警。后续可按需拓展企业微信、钉钉或邮件告警通道。
 
 ---
+
+## 7. 待确认的审计发现（2026-10-20，代码未改动）
+
+> 本节记录全量代码审计发现的逻辑问题与性能热点，**均尚未修改**，等确认后逐项落地。
+> 编号 A = 逻辑/正确性，B = 性能。量级按 300 笔持仓、10Hz 估算。
+
+### A. 逻辑与正确性
+
+| # | 严重度 | 位置 | 问题 |
+| :--- | :--- | :--- | :--- |
+| **A1** | 高 | `CopierReceiver.mq4` `OnTimer` 步骤 4 / 4b | `SaveReceiverMap()` 排在 `RefreshRisk()` **之前**。启动时 `g_lastMapSave=0`，第一个 100ms tick 就用**尚未填充**的 `g_acctAllPos`（count=0）重建身份表：`g_recKnown` 被清空，磁盘状态文件被写成 `N=0`。OnInit 刚从 `.st` 恢复的映射在 100ms 内丢失，此后 comment 已被终端覆盖的持仓（MT5 部分平仓）再也无法解析，重启后变 `unmanageable`。 |
+| **A2** | 中 | `HandleSnapshot` | 防误清仓锁只在 `sent>0 && n==0` 时拒绝。若 `N=300` 而只解出 150 条（截断/半解析），仍会接受并把 desired 设为 150，剩余 150 笔本地镜像被判定"不再需要"→ 误平。应改为 `sent != n` 即拒绝。 |
+| **A3** | 低 | `UpdatePanel` | 面板 "Managing open/pending" 改用全账户计数 `g_acctPositions/g_acctOrders`（含其他 EA 的单），原实现只统计 magic 匹配的自家单，标签含义已变。 |
+| **A4** | 低-中 | `ConvergeSender` 3469 行 | 每个已匹配 UID **每 tick** 都 `g_everOpened.Add()`。300 单 × 10Hz 会在约 1.4 秒内覆盖完 4096 槽，`ReopenClosedMirrors=false` 的"曾经开过"判断（3862/3887 行）可能因条目被挤掉而失效。 |
+| **A5** | 低 | `hub/src/main.rs` | `Stats.receipts` 现在统计"中继次数"而非"收到条数"，读数比实际收据低约 66%（已在 PROTOCOL.md 说明）。 |
+
+### B. 性能热点（Receiver 仍明显重于 Sender 的主因）
+
+| # | 量级 | 位置 | 热点与建议 |
+| :--- | :--- | :--- | :--- |
+| **B1** | ~3.7M 次/tick | `ConvergeSender` 3465-3467 | 每笔已匹配单每 tick 调 **3 次 `ForgetPrefix`**，每次扫 4096 槽（含 `StringSubstr` 分配）。建议：只对"有在途动作"的 UID 清前缀；三次合并为一次扫描；给 `CopierSeenRing` 每槽加 32 位 hash 先比 hash。 |
+| **B2** | ~614k 次/tick | `LocalForSender` 1506 行 | 每 tick 对每笔本地单 `g_recKnown.Upsert()` → `Find(uid)` 扫 2048 槽。建议：只在慢路径写入（`SaveReceiverMap` 每 10s 会全量重建）。 |
+| **B3** | ~180k 次/tick | `ConvergeSender` 3455 / 3896、`DedupLocal` 2941 | 三处 O(N²) 字符串比对。建议：converge 前建一次 `uid → index` 索引（开放寻址 1024 桶），三处共用，降到 O(N)。 |
+| **B4** | 300 次/tick | `ScanAndResolveAccountPositions` 3080 行 | 仍以 `readComment=true` 调 `CopierReadPositions`，快路径根本不用 `cmt`。建议：传 `false`，慢路径对新 ticket 定向读一次 comment（与 Sender `BuildCurrent` 同款），POS 遥测每 60s 再按需读。 |
+| **B5** | ~225KB/tick | 3082 行 | 局部 `CopierCachedOrder newCache[CP_MAX_POSITIONS]`（含 string 成员）每次调用重建 2048 项。建议：改为全局 scratch，只写 `0..an-1`。 |
+| **B6** | 300 次/tick | `CopierReadPositions` | 循环内 `ArrayResize(out,n+1,maxOut)`。建议：进循环前预分配、循环后收尾。 |
+| **B7** | 一次性 | `CopierPosTable::InsertEmpty` | 线性找空槽，重启后 300 新单为 300×2048。可维护"首个空槽"游标，收益有限。 |
+| **B8** | — | `hub/src/main.rs` | `last_rcpt_relayed` 无上限，节点改名/重连会留死键。建议加 TTL 或容量上限。 |
+| **B9** | — | `hub/src/main.rs` 2030 行 | 零拷贝转发是两次 `send`：第一帧成功、第二帧失败时 multipart 会残留在队列。阻塞发送下极罕见，可选加固。 |
+
+---
+
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*

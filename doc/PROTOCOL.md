@@ -48,7 +48,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `PARTIAL` | reserved (P4)                                                                             |                                                                                                             |
 | `MODIFY`  | event, immediate — a stop moved                                                           | `UID=..;OPN=..;SL=..;TP=..`                                                                                 |
 | `STAT`    | Receipt every `SyncHeartbeatSeconds` (1s); summary every 5s; detail/monitoring 60s/on-demand | `LOGIN=..;SID=..;H=..` always, plus `HELD/LOTS/WAIT/EQ/BL` every 5s, and `POS/WAITLIST` / `NSEND/BLOCKED/RISK` once a minute |
-| `RCPT`    | hub → sender, on every receipt a receiver reports                                         | `LOGIN=..;SID=..;H=..`                                                                                      |
+| `RCPT`    | hub → sender, immediately when the receipt changes, else at most every 3 s (dedup)        | `LOGIN=..;SID=..;H=..`                                                                                      |
 | `CFG`     | hub → node, on a config change and on the retry ladder                                    | `ID=..;REV=..;INI=<escaped ini>`                                                                            |
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
 | `CFGR`    | node → hub, when a node wants its config again                                            | `REQ=1;ROLE=..;ACC=..;REV=..`                                                                               |
@@ -143,6 +143,26 @@ Three consequences worth stating plainly:
 `H` may legitimately be **empty** in a relayed receipt — that means "no snapshot  
 ingested yet", which the sender is told, because it is not the same as a wrong  
 hash.
+
+### Receipt de-duplication (hub side)
+
+A receiver reports its receipt once a second; relaying all of them to the sender  
+is pure overhead once the two ends agree. The hub therefore remembers the last  
+`(receiver, sender) -> (H, timestamp)` it relayed and applies one rule:
+
+- **`H` changed, or `H` is empty, or this pair has never been relayed → relay at
+  once.** A receiver that just ingested a new snapshot, or one that has just come
+  online with no snapshot at all, is never delayed.
+- **`H` unchanged → relay at most once every 3 s.**
+
+The steady-state throttle therefore removes ~66% of the `RCPT` traffic without  
+touching the repair path: a receiver that is *behind* keeps reporting a hash the  
+hub has already relayed, but the sender's repair is already in flight and the  
+moment the receiver catches up its hash changes, which is relayed immediately.
+
+One side effect worth knowing when reading the console: the hub's `receipts`  
+counter increments per **relay**, not per received `STAT`, so it now reads lower  
+than the number of receipts the receivers actually sent.
 
 ### Addressing on the central channel: `@` is the hub's, and only the hub's
 
@@ -701,7 +721,7 @@ which is not what a copier is for.
 
 A sender that clears its stop clears the mirror's. This is deliberate
 faithful convergence: the snapshot is authoritative and re-sent every
-`SnapshotSeconds` (default 10 s) at the outside, while a `MODIFY` event
+`SnapshotSeconds` (default 15 s) at the outside, while a `MODIFY` event
 carries a stop change on the fast path (measured sub-second) — so a
 transient sender-side glitch is corrected within one period of the slower
 path.
