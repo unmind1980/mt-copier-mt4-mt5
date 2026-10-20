@@ -245,6 +245,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
    ./tools/deploy.sh && ./tools/compile.sh
    # 结果：ALL GREEN - 0 errors across every target (MT5 x64 两个终端, MT4 x86 两个终端全部成功编译)
    ```
+5. **Hub release 二进制与端到端套件**（2026-10-20 重新链接后补跑）：
+   ```bash
+   bash hub/build.sh --release      # 需先停掉运行中的 Hub，Windows 会锁住该文件
+   ```
+   `copier-hub.exe` 重建后用新二进制跑完全部 Hub 套件：
+   `hub_api 64`、`hub_config 63`、`hub_users 57`、`hub_commands 47`、`hub_notifications 22`、`hub_curve 21`、
+   `hub_stat_path 20`、`hub_positions 13`、`hub_alerts 12`、`hub_audit_rotation 8`，加上 `hub_proto` 路由判定，
+   **全部 0 fail**。
+
+   > 注：`tools/tests.sh` 一次连跑 13 个套件时，末尾两个可能报 `FAILED` —— 那是本机 safe-delete 钩子在单轮累计
+   > 50 次删除后拦截了测试目录清理，不是代码问题；单独运行同样两个套件均 `rc=0`。
 
 ---
 
