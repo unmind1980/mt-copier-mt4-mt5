@@ -160,7 +160,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - **慢路径（变动 1%）**：仅在新单、止损/止盈修改、手数缩减或挂单转成交等数值失配时，精准对单笔订单执行 `OrderComment()` 读取与 `ResolveUid()`，并更新缓存；
      - **兜底重验**：每 30 秒或总订单数（`OrdersTotal`）变化时自动强制全量重校验，杜绝任何状态漂移；
   3. **同 Tick 读仓合并 (1+N -> 1)**：`RefreshRisk()` 完成快慢扫描后直接输出 `g_acctAllPos`，各 `ConvergeSender(si)` 直接复用，消灭了多 Sender 下重复调用 `CopierReadPositions` 的 N 倍冗余；
-  4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴。
+  4. **`SaveReceiverMap()` 彻底复用缓存**：持久化状态保存直接消费 `g_acctAllPos`，根治了每 10 秒一次的全量扫仓与字符串风暴；
+  5. **消除结构体深拷贝与 $O(N^2)$ 线性循环**：`ScanAndResolveAccountPositions` 引入同下标优先预测 ($O(1)$ 快速命中)，淘汰临时动态数组 `nextCache`，缓存项精简剥离 `sym`/`cmt` 动态字符串深拷贝；
+  6. **`UpdatePanel()` 扫仓消灭与 500ms 刷新节流**：彻底移除 `UpdatePanel` 内部重复的 `CopierReadPositions` 和逐单 `CopierUidFromComment`，并增加 500ms GUI 渲染节流，彻底消除 10Hz 狂刷 Windows GDI 图表导致的额外 CPU 占用。
 
 ### 2.16 Sender 端 CPU 极致减负与零字符串稳态索引 (Ticket-to-Slot Indexing & Selective Comment Reading)
 - **业务痛点**：在持仓 200~300 单大持仓场景下，原版 Sender 每一个 100ms Tick 均执行 4~5 轮针对 2048 槽位定长表的线性字符串比对（opens 查找、stops 修改判断、closes 查找、volume drift 查找、roll-forward 清空重建），单 Tick 产生高达 18 万次 8 字符比较（10Hz 达 180 万次/秒）。同时 `BuildCurrent` 盲目读取 300 笔订单的 `OrderComment()`（而快照根本不需要 comment）。

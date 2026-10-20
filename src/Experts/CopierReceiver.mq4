@@ -3046,16 +3046,15 @@ struct CopierCachedOrder
    int               ptype;
    double            pprice;
    long              pexpire;
-   string            sym;
-   string            cmt;
    string            uid;
    bool              isOrphan;
   };
 
-CopierCachedOrder g_posCache[];
+CopierCachedOrder g_posCache[CP_MAX_POSITIONS];
 int               g_posCacheCount=0;
 long              g_lastFullScanMs=0;
 int               g_lastOrdersTotal=-1;
+long              g_lastPanelRenderMs=0;
 
 CopierPos g_acctAllPos[];
 int       g_acctAllPosCount=0;
@@ -3080,8 +3079,7 @@ int ScanAndResolveAccountPositions()
    CopierPos raw[];
    int an=CopierReadPositions(raw,CP_MAX_POSITIONS);
 
-   CopierCachedOrder nextCache[];
-   ArrayResize(nextCache,an,64);
+   CopierCachedOrder newCache[CP_MAX_POSITIONS];
    ArrayResize(g_acctAllPos,an,64);
    g_acctAllPosCount=an;
 
@@ -3090,39 +3088,60 @@ int ScanAndResolveAccountPositions()
       int matchIdx=-1;
       if(!forceFullScan)
         {
-         for(int c=0;c<g_posCacheCount;c++)
+         //--- Prediction 1: Same index match (O(1) hit for 99.9% of steady-state ticks)
+         if(i<g_posCacheCount && g_posCache[i].ticket==raw[i].ticket)
            {
-            if(g_posCache[c].ticket==raw[i].ticket
-               && g_posCache[c].magic==raw[i].magic
-               && g_posCache[c].side==raw[i].side
-               && g_posCache[c].kind==raw[i].kind
-               && g_posCache[c].ptype==raw[i].ptype
-               && g_posCache[c].openTime==raw[i].openTime
-               && g_posCache[c].pexpire==raw[i].pexpire
-               && g_posCache[c].lots==raw[i].lots
-               && g_posCache[c].openPx==raw[i].openPx
-               && g_posCache[c].sl==raw[i].sl
-               && g_posCache[c].tp==raw[i].tp
-               && g_posCache[c].pprice==raw[i].pprice)
+            if(g_posCache[i].magic==raw[i].magic
+               && g_posCache[i].side==raw[i].side
+               && g_posCache[i].kind==raw[i].kind
+               && g_posCache[i].ptype==raw[i].ptype
+               && g_posCache[i].openTime==raw[i].openTime
+               && g_posCache[i].pexpire==raw[i].pexpire
+               && g_posCache[i].lots==raw[i].lots
+               && g_posCache[i].openPx==raw[i].openPx
+               && g_posCache[i].sl==raw[i].sl
+               && g_posCache[i].tp==raw[i].tp
+               && g_posCache[i].pprice==raw[i].pprice)
               {
-               matchIdx=c;
-               break;
+               matchIdx=i;
+              }
+           }
+
+         //--- Prediction 2: Order shifted; search linearly only if same-index missed
+         if(matchIdx<0)
+           {
+            for(int c=0;c<g_posCacheCount;c++)
+              {
+               if(g_posCache[c].ticket==raw[i].ticket
+                  && g_posCache[c].magic==raw[i].magic
+                  && g_posCache[c].side==raw[i].side
+                  && g_posCache[c].kind==raw[i].kind
+                  && g_posCache[c].ptype==raw[i].ptype
+                  && g_posCache[c].openTime==raw[i].openTime
+                  && g_posCache[c].pexpire==raw[i].pexpire
+                  && g_posCache[c].lots==raw[i].lots
+                  && g_posCache[c].openPx==raw[i].openPx
+                  && g_posCache[c].sl==raw[i].sl
+                  && g_posCache[c].tp==raw[i].tp
+                  && g_posCache[c].pprice==raw[i].pprice)
+                 {
+                  matchIdx=c;
+                  break;
+                 }
               }
            }
         }
 
       if(matchIdx>=0)
         {
-         //--- FAST PATH: all numeric fields matched perfectly!
-         //--- Zero string allocations; reuse cached UID and orphan flag.
-         nextCache[i]=g_posCache[matchIdx];
+         //--- FAST PATH: O(1) hit, zero allocations, reuse cached UID
+         newCache[i]=g_posCache[matchIdx];
          raw[i].uid=g_posCache[matchIdx].uid;
          g_acctAllPos[i]=raw[i];
         }
       else
         {
-         //--- SLOW PATH: new ticket or numeric fields changed (SL/TP/lots/kind).
-         //--- Read comment, resolve UID, update cached fields.
+         //--- SLOW PATH: resolve UID on ticket change or numeric change
          string uid=ResolveUid(raw[i]);
          raw[i].uid=uid;
          g_acctAllPos[i]=raw[i];
@@ -3134,28 +3153,24 @@ int ScanAndResolveAccountPositions()
            }
          bool orphan=(!isOurs && StringLen(CopierUidFromComment(raw[i].cmt))>0);
 
-         nextCache[i].ticket   =raw[i].ticket;
-         nextCache[i].magic    =raw[i].magic;
-         nextCache[i].side     =raw[i].side;
-         nextCache[i].lots     =raw[i].lots;
-         nextCache[i].openPx   =raw[i].openPx;
-         nextCache[i].sl       =raw[i].sl;
-         nextCache[i].tp       =raw[i].tp;
-         nextCache[i].openTime =raw[i].openTime;
-         nextCache[i].kind     =raw[i].kind;
-         nextCache[i].ptype    =raw[i].ptype;
-         nextCache[i].pprice   =raw[i].pprice;
-         nextCache[i].pexpire  =raw[i].pexpire;
-         nextCache[i].sym      =raw[i].sym;
-         nextCache[i].cmt      =raw[i].cmt;
-         nextCache[i].uid      =uid;
-         nextCache[i].isOrphan =orphan;
+         newCache[i].ticket   =raw[i].ticket;
+         newCache[i].magic    =raw[i].magic;
+         newCache[i].side     =raw[i].side;
+         newCache[i].lots     =raw[i].lots;
+         newCache[i].openPx   =raw[i].openPx;
+         newCache[i].sl       =raw[i].sl;
+         newCache[i].tp       =raw[i].tp;
+         newCache[i].openTime =raw[i].openTime;
+         newCache[i].kind     =raw[i].kind;
+         newCache[i].ptype    =raw[i].ptype;
+         newCache[i].pprice   =raw[i].pprice;
+         newCache[i].pexpire  =raw[i].pexpire;
+         newCache[i].uid      =uid;
+         newCache[i].isOrphan =orphan;
         }
      }
 
-   // Commit nextCache to g_posCache
-   ArrayResize(g_posCache,an,64);
-   for(int i=0;i<an;i++) g_posCache[i]=nextCache[i];
+   for(int i=0;i<an;i++) g_posCache[i]=newCache[i];
    g_posCacheCount=an;
 
    return an;
@@ -5323,38 +5338,30 @@ void UpdatePanel()
   {
    if(!ShowPanel) return;
 
-   //--- Counted from what is really on the account, not from the desired set:
-   //--- the question the panel answers is "what do I hold", and a mirror that
-   //--- has not been placed yet is not held.
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
-   int nOpen=0,nPend=0,nOrphan=0,orphShown=0;
+   //--- Throttle GUI panel redraws to at most twice a second (500ms).
+   //--- Redrawing heavy on-chart objects at 10 Hz burns massive Windows GDI CPU for nothing.
+   long now=CopierNowMs();
+   if(now-g_lastPanelRenderMs<500) return;
+   g_lastPanelRenderMs=now;
+
+   //--- Directly reuse the figures already computed during RefreshRisk!
+   //--- ZERO terminal scans and ZERO comment string parsing!
+   int nOpen=g_acctPositions;
+   int nPend=g_acctOrders;
+   int nOrphan=g_orphanCount;
+   int orphShown=0;
    string orphLine[CP_PANEL_ORPHAN_SHOW];
-   for(int i=0;i<an;i++)
+
+   if(ShowOrphanedList && nOrphan>0)
      {
-      bool ours=false;
-      for(int k=0;k<g_nSenders;k++)
+      for(int i=0;i<g_acctAllPosCount && orphShown<CP_PANEL_ORPHAN_SHOW;i++)
         {
-         if(all[i].magic==g_magic[k]) { ours=true; break; }
-        }
-      if(ours)
-        {
-         if(all[i].kind==CP_ORD_PENDING) nPend++; else nOpen++;
-         continue;
-        }
-      //--- Not ours by magic. If it still carries OUR comment tag, it is an
-      //--- orphan: real money under a magic no configured sender owns any
-      //--- more. Same test as ReportOrphanedMirrors(), run against the array
-      //--- this function already read - so the panel count and the startup
-      //--- log line can never disagree, and no second pass over the orders
-      //--- is paid for on every timer tick.
-      if(StringLen(CopierUidFromComment(all[i].cmt))==0) continue;
-      nOrphan++;
-      if(ShowOrphanedList && orphShown<CP_PANEL_ORPHAN_SHOW)
-        {
-         orphLine[orphShown]="  "+all[i].sym+"  #"+(string)all[i].ticket
-                             +"  magic "+(string)all[i].magic;
-         orphShown++;
+         if(g_posCache[i].isOrphan)
+           {
+            orphLine[orphShown]="  "+g_acctAllPos[i].sym+"  #"+(string)g_acctAllPos[i].ticket
+                                +"  magic "+(string)g_acctAllPos[i].magic;
+            orphShown++;
+           }
         }
      }
 
