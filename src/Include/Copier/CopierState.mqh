@@ -178,17 +178,20 @@ public:
    bool              UpdateAt(const int i,const CopierPos &p)
      {
       if(i<0 || i>=CP_MAX_POSITIONS) return false;
+      bool wasValid=SlotValid(i);
       m_p[i]=p;
       m_p[i].used=true;
+      if(!wasValid) m_n++;
       return true;
      }
 
    bool              RemoveAt(const int i)
      {
       if(i<0 || i>=CP_MAX_POSITIONS) return false;
+      if(!SlotValid(i)) return false;
       m_p[i].used=false;
       m_p[i].uid="";
-      m_n=UsedCount();
+      if(m_n>0) m_n--;
       return true;
      }
 

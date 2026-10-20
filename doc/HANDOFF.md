@@ -169,12 +169,13 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - `BuildCurrent(cur, prevSlot)` 在利用 ticket 匹配上一轮订单时，将命中的槽位 `prevSlot[i]` 直接输出；
      - **新单开仓 (`slot < 0`)**：直接判断数值是否小于 0，零字符串查找；
      - **止损变动 / 手数缩减 / 挂单成交 (`slot >= 0`)**：直接通过 `g_prev.At(slot, prev)` 以 $O(1)$ 常数时间取出上一轮记录比对数值，彻底消除字符串匹配；
-     - **平仓检测 (`closes`)**：在遍历 `cur` 时打上 `seenPrev[slot] = true` 标记，仅需单趟扫描 `g_prev` 槽位即可定位已平仓单，淘汰了 $O(N^2)$ 的 `FindUidIn`；
-     - **就地滚进 (`roll-forward`)**：消除 `g_prev.Clear()` 与全量重插，存量单原位 `UpdateAt`，平仓单 `RemoveAt`，新单 `InsertEmpty`；
+     - **平仓检测 (`closes`)**：在遍历 `cur` 时打上 `seenPrev[slot] = true` 标记，仅需单趟扫描 `g_prev` 槽位即可定位已平仓单并原地释放槽位，淘汰了 $O(N^2)$ 的 `FindUidIn`；
+     - **就地滚进 (`roll-forward`)**：消除 `g_prev.Clear()` 与全量重插，存量单原位 `UpdateAt`，新单 `InsertEmpty`；
+     - **消除 RemoveAt 内部嵌套遍历 (`UsedCount`)**：彻底移除 `RemoveAt()` 内部每次扫描 2048 槽计算 `UsedCount()` 的 $O(N^2)$ 乘方放大陷阱，并消除针对空槽位的无效清除，每 Tick 循环从 419 万次锐减至两千次内；
   2. **按需延迟读取 `OrderComment()`**：
      - `CopierReadPositions` 默认跳过读取 `OrderComment()`（老单 99.9% 零字符串开销）；
      - 仅当新 Ticket 出现时，才单次读取该单的 comment 以检查 MT4 部分平仓 `"from #<old>"` 链；
-  3. **成效**：Sender 每 Tick 字符串比较从 18 万次彻底归零，稳态下 comment 读取完全归零。
+  3. **成效**：Sender 每 Tick 字符串比较从 18 万次彻底归零，稳态下 comment 读取完全归零，彻底根治 CPU 异常翻倍问题。
 
 ---
 

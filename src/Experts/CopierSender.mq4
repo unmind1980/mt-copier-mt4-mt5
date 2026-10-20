@@ -1313,13 +1313,10 @@ void OnTimer()
       EmitClose(q);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
       g_stateDirty=true;
+      g_prev.RemoveAt(k);
      }
 
-   //--- 5) roll the window forward in-place: update active slots, remove closed slots, insert new
-   for(int k=0;k<CP_MAX_POSITIONS;k++)
-     {
-      if(!seenPrev[k]) g_prev.RemoveAt(k);
-     }
+   //--- 5) roll the window forward in-place: update active slots, insert new
    for(int i=0;i<n;i++)
      {
       if(prevSlot[i]>=0)
