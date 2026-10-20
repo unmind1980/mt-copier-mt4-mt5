@@ -527,10 +527,10 @@ int BuildCurrent(CopierPos &cur[],int &prevSlot[])
    ArrayResize(cur,0,CP_MAX_POSITIONS);
    ArrayResize(prevSlot,0,CP_MAX_POSITIONS);
 
-   //--- One pass to rebuild the ticket index, then every lookup below is a
-   //--- hash probe. FindByTicket() without an index walks all 2048 slots, and
-   //--- it used to run once per position per tick.
-   g_prev.RebuildTicketIndex();
+   //--- Rebuild ticket index only when table mutations actually occurred.
+   //--- In steady state (99.9% of ticks), positions do not change, so the hash
+   //--- index stays valid across ticks without re-zeroing 2048 integers.
+   if(!g_prev.IsTicketIndexValid()) g_prev.RebuildTicketIndex();
 
    for(int i=0;i<rn;i++)
      {
@@ -1237,6 +1237,8 @@ void OnTimer()
    //--- Track which slots in g_prev are still alive this tick
    bool seenPrev[CP_MAX_POSITIONS];
    ArrayInitialize(seenPrev,false);
+   bool hasDiff[CP_MAX_POSITIONS];
+   ArrayInitialize(hasDiff,false);
 
    //--- 2) emit opens for new UIDs, or check stop/volume/kind changes for existing slots
    for(int i=0;i<n;i++)
@@ -1266,12 +1268,20 @@ void OnTimer()
       else
         {
          seenPrev[slot]=true;
-         CopierPos prev;
-         if(g_prev.At(slot,prev))
+         bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false;
+         double prevLots=0.0;
+         int prevKind=0;
+         long prevTicket=0;
+
+         //--- Fast numeric check directly against m_p[slot]: ZERO struct copies,
+         //--- ZERO string allocations on 99.9% of steady-state ticks (B11).
+         if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
+                             prevLots,prevKind,prevTicket,cur[i]))
            {
+            if(stopsDiff || lotsDiff || kindDiff || otherDiff) hasDiff[i]=true;
+
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
-            if(MathAbs(prev.sl-cur[i].sl)>0.0000001
-               || MathAbs(prev.tp-cur[i].tp)>0.0000001)
+            if(stopsDiff)
               {
                g_log.Info("stops "+cur[i].uid+" "+cur[i].sym
                           +" side="+(string)cur[i].side
@@ -1284,26 +1294,26 @@ void OnTimer()
               }
 
             //--- VOLUME DRIFT (partial close we do not model in the MVP)
-            if(MathAbs(prev.lots-cur[i].lots)>0.0000001)
+            if(lotsDiff)
               {
                g_stateDirty=true;
                if(g_once.ShouldEmit("vol|"+cur[i].uid))
                   g_log.Info("partial close on "+cur[i].uid+" "+cur[i].sym
-                             +" "+DoubleToString(prev.lots,2)+" -> "+DoubleToString(cur[i].lots,2)
+                             +" "+DoubleToString(prevLots,2)+" -> "+DoubleToString(cur[i].lots,2)
                              +" (UID carried across the ticket change; the snapshot"
                              +" now carries the smaller volume)");
               }
 
             //--- PENDING ORDER FILLING / KIND CHANGED
-            if(prev.kind!=cur[i].kind || prev.ticket!=cur[i].ticket)
+            if(kindDiff)
               {
                g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
-                          +(string)prev.kind+" -> "+(string)cur[i].kind+", ticket "
-                          +(string)prev.ticket+" -> "+(string)cur[i].ticket
+                          +(string)prevKind+" -> "+(string)cur[i].kind+", ticket "
+                          +(string)prevTicket+" -> "+(string)cur[i].ticket
                           +" (a pending filling looks like this once; a repeat does not)");
                //--- When a pending order fills into a market position, buffer a 0.5s (500ms)
                //--- debounce before pushing the snapshot, giving receivers time to fill naturally.
-               if(prev.kind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
+               if(prevKind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
                  {
                   if(g_fillSnapshotDueMs==0)
                     {
@@ -1328,13 +1338,19 @@ void OnTimer()
       g_prev.RemoveAt(k);
      }
 
-   //--- 5) roll the window forward in-place: update active slots, insert new
+   //--- 5) roll the window forward in-place: update modified slots, insert new
    for(int i=0;i<n;i++)
      {
       if(prevSlot[i]>=0)
-         g_prev.UpdateAt(prevSlot[i],cur[i]);
+        {
+         //--- Steady-state (99.9%): no numeric difference -> NO-OP!
+         //--- Zero struct copies and m_tkValid is preserved.
+         if(hasDiff[i]) g_prev.UpdateNumericAt(prevSlot[i],cur[i]);
+        }
       else
+        {
          g_prev.InsertEmpty(cur[i]);
+        }
      }
 
    //--- 6) snapshot

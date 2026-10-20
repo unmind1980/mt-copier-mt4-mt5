@@ -148,6 +148,8 @@ public:
       m_tkValid=true;
      }
 
+   bool              IsTicketIndexValid() const { return m_tkValid; }
+
    void              Clear()
      {
       for(int i=0;i<CP_MAX_POSITIONS;i++)
@@ -210,6 +212,31 @@ public:
      {
       if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return false;
       out=m_p[i];
+      return true;
+     }
+
+   //--- Fast numeric-only diff check against slot i.
+   //--- Reads numeric fields in-place: ZERO struct copies, ZERO string allocations.
+   bool              CheckSlot(const int i,
+                               bool &stopsDiff,
+                               bool &lotsDiff,
+                               bool &kindDiff,
+                               bool &otherDiff,
+                               double &prevLots,
+                               int &prevKind,
+                               long &prevTicket,
+                               const CopierPos &cur) const
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return false;
+      stopsDiff=(MathAbs(m_p[i].sl-cur.sl)>0.0000001 || MathAbs(m_p[i].tp-cur.tp)>0.0000001);
+      lotsDiff =(MathAbs(m_p[i].lots-cur.lots)>0.0000001);
+      kindDiff =(m_p[i].kind!=cur.kind || m_p[i].ticket!=cur.ticket);
+      otherDiff=(MathAbs(m_p[i].openPx-cur.openPx)>0.0000001
+                || MathAbs(m_p[i].pprice-cur.pprice)>0.0000001
+                || m_p[i].pexpire!=cur.pexpire);
+      prevLots  =m_p[i].lots;
+      prevKind  =m_p[i].kind;
+      prevTicket=m_p[i].ticket;
       return true;
      }
 
@@ -290,6 +317,26 @@ public:
       m_p[i].used=true;
       if(!wasValid) m_n++;
       m_tkValid=false;
+      return true;
+     }
+
+   //--- In-place numeric update of an active slot.
+   //--- Preserves stable strings (uid, sym, cmt) without copying.
+   //--- If ticket did not change, preserves m_tkValid to avoid re-hashing next tick.
+   bool              UpdateNumericAt(const int i,const CopierPos &cur)
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return false;
+      bool ticketChanged=(m_p[i].ticket!=cur.ticket);
+      m_p[i].sl      =cur.sl;
+      m_p[i].tp      =cur.tp;
+      m_p[i].lots    =cur.lots;
+      m_p[i].kind    =cur.kind;
+      m_p[i].ptype   =cur.ptype;
+      m_p[i].openPx  =cur.openPx;
+      m_p[i].pprice  =cur.pprice;
+      m_p[i].pexpire =cur.pexpire;
+      m_p[i].ticket  =cur.ticket;
+      if(ticketChanged) m_tkValid=false;
       return true;
      }
 

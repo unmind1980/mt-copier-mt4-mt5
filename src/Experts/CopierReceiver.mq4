@@ -3195,6 +3195,11 @@ int ScanAndResolveAccountPositions()
          g_posCacheNext[i]=g_posCache[matchIdx];
          raw[i].uid=g_posCache[matchIdx].uid;
          raw[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
+         if(StringLen(raw[i].cmt)==0)
+           {
+            raw[i].cmt=CopierReadCommentByTicket(raw[i]);
+            g_posCacheNext[i].cmt=raw[i].cmt;
+           }
          g_acctAllPos[i]=raw[i];
         }
       else
@@ -3279,6 +3284,21 @@ string EncodeReceiverPositions()
          if(g_acctAllPos[i].magic==g_magic[k]) { ours=true; break; }
         }
       int isManaged=ours?1:0;
+      string cmt=g_acctAllPos[i].cmt;
+      //--- Ensure POS telemetry sent to Hub/WebUI reflects the real live comment
+      //--- on the terminal, preventing stale sender ticket references (A7).
+      //--- Only executed once a minute for up to 128 positions.
+      if(ours)
+        {
+         string liveCmt=CopierReadCommentByTicket(g_acctAllPos[i]);
+         if(StringLen(liveCmt)>0)
+           {
+            cmt=liveCmt;
+            g_acctAllPos[i].cmt=liveCmt;
+            if(i<g_posCacheCount && g_posCache[i].ticket==g_acctAllPos[i].ticket)
+               g_posCache[i].cmt=liveCmt;
+           }
+        }
       if(count>0) out+=CP_SEP_REC;
       out+=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
           +g_acctAllPos[i].sym+CP_SEP_ITEM
@@ -3289,7 +3309,7 @@ string EncodeReceiverPositions()
           +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
           +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
           +(string)isManaged+CP_SEP_ITEM
-          +CopierSanitizeComment(g_acctAllPos[i].cmt);
+          +CopierSanitizeComment(cmt);
       count++;
       if(count>=128) break;
      }

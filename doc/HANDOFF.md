@@ -355,7 +355,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | 每 tick `g_recKnown` 线性查找 | 300 × 2048 | 0 |
 | converge 字符串比对 | ~180k | ~600（哈希 + 命中确认） |
 
-### 二次审计：修复记录与后续储备（2026-10-20 18:45；B10/A6/B12 已修，A8 于 19:40 补修）
+### 二次审计：全部修复完毕（2026-10-20 20:30；B10/A6/B12/A8/A7/B11 全部闭环）
 
 | # | 级别 | 位置 | 问题与修复实现 |
 | :--- | :--- | :--- | :--- |
@@ -363,8 +363,8 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A6** | 中 | `HandleSnapshot` 拒绝分支 | **已修复**：引入 `g_snapRejectStreak[si]` 连续拒绝计数。首次失败或被 `g_once` 允许时报警，常规静默防刷屏；连续失败达到 30 次（约 30 秒）里程碑时升级告警，明确提示"发送端缓存坏字节，需重建快照（重启 Sender 或清理状态文件）"；成功接收快照时即刻清零 streak。 |
 | **B12** | 低-中 | `CopierReceiver` 慢路径 `g_everOpened` 补写 | **已修复**：新增 `g_stateRestored` 标志。若 OnInit 成功从 `.st` 恢复历史持仓（已全量预填 `g_everOpened`），则慢路径彻底跳过 `Has()` 4096 槽扫描；仅在冷启动无状态文件时才做首轮补填。消灭了 `forceFullScan` 时 120 万次冗余遍历。 |
 | **A8** | 低 | `CopierReceiver` 状态文件保存节奏 | **已修复（B12 的窄窗口回归）**：状态文件原只每 10 s 定期保存；崩溃若落在开仓后 ≤10 s 内，新镜像不在 `.st` 中，重启后 `g_stateRestored=true` 又永久跳过慢路径补写，该 uid 永不入 `g_everOpened` —— 之后被手动平掉时 `ReopenClosedMirrors=false` 拦不住会被重开。**修法**：照抄 Sender 的 `g_stateDirty` 模式，新增 `g_mapDirty`，任何成功的 OPEN/TRIM/CLOSE/DEDUP 动作即置位（MODIFY 只动 SL/TP 不置位），`OnTimer` 下一 tick（约 100 ms）即刷新身份文件，与 10 s 定期保存并存、天然合并突发。 |
-| **A7** | 低 | `ScanAndResolveAccountPositions` 快路径 cmt 缓存 | *后续储备*：数值指纹不变则注释不刷新。receiver 自己改写的 comment（`tc\|uid\|senderTicket`）里 senderTicket 若变化，POS 遥测与 trim 日志会显示旧值；UID 解析不受影响。 |
-| **B11** | 低 | `g_prev.At() / UpdateAt()` | *后续储备*：每次把整个 `CopierPos`（含 `sym/cmt/uid` 三个字符串）拷进拷出，每位置每 tick 2 次。可加"只读字段比较"接口避免字符串引用计数操作。 |
+| **A7** | 低 | `ScanAndResolveAccountPositions` / `EncodeReceiverPositions` | **已修复**：在 `EncodeReceiverPositions()` 编码自家订单前，对最多 128 笔持仓直接读取 `CopierReadCommentByTicket` 校验终端 live comment 并同步回写 `g_acctAllPos` 与 `g_posCache`，彻底杜绝发往 Hub WebUI 的 POS 遥测中的 senderTicket 滞后，且稳态每 100ms tick 依然 0 API 读取；快路径对空注释做安全补读；`CopierReadCommentByTicket` 增加 `long ticket` 重载保持全面兼容。 |
+| **B11** | 低 | `CopierSender.mq4` `OnTimer` + `CopierPosTable` | **已修复**：`CopierPosTable` 新增 `CheckSlot()` 纯数值比对（原位比对 `sl`, `tp`, `lots`, `kind`, `ticket`, `openPx`, `pprice`, `pexpire`）与 `UpdateNumericAt()` 原位更新；稳态（99.9% 的 tick）完全跳过 `g_prev.At()` 的临时结构体构造与第 5 步的 `UpdateAt`，消灭了每 tick 600 次包含 3 个字符串的结构体全量深拷贝；稳态下 `m_tkValid` 保持有效，`BuildCurrent` 跳过 2048 整数清零，彻底实现稳态零深拷贝与索引免重建。 |
 | — | 可忽略 | `CopierUidIndex::Build` 的 `ArrayInitialize` | 每 tick 2 次 × 4096 int 清零（8192 写/tick），量级极小，不需改动。 |
 
 ---

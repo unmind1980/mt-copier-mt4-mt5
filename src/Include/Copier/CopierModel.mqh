@@ -562,6 +562,14 @@ string CopierReadCommentByTicket(const CopierPos &p)
 #endif
   }
 
+string CopierReadCommentByTicket(const long ticket)
+  {
+   CopierPos p;
+   p.ticket=ticket;
+   p.kind=CP_ORD_MARKET;
+   return CopierReadCommentByTicket(p);
+  }
+
 //=====================================================================
 // MT5: POSITION_IDENTIFIER is stable but PositionClose needs the
 // CURRENT position ticket. Resolve at execution time - never cache it.

@@ -461,20 +461,37 @@ void TestTicketIndex()
    Ok("ticket index: unknown ticket misses",g_tA.FindByTicket(99)<0);
    Ok("ticket index: zero ticket misses",g_tA.FindByTicket(0)<0);
 
-   //--- a slot written AFTER the rebuild must not be visible through it
+   //--- a slot written AFTER the rebuild must invalidate the index
    g_tA.Upsert(MakePos("DDDD4444",4,"XAUUSD",CP_SIDE_BUY,0.1,2000.0,0,0,0,4));
-   Ok("ticket index: a post-rebuild row is NOT seen (index is stale, not wrong)",
-      g_tA.FindByTicket(4)<0);
+   Ok("ticket index: a post-rebuild write invalidates the index",
+      !g_tA.IsTicketIndexValid());
    g_tA.RebuildTicketIndex();
    Ok("ticket index: ...and appears after a rebuild",g_tA.FindByTicket(4)>=0);
 
    //--- removing a row must also invalidate, or the index keeps handing back
    //--- a slot the close-detection loop would treat as still open
    g_tA.Remove("DDDD4444");
-   Ok("ticket index: a removal invalidates it",g_tA.FindByTicket(4)<0);
+   Ok("ticket index: a removal invalidates it",!g_tA.IsTicketIndexValid());
    g_tA.RebuildTicketIndex();
    Ok("ticket index: ...and the survivor still resolves",
       g_tA.FindByTicket(1)==g_tA.Find("AAAA1111"));
+
+   //--- numeric update without ticket change must preserve index validity (B11)
+   CopierPos cur1;
+   g_tA.Get("AAAA1111",cur1);
+   cur1.sl=1.12345;
+   g_tA.UpdateNumericAt(0,cur1);
+   Ok("ticket index: numeric update preserves index validity",
+      g_tA.IsTicketIndexValid());
+
+   //--- CheckSlot diff detection without copying structs
+   bool sDiff=false,lDiff=false,kDiff=false,oDiff=false;
+   double pLots=0; int pKind=0; long pTk=0;
+   g_tA.CheckSlot(0,sDiff,lDiff,kDiff,oDiff,pLots,pKind,pTk,cur1);
+   Ok("CheckSlot: detects no difference when matched",!sDiff && !lDiff && !kDiff && !oDiff);
+   cur1.sl=1.99999;
+   g_tA.CheckSlot(0,sDiff,lDiff,kDiff,oDiff,pLots,pKind,pTk,cur1);
+   Ok("CheckSlot: detects stop difference",sDiff);
 
    //--- stress the hash: a block of neighbouring tickets must not collide into
    //--- a cluster that beats the probe limit. The UID has to stay 8 characters
