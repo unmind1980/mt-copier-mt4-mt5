@@ -196,17 +196,28 @@ private:
    long              m_dTo[7*CP_TT_MAX];     // a 2D array is not portable
    int               m_dN[7];
 
-   bool              Hit(const long &fr[],const long &to[],const int n,
-                         const int sec) const
+   //--- Same test, against a ROW of the flat day arrays rather than a copy of
+   //--- it. The day branch used to declare two long[CP_TT_MAX] locals and copy
+   //--- the row into them on every call - on every tick, for every position
+   //--- that reached the hours gate. Reading the row in place is the same
+   //--- answer with no copy and no local array to construct.
+   bool              HitAt(const long &fr[],const long &to[],const int base,
+                           const int n,const int sec) const
      {
       for(int i=0;i<n;i++)
         {
-         long a=fr[i],b=to[i];
+         long a=fr[base+i],b=to[base+i];
          if(a==b) return true;                    // all day
          if(a<b) { if(sec>=a && sec<=b) return true; }
          else    { if(sec>=a || sec<=b) return true; }   // wraps midnight
         }
       return false;
+     }
+
+   bool              Hit(const long &fr[],const long &to[],const int n,
+                         const int sec) const
+     {
+      return HitAt(fr,to,0,n,sec);
      }
 
 public:
@@ -281,14 +292,8 @@ public:
       //--- inherit the weekday 13:00-17:00 window.
       if(m_daySet[dow])
         {
-         long fr[CP_TT_MAX],to[CP_TT_MAX];
          int n=m_dN[dow];
-         for(int i=0;i<n;i++)
-           {
-            fr[i]=m_dFrom[dow*CP_TT_MAX+i];
-            to[i]=m_dTo[dow*CP_TT_MAX+i];
-           }
-         return Hit(fr,to,n,sec);
+         return HitAt(m_dFrom,m_dTo,dow*CP_TT_MAX,n,sec);
         }
       return Hit(m_from,m_to,m_n,sec);
      }

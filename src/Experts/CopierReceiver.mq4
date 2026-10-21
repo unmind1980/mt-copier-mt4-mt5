@@ -2267,7 +2267,9 @@ void ShiftQueue()
 
 double PipSize(const CopierSymInfo &si)
   {
-   return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
+   //--- the digits-based pip rule used to live here; it is now the single
+   //--- definition in CopierModel.mqh that every caller shares
+   return CopierPipOf(si);
   }
 
 //--- Move the head of the queue to the back.
@@ -4046,8 +4048,11 @@ void ConvergeSender(const int si)
             double closePx=0.0;
             if(CopierGetClosePrice(rsym,d.side,closePx))
               {
-               double pipSize=(pi.digits==3 || pi.digits==5)
-                              ?pi.point*10.0:pi.point;
+               //--- Dig3/Dig5 => JPY-style 3/5-digit quoting, where a pip is
+               //--- 10 points, not 1. This is the SAME rule PipSize() applies
+               //--- everywhere else, and it used to be written out inline here -
+               //--- two spellings of one rule is exactly how they drift apart.
+               double pipSize=PipSize(pi);
                double profitPips=(d.side==CP_SIDE_BUY)
                                  ?((closePx-d.openPx)/pipSize)
                                  :((d.openPx-closePx)/pipSize);

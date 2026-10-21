@@ -769,6 +769,64 @@ void TestSeenRingForget()
   }
 
 //=====================================================================
+// The occupied-slot index behind the ring.
+//
+// Every query used to walk all CP_SEEN_RING slots. The index that replaced it
+// keeps a packed list of the occupied ones, which is only correct if the list
+// is maintained by every mutation - including compaction on removal, where a
+// naive "shift the list down" leaves a hole and the loop over it skips an
+// entry. The observable symptom is a Has() that returns false for a key that
+// is unambiguously in the ring, i.e. a duplicate action that executes twice.
+//=====================================================================
+void TestSeenRingOccupancy()
+  {
+   CopierSeenRing r;
+   r.SetTtlMs(600000);
+   for(int i=0;i<8;i++)
+      r.Add("k"+IntegerToString(i));
+   Ok("occupancy: every key is found",r.UsedCount()==8);
+   for(int i=0;i<8;i++)
+      if(!r.Has("k"+IntegerToString(i))) { Ok("occupancy: every key is found",false); break; }
+
+   //--- remove an interior one; the packed list must close the gap and the
+   //--- removal loop must not skip its neighbour
+   r.Forget("k4");
+   Ok("occupancy: an interior Forget drops exactly one",r.UsedCount()==7);
+   bool allFound=true;
+   for(int i=0;i<8;i++)
+     {
+      if(i==4) continue;
+      if(!r.Has("k"+IntegerToString(i))) { allFound=false; break; }
+     }
+   Ok("occupancy: the neighbours of a removed key survive",allFound);
+   Ok("occupancy: the removed key is gone",!r.Has("k4"));
+
+   //--- remove three in a row from the packed list's middle - consecutive
+   //--- DropAt compactions are where an off-by-one hides
+   r.Forget("k2");
+   r.Forget("k5");
+   Ok("occupancy: two more erasures keep the count exact",r.UsedCount()==5);
+   bool stillFound=true;
+   for(int i=0;i<8;i++)
+     {
+      if(i==2 || i==5 || i==4) continue;
+      if(!r.Has("k"+IntegerToString(i))) { stillFound=false; break; }
+     }
+   Ok("occupancy: consecutive erasures leave the rest findable",stillFound);
+
+   //--- wrap the whole ring: it must forget the OLDEST and keep the newest,
+   //--- and the occupied count must stay at the capacity, not ratchet
+   CopierSeenRing w;
+   w.SetTtlMs(600000);
+   for(int i=0;i<CP_SEEN_RING+16;i++)
+      w.Add("w"+IntegerToString(i));
+   Ok("occupancy: a wrapped ring stays at capacity",
+      w.UsedCount()==CP_SEEN_RING);
+   Ok("occupancy: ...the oldest key is what it forgot",
+      !w.Has("w0") && w.Has("w"+IntegerToString(CP_SEEN_RING+15)));
+  }
+
+//=====================================================================
 // Stop mirroring.
 //
 // The receiver copies the sender's stops as a DISTANCE from the entry, not
@@ -2221,6 +2279,34 @@ void TestBackoff()
    //--- a real failure on the same key afterwards starts from the bottom rung
    Ok("backoff: a genuine failure after Park starts at rung 1",
       p.Note("x")==1);
+
+   //--- The lookup is a 256-slot open-addressing hash index, so its own
+   //--- failure modes are silent and worth asserting: a chain broken by a
+   //--- deletion, or a key evicted from a full table, loses a parked order
+   //--- with nothing in the log to say so.
+   CopierBackoff q;
+   //--- more keys than slots, so the table has to evict. Whatever happens,
+   //--- the keys that SURVIVE must still be individually findable and their
+   //--- ladders intact - that is the property a broken probe chain breaks.
+   for(int i=0;i<CP_BACKOFF_SLOTS+40;i++)
+      q.Note("key"+IntegerToString(i));
+   Ok("backoff: a key no older than the table survives eviction",
+      q.Count("key"+IntegerToString(CP_BACKOFF_SLOTS+39))==1
+      && q.Blocked("key"+IntegerToString(CP_BACKOFF_SLOTS+39)));
+   //--- delete several, including interior ones, then confirm the REST are
+   //--- still reachable. Erasing reshuffles the probe chains, so this is the
+   //--- assertion that catches an in-place erase that split a chain.
+   q.Clear("key10");
+   q.Clear("key11");
+   q.Clear("key"+(string)(CP_BACKOFF_SLOTS+39));
+   bool reachable=true;
+   for(int i=20;i<CP_BACKOFF_SLOTS;i++)
+     {
+      string k="key"+IntegerToString(i);
+      if(!q.Blocked(k)) { reachable=false; break; }
+     }
+   Ok("backoff: keys stay reachable after interior erasures",reachable);
+   Ok("backoff: an erased key is gone",!q.Blocked("key10"));
   }
 
 //+------------------------------------------------------------------+
@@ -2249,6 +2335,7 @@ void OnStart()
    TestDedup();
    TestSeenRingGating();
    TestSeenRingForget();
+   TestSeenRingOccupancy();
    TestUidIndex();
    TestMirrorStop();
    TestFitStop();

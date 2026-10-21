@@ -441,13 +441,24 @@ private:
    //--- shows up. Without this counter every query walked all 4096 slots to
    //--- discover that, and converge does three such walks per position per
    //--- tick - 3.7 million iterations per tick at 300 positions, for nothing.
-   int               m_used;
+   //---
+   //--- m_occ / m_occN are the same idea taken one step further: not just HOW
+   //--- MANY slots are occupied, but WHICH ones, packed at the front. Every
+   //--- query then walks m_occN entries instead of the whole ring. That
+   //--- matters most exactly when the counter alone does not help: the ring is
+   //--- never empty while anything is in flight, so the "ring is empty" exit
+   //--- below is a steady-state optimisation, and a busy account - the one
+   //--- that needs the headroom - pays for 300 occupied slots out of 4096.
+   int               m_occ[CP_SEEN_RING];
+   int               m_occN;
+   int               m_used;      // == m_occN; kept as a named alias
 
 public:
    //--- same reasoning as CopierPosTable: an uncleared array of strings
    //--- may start life holding junk, which would make Has() report a key
    //--- as already processed and silently drop a real trade action.
-                     CopierSeenRing():m_head(0),m_ttlMs(300000),m_used(0) { Clear(); }
+                     CopierSeenRing():m_head(0),m_ttlMs(300000),
+                                      m_occN(0),m_used(0) { Clear(); }
 
    void              SetTtlMs(const long ms) { m_ttlMs=ms; }
 
@@ -457,6 +468,7 @@ public:
      {
       for(int i=0;i<CP_SEEN_RING;i++) { m_k[i]=""; m_t[i]=0; }
       m_head=0;
+      m_occN=0;
       m_used=0;
      }
 
@@ -464,8 +476,9 @@ public:
      {
       if(m_used==0) return false;
       long now=CopierNowMs();
-      for(int i=0;i<CP_SEEN_RING;i++)
+      for(int j=0;j<m_occN;j++)
         {
+         int i=m_occ[j];
          if(StringLen(m_k[i])==0) continue;
          if(now-m_t[i]>m_ttlMs) continue;
          if(m_k[i]==key) return true;
@@ -477,8 +490,9 @@ public:
      {
       if(m_used==0) return 0;
       long now=CopierNowMs();
-      for(int i=0;i<CP_SEEN_RING;i++)
+      for(int j=0;j<m_occN;j++)
         {
+         int i=m_occ[j];
          if(StringLen(m_k[i])==0) continue;
          if(now-m_t[i]>m_ttlMs) continue;
          if(m_k[i]==key) return m_t[i];
@@ -486,9 +500,29 @@ public:
       return 0;
      }
 
+   //--- Drop the slot at occupied-list position `j`, sliding the LAST
+   //--- occupied index into its place. Callers are iterating the list
+   //--- themselves, so they must NOT advance j after calling this.
+   void              DropAt(const int j)
+     {
+      int i=m_occ[j];
+      m_k[i]="";
+      m_t[i]=0;
+      m_occN--;
+      if(j<m_occN) m_occ[j]=m_occ[m_occN];
+      m_used=m_occN;
+     }
+
    void              Add(const string key)
      {
-      if(StringLen(m_k[m_head])==0) m_used++;
+      //--- an empty slot becoming occupied is a new occupied index; an
+      //--- occupied one being overwritten is already in the list
+      if(StringLen(m_k[m_head])==0)
+        {
+         m_occ[m_occN]=m_head;
+         m_occN++;
+         m_used=m_occN;
+        }
       m_k[m_head]=key;
       m_t[m_head]=CopierNowMs();
       m_head++;
@@ -508,9 +542,12 @@ public:
    //--- sees the UID locally, so the guard covers only the in-flight window.
    void              Forget(const string key)
      {
-      for(int i=0;i<CP_SEEN_RING;i++)
+      int j=0;
+      while(j<m_occN)
         {
-         if(m_k[i]==key) { m_k[i]=""; m_t[i]=0; if(m_used>0) m_used--; }
+         int i=m_occ[j];
+         if(m_k[i]==key) DropAt(j);   // j NOT advanced: swapped-in slot unchecked
+         else            j++;
         }
      }
 
@@ -526,13 +563,17 @@ public:
    //--- is a prefix of another, so "sid:kind:UID" cannot collide.
    void              ForgetPrefix(const string prefix)
      {
-      if(m_used==0) return;
+      if(m_occN==0) return;
       int n=StringLen(prefix);
       if(n==0) return;
-      for(int i=0;i<CP_SEEN_RING;i++)
+      int j=0;
+      while(j<m_occN)
         {
-         if(StringLen(m_k[i])<n) continue;
-         if(StringSubstr(m_k[i],0,n)==prefix) { m_k[i]=""; m_t[i]=0; if(m_used>0) m_used--; }
+         int i=m_occ[j];
+         if(StringLen(m_k[i])>=n && StringSubstr(m_k[i],0,n)==prefix)
+            DropAt(j);
+         else
+            j++;
         }
      }
 
@@ -545,20 +586,23 @@ public:
    //--- TRIM (its key carries the target volume, so it is strictly longer).
    void              ForgetUidActions(const string sid,const string uid)
      {
-      if(m_used==0) return;
+      if(m_occN==0) return;
       string pOpen =sid+":"+(string)CP_ACT_OPEN +":"+uid;
       string pClose=sid+":"+(string)CP_ACT_CLOSE+":"+uid;
       string pTrim =sid+":"+(string)CP_ACT_TRIM +":"+uid;
       int    nExact=StringLen(pOpen);
-      for(int i=0;i<CP_SEEN_RING;i++)
+      int    j=0;
+      while(j<m_occN)
         {
-         int nk=StringLen(m_k[i]);
-         if(nk<nExact) continue;
+         string k=m_k[m_occ[j]];
+         int  nk=StringLen(k);
          bool hit=false;
+         if(nk<nExact)
+            { j++; continue; }
          if(nk==nExact)
            {
             //--- the bare form: "sid:kind:uid"
-            hit=(m_k[i]==pOpen || m_k[i]==pClose || m_k[i]==pTrim);
+            hit=(k==pOpen || k==pClose || k==pTrim);
            }
          else
            {
@@ -567,18 +611,16 @@ public:
             //--- target volume - so these must be matched by PREFIX, exactly
             //--- as the three ForgetPrefix() calls this replaced did.
             //--- StringFind() == 0 is a prefix test with no allocation.
-            hit=(StringFind(m_k[i],pOpen)==0
-                 || StringFind(m_k[i],pClose)==0
-                 || StringFind(m_k[i],pTrim)==0);
+            hit=(StringFind(k,pOpen)==0
+                 || StringFind(k,pClose)==0
+                 || StringFind(k,pTrim)==0);
            }
-         if(!hit) continue;
-         m_k[i]="";
-         m_t[i]=0;
-         if(m_used>0) m_used--;
+         if(hit) DropAt(j);
+         else    j++;
         }
      }
 
-   //--- Recompute m_used and drop entries past their TTL.
+   //--- Recompute the occupied list and drop entries past their TTL.
    //---
    //--- Called once a minute: an expired key is still an occupied slot as far
    //--- as Add() is concerned, so without this the counter would ratchet up
@@ -586,14 +628,13 @@ public:
    void              PruneExpired()
      {
       long now=CopierNowMs();
-      int n=0;
-      for(int i=0;i<CP_SEEN_RING;i++)
+      int j=0;
+      while(j<m_occN)
         {
-         if(StringLen(m_k[i])==0) continue;
-         if(now-m_t[i]>m_ttlMs) { m_k[i]=""; m_t[i]=0; continue; }
-         n++;
+         int i=m_occ[j];
+         if(now-m_t[i]>m_ttlMs) DropAt(j);
+         else                    j++;
         }
-      m_used=n;
      }
   };
 
@@ -729,15 +770,74 @@ private:
    int               m_n[CP_BACKOFF_SLOTS];   // consecutive failures
    long              m_t[CP_BACKOFF_SLOTS];   // when it last failed (ms)
    long              m_u[CP_BACKOFF_SLOTS];   // do not retry before (ms)
+   //--- key -> slot hash index, same open-addressing shape
+   //--- CopierPosTable::RebuildTicketIndex uses for tickets. The lookup runs
+   //--- on every PushAction for every candidate action, so at 300 positions
+   //--- and 10 Hz a linear scan of 256 keys is ~770,000 string compares a
+   //--- second; this makes it a single probe with one compare on a hit.
+   int               m_h[CP_BACKOFF_SLOTS];   // 0 = free, else tag+1
+
+   uint              HashOf(const string key) const
+     {
+      uint h=2166136261;                        // FNV-1a
+      int  n=StringLen(key);
+      for(int i=0;i<n;i++)
+        {
+         h^=(uint)StringGetCharacter(key,i);
+         h*=16777619;
+        }
+      return h;
+     }
+
+   //--- 24-bit tag; always positive, and a collision only costs one extra
+   //--- string compare, never a wrong answer (the key is still compared).
+   int               TagOf(const uint h) const { return (int)(h & 0x00FFFFFF)+1; }
 
    int               Find(const string key) const
      {
       if(StringLen(key)==0) return -1;
-      for(int i=0;i<CP_BACKOFF_SLOTS;i++)
+      int tag=TagOf(HashOf(key));
+      int mask=CP_BACKOFF_SLOTS-1;
+      int k=(int)(HashOf(key) & (uint)mask);
+      for(int probes=0;probes<CP_BACKOFF_SLOTS;probes++)
         {
-         if(m_k[i]==key) return i;
+         int got=m_h[k];
+         if(got==0) return -1;                  // empty: not present
+         if(got==tag && m_k[k]==key) return k;  // tag hit + key equal
+         k=(k+1)&mask;                          // linear probe
         }
       return -1;
+     }
+
+   void              InsertHash(const int i,const uint h)
+     {
+      int tag=TagOf(h);
+      int mask=CP_BACKOFF_SLOTS-1;
+      int k=(int)(h & (uint)mask);
+      while(m_h[k]!=0)
+        {
+         if(m_h[k]==tag && m_k[k]==m_k[i]) return;   // already indexed
+         k=(k+1)&mask;
+        }
+      m_h[k]=tag;
+     }
+
+   //--- Remove one key from the hash index, then REBUILD the whole index from
+   //--- the live keys.
+   //---
+   //--- The obvious single-slot erase (`m_h[k]=0` in place) is wrong for
+   //--- linear probing: a slot in the middle of a probe chain, once emptied,
+   //--- splits that chain and every key probed past it becomes unreachable.
+   //--- Backward-shift deletion is the textbook fix and is easy to get subtly
+   //--- wrong, so this takes the other safe option - erases are rare (a
+   //--- success that clears a ladder, or an eviction when all 256 slots are
+   //--- full), so paying one O(slots) rebuild is not measurable next to the
+   //--- lookup this whole index exists to speed up.
+   void              EraseHash(const int i)
+     {
+      ArrayInitialize(m_h,0);
+      for(int k=0;k<CP_BACKOFF_SLOTS;k++)
+         if(StringLen(m_k[k])>0) InsertHash(k,HashOf(m_k[k]));
      }
 
    //--- Empty slot if there is one; otherwise evict the entry that is
@@ -754,6 +854,7 @@ private:
         {
          if(m_u[i]>m_u[worst]) worst=i;
         }
+      EraseHash(worst);
       return worst;
      }
 
@@ -766,6 +867,7 @@ public:
          m_n[i]=0;
          m_t[i]=0;
          m_u[i]=0;
+         m_h[i]=0;
         }
      }
 
@@ -801,10 +903,12 @@ public:
          i=FreeSlot();
 
       if(n>8) n=8;
+      if(StringLen(m_k[i])>0 && m_k[i]!=key) EraseHash(i);
       m_k[i]=key;
       m_n[i]=n;
       m_t[i]=now;
       m_u[i]=now+CopierBackoffMs(n);
+      InsertHash(i,HashOf(key));
       return n;
      }
 
@@ -822,6 +926,7 @@ public:
         {
          m_k[i]=key;
          m_n[i]=0;
+         InsertHash(i,HashOf(key));
         }
       m_t[i]=CopierNowMs();
       m_u[i]=CopierNowMs()+ms;
@@ -833,6 +938,7 @@ public:
      {
       int i=Find(key);
       if(i<0) return;
+      EraseHash(i);
       m_k[i]="";
       m_n[i]=0;
       m_t[i]=0;

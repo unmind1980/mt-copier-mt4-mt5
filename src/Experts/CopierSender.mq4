@@ -260,6 +260,21 @@ long             g_lastPanelRenderMs=0;
 CopierPos        g_rawScratch[CP_MAX_POSITIONS];
 CopierPos        g_curScratch[CP_MAX_POSITIONS];
 int              g_prevSlotScratch[CP_MAX_POSITIONS];
+//--- Per-tick "was this slot seen / did this row change" markers, as
+//--- GENERATION STAMPS rather than booleans.
+//---
+//--- The booleans they replaced were local and had to be ArrayInitialize'd
+//--- every tick: 2 x 2048 bytes of memset at 10 Hz, for an answer that can be
+//--- "stale by construction". A stamp array is written only when something is
+//--- actually seen, and the test is a single compare against the current tick
+//--- number. No clearing, no construction, no stack frame.
+//---
+//--- g_stampGen starts at 1 and is bumped BEFORE use, so a slot whose stamp
+//--- still reads 0 (untouched since load) can never match the current tick.
+//--- It would take ~2.1 billion ticks - decades at 10 Hz - to wrap.
+int              g_slotStamp[CP_MAX_POSITIONS];   // index: slot in g_prev
+int              g_rowStamp[CP_MAX_POSITIONS];    // index: row in this tick
+int              g_stampGen=1;
 
 //--- SNAPSHOT RECEIPT (slice A: observe; slice B: repair).
 //---
@@ -1281,11 +1296,13 @@ void OnTimer()
    //--- 1) scan and reconcile against what we saw last tick (zero ArrayResize)
    int n=BuildCurrent();
 
-   //--- Track which slots in g_prev are still alive this tick
-   bool seenPrev[CP_MAX_POSITIONS];
-   ArrayInitialize(seenPrev,false);
-   bool hasDiff[CP_MAX_POSITIONS];
-   ArrayInitialize(hasDiff,false);
+   //--- New generation: the two stamp arrays are NOT cleared - a slot or row
+   //--- that nothing writes this tick simply keeps an older generation and
+   //--- therefore reads as "not seen" / "unchanged".
+   g_stampGen++;
+
+   //--- Track which slots in g_prev are still alive this tick, and which rows
+   //--- changed. Generation stamps instead of ArrayInitialize'd bool arrays.
 
    //--- 2) emit opens for new UIDs, or check stop/volume/kind changes for existing slots
    for(int i=0;i<n;i++)
@@ -1314,7 +1331,7 @@ void OnTimer()
         }
       else
         {
-         seenPrev[slot]=true;
+         g_slotStamp[slot]=g_stampGen;
          bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false;
          double prevLots=0.0;
          int prevKind=0;
@@ -1325,7 +1342,7 @@ void OnTimer()
          if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
                              prevLots,prevKind,prevTicket,g_curScratch[i]))
            {
-            if(stopsDiff || lotsDiff || kindDiff || otherDiff) hasDiff[i]=true;
+            if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
 
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(stopsDiff)
@@ -1374,10 +1391,10 @@ void OnTimer()
         }
      }
 
-   //--- 3) emit closes for anything that vanished (slot valid but !seenPrev[k], 0 string lookups)
+   //--- 3) emit closes for anything that vanished (slot valid but not stamped this tick, 0 string lookups)
    for(int k=0;k<CP_MAX_POSITIONS;k++)
      {
-      if(seenPrev[k]) continue;
+      if(g_slotStamp[k]==g_stampGen) continue;
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
       EmitClose(q);
@@ -1393,7 +1410,7 @@ void OnTimer()
         {
          //--- Steady-state (99.9%): no numeric difference -> NO-OP!
          //--- Zero struct copies and m_tkValid is preserved.
-         if(hasDiff[i]) g_prev.UpdateNumericAt(g_prevSlotScratch[i],g_curScratch[i]);
+         if(g_rowStamp[i]==g_stampGen) g_prev.UpdateNumericAt(g_prevSlotScratch[i],g_curScratch[i]);
         }
       else
         {

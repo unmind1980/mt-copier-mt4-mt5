@@ -219,14 +219,14 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、节点 `ping_ms`、只读 `reqpos` 命令放行 |
 | **Hub 锁** | `hub/src/lockx.rs` | `LockExt::lock_or_recover()`：mutex 中毒时用 `into_inner()` 恢复而非 panic，全站 102 处 `.lock().unwrap()` 已替换 |
 | **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝并限制日志/计数升级告警）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`）、状态已恢复时跳过慢路径 `everOpened` 冗余扫描、`g_reopenExpected.Forget` 预期重开消费清除、券商订单上限检查计入在途 `pendCount`、开仓动作自动置位 `g_mapDirty`、心跳与 STAT 实时上报 `PING`、`LocalForSender` 静态暂存区 `g_locScratch` 与 `g_acctAllPos`/`g_waitItems`/`StopsOvIndex`/`DedupLocal`/`g_mapFrom` 全量定长化（零 `ArrayResize`）、跨平台 `CopierIsTradeDisabled` 快速重试、`CloseAllOurs` 兼顾各信号源忽略列表、动作队列 `g_qHead` 偏移消除 O(n) 搬移、持仓缓存按需拷回（稳态零深拷贝）、drain 静态接收缓冲 |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING`、`BuildCurrent` 全程写入静态暂存区（`g_curScratch`/`g_prevSlotScratch`/`g_rawScratch`）实现零 `ArrayResize`、`SnapStaleIndex` 六组并列数组定长化 `[CP_MAX_STALE_PEERS]` 且表满返回 -1 不再别名、drain 静态接收缓冲、`OnDeinit` 退出前对脏状态强制落盘 |
-| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取（支持 ticket 重载）；MT4 开仓 130 错误 ECN 自动降级与 `OrderModify` 补上止损止盈；新增 `CopierIsTradeDisabled()` 跨平台识别 MT4 `4109` 与 MT5 `10027/10026/10017`；`CopierReadPositions` 识别静态预分配数组时直接下标写入，跳过倍增扩容 |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING`、`BuildCurrent` 全程写入静态暂存区（`g_curScratch`/`g_prevSlotScratch`/`g_rawScratch`）实现零 `ArrayResize`、`SnapStaleIndex` 六组并列数组定长化 `[CP_MAX_STALE_PEERS]` 且表满返回 -1 不再别名、drain 静态接收缓冲、`OnDeinit` 退出前对脏状态强制落盘、每 tick 布尔标记改为世代戳（消除 4KB memset） |
+| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取（支持 ticket 重载）；MT4 开仓 130 错误 ECN 自动降级与 `OrderModify` 补上止损止盈；新增 `CopierIsTradeDisabled()` 跨平台识别 MT4 `4109` 与 MT5 `10027/10026/10017`；`CopierReadPositions` 识别静态预分配数组时直接下标写入，跳过倍增扩容；新增唯一 pip 规则函数 `CopierPipOf()`（原先四处 inline 复制） |
 | **规格头文件** | `src/Include/Copier/CopierSizing.mqh` | 增加 `CopierEmergencyTp()` 应急止盈计算（与 `CopierEmergencySl` 对称），供 `QueueModifyIfNeeded` 后备保护止盈不被误清除 |
-| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通；新增 `CheckSlot()` 纯数值原位比对与 `UpdateNumericAt()` 原位更新；`CopyTo()` 预查 `m_n` 一次性界定容量，消除逐单扩容 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；`CopierSeenRing` 进一步引入紧凑占用索引 `m_occ[]`，全部查询只遍历占用项；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通；新增 `CheckSlot()` 纯数值原位比对与 `UpdateNumericAt()` 原位更新；`CopyTo()` 预查 `m_n` 一次性界定容量，消除逐单扩容；`CopierBackoff` 由线性查找升级为 256 槽开放寻址哈希索引（含重建式安全擦除） |
 | **传输头文件** | `src/Include/Copier/CopierTransport.mqh` | `DrainFrames()` 排空畸形报文的第 3 帧及以后残帧（防套接字帧错位）；`DrainFrames`/`DrainSocket` 对静态预分配数组直接下标写入，动态数组进入前预分、结束后收缩 |
 | **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载；`CP_INI_MAX` 扩容至 2048 行，超限不再静默截断而是报错返回 `false`；`CP_INI_MAX_BYTES = 262144` 字节上限 |
 | **密钥头文件** | `src/Include/Copier/CopierCurveKey.mqh` | CURVE 密钥对单文件读写与派生校验；中枢公钥文件首行放宽为可选，裸 40 字符或 `PUBLIC=` 单行均可直接加载（手动粘贴回退不再是死代码） |
-| **过滤头文件** | `src/Include/Copier/CopierFilter.mqh` | 交易时段/品种/魔术过滤；`CopierTradingTimes` 跨午夜语义（`22:00-02:00` 为一个整窗）；`DayTradingTimes` 按当日星期匹配，跨午夜需显式分拆书写（已在注释与 README 说明） |
+| **过滤头文件** | `src/Include/Copier/CopierFilter.mqh` | 交易时段/品种/魔术过滤；`CopierTradingTimes` 跨午夜语义（`22:00-02:00` 为一个整窗）；`DayTradingTimes` 按当日星期匹配，跨午夜需显式分拆书写（已在注释与 README 说明）；日排期查询改为 `HitAt()` 带基址偏移直接读扁平数组，零局部数组拷贝 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
 | **风控头文件** | `src/Include/Copier/CopierRisk.mqh` | 信号源级与账户级双层风控守卫模型 |
@@ -434,6 +434,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **B21** | 中·性能 | `CopierReceiver.mq4` `ScanAndResolveAccountPositions` | **已修复**：每 tick（10Hz）结尾把 `g_posCacheNext` 全量拷回 `g_posCache`，300 单即 3000 次结构体赋值/秒，只为交换两块缓冲。**修法**：新增 `g_cacheSrc[]` 标记——未移动且数值未变的行（稳态 99.9%）标记 -1 完全跳过拷贝，只有移动行与慢路径行才拷回；cmt 刷新改为原位单字段更新，避免把可能过期的其它字段一并带回。MQL4 只允许一维结构体数组，无法用双缓冲翻转，故采用"按需拷回"。 |
 | **B22** | 低·性能 | `CopierSender.mq4` / `CopierReceiver.mq4` drain 调用点 | **已修复**：头文件已支持静态数组直填，但调用点仍用 `string x[]` 动态数组，每 tick resize 到 256 再缩回（2 次堆操作 × 10Hz）。**修法**：改为文件级 `g_drainStatus` / `g_drainTopics` / `g_drainMsgs` 静态数组，drain 全程零分配；一律以返回计数为唯一有效长度。 |
 
----
+### 八次审计：静态化收尾后剩下的两处线性扫描（2026-10-21 17:40；B23/B24/B25/B26/A29 全部闭环落地）
 
-*交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **B23** | 高·性能 | `CopierState.mqh` `CopierSeenRing` | **已修复**：环的每个查询（`Has`/`GetTime`/`Forget`/`ForgetPrefix`/`ForgetUidActions`/`PruneExpired`）都遍历全部 4096 槽，而 `m_used==0` 的提前退出只在环全空时有效——in-flight 期间恰恰是最需要性能的时刻。300 持仓时仅 `ForgetUidActions` 一项就达 122.9 万次迭代/tick，合计每 tick 数百万次循环。**修法**：新增紧凑占用索引 `m_occ[]`/`m_occN`，所有查询只遍历"被占用的那几十项"；删除走 `DropAt()` 交换尾部 + 原地压缩，删除后不前进下标以检查换入项。稳态 O(occupied)，burst 场景下相比全表扫描快 10~50 倍。 |
+| **B24** | 中·性能 | `CopierState.mqh` `CopierBackoff` | **已修复**：`Find()` 是 O(256) 线性字符串比较，而 `PushAction` 对每个候选动作都会调用 `Blocked()`——300 候选 × 10Hz × 256 ≈ 76.8 万次字符串比较/秒。**修法**：新增 256 槽开放寻址哈希索引（FNV-1a + 24 位 tag，与 `CopierPosTable::RebuildTicketIndex` 同款），查找退化为一次探测 + 一次字符串比较。**关键取舍**：开放寻址的中途单槽擦除会断裂探测链，故 `EraseHash()` 采用"全表清零 + 从存活键重建"而非原地置空——擦除只在成功清阶与满载淘汰时发生，重建成本可忽略，正确性无争议。 |
+| **B25** | 低·性能 | `CopierFilter.mqh` `CopierTradingTimes::Allows` | **已修复**：日排期命中时声明两个 `long[8]` 局部数组并逐项拷贝再传给 `Hit()`，每 tick 每持仓重复一次。**修法**：新增 `HitAt(fr,to,base,n,sec)` 直接按基址偏移读取扁平数组的行，零拷贝、零局部数组。 |
+| **A29** | 低·可维护性 | 全栈 pip 规则 | **已修复**："digits 3/5 则 1 pip = 10 点"这条规则曾被复制成 4 份（`CopierSizing.mqh` 两处应急止损/止盈、`ConvergeSender` 的利润回撤门控、Receiver 的 `PipSize()`）。**修法**：在 `CopierModel.mqh` 提为唯一函数 `CopierPipOf()`，四处全部改为调用；`PipSize()` 保留为薄封装以维持调用点可读性。 |
+| **B26** | 低·性能 | `CopierSender.mq4` `OnTimer` | **已修复**：每 tick `ArrayInitialize` 两个 2048 布尔局部数组（4KB memset ×10Hz）。**修法**：改为**世代戳** `g_slotStamp[2048]` / `g_rowStamp[2048]` + `g_stampGen`，判定式为 `arr[i]==g_stampGen`；无清零、无构造、无栈帧，只在真正看到时写入一次。 |
+
+**配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
+
+

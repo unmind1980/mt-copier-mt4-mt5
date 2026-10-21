@@ -250,7 +250,9 @@ double CopierEmergencySl(const string sym,const int side,const double openPx,
    double ref=(openPx>0.0)?openPx:px;
    //--- pip = 10 points on 3/5-digit FX, 1 point elsewhere. This is a
    //--- heuristic; override with CustomPipSizes if your broker differs.
-   double pipSize=(si.digits==3 || si.digits==5)?si.point*10.0:si.point;
+   //--- digits 3/5 means 10 points per pip; see CopierPipOf for why this is
+   //--- a single definition rather than four inline copies.
+   double pipSize=CopierPipOf(si);
    double sl=(side==CP_SIDE_BUY)?(ref-slPips*pipSize):(ref+slPips*pipSize);
    //--- clear the broker's minimum distance. Without this a small
    //--- EmergencySLPips makes every OrderSend fail outright on MT5, since
@@ -267,7 +269,9 @@ double CopierEmergencyTp(const string sym,const int side,const double openPx,
    double px=0.0;
    if(!CopierGetPrice(sym,side,px)) { outErr=-2; return 0.0; }
    double ref=(openPx>0.0)?openPx:px;
-   double pipSize=(si.digits==3 || si.digits==5)?si.point*10.0:si.point;
+   //--- digits 3/5 means 10 points per pip; see CopierPipOf for why this is
+   //--- a single definition rather than four inline copies.
+   double pipSize=CopierPipOf(si);
    double tp=(side==CP_SIDE_BUY)?(ref+tpPips*pipSize):(ref-tpPips*pipSize);
    bool clamped=false;
    return CopierFitStop(NormalizeDouble(tp,si.digits),sym,side,false,si,clamped);

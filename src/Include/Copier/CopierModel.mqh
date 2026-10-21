@@ -38,6 +38,22 @@ struct CopierSymInfo
    double            contractSize;
   };
 
+//--- The pip size, in price units.
+//---
+//--- ONE definition, on purpose. This rule was written out inline in four
+//--- places - CopierEmergencySl, CopierEmergencyTp, the profit-pullback gate
+//--- in ConvergeSender, and the receiver's own PipSize() - and every one of
+//--- them had to agree, because a stop placed at "50 pips" means something
+//--- different on a 3-digit JPY pair and a 5-digit EURUSD. Four copies of a
+//--- heuristic is a guarantee that a future change updates three of them.
+//---
+//--- It is a HEURISTIC by nature: the real pip depends on the broker's
+//--- quoting, which is exactly why it lives in exactly one place now.
+double CopierPipOf(const CopierSymInfo &si)
+  {
+   return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
+  }
+
 //=====================================================================
 // Symbol helpers
 //=====================================================================
