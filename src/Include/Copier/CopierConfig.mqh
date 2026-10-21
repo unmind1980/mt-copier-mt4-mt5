@@ -81,10 +81,11 @@ public:
    int               m_secLen[CP_INI_SECTIONS];
    int               m_nSec;
 
-   void              BuildSections()
+   bool              BuildSections()
      {
       m_nSec=0;
       int i=0;
+      bool overflow=false;
       while(i<m_n)
         {
          int start=i;
@@ -96,7 +97,12 @@ public:
             m_secLen[m_nSec]  =i-start;
             m_nSec++;
            }
+         else
+           {
+            overflow=true;
+           }
         }
+      return !overflow;
      }
 
    bool              Load(const string path)
@@ -143,7 +149,11 @@ public:
          Print("CopierIni: ERROR - ",path," exceeded CP_INI_MAX (",CP_INI_MAX," lines)! Config truncated.");
          return false;
         }
-      BuildSections();
+      if(!BuildSections())
+        {
+         Print("CopierIni: ERROR - ",path," exceeded CP_INI_SECTIONS (",CP_INI_SECTIONS," blocks)! Config rejected.");
+         return false;
+        }
       return true;
      }
 

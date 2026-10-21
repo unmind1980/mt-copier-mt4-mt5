@@ -447,6 +447,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 十一次审计：CP_INI_SECTIONS 超限拒绝、reqcfg 自适应退避与 Web 实时拉取（2026-10-21 21:15；闭环落地）
+
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A33** | 中·健壮性 | `src/Include/Copier/CopierConfig.mqh` `BuildSections()` | **已修复**：`BuildSections()` 原先在 `m_nSec >= CP_INI_SECTIONS` 时静默跳过后续 section block 的索引，导致超出上限的段无法被 `Get()` 检索到（退化为不存在）。**修法**：`BuildSections()` 返回 `bool`，若发生溢出在 `Load()` 结束前输出严重错误 `Print("CopierIni: ERROR - ", path, " exceeded CP_INI_SECTIONS...")` 并拒绝加载返回 `false`，彻底消灭静默截断。`CopierSelfTest.mq4` 增加超限拒绝测试。 |
+| **B29** | 低-中·体验 | `hub/src/main.rs` `last_cfg_pull` | **已修复**：Hub 对未见过或发生哈希漂移的 Receiver 进行 `reqcfg` 拉取时，固定 60s 频控可能导致初次启动偶发丢包时等待过长。**修法**：升级为双阶自适应频控（初次重试允许 5s，后续退避至 60s），并在收到 `CFGRPT` 成功入库时立即复位该节点的频控状态，使冷启动与重连自愈体验更迅速。 |
+| **B30** | 低·用户体验 | `hub/src/assets/dashboard.html` | **已优化**：配置编辑模态框新增 `[🔄 Query Live INI]` 快捷按钮，点击直接下发 `reqcfg` 命令，触发终端即刻异步上报真值配置并在 1.5s 后自动刷新前端视图；`dash_check.py` 验证 167 个 ID 引用全部自洽。 |
+
+---
+
 ### 十次审计：配置上报由“全量硬推”改为“内容哈希比对 + 按需 reqcfg 拉取”（2026-10-21 20:30；方案 B 闭环落地）
 
 | # | 级别 | 位置 | 问题与修复实现 |

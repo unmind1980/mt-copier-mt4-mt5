@@ -671,6 +671,7 @@
       </div>
       <div class="cfghistrow">
         <button type="button" id="cfgloadcurrentbtn" class="opbtn" style="background:#2d6930;color:#fff;border-color:#245427;font-weight:600" title="Load live Current Settings reported by the receiver terminal">📥 Load Current Setting from Node</button>
+        <button type="button" id="cfgpullcurrentbtn" class="opbtn" title="Send reqcfg command to terminal to report latest live config immediately">🔄 Query Live INI</button>
         <div style="width:1px;height:18px;background:var(--line);margin:0 2px"></div>
         <label for="cfghistselect" style="font-weight:600;color:var(--dim)">History:</label>
         <select id="cfghistselect" style="flex:1;min-width:180px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);background:var(--panel)">
@@ -4216,6 +4217,27 @@ $("cfgloadtemplate").addEventListener("click", function(){
     renderSenderCards(parsed.senders);
     $("cfgmsg").className = "opmsg";
     $("cfgmsg").textContent = "Loaded default template into editor.";
+  });
+});
+
+$("cfgpullcurrentbtn").addEventListener("click", function(){
+  if(!cfgState.target) return;
+  $("cfgmsg").className = "opmsg";
+  $("cfgmsg").textContent = "Requesting live configuration from terminal (reqcfg)...";
+  $("cfgpullcurrentbtn").disabled = true;
+  postJson("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/commands", {op: "reqcfg", args: ""}, function(err, resp){
+    $("cfgpullcurrentbtn").disabled = false;
+    if(err){
+      $("cfgmsg").className = "opmsg bad";
+      $("cfgmsg").textContent = "Failed to query live config: " + err;
+      return;
+    }
+    $("cfgmsg").className = "opmsg ok";
+    $("cfgmsg").textContent = "reqcfg command dispatched. Waiting for node report...";
+    setTimeout(function(){
+      if(!cfgState.target) return;
+      loadNodeConfig(cfgState.target);
+    }, 1500);
   });
 });
 

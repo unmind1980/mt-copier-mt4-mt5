@@ -699,6 +699,21 @@ void TestConfig()
    OkInt("config: ...and it does not extend the count",odd.SenderCount(),1);
    OkStr("config: ...but its keys are still readable",odd.Get("senderx","id"),"zz");
    FileDelete(path);
+   //--- Section overflow check: writing more than CP_INI_SECTIONS distinct blocks
+   FileDelete(path);
+   h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h!=INVALID_HANDLE)
+     {
+      for(int s=0;s<CP_INI_SECTIONS+5;s++)
+        {
+         FileWrite(h,"[sec"+IntegerToString(s)+"]");
+         FileWrite(h,"k=v");
+        }
+      FileClose(h);
+      CopierIni secOver;
+      Ok("config: sections exceeding CP_INI_SECTIONS is rejected", !secOver.Load(path));
+      FileDelete(path);
+     }
   }
 
 //=====================================================================

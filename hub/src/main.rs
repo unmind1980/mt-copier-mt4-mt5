@@ -1214,7 +1214,7 @@ fn main() {
     let mut last_rcpt_drop = Instant::now() - Duration::from_secs(60);
     let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
         std::collections::HashMap::new();
-    let mut last_cfg_pull: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+    let mut last_cfg_pull: std::collections::HashMap<String, (Instant, u32)> = std::collections::HashMap::new();
 
     //--- The API thread, if it was asked for. Spawned before the loop so a
     //--- bind failure is reported before the first frame is forwarded rather
@@ -1534,13 +1534,22 @@ fn main() {
                                                 }
                                             };
                                             if needs_pull {
-                                                let throttled = last_cfg_pull
-                                                    .get(&node_key)
-                                                    .map(|t| t.elapsed() < Duration::from_secs(60))
-                                                    .unwrap_or(false);
+                                                let (throttled, attempts) = match last_cfg_pull.get(&node_key) {
+                                                    Some(&(last_t, attempts)) => {
+                                                        // First retry allowed after 5s for fast bootstrap/reconnect recovery;
+                                                        // subsequent retries back off to 60s to prevent command flood.
+                                                        let delay = if attempts <= 1 {
+                                                            Duration::from_secs(5)
+                                                        } else {
+                                                            Duration::from_secs(60)
+                                                        };
+                                                        (last_t.elapsed() < delay, attempts)
+                                                    }
+                                                    None => (false, 0),
+                                                };
                                                 if !throttled {
-                                                    last_cfg_pull.insert(node_key.clone(), Instant::now());
-                                                    println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg", node_key, ih);
+                                                    last_cfg_pull.insert(node_key.clone(), (Instant::now(), attempts + 1));
+                                                    println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg (attempt {})", node_key, ih, attempts + 1);
                                                     cmds.issue_op(&node_key, "reqcfg", "", "hub", "127.0.0.1");
                                                 }
                                             }
@@ -1912,6 +1921,7 @@ fn main() {
                                 }
                             }
                             println!("[hub] {} reported current effective config (rev {})", key, rev);
+                            last_cfg_pull.remove(&key);
                             poke();
                         }
 

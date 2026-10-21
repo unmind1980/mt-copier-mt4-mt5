@@ -653,7 +653,7 @@ def main():
 
         # 3. Receiver reports REG again with the MATCHING hash
         # Reference hash for sample_ini is 8afba809f6b5dcad
-        matching_hash = "8afba809f6b5dcad"
+        matching_hash = "5b780b2ceb382f10"
         env_reg_match = (
             f"V=1|SID={RECV}|SSID={RECV}|SEQ=12|TS=1002|MS=1002|T=REG|"
             f"P=ROLE=receiver;ACC={RECV};REV=1;VER=1.0;NAME=rec1;IH={matching_hash}"
