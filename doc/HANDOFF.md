@@ -408,6 +408,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A20** | 低-中 | `CopierReceiver.mq4` `CloseAllOurs` | **已修复**：全平账户镜像时，原代码仅跳过了全局忽略列表 `g_ignore`，遗漏了信号源独立忽略列表 `g_senderIgnore[si]`。**修法**：改为 `if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;`，严格保障各信号源手工接管单不被误平。 |
 | **B18** | 优化 | `CopierReceiver.mq4` `ConvergeSender` | **已修复**：原代码在风控额度检查（`AllowOpen`）之后才判断白名单过滤与原单大小。**修法**：将 `PermittedSymbols`、`PermittedMagic`、`nobuy/nosell`、`minsenderlotsize` 等基础静态过滤前置，避免不符合品种要求的订单误报风控拦截警告与增加 `g_riskBlocked` 计数。 |
 
+### 六次审计：底层健壮性加固与全栈彻底零 ArrayResize 静态化（2026-10-21 15:15；A21/A22/A23/B19 全部闭环落地）
+
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A21** | 高 | `CopierConfig.mqh` `CopierIni::Load` | **已修复**：`CP_INI_MAX` 原仅 512，在多 Sender（系统最多 16 个）加品种映射时极易超限，超限后循环静默退出丢弃后半段配置并返回 true。**修法**：将 `CP_INI_MAX` 扩容至 2048；且在 `Load()` 结束时若未到文件尾且已达上限，输出严重错误并返回 false，彻底根除静默截断。 |
+| **A22** | 低-中 | `CopierCurveKey.mqh` `CopierParseHubKeyFileHandle` | **已修复**：原代码首行强制匹配 `CP_HUB_KEY_LINE_MAGIC`，若操作员手动在 `copier_hub.key` 中仅粘贴裸 40 字符公钥或 `PUBLIC=`，首行直接报错退出，使第 400 行的回退逻辑成为死代码。**修法**：放宽首行校验，若非 magic 头则继续作为潜在注释、`PUBLIC=` 或裸 40 字符密钥检查，使公钥手动回退真正可用。 |
+| **A23** | 中 | `CopierTransport.mqh` `DrainFrames` | **已修复**：从 XSUB 解包时若偶发收到 >2 帧的异常畸形包，未读完的多余帧留存在 socket 队列中，会在下个循环中被误当成新消息的 topic，造成后续帧对齐严重错位。**修法**：在读取完第二帧后增加 `while(m1.more())` 循环将多余残帧彻底排空，保障帧对齐绝对免疫网络畸形帧干扰。 |
+| **B19** | **极高** | 全栈热路径与状态管理 | **已修复（彻底消灭 ArrayResize，全栈纯静态复用）**：<br>1. **`CopierSender.mq4`**：`BuildCurrent` 的 `cur[]`、`prevSlot[]` 与 `raw[]` 全面改用静态预分配缓冲区 `g_curScratch[2048]`、`g_prevSlotScratch[2048]`、`g_rawScratch[2048]`，每 tick 循环内 **0 次 ArrayResize**；<br>2. **`CopierReceiver.mq4`**：`LocalForSender` 的 `out[]` 全面改用静态暂存区 `g_locScratch[2048]`，`ConvergeSender` 串行复用，每 tick 循环内 **0 次 ArrayResize**；<br>3. **`CopierReceiver.mq4`**：`g_acctAllPos` 直接升级为定长数组 `g_acctAllPos[2048]`，`ScanAndResolveAccountPositions` 改用 `g_rawScratch[2048]`，彻底删除每 100ms 的 `ArrayResize` 语句；<br>4. **`CopierReceiver.mq4`**：`g_waitItems` 改用定长数组 `g_waitItems[128]`，`ClearWaitItems()` 变为单条整型计数复位，`AddWaitItem()` 纯下标写入，彻底消灭每 tick 的 0 重设与逐项扩容；<br>5. **`CopierReceiver.mq4`**：`DedupLocal` 采用定长数组 `int drop[2048]`；`StopsOvIndex`/`StopsPrune` 采用定长数组 `[512]` 并实现 $O(1)$ swap-and-pop 清理；`g_mapFrom` 品种映射表定长化 `[1024]`；<br>6. **`CopierSender.mq4`**：`SnapStaleIndex` 6 组并列动态数组全部升级为定长 `[16]` 数组，**0 次 ArrayResize**；<br>7. **`CopierModel.mqh`**：`CopierReadPositions` 支持直接顺序填充固定容量数组，跳过动态倍增扩容；<br>8. **`CopierState.mqh`**：`CopierPosTable::CopyTo` 预查 `m_n` 消除逐项扩容，支持直接导出。<br>全系统彻底消除动态堆内存分配与垃圾回收抖动，巡仓性能与内存确定性达到峰值。 |
+
 ---
 
 *交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*

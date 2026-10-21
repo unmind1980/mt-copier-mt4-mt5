@@ -381,16 +381,17 @@ public:
    //--- an empty identity, which they cannot map to anything.
    int               CopyTo(CopierPos &out[]) const
      {
-      ArrayResize(out,0,CP_MAX_POSITIONS);
+      int cap=(m_n<=CP_MAX_POSITIONS)?m_n:CP_MAX_POSITIONS;
+      if(ArrayIsDynamic(out)) ArrayResize(out,cap,CP_MAX_POSITIONS);
       int n=0;
       for(int i=0;i<CP_MAX_POSITIONS;i++)
         {
          if(!SlotValid(i)) continue;
-         if(n>=CP_MAX_POSITIONS) break;
-         ArrayResize(out,n+1,CP_MAX_POSITIONS);
+         if(n>=ArraySize(out)) break;
          out[n]=m_p[i];
          n++;
         }
+      if(ArrayIsDynamic(out) && n!=cap) ArrayResize(out,n);
       return n;
      }
 

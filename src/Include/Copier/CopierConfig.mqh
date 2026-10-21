@@ -27,7 +27,7 @@
 
 #include "CopierDefs.mqh"
 
-#define CP_INI_MAX 512
+#define CP_INI_MAX 2048
 
 class CopierIni
   {
@@ -54,8 +54,14 @@ public:
       if(h==INVALID_HANDLE) return false;
 
       string section="";
-      while(!FileIsEnding(h) && m_n<CP_INI_MAX)
+      bool overflow=false;
+      while(!FileIsEnding(h))
         {
+         if(m_n>=CP_INI_MAX)
+           {
+            overflow=true;
+            break;
+           }
          string line=Trim(FileReadString(h));
          if(StringLen(line)==0) continue;
          string first=StringSubstr(line,0,1);
@@ -80,6 +86,11 @@ public:
          m_n++;
         }
       FileClose(h);
+      if(overflow)
+        {
+         Print("CopierIni: ERROR - ",path," exceeded CP_INI_MAX (",CP_INI_MAX," lines)! Config truncated.");
+         return false;
+        }
       return true;
      }
 

@@ -256,6 +256,11 @@ long             g_lastHbtMs=0;
 long             g_fillSnapshotDueMs=0; // 500ms buffered snapshot deadline after pending fill
 long             g_lastPanelRenderMs=0;
 
+//--- Pre-allocated static scratch buffers for BuildCurrent (ZERO ArrayResize in hot loop)
+CopierPos        g_rawScratch[CP_MAX_POSITIONS];
+CopierPos        g_curScratch[CP_MAX_POSITIONS];
+int              g_prevSlotScratch[CP_MAX_POSITIONS];
+
 //--- SNAPSHOT RECEIPT (slice A: observe; slice B: repair).
 //---
 //--- g_snapHash is the receipt of the snapshot we last SENT - the value a
@@ -276,8 +281,9 @@ string           g_snapHash="";
 string           g_snapPayload="";
 //--- Per-peer count of CONSECUTIVE heartbeats that reported a stale receipt.
 //--- Keyed the same way the peer table is (by the name the peer reports).
-string           g_snapStaleWho[];
-int              g_snapStaleN[];
+#define CP_MAX_STALE_PEERS 16
+string           g_snapStaleWho[CP_MAX_STALE_PEERS];
+int              g_snapStaleN[CP_MAX_STALE_PEERS];
 //--- Slice B timing, parallel to the arrays above.
 //---
 //---   g_snapStaleMs  - when the current stale run STARTED. The debounce is
@@ -291,10 +297,11 @@ int              g_snapStaleN[];
 //---                    measurement (it includes the link).
 //---   g_snapIntMs    - the last measured interval, smoothed by halving.
 //---   g_snapRepairMs - when we last re-sent to this peer, for the rate limit.
-long             g_snapStaleMs[];
-long             g_snapRcptMs[];
-long             g_snapIntMs[];
-long             g_snapRepairMs[];
+long             g_snapStaleMs[CP_MAX_STALE_PEERS];
+long             g_snapRcptMs[CP_MAX_STALE_PEERS];
+long             g_snapIntMs[CP_MAX_STALE_PEERS];
+long             g_snapRepairMs[CP_MAX_STALE_PEERS];
+int              g_snapStaleCount=0;
 
 //--- peers, latency probes and the on-chart panel -------------------
 CopierPeerTable  g_peers;              // receivers we have heard from
@@ -521,15 +528,13 @@ void EmitClose(const CopierPos &p)
 //=====================================================================
 // Scan + UID assignment
 //=====================================================================
-int BuildCurrent(CopierPos &cur[],int &prevSlot[])
+int BuildCurrent()
   {
-   CopierPos raw[];
    //--- Pass readComment=false: skip reading comments for all orders indiscriminately.
    //--- Sender only ever needs comment on MT4 for newly appeared tickets to check "from #".
-   int rn=CopierReadPositions(raw,CP_MAX_POSITIONS,false);
+   //--- Writes directly into pre-allocated static g_rawScratch, zero ArrayResize.
+   int rn=CopierReadPositions(g_rawScratch,CP_MAX_POSITIONS,false);
    int n=0;
-   ArrayResize(cur,0,CP_MAX_POSITIONS);
-   ArrayResize(prevSlot,0,CP_MAX_POSITIONS);
 
    //--- Rebuild ticket index only when table mutations actually occurred.
    //--- In steady state (99.9% of ticks), positions do not change, so the hash
@@ -538,7 +543,7 @@ int BuildCurrent(CopierPos &cur[],int &prevSlot[])
 
    for(int i=0;i<rn;i++)
      {
-      CopierPos p=raw[i];
+      CopierPos p=g_rawScratch[i];
       if(!SymbolAllowed(p.sym)) continue;
       if(!MagicAllowed(p.magic)) continue;
 
@@ -582,10 +587,9 @@ int BuildCurrent(CopierPos &cur[],int &prevSlot[])
         }
 
       p.uid=uid;
-      ArrayResize(cur,n+1,CP_MAX_POSITIONS);
-      ArrayResize(prevSlot,n+1,CP_MAX_POSITIONS);
-      cur[n]=p;
-      prevSlot[n]=slot;
+      if(n>=CP_MAX_POSITIONS) break;
+      g_curScratch[n]=p;
+      g_prevSlotScratch[n]=slot;
       n++;
      }
    return n;
@@ -1098,21 +1102,17 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
 //--- vanished mid-count would reset the very number being measured.
 int SnapStaleIndex(const string who)
   {
-   int n=ArraySize(g_snapStaleWho);
-   for(int i=0;i<n;i++)
+   for(int i=0;i<g_snapStaleCount;i++)
       if(g_snapStaleWho[i]==who) return i;
-   ArrayResize(g_snapStaleWho,n+1,16);
-   ArrayResize(g_snapStaleN,n+1,16);
-   ArrayResize(g_snapStaleMs,n+1,16);
-   ArrayResize(g_snapRcptMs,n+1,16);
-   ArrayResize(g_snapIntMs,n+1,16);
-   ArrayResize(g_snapRepairMs,n+1,16);
+   if(g_snapStaleCount>=CP_MAX_STALE_PEERS) return 0; // bounded
+   int n=g_snapStaleCount;
    g_snapStaleWho[n]=who;
    g_snapStaleN[n]=0;
    g_snapStaleMs[n]=0;
    g_snapRcptMs[n]=0;
    g_snapIntMs[n]=0;
    g_snapRepairMs[n]=0;
+   g_snapStaleCount++;
    return n;
   }
 
@@ -1242,10 +1242,8 @@ void OnTimer()
   {
    long now=CopierNowMs();
 
-   //--- 1) scan and reconcile against what we saw last tick
-   CopierPos cur[];
-   int prevSlot[];
-   int n=BuildCurrent(cur,prevSlot);
+   //--- 1) scan and reconcile against what we saw last tick (zero ArrayResize)
+   int n=BuildCurrent();
 
    //--- Track which slots in g_prev are still alive this tick
    bool seenPrev[CP_MAX_POSITIONS];
@@ -1256,26 +1254,26 @@ void OnTimer()
    //--- 2) emit opens for new UIDs, or check stop/volume/kind changes for existing slots
    for(int i=0;i<n;i++)
      {
-      int slot=prevSlot[i];
+      int slot=g_prevSlotScratch[i];
       if(slot<0)
         {
          //--- NEW POSITION: slot < 0 means no match in previous tick
-         EmitOpen(cur[i]);
+         EmitOpen(g_curScratch[i]);
          //--- log our own ticket alongside the UID: the receiver writes
          //--- both into its order comment, so the two logs line up and you
          //--- can go straight to the matching order in either terminal.
          //--- A pending entry says so, and gives its trigger price - "open"
          //--- alone cannot tell a working order from a filled one.
-         string what=(cur[i].kind==CP_ORD_PENDING)
-                     ?(" place-pending type="+(string)cur[i].ptype
-                       +" trigger="+DoubleToString(cur[i].pprice,5))
+         string what=(g_curScratch[i].kind==CP_ORD_PENDING)
+                     ?(" place-pending type="+(string)g_curScratch[i].ptype
+                       +" trigger="+DoubleToString(g_curScratch[i].pprice,5))
                      :" market";
-         g_log.Info("open "+cur[i].uid+" tkt="+(string)cur[i].ticket+" "
-                    +cur[i].sym+" side="+(string)cur[i].side
+         g_log.Info("open "+g_curScratch[i].uid+" tkt="+(string)g_curScratch[i].ticket+" "
+                    +g_curScratch[i].sym+" side="+(string)g_curScratch[i].side
                     +what
-                    +" lots="+DoubleToString(cur[i].lots,2)
-                    +" sl="+((cur[i].sl>0.0)?DoubleToString(cur[i].sl,5):"none")
-                    +" tp="+((cur[i].tp>0.0)?DoubleToString(cur[i].tp,5):"none"));
+                    +" lots="+DoubleToString(g_curScratch[i].lots,2)
+                    +" sl="+((g_curScratch[i].sl>0.0)?DoubleToString(g_curScratch[i].sl,5):"none")
+                    +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none"));
          g_stateDirty=true;
         }
       else
@@ -1289,30 +1287,30 @@ void OnTimer()
          //--- Fast numeric check directly against m_p[slot]: ZERO struct copies,
          //--- ZERO string allocations on 99.9% of steady-state ticks (B11).
          if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
-                             prevLots,prevKind,prevTicket,cur[i]))
+                             prevLots,prevKind,prevTicket,g_curScratch[i]))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) hasDiff[i]=true;
 
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(stopsDiff)
               {
-               g_log.Info("stops "+cur[i].uid+" "+cur[i].sym
-                          +" side="+(string)cur[i].side
-                          +" entry="+DoubleToString(cur[i].openPx,5)
-                          +" sl="+((cur[i].sl>0.0)?DoubleToString(cur[i].sl,5):"none")
-                          +" tp="+((cur[i].tp>0.0)?DoubleToString(cur[i].tp,5):"none"));
+               g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
+                          +" side="+(string)g_curScratch[i].side
+                          +" entry="+DoubleToString(g_curScratch[i].openPx,5)
+                          +" sl="+((g_curScratch[i].sl>0.0)?DoubleToString(g_curScratch[i].sl,5):"none")
+                          +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none"));
                Emit(CP_T_MODIFY,
-                    CopierPayloadModify(cur[i].uid,cur[i].openPx,
-                                        cur[i].sl,cur[i].tp),false);
+                    CopierPayloadModify(g_curScratch[i].uid,g_curScratch[i].openPx,
+                                        g_curScratch[i].sl,g_curScratch[i].tp),false);
               }
 
             //--- VOLUME DRIFT (partial close we do not model in the MVP)
             if(lotsDiff)
               {
                g_stateDirty=true;
-               if(g_once.ShouldEmit("vol|"+cur[i].uid))
-                  g_log.Info("partial close on "+cur[i].uid+" "+cur[i].sym
-                             +" "+DoubleToString(prevLots,2)+" -> "+DoubleToString(cur[i].lots,2)
+               if(g_once.ShouldEmit("vol|"+g_curScratch[i].uid))
+                  g_log.Info("partial close on "+g_curScratch[i].uid+" "+g_curScratch[i].sym
+                             +" "+DoubleToString(prevLots,2)+" -> "+DoubleToString(g_curScratch[i].lots,2)
                              +" (UID carried across the ticket change; the snapshot"
                              +" now carries the smaller volume)");
               }
@@ -1321,18 +1319,18 @@ void OnTimer()
             if(kindDiff)
               {
                g_stateDirty=true;
-               g_log.Info("uid "+cur[i].uid+" "+cur[i].sym+" moved: kind "
-                          +(string)prevKind+" -> "+(string)cur[i].kind+", ticket "
-                          +(string)prevTicket+" -> "+(string)cur[i].ticket
+               g_log.Info("uid "+g_curScratch[i].uid+" "+g_curScratch[i].sym+" moved: kind "
+                          +(string)prevKind+" -> "+(string)g_curScratch[i].kind+", ticket "
+                          +(string)prevTicket+" -> "+(string)g_curScratch[i].ticket
                           +" (a pending filling looks like this once; a repeat does not)");
                //--- When a pending order fills into a market position, buffer a 0.5s (500ms)
                //--- debounce before pushing the snapshot, giving receivers time to fill naturally.
-               if(prevKind==CP_ORD_PENDING && cur[i].kind==CP_ORD_MARKET)
+               if(prevKind==CP_ORD_PENDING && g_curScratch[i].kind==CP_ORD_MARKET)
                  {
                   if(g_fillSnapshotDueMs==0)
                     {
                      g_fillSnapshotDueMs=now+500;
-                     g_log.Info("uid "+cur[i].uid+" pending filled; scheduled buffered snapshot in 500ms");
+                     g_log.Info("uid "+g_curScratch[i].uid+" pending filled; scheduled buffered snapshot in 500ms");
                     }
                  }
               }
@@ -1355,15 +1353,15 @@ void OnTimer()
    //--- 5) roll the window forward in-place: update modified slots, insert new
    for(int i=0;i<n;i++)
      {
-      if(prevSlot[i]>=0)
+      if(g_prevSlotScratch[i]>=0)
         {
          //--- Steady-state (99.9%): no numeric difference -> NO-OP!
          //--- Zero struct copies and m_tkValid is preserved.
-         if(hasDiff[i]) g_prev.UpdateNumericAt(prevSlot[i],cur[i]);
+         if(hasDiff[i]) g_prev.UpdateNumericAt(g_prevSlotScratch[i],g_curScratch[i]);
         }
       else
         {
-         g_prev.InsertEmpty(cur[i]);
+         g_prev.InsertEmpty(g_curScratch[i]);
         }
      }
 

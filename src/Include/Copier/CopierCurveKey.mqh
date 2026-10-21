@@ -386,13 +386,9 @@ string CopierParseHubKeyFileHandle(const int h)
       if(firstLine)
         {
          firstLine=false;
-         // First non-empty line must match magic header
-         if(line!=CP_HUB_KEY_LINE_MAGIC)
-           {
-            FileClose(h);
-            return "";
-           }
-         continue;
+         // If first non-empty line matches magic header, skip to payload lines
+         if(line==CP_HUB_KEY_LINE_MAGIC) continue;
+         // Otherwise, allow first line to directly be a comment, PUBLIC= field, or naked 40-char key
         }
       if(StringGetCharacter(line,0)=='#') continue;
       string p=CopierKeyExtractField(line,"PUBLIC");

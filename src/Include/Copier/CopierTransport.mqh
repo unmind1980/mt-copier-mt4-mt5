@@ -111,21 +111,22 @@ private:
 
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
-      int got=0;
-      if(CheckPointer(s)==POINTER_INVALID) return 0;
       int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
+      if(ArrayIsDynamic(out)) ArrayResize(out,limit);
+      if(CheckPointer(s)==POINTER_INVALID) return 0;
+
+      int got=0;
       for(int i=0;i<limit;i++)
         {
          ZmqMsg msg;
          if(!s.recv(msg,true)) break;   // EAGAIN -> nothing pending
          string data=msg.getData();
          if(StringLen(data)==0) continue;
-         int n=ArraySize(out);
-         if(n>=CP_DRAIN_MAX) break;
-         ArrayResize(out,n+1,64);
-         out[n]=data;
+         if(got>=ArraySize(out)) break;
+         out[got]=data;
          got++;
         }
+      if(ArrayIsDynamic(out)) ArrayResize(out,got);
       return got;
      }
 
@@ -399,12 +400,12 @@ public:
    int               DrainFrames(string &topics[],string &payloads[],
                                  const int maxMsgs)
      {
-      ArrayResize(topics,0);
-      ArrayResize(payloads,0);
+      int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
+      if(ArrayIsDynamic(topics))   ArrayResize(topics,limit);
+      if(ArrayIsDynamic(payloads)) ArrayResize(payloads,limit);
       if(CheckPointer(m_sub)==POINTER_INVALID) return 0;
 
       int got=0;
-      int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
       for(int i=0;i<limit;i++)
         {
          ZmqMsg m0;
@@ -419,14 +420,21 @@ public:
             if(!m_sub.recv(m1,true)) break;
             topic=first;
             payload=m1.getData();
+            //--- Drain and drop any unexpected additional frames (>2) to prevent
+            //--- socket frame misalignment on subsequent message reads.
+            while(m1.more())
+              {
+               ZmqMsg extra;
+               if(!m_sub.recv(extra,true)) break;
+              }
            }
-         int n=ArraySize(payloads);
-         ArrayResize(topics,n+1,64);
-         ArrayResize(payloads,n+1,64);
-         topics[n]=topic;
-         payloads[n]=payload;
+         if(got>=ArraySize(topics) || got>=ArraySize(payloads)) break;
+         topics[got]=topic;
+         payloads[got]=payload;
          got++;
         }
+      if(ArrayIsDynamic(topics))   ArrayResize(topics,got);
+      if(ArrayIsDynamic(payloads)) ArrayResize(payloads,got);
       return got;
      }
 

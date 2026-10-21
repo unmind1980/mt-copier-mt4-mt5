@@ -364,12 +364,14 @@ long    g_lastRiskReport=0;
 //---
 //--- g_stLastMs is the throttle: the moment a stop edit was last queued for
 //--- this uid, so a trailing stop cannot become ten broker calls a second.
-string  g_stUid[];
-bool    g_stHasOv[];
-double  g_stOvSl[];
-double  g_stOvTp[];
-double  g_stOvOpn[];
-long    g_stLastMs[];
+#define CP_MAX_STOPS_OV 512
+string  g_stUid[CP_MAX_STOPS_OV];
+bool    g_stHasOv[CP_MAX_STOPS_OV];
+double  g_stOvSl[CP_MAX_STOPS_OV];
+double  g_stOvTp[CP_MAX_STOPS_OV];
+double  g_stOvOpn[CP_MAX_STOPS_OV];
+long    g_stLastMs[CP_MAX_STOPS_OV];
+int     g_stCount=0;
 //--- A tripped risk switch is a STEADY STATE, not an event: the receiver is
 //--- deliberately doing nothing and will keep doing it. Once an hour is
 //--- plenty to notice that in a log; once a minute is 1440 lines a day.
@@ -470,19 +472,21 @@ struct CopierWaitItem
    string reason;
   };
 
-CopierWaitItem g_waitItems[];
+#define CP_MAX_WAIT_ITEMS 128
+CopierWaitItem g_waitItems[CP_MAX_WAIT_ITEMS];
 int            g_waitItemsCount=0;
+
+//--- Pre-allocated scratch buffer for LocalForSender / ConvergeSender (zero ArrayResize)
+CopierPos      g_locScratch[CP_MAX_POSITIONS];
 
 void ClearWaitItems()
   {
    g_waitItemsCount=0;
-   ArrayResize(g_waitItems,0,64);
   }
 
 void AddWaitItem(const string uid,const string sym,const int side,const double lots,const double openPx,const long magic,const string stage,const string reason)
   {
-   if(g_waitItemsCount>=128) return;
-   ArrayResize(g_waitItems,g_waitItemsCount+1,64);
+   if(g_waitItemsCount>=CP_MAX_WAIT_ITEMS) return;
    g_waitItems[g_waitItemsCount].uid=uid;
    g_waitItems[g_waitItemsCount].sym=sym;
    g_waitItems[g_waitItemsCount].side=side;
@@ -495,9 +499,10 @@ void AddWaitItem(const string uid,const string sym,const int side,const double l
   }
 
 //--- flattened per-sender symbol maps -------------------------------
-string  g_mapFrom[];
-string  g_mapTo[];
-int     g_mapSender[];
+#define CP_MAX_TOTAL_MAPS (CP_MAX_SENDERS*CP_MAX_SYMBOL_MAP)
+string  g_mapFrom[CP_MAX_TOTAL_MAPS];
+string  g_mapTo[CP_MAX_TOTAL_MAPS];
+int     g_mapSender[CP_MAX_TOTAL_MAPS];
 int     g_nMap=0;
 
 //--- desired-position sets: nSenders * CP_MAX_POSITIONS --------------
@@ -748,10 +753,7 @@ void MapAdd(const int si,const string from,const string to)
       //--- differently, and that is deliberate.
       if(g_mapSender[i]==si && g_mapFrom[i]==from) { g_mapTo[i]=to; return; }
      }
-   if(g_nMap>=CP_MAX_SENDERS*CP_MAX_SYMBOL_MAP) return;
-   ArrayResize(g_mapFrom,g_nMap+1,16);
-   ArrayResize(g_mapTo,g_nMap+1,16);
-   ArrayResize(g_mapSender,g_nMap+1,16);
+   if(g_nMap>=CP_MAX_TOTAL_MAPS) return;
    g_mapFrom[g_nMap]=from;
    g_mapTo[g_nMap]=to;
    g_mapSender[g_nMap]=si;
@@ -772,9 +774,6 @@ void MapAdd(const int si,const string from,const string to)
 //--- "the mapping in the file" - which is the whole point of a runtime reload.
 void MapClear()
   {
-   ArrayResize(g_mapFrom,0);
-   ArrayResize(g_mapTo,0);
-   ArrayResize(g_mapSender,0);
    g_nMap=0;
   }
 
@@ -1504,10 +1503,9 @@ string ResolveUid(const CopierPos &p)
    return "";
   }
 
-int LocalForSender(const int si,const CopierPos &all[],const int n,CopierPos &out[])
+int LocalForSender(const int si,const CopierPos &all[],const int n)
   {
    int m=0;
-   ArrayResize(out,0,CP_MAX_POSITIONS);
    for(int i=0;i<n;i++)
      {
       if(all[i].magic!=g_magic[si]) continue;
@@ -1516,10 +1514,9 @@ int LocalForSender(const int si,const CopierPos &all[],const int n,CopierPos &ou
       if(StringLen(uid)==0) uid=ResolveUid(all[i]);
       if(StringLen(uid)==0) continue;
 
-      CopierPos p=all[i];
-      p.uid=uid;
-      ArrayResize(out,m+1,CP_MAX_POSITIONS);
-      out[m]=p;
+      if(m>=CP_MAX_POSITIONS) break;
+      g_locScratch[m]=all[i];
+      g_locScratch[m].uid=uid;
       m++;
      }
    return m;
@@ -2986,9 +2983,8 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
   {
    if(ln<2) return ln;
 
-   int drop[];
-   ArrayResize(drop,ln);
-   for(int i=0;i<ln;i++) drop[i]=0;
+   int drop[CP_MAX_POSITIONS];
+   ArrayInitialize(drop,0);
 
    int removed=0;
    for(int i=0;i<ln;i++)
@@ -3128,8 +3124,9 @@ long              g_lastFullScanMs=0;
 int               g_lastOrdersTotal=-1;
 long              g_lastPanelRenderMs=0;
 
-CopierPos g_acctAllPos[];
+CopierPos g_acctAllPos[CP_MAX_POSITIONS];
 int       g_acctAllPosCount=0;
+CopierPos g_rawScratch[CP_MAX_POSITIONS];
 //--- Has ScanAndResolveAccountPositions() ever produced a result? Everything
 //--- that consumes g_acctAllPos must know the difference between "the account
 //--- holds nothing" and "nobody has looked yet" - the two are identical in the
@@ -3160,14 +3157,13 @@ int ScanAndResolveAccountPositions()
       g_lastOrdersTotal=currentTotal;
      }
 
-   CopierPos raw[];
    //--- Comments are only read in bulk when this pass is a FULL revalidation
    //--- (every 30 s, or when the order count changed). A steady-state pass
    //--- reads the comment for the handful of rows that actually changed,
    //--- inside the slow path - see CopierReadCommentByTicket().
-   int an=CopierReadPositions(raw,CP_MAX_POSITIONS,forceFullScan);
+   //--- Writes directly into pre-allocated static g_rawScratch, zero ArrayResize.
+   int an=CopierReadPositions(g_rawScratch,CP_MAX_POSITIONS,forceFullScan);
 
-   ArrayResize(g_acctAllPos,an,64);
    g_acctAllPosCount=an;
    g_acctScanned=true;
 
@@ -3177,19 +3173,19 @@ int ScanAndResolveAccountPositions()
       if(!forceFullScan)
         {
          //--- Prediction 1: Same index match (O(1) hit for 99.9% of steady-state ticks)
-         if(i<g_posCacheCount && g_posCache[i].ticket==raw[i].ticket)
+         if(i<g_posCacheCount && g_posCache[i].ticket==g_rawScratch[i].ticket)
            {
-            if(g_posCache[i].magic==raw[i].magic
-               && g_posCache[i].side==raw[i].side
-               && g_posCache[i].kind==raw[i].kind
-               && g_posCache[i].ptype==raw[i].ptype
-               && g_posCache[i].openTime==raw[i].openTime
-               && g_posCache[i].pexpire==raw[i].pexpire
-               && g_posCache[i].lots==raw[i].lots
-               && g_posCache[i].openPx==raw[i].openPx
-               && g_posCache[i].sl==raw[i].sl
-               && g_posCache[i].tp==raw[i].tp
-               && g_posCache[i].pprice==raw[i].pprice)
+            if(g_posCache[i].magic==g_rawScratch[i].magic
+               && g_posCache[i].side==g_rawScratch[i].side
+               && g_posCache[i].kind==g_rawScratch[i].kind
+               && g_posCache[i].ptype==g_rawScratch[i].ptype
+               && g_posCache[i].openTime==g_rawScratch[i].openTime
+               && g_posCache[i].pexpire==g_rawScratch[i].pexpire
+               && g_posCache[i].lots==g_rawScratch[i].lots
+               && g_posCache[i].openPx==g_rawScratch[i].openPx
+               && g_posCache[i].sl==g_rawScratch[i].sl
+               && g_posCache[i].tp==g_rawScratch[i].tp
+               && g_posCache[i].pprice==g_rawScratch[i].pprice)
               {
                matchIdx=i;
               }
@@ -3200,18 +3196,18 @@ int ScanAndResolveAccountPositions()
            {
             for(int c=0;c<g_posCacheCount;c++)
               {
-               if(g_posCache[c].ticket==raw[i].ticket
-                  && g_posCache[c].magic==raw[i].magic
-                  && g_posCache[c].side==raw[i].side
-                  && g_posCache[c].kind==raw[i].kind
-                  && g_posCache[c].ptype==raw[i].ptype
-                  && g_posCache[c].openTime==raw[i].openTime
-                  && g_posCache[c].pexpire==raw[i].pexpire
-                  && g_posCache[c].lots==raw[i].lots
-                  && g_posCache[c].openPx==raw[i].openPx
-                  && g_posCache[c].sl==raw[i].sl
-                  && g_posCache[c].tp==raw[i].tp
-                  && g_posCache[c].pprice==raw[i].pprice)
+               if(g_posCache[c].ticket==g_rawScratch[i].ticket
+                  && g_posCache[c].magic==g_rawScratch[i].magic
+                  && g_posCache[c].side==g_rawScratch[i].side
+                  && g_posCache[c].kind==g_rawScratch[i].kind
+                  && g_posCache[c].ptype==g_rawScratch[i].ptype
+                  && g_posCache[c].openTime==g_rawScratch[i].openTime
+                  && g_posCache[c].pexpire==g_rawScratch[i].pexpire
+                  && g_posCache[c].lots==g_rawScratch[i].lots
+                  && g_posCache[c].openPx==g_rawScratch[i].openPx
+                  && g_posCache[c].sl==g_rawScratch[i].sl
+                  && g_posCache[c].tp==g_rawScratch[i].tp
+                  && g_posCache[c].pprice==g_rawScratch[i].pprice)
                  {
                   matchIdx=c;
                   break;
@@ -3224,30 +3220,30 @@ int ScanAndResolveAccountPositions()
         {
          //--- FAST PATH: O(1) hit, zero allocations, reuse cached UID
          g_posCacheNext[i]=g_posCache[matchIdx];
-         raw[i].uid=g_posCache[matchIdx].uid;
-         raw[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
-         if(StringLen(raw[i].cmt)==0)
+         g_rawScratch[i].uid=g_posCache[matchIdx].uid;
+         g_rawScratch[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
+         if(StringLen(g_rawScratch[i].cmt)==0)
            {
-            raw[i].cmt=CopierReadCommentByTicket(raw[i]);
-            g_posCacheNext[i].cmt=raw[i].cmt;
+            g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
+            g_posCacheNext[i].cmt=g_rawScratch[i].cmt;
            }
-         g_acctAllPos[i]=raw[i];
+         g_acctAllPos[i]=g_rawScratch[i];
         }
       else
         {
          //--- SLOW PATH: resolve UID on ticket change or numeric change
-         if(!forceFullScan) raw[i].cmt=CopierReadCommentByTicket(raw[i]);
-         string uid=ResolveUid(raw[i]);
-         raw[i].uid=uid;
-         g_acctAllPos[i]=raw[i];
+         if(!forceFullScan) g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
+         string uid=ResolveUid(g_rawScratch[i]);
+         g_rawScratch[i].uid=uid;
+         g_acctAllPos[i]=g_rawScratch[i];
 
          int oursSi=-1;
          for(int k=0;k<g_nSenders;k++)
            {
-            if(raw[i].magic==g_magic[k]) { oursSi=k; break; }
+            if(g_rawScratch[i].magic==g_magic[k]) { oursSi=k; break; }
            }
          bool isOurs=(oursSi>=0);
-         bool orphan=(!isOurs && StringLen(CopierUidFromComment(raw[i].cmt))>0);
+         bool orphan=(!isOurs && StringLen(CopierUidFromComment(g_rawScratch[i].cmt))>0);
 
          //--- Keep the durable UID <-> ticket map current - but only here.
          //--- LocalForSender used to Upsert every position on every tick,
@@ -3257,7 +3253,7 @@ int ScanAndResolveAccountPositions()
          //--- moment the map can actually need an update.
          if(isOurs && StringLen(uid)==CP_UID_LEN)
            {
-            CopierPos rec=raw[i];
+            CopierPos rec=g_rawScratch[i];
             rec.uid=uid;
             g_recKnown.Upsert(rec);
 
@@ -3278,20 +3274,20 @@ int ScanAndResolveAccountPositions()
               }
            }
 
-         g_posCacheNext[i].ticket   =raw[i].ticket;
-         g_posCacheNext[i].magic    =raw[i].magic;
-         g_posCacheNext[i].side     =raw[i].side;
-         g_posCacheNext[i].lots     =raw[i].lots;
-         g_posCacheNext[i].openPx   =raw[i].openPx;
-         g_posCacheNext[i].sl       =raw[i].sl;
-         g_posCacheNext[i].tp       =raw[i].tp;
-         g_posCacheNext[i].openTime =raw[i].openTime;
-         g_posCacheNext[i].kind     =raw[i].kind;
-         g_posCacheNext[i].ptype    =raw[i].ptype;
-         g_posCacheNext[i].pprice   =raw[i].pprice;
-         g_posCacheNext[i].pexpire  =raw[i].pexpire;
+         g_posCacheNext[i].ticket   =g_rawScratch[i].ticket;
+         g_posCacheNext[i].magic    =g_rawScratch[i].magic;
+         g_posCacheNext[i].side     =g_rawScratch[i].side;
+         g_posCacheNext[i].lots     =g_rawScratch[i].lots;
+         g_posCacheNext[i].openPx   =g_rawScratch[i].openPx;
+         g_posCacheNext[i].sl       =g_rawScratch[i].sl;
+         g_posCacheNext[i].tp       =g_rawScratch[i].tp;
+         g_posCacheNext[i].openTime =g_rawScratch[i].openTime;
+         g_posCacheNext[i].kind     =g_rawScratch[i].kind;
+         g_posCacheNext[i].ptype    =g_rawScratch[i].ptype;
+         g_posCacheNext[i].pprice   =g_rawScratch[i].pprice;
+         g_posCacheNext[i].pexpire  =g_rawScratch[i].pexpire;
          g_posCacheNext[i].uid      =uid;
-         g_posCacheNext[i].cmt      =raw[i].cmt;
+         g_posCacheNext[i].cmt      =g_rawScratch[i].cmt;
          g_posCacheNext[i].isOrphan =orphan;
         }
      }
@@ -3584,12 +3580,11 @@ void ConvergeSender(const int si)
    //--- act on positions this account already holds.
    bool mayOpen=!g_stale[si];
 
-   CopierPos loc[];
-   int ln=LocalForSender(si,g_acctAllPos,g_acctAllPosCount,loc);
+   int ln=LocalForSender(si,g_acctAllPos,g_acctAllPosCount);
    int base=si*CP_MAX_POSITIONS;
 
    double sLots=0.0;
-   for(int k=0;k<ln;k++) sLots+=loc[k].lots;
+   for(int k=0;k<ln;k++) sLots+=g_locScratch[k].lots;
 
    //--- one UID, one position. Has to run BEFORE the diff below:
    //--- the index returns the FIRST match, so a duplicate left in place
@@ -3599,11 +3594,11 @@ void ConvergeSender(const int si)
    //--- Only when it does is the quadratic dedup worth running - which, on a
    //--- normal account, is never: the old code paid 90,000 string compares a
    //--- tick to discover there were no duplicates.
-   g_locIdx.Build(loc,0,ln);
+   g_locIdx.Build(g_locScratch,0,ln);
    if(g_locIdx.Count()<ln)
      {
-      ln=DedupLocal(si,base,loc,ln);
-      g_locIdx.Build(loc,0,ln);
+      ln=DedupLocal(si,base,g_locScratch,ln);
+      g_locIdx.Build(g_locScratch,0,ln);
      }
 
    //--- desired but not mirrored -> open
@@ -3614,7 +3609,7 @@ void ConvergeSender(const int si)
       //--- the operator asked us to leave this one alone (IgnoreUids)
       if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
 
-      int li=g_locIdx.Find(loc,d.uid);
+      int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
         {
          g_seen.ForgetUidActions(g_sid[si],d.uid);
@@ -3629,12 +3624,12 @@ void ConvergeSender(const int si)
          //--- from the state file at startup for positions that were already
          //--- open.
 
-         if(loc[li].kind!=d.kind)
+         if(g_locScratch[li].kind!=d.kind)
            {
             //--- PENDING on local, but MARKET on sender: sender's pending order filled.
             //--- Give local pending order up to PendingFillGraceSeconds to fill naturally
             //--- before cancelling and re-opening, avoiding unnecessary cancellation & chase slippage.
-            if(loc[li].kind==CP_ORD_PENDING && d.kind==CP_ORD_MARKET)
+            if(g_locScratch[li].kind==CP_ORD_PENDING && d.kind==CP_ORD_MARKET)
               {
                double graceSec=g_senderCfg[si].pendingfillgraceseconds;
                if(graceSec>0.0)
@@ -3661,18 +3656,18 @@ void ConvergeSender(const int si)
               }
 
             g_log.Info("uid "+d.uid+" changed kind on the sender ("
-                       +(string)loc[li].kind+" -> "+(string)d.kind
+                       +(string)g_locScratch[li].kind+" -> "+(string)d.kind
                        +"); cancelling the mirror and re-opening it");
             g_reopenExpected.Add(g_sid[si]+":"+d.uid);
-            PushAction(si,CP_ACT_CLOSE,d.uid,loc[li].sym,loc[li].side,
-                       loc[li].lots,loc[li].ticket);
+            PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                       g_locScratch[li].lots,g_locScratch[li].ticket);
             continue;
            }
 
          g_fillGraceRing.Forget(g_sid[si]+":fillgrace:"+d.uid);
 
-         QueueModifyIfNeeded(si,d,loc[li]);
-         QueueTrimIfNeeded(si,d,loc[li]);
+         QueueModifyIfNeeded(si,d,g_locScratch[li]);
+         QueueTrimIfNeeded(si,d,g_locScratch[li]);
          continue;
         }
 
@@ -4071,23 +4066,23 @@ void ConvergeSender(const int si)
    if(ln>0) g_desIdx.Build(g_desired,base,g_desiredCount[si]);
    for(int i=0;i<ln;i++)
      {
-      if(g_desIdx.Find(g_desired,loc[i].uid)>=0) continue;
+      if(g_desIdx.Find(g_desired,g_locScratch[i].uid)>=0) continue;
 
-      if(g_ignore.Has(loc[i].uid) || g_senderIgnore[si].Has(loc[i].uid)) continue;
+      if(g_ignore.Has(g_locScratch[i].uid) || g_senderIgnore[si].Has(g_locScratch[i].uid)) continue;
 
       if(g_senderCfg[si].ignoreallexitsignals)
         {
-         if(g_once.ShouldEmit("gateexit|"+g_sid[si]+"|"+loc[i].uid))
+         if(g_once.ShouldEmit("gateexit|"+g_sid[si]+"|"+g_locScratch[i].uid))
             g_log.Warn("sender "+g_sid[si]+" IgnoreAllExitSignals is on - NOT closing "
-                       +loc[i].uid+" "+loc[i].sym+" even though the sender"
+                       +g_locScratch[i].uid+" "+g_locScratch[i].sym+" even though the sender"
                        +" has exited it. This account is still in that trade"
                        +" and nothing here will close it. Close it by hand, or"
-                       +" add "+loc[i].uid+" to the IgnoreUids input to stop"
+                       +" add "+g_locScratch[i].uid+" to the IgnoreUids input to stop"
                        +" being told.");
          continue;
         }
 
-      PushAction(si,CP_ACT_CLOSE,loc[i].uid,loc[i].sym,loc[i].side,loc[i].lots,loc[i].ticket);
+      PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket);
      }
   }
 
@@ -4249,16 +4244,10 @@ void HandleSnapshot(const int si,const CopierEnv &e)
 //--- index of `uid` in the stop-override table, growing it on demand.
 int StopsOvIndex(const string uid,const bool create)
   {
-   int n=ArraySize(g_stUid);
-   for(int i=0;i<n;i++)
+   for(int i=0;i<g_stCount;i++)
       if(g_stUid[i]==uid) return i;
-   if(!create) return -1;
-   ArrayResize(g_stUid,n+1,32);
-   ArrayResize(g_stHasOv,n+1,32);
-   ArrayResize(g_stOvSl,n+1,32);
-   ArrayResize(g_stOvTp,n+1,32);
-   ArrayResize(g_stOvOpn,n+1,32);
-   ArrayResize(g_stLastMs,n+1,32);
+   if(!create || g_stCount>=CP_MAX_STOPS_OV) return -1;
+   int n=g_stCount;
    g_stUid[n]=uid;
    g_stHasOv[n]=false;
    g_stOvSl[n]=0.0;
@@ -4269,6 +4258,7 @@ int StopsOvIndex(const string uid,const bool create)
    //--- first second after attach would stamp a real 0 and read back as
    //--- "never" - which silently disables the throttle for the next change.
    g_stLastMs[n]=-1;
+   g_stCount++;
    return n;
   }
 
@@ -4282,11 +4272,11 @@ int StopsOvIndex(const string uid,const bool create)
 void StopsPrune(const long now)
   {
    long keep=(long)StopsThrottleSeconds*1000;
-   for(int i=ArraySize(g_stUid)-1;i>=0;i--)
+   for(int i=g_stCount-1;i>=0;i--)
      {
       if(g_stHasOv[i]) continue;
       if(g_stLastMs[i]>=0 && now-g_stLastMs[i]<keep) continue;
-      int last=ArraySize(g_stUid)-1;
+      int last=g_stCount-1;
       if(i!=last)
         {
          g_stUid[i]=g_stUid[last];
@@ -4296,12 +4286,7 @@ void StopsPrune(const long now)
          g_stOvOpn[i]=g_stOvOpn[last];
          g_stLastMs[i]=g_stLastMs[last];
         }
-      ArrayResize(g_stUid,last);
-      ArrayResize(g_stHasOv,last);
-      ArrayResize(g_stOvSl,last);
-      ArrayResize(g_stOvTp,last);
-      ArrayResize(g_stOvOpn,last);
-      ArrayResize(g_stLastMs,last);
+      g_stCount--;
      }
   }
 

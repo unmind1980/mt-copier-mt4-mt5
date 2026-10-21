@@ -387,7 +387,7 @@ default is named.
 | key | default | meaning |
 | --- | --- | --- |
 | `includetradingtimes` | — | `HH:MM-HH:MM,...` in **server** time |
-| `daytradingtimes` | — | `Mon=08:00-17:00`; a day left out is closed |
+| `daytradingtimes` | — | `Mon=08:00-17:00`; a day left out is closed. For overnight ranges across days, name both (e.g. `Mon=22:00-24:00;Tue=00:00-02:00`) |
 | `pollms` | 100 | Timer interval, milliseconds |
 | `maxactionspertick` | 5 | Trade operations executed per timer tick |
 | `loglevel` | 2 | `0` errors, `1` warnings, `2` info, `3` debug |

@@ -425,9 +425,12 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.kind=CP_ORD_MARKET;
       p.ptype=0; p.pprice=0.0; p.pstop=0.0; p.pexpire=0;
       p.used=true;
-      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
-      //--- on a busy account, and the array is capped by maxOut anyway
-      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+      //--- grow in chunks if dynamic; if fixed static buffer, check bounds
+      if(n>=ArraySize(out))
+        {
+         if(ArrayIsDynamic(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+         else break;
+        }
       out[n]=p;
       n++;
      }
@@ -465,9 +468,12 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.pstop=OrderGetDouble(ORDER_PRICE_STOPLIMIT);
       p.pexpire=(long)OrderGetInteger(ORDER_TIME_EXPIRATION);
       p.used=true;
-      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
-      //--- on a busy account, and the array is capped by maxOut anyway
-      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+      //--- grow in chunks if dynamic; if fixed static buffer, check bounds
+      if(n>=ArraySize(out))
+        {
+         if(ArrayIsDynamic(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+         else break;
+        }
       out[n]=p;
       n++;
      }
@@ -512,9 +518,12 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
          p.pexpire=(long)OrderExpiration();
         }
       p.used=true;
-      //--- grow in chunks: one ArrayResize per order per tick is 300 calls
-      //--- on a busy account, and the array is capped by maxOut anyway
-      if(n>=ArraySize(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+      //--- grow in chunks if dynamic; if fixed static buffer, check bounds
+      if(n>=ArraySize(out))
+        {
+         if(ArrayIsDynamic(out)) ArrayResize(out,(n*2<32)?32:((n*2>maxOut)?maxOut:n*2),maxOut);
+         else break;
+        }
       out[n]=p;
       n++;
      }
