@@ -324,6 +324,48 @@
     display: flex; align-items: center; gap: 8px; padding: 24px 16px; color: var(--dim); font-size: 12.5px; justify-content: center;
   }
 
+  
+  /* Embedded Cockpit Detail Header & Footer */
+  .cockpit-detail-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+  }
+  .poshead-embedded {
+    padding: 12px 18px;
+    background: var(--surface-header);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .poshead-embedded h2 {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .posfoot-embedded {
+    padding: 12px 18px;
+    background: var(--surface-header);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+  }
+  .node-banner-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
   /* Split Cockpit View Styles */
   .cockpit-layout {
     display: flex;
@@ -1023,7 +1065,77 @@
       <div id="cockpit_node_list"></div>
     </div>
     <div class="cockpit-pane">
-      <div id="cockpit_detail_view"></div>
+      
+      <div id="cockpit_detail_view" class="cockpit-detail-container">
+        <div class="poshead-embedded">
+          <div style="display:flex;align-items:center;gap:10px">
+            <h2 id="postitle">📊 Positions &amp; Waiting Inspection <span id="pcount"></span></h2>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <div class="pos-node-selector-wrap" style="display:flex;align-items:center;gap:6px">
+              <label for="pos_node_select" class="pos-select-label" style="font-size:12px;color:var(--dim)">Switch Node:</label>
+              <select id="pos_node_select" class="pos-node-select" style="padding:4px 8px;font:12px var(--mono);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px"></select>
+            </div>
+            <div class="pos-node-nav" style="display:flex;gap:4px">
+              <button type="button" id="pos_prev_btn" class="btn-sm" title="Previous node">◀ Prev</button>
+              <button type="button" id="pos_next_btn" class="btn-sm" title="Next node">Next ▶</button>
+              <button type="button" id="posclose_x" class="btn-sm" onclick="switchMainTab('dash')" title="Back to Dashboard">✕ Back</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="pos_detail_body">
+          <div id="pos_node_content">
+            <div id="pos_node_banner"></div>
+
+            <div id="pos_rec_view">
+              <div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>
+              <div id="pos_rec_held_cards" class="pos-card-grid"></div>
+
+              <div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>
+              <div id="pos_rec_waiting_wrap"></div>
+
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
+                <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>
+                  <button type="button" id="pos_refresh_btn" class="btn-sm" onclick="requestPosUpdate()" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:5px 12px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer">🔄 Request Update</button>
+                </div>
+              </div>
+
+              <div class="pos-filter-toolbar">
+                <button type="button" id="pos_filter_all" class="pos-filter-btn active" onclick="setPosDetailFilter('all')">All (0)</button>
+                <button type="button" id="pos_filter_opened" class="pos-filter-btn" onclick="setPosDetailFilter('opened')">Opened (0)</button>
+                <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
+                <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
+                <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
+              </div>
+
+              <div id="pos_rec_table_wrap" class="pos-table-wrap">
+                <table id="pos_rec_table">
+                  <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>
+                  <tbody id="pos_rec_tbody"></tbody>
+                </table>
+                <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
+              </div>
+            </div>
+
+            <div id="pos_snd_view" style="display:none">
+              <div id="pos_snd_content"></div>
+            </div>
+
+            <div id="pos_empty_view" class="empty hidden">Please select a node on the left to inspect its positions and waiting telemetry.</div>
+          </div>
+          <div id="pos" class="hidden"></div>
+          <div id="recposbody" class="hidden"></div>
+        </div>
+
+        <div class="posfoot-embedded">
+          <span class="opmsg" id="pos_foot_msg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
+          <button type="button" id="posclose_btn" class="btn-sm" onclick="switchMainTab('dash')">Back to Dashboard</button>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -1569,73 +1681,7 @@
   </div>
 </div>
 
-<div id="posmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="postitle">
-  <div class="posbox">
-    <div class="poshead">
-      <h2 id="postitle">📊 Positions &amp; Waiting Inspection <span id="pcount"></span></h2>
-      <button type="button" id="posclose_x" style="background:none;border:none;font-size:22px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
-    </div>
-    <div class="pos-node-toolbar">
-      <div class="pos-node-selector-wrap">
-        <label for="pos_node_select" class="pos-select-label">Select Node:</label>
-        <select id="pos_node_select" class="pos-node-select"></select>
-      </div>
-      <div class="pos-node-nav">
-        <button type="button" id="pos_prev_btn" class="opbtn" title="Previous node">◀ Prev</button>
-        <button type="button" id="pos_next_btn" class="opbtn" title="Next node">Next ▶</button>
-      </div>
-    </div>
-    <div class="posbody" id="pos_detail_body">
-      <div id="pos_node_content">
-        <div id="pos_node_banner"></div>
-
-        <div id="pos_rec_view">
-          <div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>
-          <div id="pos_rec_held_cards" class="pos-card-grid"></div>
-
-          <div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>
-          <div id="pos_rec_waiting_wrap"></div>
-
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
-            <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>
-              <button type="button" id="pos_refresh_btn" class="opbtn" onclick="requestPosUpdate()" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:4px 11px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer">🔄 Request Update</button>
-            </div>
-          </div>
-
-          <div class="pos-filter-toolbar">
-            <button type="button" id="pos_filter_all" class="pos-filter-btn active" onclick="setPosDetailFilter('all')">All (0)</button>
-            <button type="button" id="pos_filter_opened" class="pos-filter-btn" onclick="setPosDetailFilter('opened')">Opened (0)</button>
-            <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
-            <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
-            <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
-          </div>
-
-          <div id="pos_rec_table_wrap" class="pos-table-wrap">
-            <table id="pos_rec_table">
-              <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>
-              <tbody id="pos_rec_tbody"></tbody>
-            </table>
-            <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
-          </div>
-        </div>
-
-        <div id="pos_snd_view" style="display:none">
-          <div id="pos_snd_content"></div>
-        </div>
-
-        <div id="pos_empty_view" class="empty hidden">Please select a node above to inspect its positions and waiting telemetry.</div>
-      </div>
-      <div id="pos" class="hidden"></div>
-      <div id="recposbody" class="hidden"></div>
-    </div>
-    <div class="posfoot">
-      <span class="opmsg" id="pos_foot_msg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
-      <button type="button" id="posclose_btn" class="btn-sec">Close</button>
-    </div>
-  </div>
-</div>
+<div id="posmodal" class="hidden" style="display:none"></div>
 
 <div id="confirmmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="confirmtitle">
   <div class="confirmbox">
@@ -2088,11 +2134,20 @@ function updatePosNodeSelector(){
 
 function selectPosNode(key){
   s.selectedPosNode = key;
+  s.cockpitSelectedKey = key;
   var sel = $("pos_node_select");
   if(sel && sel.value !== key){
     sel.value = key;
   }
   renderPosNodeDetail();
+  // Sync active highlight on sidebar list
+  var listHost = $("cockpit_node_list");
+  if(listHost){
+    var items = listHost.querySelectorAll(".node-entry");
+    items.forEach(function(it){
+      it.classList.toggle("active", it.getAttribute("data-ck") === key);
+    });
+  }
 }
 
 function navPosNode(step){
@@ -2140,6 +2195,22 @@ function renderPosNodeDetail(){
   var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">PAUSED (No new mirrors)</span>' : '';
   var riskBadge = (n.risk && n.risk !== "ok") ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px" title="Risk limit tripped: ' + esc(n.risk) + '">⚠️ ' + esc(n.risk) + '</span>' : '';
 
+  var nodeActions = "";
+  if(n.role === "receiver"){
+    var pzOp = n.paused ? "resume" : "pause";
+    var pzText = n.paused ? "Resume Node" : "Pause Node";
+    nodeActions = '<div class="node-banner-actions">' +
+      '<button type="button" class="btn-sm btn-primary" onclick="openConfigModal(\'' + esc(n.key) + '\')">📥 Visual Config</button> ' +
+      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'reqcfg\')">🔄 Query Live INI</button> ' +
+      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
+      '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">Close All</button>' +
+      '</div>';
+  } else {
+    nodeActions = '<div class="node-banner-actions">' +
+      '<button type="button" class="btn-sm btn-primary" onclick="openConfigModal(\'' + esc(n.key) + '\')">⚙️ Config</button>' +
+      '</div>';
+  }
+
   var bannerHtml =
     '<div class="node-banner">' +
     '  <div class="node-banner-info">' +
@@ -2156,8 +2227,8 @@ function renderPosNodeDetail(){
     (finStr ? ('      <span>· ' + finStr + '</span>') : '') +
     '    </div>' +
     '  </div>' +
-    '  <div class="node-banner-meta">' +
-    pausedBadge + riskBadge +
+    '  <div class="node-banner-meta" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+    pausedBadge + riskBadge + nodeActions +
     '  </div>' +
     '</div>';
 
@@ -2519,11 +2590,12 @@ function renderPosNodeDetail(){
   }
 }
 
-function openPositionsModal(focusKey){
-  $("posmodal").classList.remove("hidden");
+function openPositionsView(focusKey){
   if(focusKey){
     s.selectedPosNode = focusKey;
+    s.cockpitSelectedKey = focusKey;
   }
+  switchMainTab("cockpit");
   s.lastPosNodeKey = null;
   s.lastPosRowsHtml = null;
   s.lastHeldHtml = null;
@@ -2532,8 +2604,27 @@ function openPositionsModal(focusKey){
   s.lastSndHtml = null;
   s.lastPosNodeSelectHtml = null;
   updatePosNodeSelector();
-  renderPosNodeDetail();
-  renderRecPositions();
+  if(focusKey){
+    selectPosNode(focusKey);
+  } else {
+    renderPosNodeDetail();
+  }
+}
+
+function openPositionsModal(focusKey){
+  openPositionsView(focusKey);
+}
+
+function confirmCloseAllNode(k){
+  confirmDialog({
+    title: "Confirm Close All Positions",
+    desc: "Close ALL positions on receiver <code>" + esc(k) + "</code>?",
+    detail: "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+    danger: true,
+    confirmText: "Close All Positions"
+  }).then(function(ok){
+    if(ok) sendCommand(k, "closeall");
+  });
 }
 
 function closePositionsModal(){
@@ -2627,11 +2718,8 @@ function render(){
   drawTopology(nodes);
   renderCurveKey(d.curve || null);
   renderCockpit(nodes, pos);
-
-  if(!$("posmodal").classList.contains("hidden")){
-    updatePosNodeSelector();
-    renderPosNodeDetail();
-  }
+  updatePosNodeSelector();
+  renderPosNodeDetail();
 }
 
 // M9/§19.1: the hub's CURVE public key lives in the footer, because it is
@@ -2697,96 +2785,40 @@ function applyScale(size){
 // --- Split Cockpit Rendering (Tab 2) ---
 function renderCockpit(nodes, pos){
   var listHost = $("cockpit_node_list");
-  var detailHost = $("cockpit_detail_view");
   var countEl = $("cockpit_node_count");
-  if(!listHost || !detailHost) return;
+  if(!listHost) return;
   if(countEl) countEl.textContent = nodes.length;
 
   if(!nodes.length){
     listHost.innerHTML = '<div class="empty">No nodes connected</div>';
-    detailHost.innerHTML = '<div class="empty">No node registered yet</div>';
     return;
   }
 
-  if(!s.cockpitSelectedKey || !nodes.some(function(n){ return n.key === s.cockpitSelectedKey; })){
-    s.cockpitSelectedKey = nodes[0].key;
+  var activeKey = s.selectedPosNode || s.cockpitSelectedKey;
+  if(!activeKey || !nodes.some(function(n){ return n.key === activeKey; })){
+    activeKey = nodes[0].key;
+    s.selectedPosNode = activeKey;
+    s.cockpitSelectedKey = activeKey;
   }
 
   listHost.innerHTML = nodes.map(function(n){
-    var activeCls = n.key === s.cockpitSelectedKey ? " active" : "";
+    var activeCls = n.key === activeKey ? " active" : "";
     var roleCls = n.role === "sender" ? "role-pill sender" : "role-pill receiver";
     var posCount = (n.positions && n.positions.count !== undefined) ? n.positions.count : "-";
     var lotsStr = (n.positions && n.positions.lots !== undefined) ? n.positions.lots + " Lots" : "";
-    var eqStr = n.equity ? ("$" + n.equity) : (n.balance ? ("$" + n.balance) : "-");
+    var eqStr = n.equity ? ("$" + Number(n.equity).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})) : (n.balance ? ("$" + Number(n.balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})) : "-");
     var pingStr = n.ping_ms ? (n.ping_ms + "ms") : "-";
+    var dotCls = "dot " + (n.liveness || "offline");
     return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
            '<div class="node-entry-top">' +
-           '<strong>' + esc(n.key) + ' \u00b7 ' + esc(n.name || n.role) + '</strong>' +
+           '<div><span class="' + dotCls + '"></span><strong>#' + esc(n.acc || n.key) + '</strong> ' + (n.name ? ('<span style="color:var(--dim)">· ' + esc(n.name) + '</span>') : '') + '</div>' +
            '<span class="ping-tag ping-ok">' + esc(pingStr) + '</span>' +
            '</div>' +
            '<div class="node-entry-sub">' +
            '<span class="' + roleCls + '">' + esc(n.role) + '</span> ' +
-           esc(n.ver ? ("v" + n.ver) : "") + ' \u00b7 ' + posCount + ' pos (' + lotsStr + ') \u00b7 ' + eqStr +
+           esc(n.ver ? ("v" + n.ver) : "") + ' · ' + posCount + ' pos (' + lotsStr + ') · ' + eqStr +
            '</div></div>';
   }).join("");
-
-  var sel = nodes.find(function(n){ return n.key === s.cockpitSelectedKey; }) || nodes[0];
-  if(!sel) return;
-
-  var selOps = "";
-  if(sel.role === "receiver"){
-    var pzOp = sel.paused ? "resume" : "pause";
-    var pzText = sel.paused ? "Resume Node" : "Pause Node";
-    selOps = '<button type="button" class="btn-sm btn-primary" data-cockpit-op="config" data-ck="' + esc(sel.key) + '">📥 Visual Config</button> ' +
-             '<button type="button" class="btn-sm" data-cockpit-op="reqcfg" data-ck="' + esc(sel.key) + '">🔄 Query Live INI</button> ' +
-             '<button type="button" class="btn-sm" data-cockpit-op="' + pzOp + '" data-ck="' + esc(sel.key) + '">' + pzText + '</button> ' +
-             '<button type="button" class="btn-sm btn-danger" data-cockpit-op="closeall" data-ck="' + esc(sel.key) + '">Close All</button> ' +
-             '<button type="button" class="btn-sm" data-cockpit-op="reload" data-ck="' + esc(sel.key) + '">Reload</button>';
-  } else {
-    selOps = '<button type="button" class="btn-sm btn-primary" data-cockpit-op="positions" data-ck="' + esc(sel.key) + '">📊 Inspect Positions</button> ' +
-             '<button type="button" class="btn-sm" data-cockpit-op="config" data-ck="' + esc(sel.key) + '">⚙️ Config</button>';
-  }
-
-  var eqVal = sel.equity ? ("$" + sel.equity) : (sel.balance ? ("$" + sel.balance) : "-");
-  var balVal = sel.balance ? ("$" + sel.balance) : "-";
-  var posVal = (sel.positions && sel.positions.count !== undefined)
-    ? (sel.positions.count + " pos (" + (sel.positions.lots || 0) + " lots)") : "-";
-  var hashVal = (sel.role === "receiver" && cfgState.data && cfgState.data.current_setting)
-    ? "Live Setting Synced" : (sel.role === "receiver" ? "IH Content-Hash Gated" : "N/A (Sender)");
-
-  var nodePos = (pos || []).filter(function(p){ return p.sid === sel.key || p.sid === sel.acc; });
-  var posRows = nodePos.map(function(p){
-    var syms = (p.symbols || []).map(function(x){ return esc(x.symbol) + "×" + esc(x.count) + "/" + esc(x.lots); }).join(" ");
-    return '<tr><td>' + esc(p.sid) + '</td><td class="num">' + esc(p.count) + '</td><td class="num">' + esc(p.lots) + '</td><td>' + (syms || '-') + '</td><td><code>' + esc(p.receipt || '-') + '</code></td></tr>';
-  }).join("");
-  if(!posRows){
-    posRows = '<tr><td colspan="5" class="empty" style="text-align:center">No active positions reported for this node</td></tr>';
-  }
-
-  detailHost.innerHTML =
-    '<div class="cockpit-banner">' +
-    '<div>' +
-    '<h2 style="font-size:1.5em;font-weight:800;margin:0;letter-spacing:-0.02em">' + esc(sel.key) + ' \u00b7 ' + esc(sel.name || sel.role) + '</h2>' +
-    '<div style="font-size:0.9em;color:var(--dim);margin-top:4px">' +
-    'Role: <span class="role-pill ' + sel.role + '">' + esc(sel.role) + '</span> ' +
-    '\u00b7 Platform: ' + esc(sel.ver ? ("v" + sel.ver) : "MT Terminal") +
-    ' \u00b7 Latency: ' + esc(sel.ping_ms ? (sel.ping_ms + "ms") : "-") +
-    ' \u00b7 Status: <span class="dot ' + sel.liveness + '"></span>' + esc(sel.liveness) +
-    (sel.paused ? ' \u00b7 <strong style="color:var(--warn)">PAUSED</strong>' : '') +
-    '</div></div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">' + selOps + '</div>' +
-    '</div>' +
-    '<div class="cockpit-kpi-grid">' +
-    '<div class="spec-card"><div class="spec-card-lbl">Account Equity</div><div class="spec-card-val">' + esc(eqVal) + '</div></div>' +
-    '<div class="spec-card"><div class="spec-card-lbl">Account Balance</div><div class="spec-card-val">' + esc(balVal) + '</div></div>' +
-    '<div class="spec-card"><div class="spec-card-lbl">Managed Positions</div><div class="spec-card-val">' + esc(posVal) + '</div></div>' +
-    '<div class="spec-card"><div class="spec-card-lbl">Config Hash (IH)</div><div class="spec-card-val" style="color:var(--ok)">' + esc(hashVal) + '</div></div>' +
-    '</div>' +
-    '<section style="margin-top:20px">' +
-    '<h2><span>Node Position Snapshot &amp; Symbol Exposure</span></h2>' +
-    '<div style="overflow-x:auto"><table>' +
-    '<thead><tr><th>Source Identifier</th><th class="num">Positions</th><th class="num">Lots</th><th>Symbols</th><th>Receipt Hash (H)</th></tr></thead>' +
-    '<tbody>' + posRows + '</tbody></table></div></section>';
 }
 
 function renderAlerts(alerts){
@@ -3290,17 +3322,10 @@ function onOpClick(ev){
     t = t.parentNode;
   }
   if(!btn){
-    var psCell = ev.target.closest ? ev.target.closest(".ps-cell") : null;
-    if(psCell){
-      var trP = psCell.closest("tr");
-      if(trP) openPositionsModal(trP.getAttribute("data-k"));
-      return;
-    }
-    var wtCell = ev.target.closest ? ev.target.closest(".wt-cell") : null;
-    if(wtCell){
-      var trW = wtCell.closest("tr");
-      if(trW) openPositionsModal(trW.getAttribute("data-k"));
-      return;
+    // Clicking any cell on a row directly switches to Split Cockpit focusing this node
+    var tr = ev.target.closest ? ev.target.closest("tr") : null;
+    if(tr && tr.getAttribute("data-k")){
+      openPositionsView(tr.getAttribute("data-k"));
     }
     return;
   }
@@ -3308,7 +3333,7 @@ function onOpClick(ev){
   var k = tr ? tr.getAttribute("data-k") : "";
   var op = btn.getAttribute("data-op");
   if(op === "positions"){
-    openPositionsModal(k);
+    openPositionsView(k);
     return;
   }
   if(op === "config"){
@@ -3496,8 +3521,7 @@ function startDashboard(){
       if(!item) return;
       var k = item.getAttribute("data-ck");
       if(k){
-        s.cockpitSelectedKey = k;
-        renderCockpit(s.data && s.data.nodes || [], s.data && s.data.positions || []);
+        selectPosNode(k);
       }
     });
   }
