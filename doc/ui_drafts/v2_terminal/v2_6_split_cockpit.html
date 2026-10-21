@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-6: 分体式控制台 (左侧节点大字号 + 右侧主明细)</title>
+<style>
+  :root {
+    --font-base: 14px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Consolas", Menlo, monospace;
+  }
+  [data-theme="light"] {
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --sidebar: #f1f5f9;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --accent: #2563eb;
+    --green: #10b981;
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --panel: #111827;
+    --sidebar: #0f172a;
+    --border: #1f2937;
+    --text: #f9fafb;
+    --text-muted: #9ca3af;
+    --accent: #38bdf8;
+    --green: #34d399;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-sans);
+    font-size: var(--font-base); height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 24px;
+    display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+  }
+  .cockpit-body { display: flex; flex: 1; overflow: hidden; }
+  .node-sidebar {
+    width: 380px; background: var(--sidebar); border-right: 1px solid var(--border);
+    overflow-y: auto; display: flex; flex-direction: column;
+  }
+  .detail-main {
+    flex: 1; background: var(--panel); overflow-y: auto; padding: 24px;
+  }
+  .node-item {
+    padding: 14px 18px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s;
+  }
+  .node-item:hover { background: rgba(0,0,0,0.03); }
+  .node-item.active { background: var(--panel); border-left: 4px solid var(--accent); }
+  .btn {
+    padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>⚡ 分体式驾驶舱架构 (V2-6)</strong>
+    <span style="font-size:12px;color:var(--text-muted);margin-left:8px">左侧专注于节点状态选择，右侧展开全量持仓与配置。各区独立滚动，彻底告别宽表挤压</span>
+  </div>
+  <div style="display:flex;gap:10px">
+    <button class="btn" onclick="toggleTheme()"><span id="theme_icon">🌙</span> <span id="theme_text">夜间模式</span></button>
+  </div>
+</header>
+
+<div class="cockpit-body">
+  <div class="node-sidebar">
+    <div style="padding:10px 18px;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;border-bottom:1px solid var(--border)">
+      节点列表 (24 个)
+    </div>
+    <div class="node-item active">
+      <div style="display:flex;justify-content:space-between">
+        <strong>Prop Master Alpha (#2001)</strong>
+        <span style="color:var(--green);font-size:12px">● 22ms</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">RECEIVER · MT5 · 20 Positions · $105k</div>
+    </div>
+    <div class="node-item">
+      <div style="display:flex;justify-content:space-between">
+        <strong>Alpari Main FX (#1001)</strong>
+        <span style="color:var(--green);font-size:12px">● 18ms</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">SENDER · MT5 · 6 Positions · $12.4k</div>
+    </div>
+    <div class="node-item">
+      <div style="display:flex;justify-content:space-between">
+        <strong>FTMO Stage 2 (#2002)</strong>
+        <span style="color:#d97706;font-size:12px">● 142ms</span>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">RECEIVER · MT4 · 2 Delayed · $108k</div>
+    </div>
+  </div>
+
+  <div class="detail-main">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700">Prop Master Alpha (#2001)</h2>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:2px">MT5 独立实盘 · 策略全同步中 · 状态正常</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" style="background:var(--accent);color:#fff">打开可视化配置器</button>
+        <button class="btn">暂停接收</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">
+      <div style="background:var(--sidebar);padding:14px;border-radius:8px">
+        <div style="font-size:12px;color:var(--text-muted)">账户净值 Equity</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">$105,420.50</div>
+      </div>
+      <div style="background:var(--sidebar);padding:14px;border-radius:8px">
+        <div style="font-size:12px;color:var(--text-muted)">已同步持仓</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px">20 笔 (5.70 Lots)</div>
+      </div>
+      <div style="background:var(--sidebar);padding:14px;border-radius:8px">
+        <div style="font-size:12px;color:var(--text-muted)">当前配置哈希</div>
+        <div style="font-size:22px;font-weight:700;margin-top:4px;color:var(--green)">8afba809 (一致)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  const icon = document.getElementById("theme_icon");
+  const txt = document.getElementById("theme_text");
+  if(icon) icon.textContent = next === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+function setFontSize(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.querySelectorAll(".font-btn").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-size") === size);
+  });
+  const lbl = document.getElementById("cur_size_lbl");
+  if(lbl) lbl.textContent = size + "px";
+}
+</script>
+
+</body>
+</html>

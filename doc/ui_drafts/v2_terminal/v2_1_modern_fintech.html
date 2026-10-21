@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-1: 现代金融交易终端 (高对比清晰白天/黑夜双模)</title>
+<style>
+  :root {
+    --font-base: 13.5px;
+    --font-heading: 16px;
+    --font-mono: "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-header: #f1f5f9;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --accent: #2563eb;
+    --accent-bg: #eff6ff;
+    --green: #059669;
+    --green-bg: #ecfdf5;
+    --green-border: #a7f3d0;
+    --red: #dc2626;
+    --red-bg: #fef2f2;
+    --amber: #d97706;
+    --amber-bg: #fffbeb;
+    --shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  [data-theme="dark"] {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface-header: #334155;
+    --border: #334155;
+    --border-strong: #475569;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-bg: rgba(56, 189, 248, 0.12);
+    --green: #34d399;
+    --green-bg: rgba(52, 211, 153, 0.12);
+    --green-border: rgba(52, 211, 153, 0.3);
+    --red: #f87171;
+    --red-bg: rgba(248, 113, 113, 0.15);
+    --amber: #fbbf24;
+    --amber-bg: rgba(251, 191, 36, 0.15);
+    --shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-base);
+    line-height: 1.5;
+    transition: background 0.2s, color 0.2s;
+  }
+  .app-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--shadow);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .app-title {
+    font-size: var(--font-heading);
+    font-weight: 700;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pill-tag {
+    font-size: 12px; font-family: var(--font-mono); font-weight: 600;
+    padding: 3px 8px; border-radius: 4px;
+  }
+  .tools { display: flex; align-items: center; gap: 10px; }
+  .btn-theme {
+    padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-primary);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    transition: all 0.15s;
+  }
+  .btn-theme:hover { background: var(--surface-header); }
+
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    padding: 16px 24px 0;
+  }
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    box-shadow: var(--shadow);
+  }
+  .kpi-lbl { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .kpi-val { font-size: 24px; font-weight: 800; font-family: var(--font-mono); color: var(--text-primary); margin-top: 4px; }
+  .kpi-sub { font-size: 12px; color: var(--green); margin-top: 2px; }
+
+  .layout-grid {
+    display: grid;
+    grid-template-columns: 2.2fr 1fr;
+    gap: 16px;
+    padding: 16px 24px 24px;
+  }
+  @media(max-width: 1100px) { .layout-grid { grid-template-columns: 1fr; } }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .box-h {
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    font-size: 13px; font-weight: 700; color: var(--text-primary);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  table.data-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  table.data-table th {
+    background: var(--surface-header); color: var(--text-muted); font-weight: 600;
+    text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  table.data-table td {
+    padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+  }
+  table.data-table tr:hover { background: var(--accent-bg); }
+  .num { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+  
+  .badge {
+    padding: 3px 8px; border-radius: 4px; font-size: 11.5px; font-weight: 700;
+    font-family: var(--font-mono); text-transform: uppercase; display: inline-block;
+  }
+  .badge-sender { background: #dbeafe; color: #1e40af; }
+  .badge-receiver { background: #f3e8ff; color: #7e22ce; }
+  .badge-online { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+  .btn-sm {
+    padding: 4px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-primary);
+  }
+  .btn-sm:hover { background: var(--surface-header); border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="app-bar">
+  <div class="app-title">
+    <span style="font-size:20px">⚡</span>
+    <span>MT-COPIER 交易终端 (V2-1 现代高可读白底双模)</span>
+    <span class="pill-tag" style="background:var(--accent-bg);color:var(--accent)">ZMQ: 6000 [CURVE ON]</span>
+  </div>
+  <div class="tools">
+    <button class="btn-theme" onclick="toggleTheme()">
+      <span id="theme_icon">🌙</span> <span id="theme_text">切换为黑夜模式</span>
+    </button>
+    <button class="btn-sm" style="background:#fee2e2;color:#b91c1c;border-color:#fca5a5;font-weight:700">🚨 全局急停</button>
+  </div>
+</div>
+
+<div class="kpi-row">
+  <div class="kpi-card">
+    <div class="kpi-lbl">在线节点总数</div>
+    <div class="kpi-val">24 <span style="font-size:14px;color:var(--green)">● ALL READY</span></div>
+    <div class="kpi-sub">4 Senders · 20 Receivers</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-lbl">当前持仓订单</div>
+    <div class="kpi-val">342 笔</div>
+    <div class="kpi-sub" style="color:var(--accent)">合并交易量: 84.50 Lots</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-lbl">账户总体权益</div>
+    <div class="kpi-val">$1,248,590.20</div>
+    <div class="kpi-sub">+1.15% 距离回撤警戒线</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-lbl">网络往返延迟 (RTT)</div>
+    <div class="kpi-val">19.4 ms</div>
+    <div class="kpi-sub">IH 配置哈希验证 (稳态零字节)</div>
+  </div>
+</div>
+
+<div class="layout-grid">
+  <!-- Left Side: Node Surveillance -->
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="box">
+      <div class="box-h">
+        <span>节点集群实时状态 (字体放大至 13.5px，阅读更舒适、不换行变形)</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn-sm">批量暂停</button>
+          <button class="btn-sm">批量重载</button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>账号与终端</th>
+            <th>延迟</th>
+            <th>状态</th>
+            <th class="num">持仓笔数</th>
+            <th class="num">手数</th>
+            <th class="num">账户权益</th>
+            <th>运行与等待状态</th>
+            <th style="text-align:center">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-sender">SENDER</span></td>
+            <td><strong>#1001</strong> · Alpari Main (MT5)</td>
+            <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">18 ms</td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="num">6</td>
+            <td class="num">1.20</td>
+            <td class="num">$12,450.80</td>
+            <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+            <td style="text-align:center"><button class="btn-sm">配置</button></td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-sender">SENDER</span></td>
+            <td><strong>#1002</strong> · ICMarkets (MT4)</td>
+            <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">34 ms</td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="num">14</td>
+            <td class="num">4.50</td>
+            <td class="num">$45,210.00</td>
+            <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+            <td style="text-align:center"><button class="btn-sm">配置</button></td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-receiver">RECEIVER</span></td>
+            <td><strong>#2001</strong> · Prop Alpha (MT5)</td>
+            <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">22 ms</td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="num">20</td>
+            <td class="num">5.70</td>
+            <td class="num">$105,420.50</td>
+            <td style="color:var(--green)">已收敛同步 (0等待)</td>
+            <td style="text-align:center">
+              <button class="btn-sm btn-primary">可视化配置</button>
+              <button class="btn-sm">暂停</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-receiver">RECEIVER</span></td>
+            <td><strong>#2002</strong> · FTMO Stage 2 (MT4)</td>
+            <td style="color:var(--amber);font-family:var(--font-mono);font-weight:600">142 ms</td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="num">6</td>
+            <td class="num">1.20</td>
+            <td class="num">$108,940.10</td>
+            <td style="color:var(--amber)">2笔订单延迟等待 (回撤门控)</td>
+            <td style="text-align:center">
+              <button class="btn-sm btn-primary">可视化配置</button>
+              <button class="btn-sm">暂停</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Active Exposure Table -->
+    <div class="box">
+      <div class="box-h">
+        <span>持仓暴露监控与镜像情况</span>
+        <span style="font-size:12px;color:var(--text-muted)">共 342 笔持仓</span>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Ticket</th>
+            <th>UID</th>
+            <th>品种</th>
+            <th>方向</th>
+            <th class="num">手数</th>
+            <th class="num">开仓价</th>
+            <th class="num">止损 SL</th>
+            <th class="num">止盈 TP</th>
+            <th>来源信号</th>
+            <th>同步率</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#9821401</td>
+            <td><code>U7A912F4</code></td>
+            <td><strong>XAUUSD</strong></td>
+            <td><span style="color:var(--green);font-weight:700">BUY</span></td>
+            <td class="num">1.00</td>
+            <td class="num">2684.50</td>
+            <td class="num">2672.00</td>
+            <td class="num">2710.00</td>
+            <td>Alpari Main</td>
+            <td><span class="badge badge-online">20/20 全部同步</span></td>
+          </tr>
+          <tr>
+            <td>#9821422</td>
+            <td><code>B12C44D8</code></td>
+            <td><strong>EURUSD</strong></td>
+            <td><span style="color:var(--red);font-weight:700">SELL</span></td>
+            <td class="num">2.50</td>
+            <td class="num">1.08420</td>
+            <td class="num">1.08850</td>
+            <td class="num">1.07900</td>
+            <td>ICMarkets</td>
+            <td><span class="badge badge-online">18/20 (2门控)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Right Side: Telemetry & Log Stream -->
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="box">
+      <div class="box-h">
+        <span>当前配置哈希对比 (IH 状态)</span>
+        <button class="btn-sm">全量核查</button>
+      </div>
+      <div style="padding:14px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px">
+          <span>#2001 Prop Alpha</span>
+          <span style="color:var(--green);font-family:var(--font-mono);font-weight:600">8afba809 (一致)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px">
+          <span>#2002 FTMO</span>
+          <span style="color:var(--green);font-family:var(--font-mono);font-weight:600">5b780b2c (一致)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span>#2003 VPS Backup</span>
+          <span style="color:var(--amber);font-family:var(--font-mono);font-weight:600">10ca0c3b (检测到漂移)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-h">
+        <span>ZMQ 协议实时遥测流 (10 Hz)</span>
+      </div>
+      <div style="padding:12px;font-family:var(--font-mono);font-size:12px;line-height:1.6;color:var(--text-secondary);background:var(--surface-header);max-height:260px;overflow-y:auto">
+        <div>[22:38:01] <span style="color:var(--green)">STAT</span> #2001: 20 held · 0 delay · 18ms</div>
+        <div>[22:38:01] FORWARD 252033316 SNAP hash=4a1c09bf (12 items)</div>
+        <div>[22:38:02] <span style="color:var(--accent)">IH_COMPARE</span> #2001 hash match: 0B transferred</div>
+        <div>[22:38:02] HBT2 node sender:1001 quiet 0s</div>
+        <div>[22:38:03] <span style="color:var(--green)">PONG</span> probe answered in 18ms</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  document.getElementById("theme_icon").textContent = next === "light" ? "🌙" : "☀️";
+  document.getElementById("theme_text").textContent = next === "light" ? "切换为黑夜模式" : "切换为白天白底";
+}
+</script>
+</body>
+</html>

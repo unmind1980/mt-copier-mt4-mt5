@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-5: 苹果工坊极简白 (Apple Studio Minimalist)</title>
+<style>
+  :root {
+    --font-base: 14.5px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  [data-theme="light"] {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --border: rgba(0, 0, 0, 0.08);
+    --text: #1d1d1f;
+    --text-muted: #86868b;
+    --accent: #0071e3;
+    --green: #34c759;
+    --amber: #ff9500;
+    --shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+  }
+  [data-theme="dark"] {
+    --bg: #000000;
+    --card: #1c1c1e;
+    --border: rgba(255, 255, 255, 0.12);
+    --text: #f5f5f7;
+    --text-muted: #86868b;
+    --accent: #2997ff;
+    --green: #30d158;
+    --amber: #ffd60a;
+    --shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font);
+    font-size: var(--font-base); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  header {
+    background: rgba(255, 255, 255, 0.8); backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--border); padding: 14px 32px;
+    display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0;
+  }
+  [data-theme="dark"] header { background: rgba(28, 28, 30, 0.8); }
+  .container { max-width: 1200px; margin: 30px auto; padding: 0 24px; display: flex; flex-direction: column; gap: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px; box-shadow: var(--shadow);
+  }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .btn {
+    padding: 7px 16px; border-radius: 980px; font-size: 13px; font-weight: 500;
+    cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--text);
+  }
+  .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 style="font-size:16px;font-weight:600">MT-Copier Studio (V2-5 极简高级白)</h1>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button class="btn" onclick="toggleTheme()"><span id="theme_icon">🌙</span> <span id="theme_text">深色模式</span></button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="card stat-grid">
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">活跃节点</div>
+      <div style="font-size:28px;font-weight:700;margin-top:4px">24 节点全部就绪</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">管理持仓</div>
+      <div style="font-size:28px;font-weight:700;margin-top:4px">342 笔 (84.50 Lots)</div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">链路延迟</div>
+      <div style="font-size:28px;font-weight:700;color:var(--green);margin-top:4px">19.4 ms 平均</div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:16px 24px;border-bottom:1px solid var(--border);font-weight:600">已连接终端列表</div>
+    <div style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+      <div>
+        <strong>Alpari Main FX</strong> <span style="color:var(--text-muted);font-family:var(--mono);font-size:13px">(#1001 · MT5)</span>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:2px">6 笔持仓 · 1.20 Lots · $12,450.80 权益</div>
+      </div>
+      <div><button class="btn">设置</button></div>
+    </div>
+    <div style="padding:16px 24px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <strong>Prop Master Alpha</strong> <span style="color:var(--text-muted);font-family:var(--mono);font-size:13px">(#2001 · MT5)</span>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:2px">20 笔同步持仓 · 5.70 Lots · $105,420.50 权益 · 完全收敛</div>
+      </div>
+      <div><button class="btn btn-accent">可视化配置</button></div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  const icon = document.getElementById("theme_icon");
+  const txt = document.getElementById("theme_text");
+  if(icon) icon.textContent = next === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+function setFontSize(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.querySelectorAll(".font-btn").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-size") === size);
+  });
+  const lbl = document.getElementById("cur_size_lbl");
+  if(lbl) lbl.textContent = size + "px";
+}
+</script>
+
+</body>
+</html>

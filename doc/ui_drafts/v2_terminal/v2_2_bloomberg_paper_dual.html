@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-2: 彭博经典纸白/深黑双模 (专业排版+字号缩放无变形)</title>
+<style>
+  :root {
+    --font-base: 13.5px;
+    --font-mono: "Consolas", "Liberation Mono", Menlo, Courier, monospace;
+  }
+  [data-theme="light"] {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --header-bg: #eaedf2;
+    --border: #d0d7de;
+    --border-dark: #b8c2cc;
+    --text: #1a202c;
+    --text-dim: #5a6a80;
+    --accent: #b45309;
+    --accent-bg: #fef3c7;
+    --green: #15803d;
+    --green-bg: #dcfce7;
+    --red: #b91c1c;
+    --red-bg: #fee2e2;
+    --blue: #1d4ed8;
+    --blue-bg: #dbeafe;
+  }
+  [data-theme="dark"] {
+    --bg: #0b0e14;
+    --surface: #121722;
+    --header-bg: #1a2233;
+    --border: #243147;
+    --border-dark: #374b6e;
+    --text: #e2e8f0;
+    --text-dim: #798ba7;
+    --accent: #f59e0b;
+    --accent-bg: rgba(245, 158, 11, 0.15);
+    --green: #10b981;
+    --green-bg: rgba(16, 185, 129, 0.15);
+    --red: #ef4444;
+    --red-bg: rgba(239, 68, 68, 0.15);
+    --blue: #38bdf8;
+    --blue-bg: rgba(56, 189, 248, 0.15);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--font-base);
+    line-height: 1.45;
+  }
+  .top-strip {
+    background: var(--header-bg);
+    border-bottom: 2px solid var(--accent);
+    padding: 8px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .controls-bar {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .ctrl-btn {
+    background: var(--surface);
+    border: 1px solid var(--border-dark);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .ctrl-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .font-zoom-ctrl {
+    display: flex; align-items: center; gap: 4px; background: var(--surface);
+    border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px;
+  }
+
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    padding: 12px 20px;
+  }
+  .kpi-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    padding: 10px 14px;
+  }
+  .kpi-title { font-size: 0.85em; text-transform: uppercase; color: var(--text-dim); }
+  .kpi-value { font-size: 1.6em; font-weight: 700; margin-top: 4px; }
+
+  .main-flex {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 12px;
+    padding: 0 20px 20px;
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .panel-h {
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px;
+    font-weight: 700;
+    font-size: 0.95em;
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--accent);
+  }
+  table.p-table {
+    width: 100%; border-collapse: collapse; font-size: 0.92em;
+  }
+  table.p-table th {
+    background: var(--header-bg);
+    color: var(--text-dim);
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.p-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  table.p-table tr:hover { background: var(--accent-bg); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tag {
+    padding: 2px 6px; border-radius: 3px; font-size: 0.82em; font-weight: 700;
+  }
+  .tag-s { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue); }
+  .tag-r { background: #fdf4ff; color: #a21caf; border: 1px solid #e879f9; }
+  .tag-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+</style>
+</head>
+<body>
+
+<div class="top-strip">
+  <div style="display:flex;align-items:center;gap:10px">
+    <strong>⚡ BLOOMBERG DUAL TERMINAL (V2-2)</strong>
+    <span style="color:var(--text-dim)">|</span>
+    <span>PORT: 6000 [CURVE]</span>
+    <span style="color:var(--text-dim)">|</span>
+    <span>ZMQ 10Hz TELEMETRY</span>
+  </div>
+  <div class="controls-bar">
+    <div class="font-zoom-ctrl">
+      <span style="font-size:11px;color:var(--text-dim)">字号调节:</span>
+      <button class="ctrl-btn font-btn" data-size="12" onclick="setFontSize('12')">小 12</button>
+      <button class="ctrl-btn font-btn active" data-size="13.5" onclick="setFontSize('13.5')">标准 13.5</button>
+      <button class="ctrl-btn font-btn" data-size="15" onclick="setFontSize('15')">清晰大 15</button>
+      <button class="ctrl-btn font-btn" data-size="16.5" onclick="setFontSize('16.5')">特大 16.5</button>
+    </div>
+    <button class="ctrl-btn" onclick="toggleTheme()">
+      <span id="theme_icon">🌙</span> <span id="theme_text">夜间模式</span>
+    </button>
+  </div>
+</div>
+
+<div class="kpi-row">
+  <div class="kpi-box">
+    <div class="kpi-title">在线节点 (Fleets)</div>
+    <div class="kpi-value">24 <span style="font-size:0.6em;color:var(--green)">ALL HEALTHY</span></div>
+  </div>
+  <div class="kpi-box" style="border-left-color:var(--blue)">
+    <div class="kpi-title">持仓总手数 (Volume)</div>
+    <div class="kpi-value">84.50 <span style="font-size:0.6em;color:var(--text-dim)">Lots (342笔)</span></div>
+  </div>
+  <div class="kpi-box" style="border-left-color:var(--green)">
+    <div class="kpi-title">聚合资金权益 (Equity)</div>
+    <div class="kpi-value">$1,248,590.20</div>
+  </div>
+  <div class="kpi-box" style="border-left-color:#6366f1">
+    <div class="kpi-title">平均延迟与哈希 (RTT / IH)</div>
+    <div class="kpi-value">19.4 ms <span style="font-size:0.6em;color:var(--green)">100% MATCH</span></div>
+  </div>
+</div>
+
+<div class="main-flex">
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="panel">
+      <div class="panel-h">
+        <span>节点集群实时监控表 (自适应弹性排版，字号放大不挤压)</span>
+        <span style="font-size:0.85em;color:var(--text-dim)">当前字号: <strong id="cur_size_lbl">13.5px</strong></span>
+      </div>
+      <table class="p-table">
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th>账号 / 终端别名</th>
+            <th>网络延时</th>
+            <th>状态</th>
+            <th class="num">持仓</th>
+            <th class="num">手数</th>
+            <th class="num">当前权益</th>
+            <th>收敛与等待情况</th>
+            <th style="text-align:center">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag tag-s">SENDER</span></td>
+            <td><strong>#1001</strong> · Alpari Prime (MT5)</td>
+            <td style="color:var(--green)">18 ms</td>
+            <td><span class="tag tag-ok">ONLINE</span></td>
+            <td class="num">6</td>
+            <td class="num">1.20</td>
+            <td class="num">$12,450.80</td>
+            <td style="color:var(--blue)">广播正常 (15s周期)</td>
+            <td style="text-align:center"><button class="ctrl-btn">配置</button></td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-s">SENDER</span></td>
+            <td><strong>#1002</strong> · ICMarkets (MT4)</td>
+            <td style="color:var(--green)">34 ms</td>
+            <td><span class="tag tag-ok">ONLINE</span></td>
+            <td class="num">14</td>
+            <td class="num">4.50</td>
+            <td class="num">$45,210.00</td>
+            <td style="color:var(--blue)">广播正常 (15s周期)</td>
+            <td style="text-align:center"><button class="ctrl-btn">配置</button></td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-r">RECEIVER</span></td>
+            <td><strong>#2001</strong> · Prop Master 1 (MT5)</td>
+            <td style="color:var(--green)">22 ms</td>
+            <td><span class="tag tag-ok">ONLINE</span></td>
+            <td class="num">20</td>
+            <td class="num">5.70</td>
+            <td class="num">$105,420.50</td>
+            <td style="color:var(--green)">完全收敛 (0等待)</td>
+            <td style="text-align:center">
+              <button class="ctrl-btn" style="background:var(--accent);color:#fff">可视化配置</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="tag tag-r">RECEIVER</span></td>
+            <td><strong>#2002</strong> · FTMO $100k (MT4)</td>
+            <td style="color:var(--accent)">142 ms</td>
+            <td><span class="tag tag-ok">ONLINE</span></td>
+            <td class="num">6</td>
+            <td class="num">1.20</td>
+            <td class="num">$108,940.10</td>
+            <td style="color:var(--accent)">2单回撤门控等待中</td>
+            <td style="text-align:center">
+              <button class="ctrl-btn" style="background:var(--accent);color:#fff">可视化配置</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="panel">
+      <div class="panel-h">
+        <span>配置内容哈希 (IH 验证真值)</span>
+        <button class="ctrl-btn">即时查验</button>
+      </div>
+      <div style="padding:12px;display:flex;flex-direction:column;gap:8px;font-size:0.9em">
+        <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--border);padding-bottom:6px">
+          <span>#2001 Prop Master</span>
+          <span style="color:var(--green)">8afba809 (一致)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;border-bottom:1px dashed var(--border);padding-bottom:6px">
+          <span>#2002 FTMO</span>
+          <span style="color:var(--green)">5b780b2c (一致)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span>#2003 VPS Backup</span>
+          <span style="color:var(--accent)">10ca0c3b (漂移拉取中)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  const icon = document.getElementById("theme_icon");
+  const txt = document.getElementById("theme_text");
+  if(icon) icon.textContent = next === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+function setFontSize(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.querySelectorAll(".font-btn").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-size") === size);
+  });
+  const lbl = document.getElementById("cur_size_lbl");
+  if(lbl) lbl.textContent = size + "px";
+}
+</script>
+
+</body>
+</html>

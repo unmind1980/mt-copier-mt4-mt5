@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft 4: Pipeline Topology Kanban</title>
+<style>
+  :root {
+    --bg: #f1f5f9;
+    --column-bg: #e2e8f0;
+    --card: #ffffff;
+    --border: #cbd5e1;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --accent: #2563eb;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; }
+  header {
+    background: #fff; border-bottom: 1px solid var(--border); padding: 14px 28px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .kanban-board {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 20px;
+    padding: 24px 28px;
+  }
+  .pipeline-column {
+    background: #eef2f6;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .column-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-bottom: 8px; border-bottom: 2px solid #cbd5e1;
+  }
+  .column-title { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .sender-lead-card {
+    background: #ffffff;
+    border: 2px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+  }
+  .receiver-subcard {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    margin-left: 16px;
+    position: relative;
+  }
+  .receiver-subcard::before {
+    content: "↳"; position: absolute; left: -14px; top: 10px; font-size: 14px; color: var(--accent);
+  }
+  .tag { font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; font-family: var(--mono); }
+  .tag-sender { background: #dbeafe; color: #1e40af; }
+  .tag-recv { background: #f3e8ff; color: #7e22ce; }
+  .tag-green { background: #dcfce7; color: #15803d; }
+  .stat-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 style="font-size:16px;font-weight:800">Topology Pipeline Board</h1>
+    <div style="font-size:11.5px;color:var(--text-muted)">Cluster-Grouped Signal Flow: Senders &rarr; Dependent Receiver Fleets</div>
+  </div>
+  <div style="display:flex;gap:10px">
+    <span style="font-family:var(--mono);font-size:12px;padding:6px 12px;background:#fff;border-radius:6px;border:1px solid #cbd5e1">Active Pipelines: <strong>2 Active</strong></span>
+  </div>
+</header>
+
+<div class="kanban-board">
+  <!-- Pipeline 1 -->
+  <div class="pipeline-column">
+    <div class="column-header">
+      <div class="column-title">
+        <span class="tag tag-sender">CLUSTER A</span>
+        <span>Alpari Prime FX</span>
+      </div>
+      <span style="color:var(--green);font-weight:700">● 18ms</span>
+    </div>
+
+    <div class="sender-lead-card">
+      <div style="display:flex;justify-content:space-between">
+        <strong>Sender #1001 (MT5)</strong>
+        <span class="tag tag-green">BROADCASTING</span>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Exposure</span>
+        <strong>6 Positions (1.20 Lots)</strong>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Equity</span>
+        <strong>$12,450.80</strong>
+      </div>
+    </div>
+
+    <!-- Child Receivers -->
+    <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-top:4px">
+      Synchronized Downstream Receivers (2)
+    </div>
+
+    <div class="receiver-subcard">
+      <div style="display:flex;justify-content:space-between">
+        <strong>Prop Master 1 (#2001)</strong>
+        <span class="tag tag-green">SYNCED (0 wait)</span>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Mirrored</span>
+        <strong>6/6 Open · 1.20 Lots</strong>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Account Equity</span>
+        <strong>$105,420.50</strong>
+      </div>
+    </div>
+
+    <div class="receiver-subcard">
+      <div style="display:flex;justify-content:space-between">
+        <strong>FTMO Challenge (#2002)</strong>
+        <span class="tag" style="background:#fef3c7;color:#92400e">2 GATED</span>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Mirrored</span>
+        <strong>4/6 Open · 0.80 Lots</strong>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Wait Reason</span>
+        <span style="color:#d97706">Profit Pullback Gate</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pipeline 2 -->
+  <div class="pipeline-column">
+    <div class="column-header">
+      <div class="column-title">
+        <span class="tag tag-sender">CLUSTER B</span>
+        <span>ICMarkets Scalper</span>
+      </div>
+      <span style="color:var(--green);font-weight:700">● 34ms</span>
+    </div>
+
+    <div class="sender-lead-card" style="border-color:#8b5cf6">
+      <div style="display:flex;justify-content:space-between">
+        <strong>Sender #1002 (MT4)</strong>
+        <span class="tag tag-green">BROADCASTING</span>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Exposure</span>
+        <strong>14 Positions (4.50 Lots)</strong>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Equity</span>
+        <strong>$45,210.00</strong>
+      </div>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-top:4px">
+      Synchronized Downstream Receivers (1)
+    </div>
+
+    <div class="receiver-subcard">
+      <div style="display:flex;justify-content:space-between">
+        <strong>VPS Secondary (#2003)</strong>
+        <span class="tag tag-green">SYNCED (0 wait)</span>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Mirrored</span>
+        <strong>14/14 Open · 4.50 Lots</strong>
+      </div>
+      <div class="stat-row">
+        <span style="color:var(--text-muted)">Account Equity</span>
+        <strong>$24,800.00</strong>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

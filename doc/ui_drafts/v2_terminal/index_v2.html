@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MT-Copier 交易终端改版设计 V2 (白底/黑夜双模 + 大字号防变形专题)</title>
+<style>
+  :root {
+    --bg: #090d16;
+    --bar: #131b2e;
+    --border: #222f4c;
+    --accent: #2563eb;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  .nav-header {
+    background: var(--bar); border-bottom: 1px solid var(--border); padding: 10px 20px;
+    display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+  }
+  .badge { background: #1e3a8a; color: #93c5fd; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 700; }
+  .tabs-switcher {
+    display: flex; gap: 6px; background: #0b1120; padding: 4px; border-radius: 8px; border: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: transparent; border: none; color: var(--muted); font-size: 12.5px; font-weight: 600;
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s;
+  }
+  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .tab-btn.active { background: var(--accent); color: #fff; }
+
+  .preview-wrapper { flex: 1; position: relative; background: #000; }
+  iframe { width: 100%; height: 100%; border: none; }
+  .info-drawer {
+    background: #111827; border-top: 1px solid var(--border); padding: 8px 24px;
+    font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; align-items: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="nav-header">
+  <div style="display:flex;align-items:center;gap:12px">
+    <strong style="font-size:15px">⚡ MT-COPIER 交易终端 V2 延伸版 (白底/黑夜双模 + 大字号防变形)</strong>
+    <span class="badge">6 款完整生成</span>
+    <span style="font-size:12px;color:var(--muted)">点击上方标签页直接全屏预览</span>
+  </div>
+  <div class="tabs-switcher">
+    <button class="tab-btn active" data-file="final_production_preview.html" data-desc="🎯 [最终版本全功能完整预览]: 穿上 V2-1 白底现代质感，集成生产版全部模块(4大KPI+全局指令+节点表+拓扑图+通知通道+用户管理+配置弹窗+持仓明细+公钥) + 6号分体驾驶舱Tab + 4号滑块实时缩放">🎯 最终版全功能预览 (完整模块)</button>
+    <button class="tab-btn" data-file="v2_combo_master.html" data-desc="⭐ [架构融合版]: 1号主仪表盘 + 6号分体驾驶舱(Tab切换) + 4号滑块实时缩放(11~18px无变形)">⭐ 1+4+6 架构融合版</button>
+    <button class="tab-btn" data-file="v2_1_modern_fintech.html" data-desc="V2-1: 现代金融高可读双模终端 (默认白底/黑夜一键切，字号 13.5px 优雅大方)">1. 现代高可读终端</button>
+    <button class="tab-btn" data-file="v2_2_bloomberg_paper_dual.html" data-desc="V2-2: 彭博经典纸白/深黑终端 (专业排版+实时字号缩放器)">2. 彭博经典双模</button>
+    <button class="tab-btn" data-file="v2_3_trading_room_cards.html" data-desc="V2-3: 交易室模块卡片流 (独立卡片封装，字号无论多大彻底不挤压变形)">3. 独立卡片流(零变形)</button>
+    <button class="tab-btn" data-file="v2_4_elastic_zoom_table.html" data-desc="V2-4: 弹性响应式表格 (支持 11px~18px 任意滑块缩放测试，内容自适应保护)">4. 弹性滑块缩放表</button>
+    <button class="tab-btn" data-file="v2_5_apple_studio_white.html" data-desc="V2-5: 苹果工坊极简高级白 (Apple Studio 纯净质感，14.5px 舒适阅读)">5. 苹果工坊高级白</button>
+    <button class="tab-btn" data-file="v2_6_split_cockpit.html" data-desc="V2-6: 分体式控制台 (左侧节点大字号导航，右侧展开全量明细，彻底杜绝宽表挤压)">6. 分体式控制台</button>
+  </div>
+</div>
+
+<div class="preview-wrapper">
+  <iframe id="preview_frame" src="final_production_preview.html"></iframe>
+</div>
+
+<div class="info-drawer">
+  <div id="desc_bar">当前预览：<strong>🎯 [最终版本全功能完整预览]: 穿上 V2-1 白底现代质感，集成生产版全部模块(4大KPI+全局指令+节点表+拓扑图+通知通道+用户管理+配置弹窗+持仓明细+公钥) + 6号分体驾驶舱Tab + 4号滑块实时缩放</strong></div>
+  <div>文件位置：<code>doc/ui_drafts/v2_terminal/</code></div>
+</div>
+
+<script>
+  var btns = document.querySelectorAll(".tab-btn");
+  var frame = document.getElementById("preview_frame");
+  var desc = document.getElementById("desc_bar");
+
+  btns.forEach(function(b){
+    b.addEventListener("click", function(){
+      btns.forEach(function(x){ x.classList.remove("active"); });
+      b.classList.add("active");
+      var f = b.getAttribute("data-file");
+      frame.src = f;
+      desc.innerHTML = "当前预览：<strong>" + b.getAttribute("data-desc") + "</strong>";
+    });
+  });
+</script>
+
+</body>
+</html>

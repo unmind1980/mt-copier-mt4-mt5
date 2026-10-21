@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft 1: Bloomberg Terminal (High-Density Dark)</title>
+<style>
+  :root {
+    --bg: #0a0d13;
+    --panel: #111622;
+    --panel-header: #182030;
+    --border: #222c42;
+    --border-bright: #364668;
+    --text: #e2e8f0;
+    --dim: #798ba7;
+    --accent: #f59e0b;
+    --accent-glow: rgba(245, 158, 11, 0.2);
+    --green: #10b981;
+    --green-dim: rgba(16, 185, 129, 0.15);
+    --red: #ef4444;
+    --red-dim: rgba(239, 68, 68, 0.15);
+    --cyan: #06b6d4;
+    --purple: #a855f7;
+    --font: "Consolas", "Liberation Mono", "Menlo", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .terminal-bar {
+    background: #000;
+    border-bottom: 2px solid var(--accent);
+    padding: 6px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+  }
+  .terminal-brand {
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .grid-header {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .stat-block {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    border-left: 3px solid var(--accent);
+  }
+  .stat-label { color: var(--dim); font-size: 10px; text-transform: uppercase; }
+  .stat-val { font-size: 18px; font-weight: 700; color: #fff; margin-top: 2px; }
+  .stat-sub { font-size: 10px; color: var(--green); margin-top: 2px; }
+
+  .layout-main {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 10px;
+    padding: 0 14px 14px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+  }
+  .panel-h {
+    background: var(--panel-header);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  table.t-dense {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  table.t-dense th {
+    background: #0f141e;
+    color: var(--dim);
+    font-weight: 600;
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.t-dense td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #161d2d;
+  }
+  table.t-dense tr:hover { background: #182236; }
+  .badge {
+    padding: 2px 5px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .badge-sender { background: #1e3a5f; color: #60a5fa; border: 1px solid #2563eb; }
+  .badge-receiver { background: #3b1d54; color: #c084fc; border: 1px solid #9333ea; }
+  .badge-online { background: var(--green-dim); color: var(--green); }
+  .badge-stale { background: var(--red-dim); color: var(--red); }
+  .btn-kill {
+    background: #7f1d1d;
+    color: #fca5a5;
+    border: 1px solid #ef4444;
+    padding: 4px 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .btn-kill:hover { background: #b91c1c; color: #fff; }
+  .btn-cmd {
+    background: #1e293b;
+    border: 1px solid var(--border-bright);
+    color: #cbd5e1;
+    padding: 2px 6px;
+    font-size: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-cmd:hover { background: var(--accent); color: #000; border-color: var(--accent); }
+  .mono-num { font-variant-numeric: tabular-nums; text-align: right; }
+  .stream-log {
+    background: #090c12;
+    padding: 8px;
+    height: 180px;
+    overflow-y: auto;
+    font-size: 10px;
+    color: #94a3b8;
+    line-height: 1.5;
+  }
+  .log-line { border-bottom: 1px dashed #1a2336; padding: 2px 0; }
+  .log-ts { color: #64748b; margin-right: 6px; }
+  .log-ok { color: var(--green); }
+  .log-warn { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="terminal-bar">
+  <div class="terminal-brand">
+    <div class="live-dot"></div>
+    <span>MT-COPIER // HUB TERMINAL PRO v2.4</span>
+    <span style="color:#64748b">|</span>
+    <span style="color:#38bdf8">PORT:6000 [CURVE ON]</span>
+    <span style="color:#64748b">|</span>
+    <span style="color:#a3e635">HTTP:6001 [M9 ADMIN]</span>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <span style="color:var(--dim)">SERVER CLOCK: <strong style="color:#fff">2026-10-21 21:28:10 UTC</strong></span>
+    <button class="btn-kill">EMERGENCY KILL SWITCH</button>
+  </div>
+</div>
+
+<div class="grid-header">
+  <div class="stat-block">
+    <div class="stat-label">Total Fleet Nodes</div>
+    <div class="stat-val">24 <span style="font-size:12px;color:var(--green)">▲ ONLINE</span></div>
+    <div class="stat-sub">4 Senders / 20 Receivers</div>
+  </div>
+  <div class="stat-block" style="border-left-color:var(--cyan)">
+    <div class="stat-label">Active Managed Positions</div>
+    <div class="stat-val">342</div>
+    <div class="stat-sub">Volume: 84.50 Lots Managed</div>
+  </div>
+  <div class="stat-block" style="border-left-color:var(--green)">
+    <div class="stat-label">Aggregate Equity</div>
+    <div class="stat-val">$1,248,590.20</div>
+    <div class="stat-sub">+$14,280.00 Realized Today</div>
+  </div>
+  <div class="stat-block" style="border-left-color:#818cf8">
+    <div class="stat-label">Avg Link Latency (RTT)</div>
+    <div class="stat-val">19.4 <span style="font-size:12px">ms</span></div>
+    <div class="stat-sub">Direct ZMQ Loopback: &lt;1ms</div>
+  </div>
+  <div class="stat-block" style="border-left-color:var(--red)">
+    <div class="stat-label">Circuit Breakers</div>
+    <div class="stat-val" style="color:var(--green)">ARMED <span style="font-size:11px;color:var(--dim)">(0 Tripped)</span></div>
+    <div class="stat-sub">Drawdown Cap: 5.0%</div>
+  </div>
+</div>
+
+<div class="layout-main">
+  <!-- Left Column: Primary Fleet Monitor -->
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <div class="panel-h">
+        <span>FLEET TOPOLOGY &amp; NODE SURVEILLANCE [24 NODES]</span>
+        <div style="display:flex;gap:6px">
+          <button class="btn-cmd">REFRESH STATE</button>
+          <button class="btn-cmd">PAUSE ALL</button>
+          <button class="btn-cmd">RESUME ALL</button>
+        </div>
+      </div>
+      <table class="t-dense">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Account / Alias</th>
+            <th>Platform</th>
+            <th>RTT (Ping)</th>
+            <th>Status</th>
+            <th class="mono-num">Positions</th>
+            <th class="mono-num">Volume</th>
+            <th class="mono-num">Equity</th>
+            <th>Telemetry / Waiting</th>
+            <th style="text-align:center">Ops</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-sender">SENDER</span></td>
+            <td><strong>#1001</strong> · Alpari Main FX</td>
+            <td>MT5.x64</td>
+            <td><span style="color:var(--green)">18ms</span></td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="mono-num">6</td>
+            <td class="mono-num">1.20</td>
+            <td class="mono-num">$12,450.80</td>
+            <td style="color:#38bdf8">Broadcasting (SNAP 15s)</td>
+            <td style="text-align:center">
+              <button class="btn-cmd">CONFIG</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-sender">SENDER</span></td>
+            <td><strong>#1002</strong> · ICMarkets Scalp</td>
+            <td>MT4</td>
+            <td><span style="color:var(--green)">34ms</span></td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="mono-num">14</td>
+            <td class="mono-num">4.50</td>
+            <td class="mono-num">$45,210.00</td>
+            <td style="color:#38bdf8">Broadcasting (SNAP 15s)</td>
+            <td style="text-align:center">
+              <button class="btn-cmd">CONFIG</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-receiver">RECEIVER</span></td>
+            <td><strong>#2001</strong> · Prop Fleet Alpha</td>
+            <td>MT5.x64</td>
+            <td><span style="color:var(--green)">22ms</span></td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="mono-num">20</td>
+            <td class="mono-num">5.70</td>
+            <td class="mono-num">$105,420.50</td>
+            <td style="color:var(--green)">Managing 20 (0 delayed)</td>
+            <td style="text-align:center">
+              <button class="btn-cmd">VISUAL CFG</button>
+              <button class="btn-cmd">PAUSE</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-receiver">RECEIVER</span></td>
+            <td><strong>#2002</strong> · FTMO $100k Stage 2</td>
+            <td>MT4</td>
+            <td><span style="color:var(--accent)">142ms</span></td>
+            <td><span class="badge badge-online">ONLINE</span></td>
+            <td class="mono-num">6</td>
+            <td class="mono-num">1.20</td>
+            <td class="mono-num">$108,940.10</td>
+            <td style="color:var(--accent)">1 queued · 2 delayed (pullback)</td>
+            <td style="text-align:center">
+              <button class="btn-cmd">VISUAL CFG</button>
+              <button class="btn-cmd">PAUSE</button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-receiver">RECEIVER</span></td>
+            <td><strong>#2003</strong> · VPS Asia Secondary</td>
+            <td>MT5.x64</td>
+            <td><span style="color:var(--red)">320ms</span></td>
+            <td><span class="badge badge-stale">STALE</span></td>
+            <td class="mono-num">0</td>
+            <td class="mono-num">0.00</td>
+            <td class="mono-num">$24,800.00</td>
+            <td style="color:var(--red)">No quote / 42s quiet</td>
+            <td style="text-align:center">
+              <button class="btn-cmd">VISUAL CFG</button>
+              <button class="btn-cmd">RELOAD</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Active Open Positions Matrix -->
+    <div class="panel">
+      <div class="panel-h">
+        <span>CONVERGED MIRROR EXPOSURE MATRIX</span>
+        <span style="color:var(--dim)">Total 342 Trades</span>
+      </div>
+      <table class="t-dense">
+        <thead>
+          <tr>
+            <th>Ticket</th>
+            <th>UID</th>
+            <th>Symbol</th>
+            <th>Direction</th>
+            <th class="mono-num">Volume</th>
+            <th class="mono-num">Open Px</th>
+            <th class="mono-num">SL</th>
+            <th class="mono-num">TP</th>
+            <th>Source Sender</th>
+            <th>Active Mirrors</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>#9821401</td>
+            <td><code>U7A912F4</code></td>
+            <td><strong>XAUUSD</strong></td>
+            <td><span style="color:var(--green)">BUY</span></td>
+            <td class="mono-num">1.00</td>
+            <td class="mono-num">2684.50</td>
+            <td class="mono-num">2672.00</td>
+            <td class="mono-num">2710.00</td>
+            <td>Alpari Main FX</td>
+            <td><span class="badge badge-online">20/20 COPIED</span></td>
+          </tr>
+          <tr>
+            <td>#9821422</td>
+            <td><code>B12C44D8</code></td>
+            <td><strong>EURUSD</strong></td>
+            <td><span style="color:var(--red)">SELL</span></td>
+            <td class="mono-num">2.50</td>
+            <td class="mono-num">1.08420</td>
+            <td class="mono-num">1.08850</td>
+            <td class="mono-num">1.07900</td>
+            <td>ICMarkets Scalp</td>
+            <td><span class="badge badge-online">18/20 (2 HELD)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Right Column: Telemetry & Live Wire Feed -->
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <div class="panel-h">
+        <span>SECURITY &amp; COMPLIANCE (M9)</span>
+      </div>
+      <div style="padding:10px;font-size:11px;color:#cbd5e1;line-height:1.6">
+        <div>Admin: <strong style="color:#fff">admin (Superuser)</strong></div>
+        <div>Session IP: <code>127.0.0.1</code> · Expires in 84m</div>
+        <div>Config Write Gate: <span style="color:var(--green);font-weight:700">ENABLED (--writes on)</span></div>
+        <div>CURVE Security: <span style="color:var(--cyan);font-weight:700">256-bit Z85 Authorized</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">
+        <span>RECEIVER CURRENT CONFIGURATION HASH (IH)</span>
+        <button class="btn-cmd">AUDIT ALL</button>
+      </div>
+      <div style="padding:8px 12px;font-size:11px">
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a2336">
+          <span>#2001 Prop Master</span>
+          <span style="color:var(--green)"><code>8afba809...</code> (MATCH)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a2336">
+          <span>#2002 FTMO</span>
+          <span style="color:var(--green)"><code>32c10b2a...</code> (MATCH)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span>#2003 VPS Backup</span>
+          <span style="color:var(--accent)"><code>10ca0c3b...</code> (DRIFT DETECTED)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-h">
+        <span>LIVE ZMQ PROTOCOL TELEMETRY STREAM</span>
+        <span style="color:var(--green)">10 Hz</span>
+      </div>
+      <div class="stream-log">
+        <div class="log-line"><span class="log-ts">21:28:09.102</span><span class="log-ok">STAT</span> recv #2001: 20 held · 0 delayed · 18ms</div>
+        <div class="log-line"><span class="log-ts">21:28:09.214</span><span>FORWARD</span> topic:252033316 SNAP hash=4a1c09bf (12 items)</div>
+        <div class="log-line"><span class="log-ts">21:28:09.300</span><span class="log-warn">IH_COMPARE</span> recv #2003 hash match: 0 bytes transferred</div>
+        <div class="log-line"><span class="log-ts">21:28:09.412</span><span>HBT2</span> node sender:1001 quiet 0s</div>
+        <div class="log-line"><span class="log-ts">21:28:09.520</span><span class="log-ok">PONG</span> link probe echoed in 18ms</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

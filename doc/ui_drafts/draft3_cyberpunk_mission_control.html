@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft 3: Cyberpunk Mission Control</title>
+<style>
+  :root {
+    --bg: #07090e;
+    --card: #0d121d;
+    --border: #1f293d;
+    --accent: #00f0ff;
+    --accent-dim: rgba(0, 240, 255, 0.12);
+    --neon-green: #00ff66;
+    --neon-pink: #ff007f;
+    --text: #e6edf3;
+    --text-dim: #7d8b99;
+    --font: "Rajdhani", "JetBrains Mono", "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    background-image: radial-gradient(circle at 50% 0%, rgba(0, 240, 255, 0.05), transparent 40%);
+  }
+  .hud-header {
+    background: rgba(13, 18, 29, 0.8);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 28px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .hud-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  }
+  .grid-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 20px 28px 0;
+  }
+  .hud-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hud-card::before {
+    content: ""; position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+  }
+  .hud-card.pink::before { background: var(--neon-pink); box-shadow: 0 0 10px var(--neon-pink); }
+  .hud-card.green::before { background: var(--neon-green); box-shadow: 0 0 10px var(--neon-green); }
+  .hud-card-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
+  .hud-card-val { font-size: 22px; font-weight: 800; font-family: var(--mono); color: #fff; margin-top: 4px; }
+  
+  .hud-container { padding: 20px 28px; display: flex; flex-direction: column; gap: 16px; }
+  .table-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .table-head-bar {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(31, 41, 61, 0.4);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  table.cyber-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  table.cyber-tbl th {
+    background: rgba(10, 14, 22, 0.8);
+    color: var(--text-dim);
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  table.cyber-tbl td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(31, 41, 61, 0.5);
+  }
+  table.cyber-tbl tr:hover { background: rgba(0, 240, 255, 0.03); }
+  .cyber-pill {
+    padding: 2px 8px; border-radius: 2px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .cyber-pill.sender { background: rgba(0, 240, 255, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+  .cyber-pill.recv { background: rgba(255, 0, 127, 0.15); color: var(--neon-pink); border: 1px solid var(--neon-pink); }
+  .cyber-pill.online { background: rgba(0, 255, 102, 0.15); color: var(--neon-green); border: 1px solid var(--neon-green); }
+  .glow-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 4px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .glow-btn:hover { background: var(--accent); color: #000; box-shadow: 0 0 12px var(--accent); }
+</style>
+</head>
+<body>
+  <div class="hud-header">
+    <div class="hud-title">
+      <span style="display:inline-block;width:10px;height:10px;background:var(--accent);box-shadow:0 0 8px var(--accent)"></span>
+      MT-COPIER // CYBER COMMAND
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;font-family:var(--mono);font-size:11px">
+      <span style="color:var(--neon-green)">ZMQ CORE: 6000 [ARMED]</span>
+      <span style="color:var(--text-dim)">|</span>
+      <span>CURVE: 256-BIT ENCRYPTED</span>
+      <button class="glow-btn" style="border-color:var(--neon-pink);color:var(--neon-pink)">HALT ALL EXECUTION</button>
+    </div>
+  </div>
+
+  <div class="grid-metrics">
+    <div class="hud-card">
+      <div class="hud-card-lbl">Fleet Convergence</div>
+      <div class="hud-card-val">100.0% <span style="font-size:12px;color:var(--neon-green)">LOCKED</span></div>
+    </div>
+    <div class="hud-card pink">
+      <div class="hud-card-lbl">Global Orders</div>
+      <div class="hud-card-val">342 TRADES</div>
+    </div>
+    <div class="hud-card green">
+      <div class="hud-card-lbl">Synchronized Lots</div>
+      <div class="hud-card-val">84.50 LOTS</div>
+    </div>
+    <div class="hud-card">
+      <div class="hud-card-lbl">Average Network RTT</div>
+      <div class="hud-card-val">19.4 MS</div>
+    </div>
+  </div>
+
+  <div class="hud-container">
+    <div class="table-box">
+      <div class="table-head-bar">
+        <span>ACTIVE FLEET MATRIX SURVEILLANCE</span>
+        <button class="glow-btn">RESYNC TELEMETRY</button>
+      </div>
+      <table class="cyber-tbl">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Node Identifier</th>
+            <th>Latency</th>
+            <th>State</th>
+            <th>Positions</th>
+            <th>Lots</th>
+            <th>Equity</th>
+            <th>Convergence &amp; Wait</th>
+            <th>Command</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="cyber-pill sender">SENDER</span></td>
+            <td><strong>#1001</strong> · Alpari Prime FX (MT5)</td>
+            <td><span style="color:var(--neon-green)">18ms</span></td>
+            <td><span class="cyber-pill online">ONLINE</span></td>
+            <td>6</td>
+            <td>1.20</td>
+            <td>$12,450.80</td>
+            <td style="color:var(--accent)">Broadcasting (15s cycle)</td>
+            <td><button class="glow-btn">CONFIG</button></td>
+          </tr>
+          <tr>
+            <td><span class="cyber-pill recv">RECEIVER</span></td>
+            <td><strong>#2001</strong> · Prop Account Alpha (MT5)</td>
+            <td><span style="color:var(--neon-green)">22ms</span></td>
+            <td><span class="cyber-pill online">ONLINE</span></td>
+            <td>20</td>
+            <td>5.70</td>
+            <td>$105,420.50</td>
+            <td style="color:var(--neon-green)">Converged (0 wait)</td>
+            <td><button class="glow-btn">VISUAL CFG</button></td>
+          </tr>
+          <tr>
+            <td><span class="cyber-pill recv">RECEIVER</span></td>
+            <td><strong>#2002</strong> · FTMO Challenge (MT4)</td>
+            <td><span style="color:var(--accent)">142ms</span></td>
+            <td><span class="cyber-pill online">ONLINE</span></td>
+            <td>6</td>
+            <td>1.20</td>
+            <td>$108,940.10</td>
+            <td style="color:#f59e0b">2 delayed (pullback target)</td>
+            <td><button class="glow-btn">VISUAL CFG</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

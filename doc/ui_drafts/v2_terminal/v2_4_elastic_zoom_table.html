@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-4: 弹性响应式表格 (支持 11px~18px 自由放大防变形)</title>
+<style>
+  :root {
+    --font-base: 14px;
+    --font-mono: Consolas, "Liberation Mono", Menlo, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #ffffff;
+    --subtle-bg: #f8fafc;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --text-dim: #64748b;
+    --accent: #0284c7;
+    --green: #16a34a;
+    --green-bg: #f0fdf4;
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --subtle-bg: #111827;
+    --border: #1f2937;
+    --text: #f9fafb;
+    --text-dim: #9ca3af;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --green-bg: rgba(74, 222, 128, 0.1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-sans);
+    font-size: var(--font-base); line-height: 1.5;
+  }
+  .bar {
+    padding: 12px 24px; border-bottom: 1px solid var(--border); display: flex;
+    justify-content: space-between; align-items: center; background: var(--subtle-bg);
+  }
+  .zoom-slider-box { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .btn {
+    padding: 5px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .container { padding: 20px 24px; }
+
+  .table-responsive {
+    width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px;
+  }
+  table.elastic-tbl {
+    width: 100%; border-collapse: collapse; font-size: 1em; min-width: 800px;
+  }
+  table.elastic-tbl th {
+    background: var(--subtle-bg); color: var(--text-dim); padding: 12px 14px;
+    border-bottom: 1px solid var(--border); text-align: left; font-size: 0.88em;
+  }
+  table.elastic-tbl td {
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+  }
+  table.elastic-tbl tr:last-child td { border-bottom: none; }
+  table.elastic-tbl tr:hover { background: rgba(2, 132, 199, 0.05); }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div>
+    <strong>⚡ 弹性响应式表格 (V2-4)</strong>
+    <span style="color:var(--text-dim);margin-left:8px">即使字体放大到 18px，横向自适应保护机制也绝不发生内容截断变形</span>
+  </div>
+  <div class="zoom-slider-box">
+    <span>字号缩放:</span>
+    <input type="range" min="11" max="18" step="0.5" value="14" oninput="setFontSize(this.value)" style="cursor:pointer">
+    <strong id="cur_size_lbl" style="min-width:40px">14px</strong>
+    <button class="btn" onclick="toggleTheme()"><span id="theme_icon">🌙</span> <span id="theme_text">夜间模式</span></button>
+  </div>
+</div>
+
+<div class="container">
+  <div class="table-responsive">
+    <table class="elastic-tbl">
+      <thead>
+        <tr>
+          <th>角色</th>
+          <th>节点标识</th>
+          <th>延时</th>
+          <th>状态</th>
+          <th style="text-align:right">持仓</th>
+          <th style="text-align:right">手数</th>
+          <th style="text-align:right">账户权益</th>
+          <th>收敛说明</th>
+          <th style="text-align:center">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span style="font-weight:700;color:var(--accent)">SENDER</span></td>
+          <td><strong>#1001</strong> · Alpari Prime (MT5)</td>
+          <td class="mono" style="color:var(--green)">18 ms</td>
+          <td><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+          <td class="mono" style="text-align:right">6</td>
+          <td class="mono" style="text-align:right">1.20</td>
+          <td class="mono" style="text-align:right">$12,450.80</td>
+          <td>广播正常 (SNAP 15s)</td>
+          <td style="text-align:center"><button class="btn">配置</button></td>
+        </tr>
+        <tr>
+          <td><span style="font-weight:700;color:#9333ea">RECEIVER</span></td>
+          <td><strong>#2001</strong> · Prop Fleet 1 (MT5)</td>
+          <td class="mono" style="color:var(--green)">22 ms</td>
+          <td><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+          <td class="mono" style="text-align:right">20</td>
+          <td class="mono" style="text-align:right">5.70</td>
+          <td class="mono" style="text-align:right">$105,420.50</td>
+          <td>完全收敛 (0 等待)</td>
+          <td style="text-align:center"><button class="btn" style="background:var(--accent);color:#fff">可视化配置</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  const icon = document.getElementById("theme_icon");
+  const txt = document.getElementById("theme_text");
+  if(icon) icon.textContent = next === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+function setFontSize(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.querySelectorAll(".font-btn").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-size") === size);
+  });
+  const lbl = document.getElementById("cur_size_lbl");
+  if(lbl) lbl.textContent = size + "px";
+}
+</script>
+
+</body>
+</html>

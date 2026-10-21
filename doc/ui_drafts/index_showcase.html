@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mt-copier WebUI 界面改版设计草稿集 (6套方案全览)</title>
+<style>
+  :root {
+    --bg: #090d16;
+    --bar: #131b2e;
+    --border: #222f4c;
+    --accent: #3b82f6;
+    --text: #f8fafc;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .nav-header {
+    background: var(--bar);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .brand-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .badge {
+    background: #1e3a8a;
+    color: #93c5fd;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+  }
+  .tabs-switcher {
+    display: flex;
+    gap: 6px;
+    background: #0b1120;
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tab-btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .tab-btn.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4); }
+
+  .preview-wrapper {
+    flex: 1;
+    position: relative;
+    background: #000;
+  }
+  iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  .info-drawer {
+    background: #111827;
+    border-top: 1px solid var(--border);
+    padding: 8px 24px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+</style>
+</head>
+<body>
+
+<div class="nav-header">
+  <div class="brand-area">
+    <strong style="font-size:15px;letter-spacing:-0.02em">⚡ MT-COPIER UI 视觉改版草稿集</strong>
+    <span class="badge">6 套独立风格</span>
+    <span style="font-size:12px;color:var(--muted)">点击上方标签页直接无缝预览切换</span>
+  </div>
+  <div class="tabs-switcher">
+    <button class="tab-btn active" data-file="draft1_bloomberg_terminal.html" data-desc="方案 1: 彭博高密度专业交易终端 (Bloomberg Pro Dark，硬核操盘手控制台)">1. 彭博交易终端</button>
+    <button class="tab-btn" data-file="draft2_modern_fintech_saas.html" data-desc="方案 2: Stripe / Vercel 现代明亮 FinTech SaaS (极致纯净、卡片式与高辨识度)">2. 现代金融 SaaS</button>
+    <button class="tab-btn" data-file="draft3_cyberpunk_mission_control.html" data-desc="方案 3: 赛博朋克指挥中心 (Cyber HUD，高饱和霓虹与极客视觉张力)">3. 赛博指挥中心</button>
+    <button class="tab-btn" data-file="draft4_pipeline_kanban.html" data-desc="方案 4: 信号流看板拓扑 (Pipeline Kanban，以 Sender 为根节点分组向下串联 Receivers)">4. 信号流拓扑看板</button>
+    <button class="tab-btn" data-file="draft5_linear_monospace_studio.html" data-desc="方案 5: Linear / Raycast 开发者暗调极简工作室 (暗黑灰阶，等宽字体聚焦状态)">5. Linear 极简暗调</button>
+    <button class="tab-btn" data-file="draft6_enterprise_compact_matrix.html" data-desc="方案 6: 企业级 100-Account 紧凑操作矩阵 (TradingView / 紧凑数据表，专为 50~100 节点批量设计)">6. 百账户操作矩阵</button>
+  </div>
+</div>
+
+<div class="preview-wrapper">
+  <iframe id="preview_frame" src="draft1_bloomberg_terminal.html"></iframe>
+</div>
+
+<div class="info-drawer">
+  <div id="desc_bar">当前预览：<strong>方案 1: 彭博高密度专业交易终端 (Bloomberg Pro Dark，硬核操盘手控制台)</strong></div>
+  <div>文件位置：<code>doc/ui_drafts/</code> (未触碰现有生产代码)</div>
+</div>
+
+<script>
+  var btns = document.querySelectorAll(".tab-btn");
+  var frame = document.getElementById("preview_frame");
+  var desc = document.getElementById("desc_bar");
+
+  btns.forEach(function(b){
+    b.addEventListener("click", function(){
+      btns.forEach(function(x){ x.classList.remove("active"); });
+      b.classList.add("active");
+      var f = b.getAttribute("data-file");
+      frame.src = f;
+      desc.innerHTML = "当前预览：<strong>" + b.getAttribute("data-desc") + "</strong>";
+    });
+  });
+</script>
+
+</body>
+</html>

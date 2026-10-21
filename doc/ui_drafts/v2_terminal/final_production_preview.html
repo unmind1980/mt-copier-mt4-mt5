@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MT-Copier 最终版完整界面预览 (全功能完整集成 + 白天白底双模 + 无级缩放)</title>
+<style>
+  :root {
+    --font-base: 13.5px;
+    --font-mono: "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-header: #f1f5f9;
+    --sidebar: #f8fafc;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-bg: #eff6ff;
+    --green: #059669;
+    --green-bg: #ecfdf5;
+    --green-border: #a7f3d0;
+    --red: #dc2626;
+    --red-bg: #fef2f2;
+    --red-border: #fecaca;
+    --amber: #d97706;
+    --amber-bg: #fffbeb;
+    --amber-border: #fde68a;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08), 0 2px 4px -2px rgba(0,0,0,0.04);
+    --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
+    --modal-overlay: rgba(15, 23, 42, 0.5);
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --surface: #131b2e;
+    --surface-header: #1a253e;
+    --sidebar: #0e1626;
+    --border: #222f4c;
+    --border-strong: #334366;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-hover: #0284c7;
+    --accent-bg: rgba(56, 189, 248, 0.12);
+    --green: #34d399;
+    --green-bg: rgba(52, 211, 153, 0.12);
+    --green-border: rgba(52, 211, 153, 0.3);
+    --red: #f87171;
+    --red-bg: rgba(248, 113, 113, 0.15);
+    --red-border: rgba(248, 113, 113, 0.3);
+    --amber: #fbbf24;
+    --amber-bg: rgba(251, 191, 36, 0.15);
+    --amber-border: rgba(251, 191, 36, 0.3);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+    --shadow: 0 2px 6px rgba(0,0,0,0.3);
+    --shadow-md: 0 6px 12px rgba(0,0,0,0.4);
+    --shadow-lg: 0 16px 24px -4px rgba(0,0,0,0.5);
+    --modal-overlay: rgba(0, 0, 0, 0.75);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-base);
+    line-height: 1.5;
+    transition: background 0.15s, color 0.15s;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Top App Navigation Header */
+  header.app-nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow);
+  }
+  .brand-block { display: flex; align-items: center; gap: 12px; }
+  .logo-symbol {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, #2563eb, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; font-weight: 800;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  }
+  .brand-text h1 { font-size: 16px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; }
+  .brand-text .pills-row { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+
+  .pill {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    padding: 2px 7px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .pill-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+  .pill-info { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--border-strong); }
+  .pill-dim { background: var(--surface-header); color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* Navigation Center Tabs */
+  .view-tabs {
+    display: flex;
+    gap: 6px;
+    background: var(--surface-header);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .tab-item {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tab-item:hover { color: var(--text-primary); }
+  .tab-item.active {
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: var(--shadow);
+  }
+
+  /* Utility toolbar on right */
+  .nav-tools { display: flex; align-items: center; gap: 12px; }
+  .zoom-box {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-header); border: 1px solid var(--border);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px;
+  }
+  .zoom-slider { width: 80px; cursor: pointer; accent-color: var(--accent); }
+  .zoom-label { font-family: var(--font-mono); font-weight: 700; color: var(--accent); min-width: 44px; text-align: right; }
+
+  .btn {
+    padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-primary);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn:hover { background: var(--surface-header); border-color: var(--accent); }
+  
+  .btn-sm {
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+  }
+  .btn-sm:hover {
+    background: var(--surface-header);
+    border-color: var(--accent);
+  }
+
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
+  .btn-danger:hover { background: var(--red); color: #fff; }
+
+  /* Views */
+  .view-container { display: none; }
+  .view-container.active { display: block; }
+
+  /* Main Dashboard Tab Styles */
+  .main-dash {
+    max-width: 1560px;
+    margin: 0 auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    width: 100%;
+  }
+
+  /* KPI Grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+  }
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+    transition: transform 0.15s, box-shadow 0.15s;
+    cursor: pointer;
+  }
+  .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .kpi-head { display: flex; justify-content: space-between; align-items: center; }
+  .kpi-lbl { font-size: 0.85em; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .kpi-val { font-size: 1.7em; font-weight: 800; font-family: var(--font-mono); color: var(--text-primary); margin-top: 6px; }
+  .kpi-sub { font-size: 0.88em; margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+
+  /* Global Operations Ribbon */
+  .gops-ribbon {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    box-shadow: var(--shadow);
+  }
+  .gops-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .gops-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+
+  /* Sections */
+  .section-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .section-head {
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 18px;
+    font-size: 0.95em;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* Table */
+  .table-scroll { width: 100%; overflow-x: auto; }
+  table.hub-table {
+    width: 100%; border-collapse: collapse; font-size: 0.94em;
+  }
+  table.hub-table th {
+    background: var(--surface-header); color: var(--text-muted); font-weight: 600;
+    text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 0.86em;
+    white-space: nowrap;
+  }
+  table.hub-table td {
+    padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+    white-space: nowrap;
+  }
+  table.hub-table tr:hover { background: var(--accent-bg); }
+  .num { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+
+  
+  /* 消息中心 / 实时审计事件流 (Message Center) */
+  .grid-2col-equal {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 16px;
+  }
+  @media(max-width: 1100px) {
+    .grid-2col-equal { grid-template-columns: 1fr; }
+  }
+  .msg-center-box {
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 230px;
+    overflow-y: auto;
+  }
+  .msg-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.9em;
+    border: 1px solid var(--border);
+    background: var(--surface-header);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    transition: transform 0.1s ease;
+  }
+  .msg-item:hover {
+    transform: translateX(2px);
+    border-color: var(--border-strong);
+  }
+  .msg-item.crit {
+    background: var(--red-bg);
+    border-color: var(--red-border);
+    color: var(--red);
+  }
+  .msg-item.warn {
+    background: var(--amber-bg);
+    border-color: var(--amber-border);
+    color: #92400e;
+  }
+  .msg-item.info {
+    background: var(--surface-header);
+    border-color: var(--border);
+    color: var(--text-primary);
+  }
+  .msg-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .msg-badge {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    padding: 1px 5px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .msg-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+  }
+
+  /* Topology SVG styling */
+  .topo-box { padding: 20px; background: var(--surface); text-align: center; }
+  .topo-svg { width: 100%; max-height: 220px; }
+
+  /* Split Cockpit View Styles */
+  .cockpit-layout {
+    display: flex;
+    height: calc(100vh - 66px);
+    overflow: hidden;
+  }
+  .cockpit-list {
+    width: 380px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .cockpit-list-head {
+    padding: 12px 18px;
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.88em; font-weight: 700; color: var(--text-muted); text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  .node-entry {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    border-left: 4px solid transparent;
+    transition: all 0.15s;
+  }
+  .node-entry:hover { background: var(--surface-header); }
+  .node-entry.active {
+    background: var(--surface);
+    border-left-color: var(--accent);
+  }
+  .node-entry-top { display: flex; justify-content: space-between; align-items: center; }
+  .node-entry-sub { font-size: 0.88em; color: var(--text-muted); font-family: var(--font-mono); margin-top: 4px; }
+
+  .cockpit-pane {
+    flex: 1;
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 24px 32px;
+  }
+  .cockpit-banner {
+    background: var(--surface-header);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  /* Modals Overlay & Boxes */
+  .modal-overlay {
+    position: fixed; inset: 0; background: var(--modal-overlay);
+    backdrop-filter: blur(4px); z-index: 1000;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-overlay.hidden { display: none !important; }
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 900px;
+    max-height: 90vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .modal-head {
+    padding: 16px 20px;
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-head h3 { font-size: 16px; font-weight: 700; }
+  .modal-close {
+    background: transparent; border: none; font-size: 20px; cursor: pointer; color: var(--text-muted);
+  }
+  .modal-body { padding: 20px; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="app-nav">
+  <div class="brand-block">
+    <div class="logo-symbol">⚡</div>
+    <div class="brand-text">
+      <h1>MT-COPIER HUB PRO</h1>
+      <div class="pills-row">
+        <span class="pill pill-ok">● WebSocket (10Hz)</span>
+        <span class="pill pill-info">Port: 6000 [CURVE ON]</span>
+        <span class="pill pill-dim">Role: Admin</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Central Nav: 1号主仪表盘 + 6号分体驾驶舱 -->
+  <div class="view-tabs">
+    <button class="tab-item active" onclick="switchNav('dash')">
+      <span>📊</span>
+      <span>主仪表盘 (Dashboard)</span>
+    </button>
+    <button class="tab-item" onclick="switchNav('cockpit')">
+      <span>🎛️</span>
+      <span>分体式驾驶舱 (Split Cockpit)</span>
+    </button>
+  </div>
+
+  <!-- Right Actions: Zoom Slider (4号) + Theme Toggle (Day/Night) -->
+  <div class="nav-tools">
+    <div class="zoom-box" title="无级字号缩放：卡片、宽表与分体栏同步缩放，排版自适应不变形">
+      <span style="color:var(--text-muted)">字号:</span>
+      <input type="range" class="zoom-slider" id="zoomRange" min="11" max="18" step="0.5" value="13.5" oninput="applyScale(this.value)">
+      <span class="zoom-label" id="zoomVal">13.5px</span>
+    </div>
+
+    <button class="btn" onclick="toggleMode()">
+      <span id="mode_icon">🌙</span>
+      <span id="mode_text">夜间模式</span>
+    </button>
+
+    <button class="btn" onclick="openModal('hubkey_modal')">🔑 Hub Key</button>
+    <button class="btn" onclick="alert('用户已安全登出')">登出</button>
+  </div>
+</header>
+
+<!-- ========================================================= -->
+<!-- TAB 1: 主仪表盘 (保留原版全部模块，穿上 V2 现代白底高对比质感) -->
+<!-- ========================================================= -->
+<div id="tab_dash" class="view-container active">
+  <div class="main-dash">
+    <!-- 4 大核心 KPI 指标卡 (保留生产版所有交互) -->
+    <div class="kpi-grid">
+      <div class="kpi-card" onclick="switchNav('cockpit')">
+        <div class="kpi-head">
+          <span class="kpi-lbl">在线终端节点 (Nodes)</span>
+          <span style="font-size:16px">🖥️</span>
+        </div>
+        <div class="kpi-val">24 <span style="font-size:0.6em;color:var(--green)">● ALL READY</span></div>
+        <div class="kpi-sub" style="color:var(--text-muted)">4 Senders · 20 Receivers</div>
+      </div>
+
+      <div class="kpi-card" onclick="openModal('pos_modal')">
+        <div class="kpi-head">
+          <span class="kpi-lbl">当前持仓订单 (Open Positions)</span>
+          <span style="font-size:16px">📈</span>
+        </div>
+        <div class="kpi-val">342 笔</div>
+        <div class="kpi-sub" style="color:var(--accent)">合并交易量: 84.50 Lots (点击查看明细 &rarr;)</div>
+      </div>
+
+      <div class="kpi-card" onclick="alert('展示等待开仓遥测明细')">
+        <div class="kpi-head">
+          <span class="kpi-lbl">等待与门控 (Waiting Telemetry)</span>
+          <span style="font-size:16px">⏳</span>
+        </div>
+        <div class="kpi-val">2 笔等待</div>
+        <div class="kpi-sub" style="color:var(--amber)">0 queued · 2 delayed (回撤门控)</div>
+      </div>
+
+      <div class="kpi-card" onclick="alert('查看网络心跳与节点链路延时')">
+        <div class="kpi-head">
+          <span class="kpi-lbl">Hub 运行态 &amp; 网络往返</span>
+          <span style="font-size:16px">🌐</span>
+        </div>
+        <div class="kpi-val">19.4 ms</div>
+        <div class="kpi-sub" style="color:var(--green)">IH 配置哈希验证 (稳态零字节)</div>
+      </div>
+    </div>
+
+    <!-- 全局快捷操作栏 (Global Operations) -->
+    <div class="gops-ribbon">
+      <div class="gops-group">
+        <span style="font-size:0.9em;font-weight:700;color:var(--text-muted);text-transform:uppercase">全局指令:</span>
+        <button class="btn btn-danger" onclick="confirmGop('closeall')">🛑 紧急全平 CLOSE ALL</button>
+        <button class="btn" onclick="confirmGop('pause')">⏸️ 全部暂停 Pause</button>
+        <button class="btn" onclick="confirmGop('resume')">▶️ 全部恢复 Resume</button>
+      </div>
+
+      <div class="gops-group">
+        <div class="gops-divider"></div>
+        <button class="btn" onclick="openModal('pos_modal')">📊 聚合持仓</button>
+        <button class="btn" onclick="openModal('cfg_modal')">⚙️ Receiver 配置器</button>
+        <button class="btn" onclick="toggleSec('notif_sec')">🔔 通知通道</button>
+        <button class="btn" onclick="toggleSec('users_sec')">👥 用户管理</button>
+        <button class="btn btn-primary" onclick="openModal('cfg_modal')">+ 新建配置推送</button>
+      </div>
+    </div>
+
+    <!-- 终端舰队监控主表 (Terminals & Nodes) -->
+    <div class="section-card">
+      <div class="section-head">
+        <span>终端集群与节点状态 (Terminals &amp; Nodes)</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm" onclick="alert('已向所有 Receiver 发送批量暂停指令')">批量暂停</button>
+          <button class="btn-sm" onclick="alert('已向所有 Receiver 发送批量重载指令')">批量重载</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="hub-table">
+          <thead>
+            <tr>
+              <th>角色</th>
+              <th>账号与终端别名</th>
+              <th>延时 (Ping)</th>
+              <th>在线状态</th>
+              <th class="num">持仓笔数</th>
+              <th class="num">手数</th>
+              <th class="num">账户净值</th>
+              <th class="num">账户余额</th>
+              <th>运行状态 / 门控延时</th>
+              <th>配置哈希 (IH)</th>
+              <th style="text-align:center">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="pill pill-info">SENDER</span></td>
+              <td><strong>#1001</strong> · Alpari Prime (MT5)</td>
+              <td style="color:var(--green);font-family:var(--font-mono);font-weight:700">18 ms</td>
+              <td><span class="status-dot" style="background:var(--green)"></span><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+              <td class="num">6</td>
+              <td class="num">1.20</td>
+              <td class="num">$12,450.80</td>
+              <td class="num">$12,000.00</td>
+              <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+              <td><code style="font-family:var(--font-mono)">N/A</code></td>
+              <td style="text-align:center">
+                <button class="btn-sm" onclick="openModal('cfg_modal')">配置</button>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="pill pill-info">SENDER</span></td>
+              <td><strong>#1002</strong> · ICMarkets (MT4)</td>
+              <td style="color:var(--green);font-family:var(--font-mono);font-weight:700">34 ms</td>
+              <td><span class="status-dot" style="background:var(--green)"></span><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+              <td class="num">14</td>
+              <td class="num">4.50</td>
+              <td class="num">$45,210.00</td>
+              <td class="num">$44,000.00</td>
+              <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+              <td><code style="font-family:var(--font-mono)">N/A</code></td>
+              <td style="text-align:center">
+                <button class="btn-sm" onclick="openModal('cfg_modal')">配置</button>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="pill" style="background:#f3e8ff;color:#7e22ce;border:1px solid #e9d5ff">RECEIVER</span></td>
+              <td><strong>#2001</strong> · Prop Master Alpha (MT5)</td>
+              <td style="color:var(--green);font-family:var(--font-mono);font-weight:700">22 ms</td>
+              <td><span class="status-dot" style="background:var(--green)"></span><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+              <td class="num">20</td>
+              <td class="num">5.70</td>
+              <td class="num">$105,420.50</td>
+              <td class="num">$102,000.00</td>
+              <td style="color:var(--green)">已完全收敛 (0等待)</td>
+              <td><code style="font-family:var(--font-mono);color:var(--green)">8afba809 (一致)</code></td>
+              <td style="text-align:center">
+                <button class="btn-sm btn-primary" onclick="openModal('cfg_modal')">可视化配置</button>
+                <button class="btn-sm" onclick="alert('已向节点 #2001 发送暂停指令')">暂停</button>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="pill" style="background:#f3e8ff;color:#7e22ce;border:1px solid #e9d5ff">RECEIVER</span></td>
+              <td><strong>#2002</strong> · FTMO Challenge 2 (MT4)</td>
+              <td style="color:var(--amber);font-family:var(--font-mono);font-weight:700">142 ms</td>
+              <td><span class="status-dot" style="background:var(--green)"></span><span style="color:var(--green);font-weight:700">ONLINE</span></td>
+              <td class="num">6</td>
+              <td class="num">1.20</td>
+              <td class="num">$108,940.10</td>
+              <td class="num">$110,000.00</td>
+              <td style="color:var(--amber)">2笔订单等待 (利润回撤门控)</td>
+              <td><code style="font-family:var(--font-mono);color:var(--green)">5b780b2c (一致)</code></td>
+              <td style="text-align:center">
+                <button class="btn-sm btn-primary" onclick="openModal('cfg_modal')">可视化配置</button>
+                <button class="btn-sm" onclick="alert('已向节点 #2002 发送暂停指令')">暂停</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 拓扑连接图 + 消息事件中心 (并列排版，填满右侧留白) -->
+    <div class="grid-2col-equal">
+      <!-- Left: Topology Vector Map -->
+      <div class="section-card">
+        <div class="section-head">
+          <span>实时拓扑连接 (Live Topology)</span>
+          <span style="font-size:0.85em;color:var(--text-muted)">4 Senders &rarr; Hub &rarr; 20 Receivers</span>
+        </div>
+        <div class="topo-box" style="padding:16px 10px">
+          <svg class="topo-svg" viewBox="0 0 520 180">
+            <!-- Senders on Left -->
+            <rect x="15" y="30" width="135" height="38" rx="6" fill="var(--surface-header)" stroke="var(--border)" stroke-width="1.5"/>
+            <text x="82" y="54" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--accent)">Sender #1001 (MT5)</text>
+
+            <rect x="15" y="105" width="135" height="38" rx="6" fill="var(--surface-header)" stroke="var(--border)" stroke-width="1.5"/>
+            <text x="82" y="129" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--accent)">Sender #1002 (MT4)</text>
+
+            <!-- Central Hub -->
+            <circle cx="260" cy="85" r="42" fill="var(--accent-bg)" stroke="var(--accent)" stroke-width="2"/>
+            <text x="260" y="82" text-anchor="middle" font-size="12" font-weight="800" fill="var(--accent)">HUB CORE</text>
+            <text x="260" y="98" text-anchor="middle" font-size="10" fill="var(--text-muted)">PORT: 6000</text>
+
+            <!-- Lines from Senders to Hub -->
+            <line x1="150" y1="49" x2="218" y2="85" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4"/>
+            <line x1="150" y1="124" x2="218" y2="85" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4"/>
+
+            <!-- Lines from Hub to Receivers -->
+            <line x1="302" y1="85" x2="370" y2="49" stroke="var(--green)" stroke-width="1.5"/>
+            <line x1="302" y1="85" x2="370" y2="124" stroke="var(--green)" stroke-width="1.5"/>
+
+            <!-- Receivers on Right -->
+            <rect x="370" y="30" width="135" height="38" rx="6" fill="var(--green-bg)" stroke="var(--green-border)" stroke-width="1.5"/>
+            <text x="437" y="54" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--green)">Receiver #2001 (MT5)</text>
+
+            <rect x="370" y="105" width="135" height="38" rx="6" fill="var(--green-bg)" stroke="var(--green-border)" stroke-width="1.5"/>
+            <text x="437" y="129" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--green)">Receiver #2002 (MT4)</text>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Right: Message Center / Event Activity Stream (精确呈现几分钟前发生的关键事件) -->
+      <div class="section-card">
+        <div class="section-head">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span>📢 消息中心与系统事件 (Message Center)</span>
+            <span class="pill pill-ok">实时在线</span>
+          </div>
+          <button class="btn-sm" onclick="alert(已清空已读事件)">标记已读</button>
+        </div>
+        <div class="msg-center-box">
+          <div class="msg-item warn">
+            <div class="msg-left">
+              <span class="msg-badge" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a">GATED</span>
+              <span><strong>Receiver #2002</strong>: 2 笔订单触发利润回撤保护门控，等待回调</span>
+            </div>
+            <div class="msg-time">2 分钟前 (23:28)</div>
+          </div>
+
+          <div class="msg-item info">
+            <div class="msg-left">
+              <span class="msg-badge" style="background:var(--accent-bg);color:var(--accent);border:1px solid var(--border-strong)">CONFIG</span>
+              <span><strong>Receiver #2001</strong>: IH 哈希对比一致 (<code>8afba809</code>)，零字节完成校准</span>
+            </div>
+            <div class="msg-time">5 分钟前 (23:25)</div>
+          </div>
+
+          <div class="msg-item info">
+            <div class="msg-left">
+              <span class="msg-badge" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)">SYNC</span>
+              <span><strong>Sender #1001</strong>: 成功下发 15s 周期快照，全网 20 个 Receiver 回执对齐</span>
+            </div>
+            <div class="msg-time">8 分钟前 (23:22)</div>
+          </div>
+
+          <div class="msg-item info">
+            <div class="msg-left">
+              <span class="msg-badge" style="background:var(--surface);color:var(--text-muted);border:1px solid var(--border)">AUTH</span>
+              <span><strong>管理员 admin</strong> 从 <code>127.0.0.1</code> 成功登录中央管理控制台</span>
+            </div>
+            <div class="msg-time">14 分钟前 (23:16)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通知渠道管理 (Notification Channels，支持 Telegram/WeCom/DingTalk/Webhook) -->
+    <div class="section-card" id="notif_sec">
+      <div class="section-head">
+        <span>报警与通知渠道 (Telegram / 企业微信 / 钉钉 / Webhook)</span>
+        <button class="btn-sm btn-primary" onclick="alert('添加新通知渠道')">+ 添加渠道</button>
+      </div>
+      <div style="padding:16px;display:flex;gap:12px;flex-wrap:wrap">
+        <div style="background:var(--surface-header);border:1px solid var(--border);border-radius:8px;padding:12px 16px;min-width:240px">
+          <div style="font-weight:700">📱 Telegram 运维群</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Chat ID: -10029481 · 级别: Critical+Warning</div>
+          <div style="margin-top:8px"><span class="pill pill-ok">已启用 (Active)</span></div>
+        </div>
+        <div style="background:var(--surface-header);border:1px solid var(--border);border-radius:8px;padding:12px 16px;min-width:240px">
+          <div style="font-weight:700">🏢 企业微信群机器人</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Webhook: key=8b4c-*** · 级别: Critical Only</div>
+          <div style="margin-top:8px"><span class="pill pill-ok">已启用 (Active)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 用户与权限管理 (M9 Users & Roles) -->
+    <div class="section-card" id="users_sec">
+      <div class="section-head">
+        <span>系统用户与鉴权控制 (User Management &amp; Roles)</span>
+        <button class="btn-sm btn-primary" onclick="alert('新增用户')">+ 创建用户</button>
+      </div>
+      <div class="table-scroll">
+        <table class="hub-table">
+          <thead>
+            <tr>
+              <th>用户名 (ID)</th>
+              <th>权限等级 (Role)</th>
+              <th>状态</th>
+              <th>最近登录时间</th>
+              <th style="text-align:right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>admin</strong> (主管理员)</td>
+              <td><span class="pill pill-info">ADMIN (超级管理)</span></td>
+              <td><span class="pill pill-ok">正常</span></td>
+              <td>刚刚 (127.0.0.1)</td>
+              <td style="text-align:right"><button class="btn-sm" onclick="alert('修改密码')">改密</button></td>
+            </tr>
+            <tr>
+              <td><strong>operator_desk</strong></td>
+              <td><span class="pill" style="background:#fef3c7;color:#b45309">OPERATOR (操作员)</span></td>
+              <td><span class="pill pill-ok">正常</span></td>
+              <td>今天 14:20</td>
+              <td style="text-align:right"><button class="btn-sm" onclick="alert('修改权限')">设置</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- TAB 2: 分体式驾驶舱 (Split Cockpit)                        -->
+<!-- ========================================================= -->
+<div id="tab_cockpit" class="view-container">
+  <div class="cockpit-layout">
+    <!-- Left Navigation List -->
+    <div class="cockpit-list">
+      <div class="cockpit-list-head">
+        <span>已连接终端 (24)</span>
+        <span>单击切换</span>
+      </div>
+
+      <div class="node-entry active" onclick="pickNode(this, 'Prop Master Alpha (#2001)', 'MT5.x64', '$105,420.50', '20 笔 (5.70 Lots)', '8afba809 (一致)')">
+        <div class="node-entry-top">
+          <strong>Prop Master Alpha (#2001)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 22ms</span>
+        </div>
+        <div class="node-entry-sub">RECEIVER · MT5 · 20 Pos · $105.4k 净值</div>
+      </div>
+
+      <div class="node-entry" onclick="pickNode(this, 'Alpari Main FX (#1001)', 'MT5.x64', '$12,450.80', '6 笔 (1.20 Lots)', 'N/A (Sender)')">
+        <div class="node-entry-top">
+          <strong>Alpari Main FX (#1001)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 18ms</span>
+        </div>
+        <div class="node-entry-sub">SENDER · MT5 · 6 Pos · $12.4k 净值</div>
+      </div>
+
+      <div class="node-entry" onclick="pickNode(this, 'FTMO Challenge 2 (#2002)', 'MT4.x86', '$108,940.10', '6 笔 (1.20 Lots)', '5b780b2c (一致)')">
+        <div class="node-entry-top">
+          <strong>FTMO Challenge 2 (#2002)</strong>
+          <span style="color:var(--amber);font-size:0.85em;font-weight:700">▲ 142ms</span>
+        </div>
+        <div class="node-entry-sub">RECEIVER · MT4 · 2 延迟门控中</div>
+      </div>
+
+      <div class="node-entry" onclick="pickNode(this, 'ICMarkets Scalp (#1002)', 'MT4.x86', '$45,210.00', '14 笔 (4.50 Lots)', 'N/A (Sender)')">
+        <div class="node-entry-top">
+          <strong>ICMarkets Scalp (#1002)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 34ms</span>
+        </div>
+        <div class="node-entry-sub">SENDER · MT4 · 14 Pos · $45.2k 净值</div>
+      </div>
+    </div>
+
+    <!-- Right Detailed Workspace -->
+    <div class="cockpit-pane">
+      <div class="cockpit-banner">
+        <div>
+          <h2 id="focus_node_title" style="font-size:1.5em;font-weight:800;letter-spacing:-0.02em">Prop Master Alpha (#2001)</h2>
+          <div id="focus_node_sub" style="font-size:0.9em;color:var(--text-muted);margin-top:4px">终端类型: MT5.x64 · 策略收敛对齐正常 · 独立时钟对齐</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" onclick="openModal('cfg_modal')">📥 可视化配置器</button>
+          <button class="btn" onclick="alert('已发送 reqcfg 命令')">🔄 实时拉取 live INI</button>
+          <button class="btn" onclick="alert('已暂停接收')">暂停</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">
+        <div style="background:var(--surface-header);border:1px solid var(--border);border-radius:8px;padding:16px">
+          <div style="font-size:0.84em;color:var(--text-muted);text-transform:uppercase">账户实时净值 (Equity)</div>
+          <div style="font-size:1.5em;font-weight:800;font-family:var(--font-mono);margin-top:4px" id="focus_eq">$105,420.50</div>
+        </div>
+        <div style="background:var(--surface-header);border:1px solid var(--border);border-radius:8px;padding:16px">
+          <div style="font-size:0.84em;color:var(--text-muted);text-transform:uppercase">同步持仓手数</div>
+          <div style="font-size:1.5em;font-weight:800;font-family:var(--font-mono);margin-top:4px" id="focus_pos">20 笔 (5.70 Lots)</div>
+        </div>
+        <div style="background:var(--surface-header);border:1px solid var(--border);border-radius:8px;padding:16px">
+          <div style="font-size:0.84em;color:var(--text-muted);text-transform:uppercase">配置内容哈希 (IH)</div>
+          <div style="font-size:1.5em;font-weight:800;font-family:var(--font-mono);color:var(--green);margin-top:4px" id="focus_hash">8afba809 (一致)</div>
+        </div>
+      </div>
+
+      <!-- Specific Node's Open Position Table -->
+      <div class="section-card">
+        <div class="section-head">
+          <span>该账户当前持仓与镜像对齐流水 (明细宽区，字号无论多大均有独立水平滑动保护)</span>
+          <span style="font-size:0.85em;color:var(--text-muted)">更新于 1 秒前</span>
+        </div>
+        <div class="table-scroll">
+          <table class="hub-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>UID</th>
+                <th>品种</th>
+                <th>买卖</th>
+                <th class="num">本地手数</th>
+                <th class="num">成交价</th>
+                <th class="num">止损 SL</th>
+                <th class="num">止盈 TP</th>
+                <th>对应 Sender</th>
+                <th>滑点与状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>#10824901</td>
+                <td><code>U7A912F4</code></td>
+                <td><strong>XAUUSD</strong></td>
+                <td><span style="color:var(--green);font-weight:700">BUY</span></td>
+                <td class="num">0.50</td>
+                <td class="num">2684.52</td>
+                <td class="num">2672.00</td>
+                <td class="num">2710.00</td>
+                <td>Alpari (#1001)</td>
+                <td><span class="pill pill-ok">+0.2 pip · 正常</span></td>
+              </tr>
+              <tr>
+                <td>#10824902</td>
+                <td><code>B12C44D8</code></td>
+                <td><strong>EURUSD</strong></td>
+                <td><span style="color:var(--red);font-weight:700">SELL</span></td>
+                <td class="num">1.25</td>
+                <td class="num">1.08421</td>
+                <td class="num">1.08850</td>
+                <td class="num">1.07900</td>
+                <td>ICMarkets (#1002)</td>
+                <td><span class="pill pill-ok">+0.1 pip · 正常</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- 模态框系统：完整保留生产版所有弹窗能力                    -->
+<!-- ========================================================= -->
+
+<!-- 1. 配置模态框 cfg_modal -->
+<div class="modal-overlay hidden" id="cfg_modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>⚙️ Receiver 运行时配置器 (Visual &amp; Raw Editor)</h3>
+      <button class="modal-close" onclick="closeModal('cfg_modal')">&times;</button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;gap:10px;align-items:center;padding:10px;background:var(--surface-header);border-radius:6px">
+        <button class="btn btn-primary" onclick="alert('已从终端拉取实时设置')">📥 Load Current Setting from Node</button>
+        <button class="btn" onclick="alert('已下发 reqcfg 命令')">🔄 Query Live INI</button>
+        <span style="color:var(--text-muted);font-size:12px">状态: <strong>Synced (Rev 12)</strong></span>
+      </div>
+      <div>
+        <label style="font-weight:700;display:block;margin-bottom:6px">编辑配置 (copier.ini):</label>
+        <textarea style="width:100%;height:220px;font-family:var(--font-mono);font-size:12px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-primary)" spellcheck="false">[common]
+maxlotsperposition=10.0
+dailylosspct=3.0
+maxdrawdownpct=5.0
+
+[sender0]
+id=1001
+magic=7001
+lotmode=multiplier
+lotparam=1.0</textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px">
+        <button class="btn" onclick="closeModal('cfg_modal')">取消</button>
+        <button class="btn btn-primary" onclick="alert('新配置已推送到节点');closeModal('cfg_modal')">保存并下发新版本</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 2. 全量持仓弹窗 pos_modal -->
+<div class="modal-overlay hidden" id="pos_modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>📊 聚合持仓明细 (Open Positions Breakdown)</h3>
+      <button class="modal-close" onclick="closeModal('pos_modal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+        <input type="text" placeholder="搜索品种、Ticket、UID..." style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;width:280px;background:var(--surface);color:var(--text-primary)">
+        <button class="btn btn-danger" onclick="alert('平仓选中的订单')">平仓选中单</button>
+      </div>
+      <div class="table-scroll">
+        <table class="hub-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox"></th>
+              <th>Ticket</th>
+              <th>UID</th>
+              <th>品种</th>
+              <th>方向</th>
+              <th class="num">手数</th>
+              <th class="num">开仓价</th>
+              <th>当前浮盈</th>
+              <th>持有人账号</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td>#9821401</td>
+              <td><code>U7A912F4</code></td>
+              <td><strong>XAUUSD</strong></td>
+              <td><span style="color:var(--green);font-weight:700">BUY</span></td>
+              <td class="num">1.00</td>
+              <td class="num">2684.50</td>
+              <td style="color:var(--green);font-weight:700">+$1,420.00</td>
+              <td>#1001 (Alpari)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3. Hub Key 弹窗 hubkey_modal -->
+<div class="modal-overlay hidden" id="hubkey_modal">
+  <div class="modal-box" style="max-width:540px">
+    <div class="modal-head">
+      <h3>🔑 Hub CURVE 公钥与连接指引</h3>
+      <button class="modal-close" onclick="closeModal('hubkey_modal')">&times;</button>
+    </div>
+    <div class="modal-body" style="font-size:13px;line-height:1.6">
+      <p style="color:var(--text-muted)">本 Central Hub 当前的 CURVE 256 位公钥如下：</p>
+      <div style="background:var(--surface-header);padding:10px;border-radius:6px;font-family:var(--font-mono);font-size:12px;word-break:break-all;margin:10px 0;border:1px solid var(--border)">
+        y9r%d-pL2&amp;wXyB7-&gt;qK8$zM1!vP5^tN3*jF0~aC4#
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary" onclick="alert('公钥已复制到剪贴板')">复制公钥</button>
+        <button class="btn" onclick="alert('已开始下载 copier_hub.key')">下载 key 文件</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// 1. Tab Nav Switching
+function switchNav(nav) {
+  document.querySelectorAll(".tab-item").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".view-container").forEach(c => c.classList.remove("active"));
+  if(nav === "dash") {
+    document.querySelector(".tab-item:nth-child(1)").classList.add("active");
+    document.getElementById("tab_dash").classList.add("active");
+  } else {
+    document.querySelector(".tab-item:nth-child(2)").classList.add("active");
+    document.getElementById("tab_cockpit").classList.add("active");
+  }
+}
+
+// 2. Day/Night Theme Toggle
+function toggleMode() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  document.getElementById("mode_icon").textContent = next === "light" ? "🌙" : "☀️";
+  document.getElementById("mode_text").textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+// 3. Dynamic Font Zoom Slider (无级字号缩放)
+function applyScale(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.getElementById("zoomVal").textContent = size + "px";
+}
+
+// 4. Cockpit Node Picking
+function pickNode(el, name, meta, eq, pos, hash) {
+  document.querySelectorAll(".node-entry").forEach(item => item.classList.remove("active"));
+  el.classList.add("active");
+  document.getElementById("focus_node_title").textContent = name;
+  document.getElementById("focus_node_sub").textContent = "终端类型: " + meta + " · 策略收敛对齐正常 · 独立时钟对齐";
+  document.getElementById("focus_eq").textContent = eq;
+  document.getElementById("focus_pos").textContent = pos;
+  document.getElementById("focus_hash").textContent = hash;
+}
+
+// 5. Section Toggle
+function toggleSec(id) {
+  const el = document.getElementById(id);
+  if(el) el.scrollIntoView({ behavior: "smooth" });
+}
+
+// 6. Modal Controls
+function openModal(id) {
+  const el = document.getElementById(id);
+  if(el) el.classList.remove("hidden");
+}
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if(el) el.classList.add("hidden");
+}
+function confirmGop(op) {
+  if(confirm("确定要执行全局指令: " + op + " 吗？")) {
+    alert("指令已向全网下发: " + op);
+  }
+}
+</script>
+</body>
+</html>

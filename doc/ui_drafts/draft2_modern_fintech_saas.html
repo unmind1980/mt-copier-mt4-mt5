@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft 2: Modern FinTech SaaS (Stripe / Vercel Style)</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --border-hover: #cbd5e1;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --primary: #4f46e5;
+    --primary-light: #eef2ff;
+    --primary-hover: #4338ca;
+    --success: #10b981;
+    --success-bg: #ecfdf5;
+    --warning: #f59e0b;
+    --warning-bg: #fffbeb;
+    --danger: #ef4444;
+    --danger-bg: #fef2f2;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: "SF Mono", Menlo, Consolas, Monaco, monospace;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  header {
+    background: #ffffff;
+    border-bottom: 1px solid var(--border);
+    padding: 12px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-icon {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, #4f46e5, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 16px;
+    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+  }
+  .brand h1 { font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
+  .badge-tag {
+    font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px;
+    font-family: var(--mono);
+  }
+  .container { max-width: 1400px; margin: 24px auto; padding: 0 24px; display: flex; flex-direction: column; gap: 20px; }
+  
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+  .metric-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .metric-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .metric-value { font-size: 26px; font-weight: 800; color: var(--text); font-family: var(--mono); letter-spacing: -0.03em; }
+  .metric-foot { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+
+  .content-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .content-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .content-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  
+  table.saas-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.saas-table th {
+    background: #f8fafc;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  table.saas-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+  }
+  table.saas-table tr:last-child td { border-bottom: none; }
+  table.saas-table tr:hover { background: #f8fafc; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; font-family: var(--mono);
+  }
+  .pill-green { background: var(--success-bg); color: var(--success); }
+  .pill-warn { background: var(--warning-bg); color: #b45309; }
+  .pill-purple { background: #f5f3ff; color: #6d28d9; }
+  .pill-blue { background: #eff6ff; color: #1d4ed8; }
+
+  .btn {
+    padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: #fff; color: var(--text);
+    transition: all 0.15s;
+  }
+  .btn:hover { background: #f1f5f9; border-color: var(--border-hover); }
+  .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: #fca5a5; }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-icon">M</div>
+    <div>
+      <h1>MT-Copier Cloud Console</h1>
+      <div style="font-size:11px;color:var(--text-muted)">High-Frequency Central Synchronization Node</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <span class="badge-tag" style="background:#ecfdf5;color:#047857">● WebSocket Live (10 Hz)</span>
+    <span class="badge-tag" style="background:#eff6ff;color:#1e40af">ZMQ Port 6000 [CURVE Active]</span>
+    <button class="btn btn-danger">🚨 Kill All Open Trades</button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="stats-grid">
+    <div class="metric-card">
+      <div class="metric-title">Active Fleet Nodes</div>
+      <div class="metric-value">24 <span style="font-size:14px;color:var(--success)">Healthy</span></div>
+      <div class="metric-foot" style="color:var(--text-muted)">4 Signal Senders · 20 Auto Receivers</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Live Managed Exposure</div>
+      <div class="metric-value">342 <span style="font-size:14px;color:var(--text-muted)">Orders</span></div>
+      <div class="metric-foot" style="color:var(--primary)"><strong>84.50 Lots</strong> aggregated</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Total Account Balance</div>
+      <div class="metric-value">$1,248,590</div>
+      <div class="metric-foot" style="color:var(--success)">▲ +1.15% drawdown cushion</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Network Synchronization</div>
+      <div class="metric-value">19.4 <span style="font-size:14px;color:var(--text-muted)">ms avg</span></div>
+      <div class="metric-foot" style="color:var(--success)">● IH Content-Hash (0 B steady state)</div>
+    </div>
+  </div>
+
+  <div class="content-card">
+    <div class="content-header">
+      <div>
+        <div class="content-title">Connected MT4 &amp; MT5 Accounts</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Real-time telemetry and convergence verification status</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn">Filter Senders (4)</button>
+        <button class="btn">Filter Receivers (20)</button>
+        <button class="btn btn-primary">+ Register New Terminal</button>
+      </div>
+    </div>
+
+    <table class="saas-table">
+      <thead>
+        <tr>
+          <th>Role &amp; Terminal</th>
+          <th>Account Details</th>
+          <th>Link Latency</th>
+          <th>Exposure (Orders)</th>
+          <th>Equity / Balance</th>
+          <th>Gating &amp; Delays</th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <span class="pill pill-blue">SENDER</span>
+            <strong style="margin-left:6px">Alpari Prime</strong>
+          </td>
+          <td><code style="font-family:var(--mono)">#1001</code> <span style="color:var(--text-muted)">· MT5.x64</span></td>
+          <td><span class="pill pill-green">18 ms</span></td>
+          <td><strong style="font-family:var(--mono)">6 pos</strong> <span style="color:var(--text-muted)">(1.20 lots)</span></td>
+          <td style="font-family:var(--mono)">$12,450.80</td>
+          <td><span style="color:var(--success)">● Broadcast 15s Routine</span></td>
+          <td style="text-align:right">
+            <button class="btn">Settings</button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill pill-blue">SENDER</span>
+            <strong style="margin-left:6px">ICMarkets Raw</strong>
+          </td>
+          <td><code style="font-family:var(--mono)">#1002</code> <span style="color:var(--text-muted)">· MT4.x86</span></td>
+          <td><span class="pill pill-green">34 ms</span></td>
+          <td><strong style="font-family:var(--mono)">14 pos</strong> <span style="color:var(--text-muted)">(4.50 lots)</span></td>
+          <td style="font-family:var(--mono)">$45,210.00</td>
+          <td><span style="color:var(--success)">● Broadcast 15s Routine</span></td>
+          <td style="text-align:right">
+            <button class="btn">Settings</button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill pill-purple">RECEIVER</span>
+            <strong style="margin-left:6px">Prop Account Alpha</strong>
+          </td>
+          <td><code style="font-family:var(--mono)">#2001</code> <span style="color:var(--text-muted)">· MT5.x64</span></td>
+          <td><span class="pill pill-green">22 ms</span></td>
+          <td><strong style="font-family:var(--mono)">20 pos</strong> <span style="color:var(--text-muted)">(5.70 lots)</span></td>
+          <td style="font-family:var(--mono)">$105,420.50</td>
+          <td><span style="color:var(--success)">● Fully Synced (0 delay)</span></td>
+          <td style="text-align:right">
+            <button class="btn btn-primary">Visual Config</button>
+            <button class="btn">Pause</button>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="pill pill-purple">RECEIVER</span>
+            <strong style="margin-left:6px">FTMO Stage 2 Challenge</strong>
+          </td>
+          <td><code style="font-family:var(--mono)">#2002</code> <span style="color:var(--text-muted)">· MT4.x86</span></td>
+          <td><span class="pill pill-warn">142 ms</span></td>
+          <td><strong style="font-family:var(--mono)">6 pos</strong> <span style="color:var(--text-muted)">(1.20 lots)</span></td>
+          <td style="font-family:var(--mono)">$108,940.10</td>
+          <td><span class="pill pill-warn">2 delayed (pullback target)</span></td>
+          <td style="text-align:right">
+            <button class="btn btn-primary">Visual Config</button>
+            <button class="btn">Pause</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</body>
+</html>

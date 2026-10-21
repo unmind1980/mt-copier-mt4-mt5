@@ -20,6 +20,300 @@
   in the header so the switch is visible rather than mysterious.
 -->
 <style>
+
+  :root, :root[data-theme="light"] {
+    --font-base: 13.5px;
+    --font-heading: 16px;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    --bg: #f8fafc;
+    --panel: #ffffff;
+    --surface-header: #f1f5f9;
+    --sidebar: #f8fafc;
+    --line: #e2e8f0;
+    --line-subtle: #f1f5f9;
+    --border-strong: #cbd5e1;
+    --ink: #0f172a;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --dim: #64748b;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-bg: #eff6ff;
+    --primary: var(--accent);
+    --primary-hover: var(--accent-hover);
+    --ok: #059669;
+    --ok-bg: #ecfdf5;
+    --ok-border: #a7f3d0;
+    --warn: #d97706;
+    --warn-bg: #fffbeb;
+    --warn-border: #fde68a;
+    --bad: #dc2626;
+    --bad-bg: #fef2f2;
+    --bad-border: #fecaca;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  }
+  :root[data-theme="dark"] {
+    --bg: #090d16;
+    --panel: #131b2e;
+    --surface-header: #1a253e;
+    --sidebar: #0e1626;
+    --line: #222f4c;
+    --line-subtle: #1c2740;
+    --border-strong: #334366;
+    --ink: #f8fafc;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --dim: #94a3b8;
+    --accent: #38bdf8;
+    --accent-hover: #0284c7;
+    --accent-bg: rgba(56, 189, 248, 0.12);
+    --ok: #34d399;
+    --ok-bg: rgba(52, 211, 153, 0.12);
+    --ok-border: rgba(52, 211, 153, 0.3);
+    --warn: #fbbf24;
+    --warn-bg: rgba(251, 191, 36, 0.15);
+    --warn-border: rgba(251, 191, 36, 0.3);
+    --bad: #f87171;
+    --bad-bg: rgba(248, 113, 113, 0.15);
+    --bad-border: rgba(248, 113, 113, 0.3);
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 6px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  body {
+    font-size: var(--font-base) !important;
+    font-family: var(--sans) !important;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  /* Header Bar */
+  header.app-nav {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .brand-zone { display: flex; align-items: center; gap: 12px; }
+  .brand-logo {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: linear-gradient(135deg, #2563eb, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 15px; font-weight: 800;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+  }
+  .brand-text h1 { font-size: 15.5px; font-weight: 700; color: var(--ink); margin: 0; }
+  .brand-text .header-pills { display: flex; gap: 6px; align-items: center; margin-top: 2px; flex-wrap: wrap; }
+
+  /* Navigation Center Tabs */
+  .main-tabs {
+    display: flex; gap: 6px; background: var(--surface-header); padding: 4px; border-radius: 8px; border: 1px solid var(--line);
+  }
+  .tab-trigger {
+    background: transparent; border: none; color: var(--dim); font-size: 13px; font-weight: 600;
+    padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
+    font-family: var(--sans);
+  }
+  .tab-trigger:hover { color: var(--ink); }
+  .tab-trigger.active {
+    background: var(--panel); color: var(--accent); box-shadow: var(--shadow-sm);
+  }
+
+  /* Nav Utility tools */
+  .nav-tools { display: flex; align-items: center; gap: 12px; }
+  .zoom-box {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface-header); border: 1px solid var(--line);
+    padding: 4px 10px; border-radius: 6px; font-size: 12px;
+  }
+  .zoom-slider { width: 80px; cursor: pointer; accent-color: var(--accent); }
+  .zoom-label { font-family: var(--mono); font-weight: 700; color: var(--accent); min-width: 44px; text-align: right; }
+  .btn-theme {
+    padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600;
+    border: 1px solid var(--border-strong, var(--line)); background: var(--panel); color: var(--ink);
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; font-family: var(--sans);
+  }
+  .btn-theme:hover { background: var(--surface-header); border-color: var(--accent); }
+
+  /* Buttons */
+  .btn-sm, .opbtn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border-strong, var(--line));
+    background: var(--panel);
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    transition: all 0.15s ease;
+    box-shadow: var(--shadow-sm);
+    font-family: var(--sans);
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+  .btn-sm:hover, .opbtn:hover {
+    background: var(--surface-header);
+    border-color: var(--accent);
+  }
+  .btn-primary, .btn-sm.btn-primary, .opbtn.btn-primary {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #2563eb !important;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25);
+  }
+  .btn-primary:hover, .btn-sm.btn-primary:hover, .opbtn.btn-primary:hover {
+    background: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
+  }
+  .btn-danger, .btn-sm.btn-danger, .opbtn.danger {
+    background: var(--bad-bg) !important;
+    color: var(--bad) !important;
+    border-color: var(--bad-border) !important;
+  }
+  .btn-danger:hover, .btn-sm.btn-danger:hover, .opbtn.danger:hover {
+    background: var(--bad) !important;
+    color: #ffffff !important;
+  }
+
+  /* Topology & Message Center 2-Column Grid */
+  .grid-2col-topo {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 16px;
+  }
+  @media(max-width: 1100px) {
+    .grid-2col-topo { grid-template-columns: 1fr; }
+  }
+  .msg-center-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    display: flex;
+    flex-direction: column;
+  }
+  .msg-center-body {
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .msg-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface-header);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    transition: transform 0.1s ease;
+  }
+  .msg-item:hover {
+    transform: translateX(2px);
+    border-color: var(--border-strong);
+  }
+  .msg-item.crit { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
+  .msg-item.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #92400e; }
+  .msg-item.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
+  .msg-left { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+  .msg-badge {
+    font-size: 10px; font-weight: 700; font-family: var(--mono); padding: 1px 5px; border-radius: 3px; text-transform: uppercase; flex-shrink: 0;
+  }
+  .msg-badge.crit { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+  .msg-badge.warn { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+  .msg-badge.ok { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+  .msg-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .msg-time { font-size: 11px; color: var(--dim); font-family: var(--mono); white-space: nowrap; }
+  .empty-alerts {
+    display: flex; align-items: center; gap: 8px; padding: 24px 16px; color: var(--dim); font-size: 12.5px; justify-content: center;
+  }
+
+  /* Split Cockpit View Styles */
+  .cockpit-layout {
+    display: flex;
+    height: calc(100vh - 66px);
+    overflow: hidden;
+  }
+  .cockpit-sidebar {
+    width: 380px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .cockpit-sidebar-head {
+    padding: 12px 18px;
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--line);
+    font-size: 11.5px; font-weight: 700; color: var(--dim); text-transform: uppercase;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .node-entry {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    border-left: 4px solid transparent;
+    transition: all 0.15s ease;
+  }
+  .node-entry:hover { background: var(--surface-header); }
+  .node-entry.active {
+    background: var(--panel);
+    border-left-color: var(--accent);
+  }
+  .node-entry-top { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; }
+  .node-entry-sub { font-size: 12px; color: var(--dim); font-family: var(--mono); margin-top: 4px; }
+
+  .cockpit-pane {
+    flex: 1;
+    background: var(--panel);
+    overflow-y: auto;
+    padding: 24px 32px;
+  }
+  .cockpit-banner {
+    background: var(--surface-header);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin-bottom: 20px;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+  }
+  .cockpit-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .spec-card {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .spec-card-lbl { font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .spec-card-val { font-size: 18px; font-weight: 800; font-family: var(--mono); color: var(--ink); margin-top: 4px; }
+
   :root{
     --bg:#f8fafc; --panel:#ffffff; --line:#e2e8f0; --line-subtle:#f1f5f9; --ink:#0f172a;
     --dim:#64748b; --accent:#2563eb; --accent-hover:#1d4ed8;
@@ -488,21 +782,47 @@
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">
+<header class="app-nav">
+  <div class="brand-zone">
     <div class="brand-logo">⚡</div>
-    <h1>mt-copier hub</h1>
+    <div class="brand-text">
+      <h1>mt-copier hub</h1>
+      <div class="header-pills">
+        <span class="pill" id="mode">connecting</span>
+        <span class="pill" id="who"></span>
+        <span class="pill" id="counts">-</span>
+        <span class="pill" id="up">-</span>
+        <span class="pill" id="age">-</span>
+      </div>
+    </div>
   </div>
-  <div class="header-pills">
-    <span class="pill" id="mode">connecting</span>
-    <span class="pill" id="who"></span>
-    <span class="pill" id="counts">-</span>
-    <span class="pill" id="up">-</span>
-    <span class="pill" id="age">-</span>
+
+  <div class="main-tabs">
+    <button type="button" class="tab-trigger active" id="tab_btn_dash" onclick="switchMainTab('dash')">
+      <span>📊</span>
+      <span>Main Dashboard</span>
+    </button>
+    <button type="button" class="tab-trigger" id="tab_btn_cockpit" onclick="switchMainTab('cockpit')">
+      <span>🎛️</span>
+      <span>Split Cockpit</span>
+    </button>
+  </div>
+
+  <div class="nav-tools">
+    <div class="zoom-box" title="Scale font size without layout distortion (11px - 18px)">
+      <span style="color:var(--dim)">Font:</span>
+      <input type="range" class="zoom-slider" id="zoomRange" min="11" max="18" step="0.5" value="13.5" oninput="applyScale(this.value)">
+      <span class="zoom-label" id="zoomVal">13.5px</span>
+    </div>
+
+    <button type="button" class="btn-theme" id="theme_toggle" onclick="toggleTheme()">
+      <span id="theme_icon">🌙</span>
+      <span id="theme_text">Night Mode</span>
+    </button>
   </div>
 </header>
-<div id="alerts"></div>
 
+<div id="view_dash" class="view-panel active">
 <main>
   <!-- KPI Overview Grid -->
   <div class="kpi-grid">
@@ -564,15 +884,29 @@
   <section id="nodes-sec">
     <h2>
       <span>Terminals &amp; Nodes <span id="ncount"></span></span>
-      <button type="button" class="opbtn" id="btn-open-cfg" style="text-transform:none;letter-spacing:normal;font-weight:600">+ Configure Receiver</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button type="button" class="btn-sm" id="btn-batch-pause">Batch Pause</button>
+        <button type="button" class="btn-sm" id="btn-batch-reload">Batch Reload</button>
+        <button type="button" class="btn-sm btn-primary" id="btn-open-cfg">+ Configure Receiver</button>
+      </div>
     </h2>
     <div id="nodes"><div class="empty">loading</div></div>
   </section>
 
-  <section id="topo">
-    <h2>Topology <span id="tcount"></span></h2>
-    <div id="topobody"><div class="empty">loading</div></div>
-  </section>
+  <div class="grid-2col-topo">
+    <section id="topo">
+      <h2>Topology <span id="tcount"></span></h2>
+      <div id="topobody"><div class="empty">loading</div></div>
+    </section>
+
+    <section id="msgcenter-card" class="msg-center-card">
+      <h2>
+        <span>📢 Message Center &amp; Alerts</span>
+        <button type="button" class="btn-sm" data-act="dismiss-all" style="font-size:11px">Dismiss All</button>
+      </h2>
+      <div id="alerts" class="msg-center-body"></div>
+    </section>
+  </div>
 
   <!-- Notification Channels (Telegram / WeCom / DingTalk / Webhook) -->
   <section id="notif-sec" class="hidden">
@@ -601,6 +935,22 @@
     </form>
   </section>
 </main>
+</div>
+
+<div id="view_cockpit" class="view-panel" style="display:none">
+  <div class="cockpit-layout">
+    <div class="cockpit-sidebar">
+      <div class="cockpit-sidebar-head">
+        <span>Connected Terminals (<span id="cockpit_node_count">0</span>)</span>
+        <span style="font-size:11px;color:var(--dim)">Click to focus</span>
+      </div>
+      <div id="cockpit_node_list"></div>
+    </div>
+    <div class="cockpit-pane">
+      <div id="cockpit_detail_view"></div>
+    </div>
+  </div>
+</div>
 
 <footer id="foot"><span id="writes-state">loading command state…</span> · <span id="curvekey" class="hidden">CURVE <code id="ckey" title="click to copy"></code> <a href="#" id="ckeycopy" style="color:inherit">(copy)</a> · <a href="#" id="ckeydlg" style="color:inherit">(download / instructions)</a></span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
 
@@ -2200,6 +2550,7 @@ function render(){
   updateKpiCards(nodes, pos, d);
   drawTopology(nodes);
   renderCurveKey(d.curve || null);
+  renderCockpit(nodes, pos);
 
   if(!$("posmodal").classList.contains("hidden")){
     updatePosNodeSelector();
@@ -2223,49 +2574,190 @@ function renderCurveKey(cv){
 //--- M6: the alert bar. The hub's WebSocket (and the polling fallback) put
 //--- the engine's recent ring in every snapshot, so this is a pure render.
 //--- Hidden when empty: an alert that is always visible stops being one.
-function renderAlerts(alerts){
-  var bar = $("alerts");
-  if(!alerts || !alerts.length){
-    bar.className = "";
-    bar.innerHTML = "";
+// --- View Navigation & Tab Switching ---
+function switchMainTab(tab){
+  var bDash = $("tab_btn_dash"), bCockpit = $("tab_btn_cockpit");
+  var vDash = $("view_dash"), vCockpit = $("view_cockpit");
+  if(tab === "cockpit"){
+    if(bDash) bDash.classList.remove("active");
+    if(bCockpit) bCockpit.classList.add("active");
+    if(vDash) vDash.style.display = "none";
+    if(vCockpit) vCockpit.style.display = "flex";
+    localStorage.setItem("mtc_active_tab", "cockpit");
+    renderCockpit(s.data && s.data.nodes || [], s.data && s.data.positions || []);
+  } else {
+    if(bCockpit) bCockpit.classList.remove("active");
+    if(bDash) bDash.classList.add("active");
+    if(vCockpit) vCockpit.style.display = "none";
+    if(vDash) vDash.style.display = "flex";
+    localStorage.setItem("mtc_active_tab", "dash");
+  }
+}
+
+// --- Theme Management (Daylight White / Dark Night) ---
+function toggleTheme(){
+  var html = document.documentElement;
+  var cur = html.getAttribute("data-theme") || "light";
+  var next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  localStorage.setItem("mtc_theme", next);
+  updateThemeBtn(next);
+}
+function updateThemeBtn(theme){
+  var icon = $("theme_icon");
+  var txt = $("theme_text");
+  if(icon) icon.textContent = theme === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = theme === "light" ? "Night Mode" : "Day Mode";
+}
+
+// --- Dynamic Font Scaling Slider ---
+function applyScale(size){
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  var lbl = $("zoomVal");
+  if(lbl) lbl.textContent = size + "px";
+  localStorage.setItem("mtc_font_size", size);
+}
+
+// --- Split Cockpit Rendering (Tab 2) ---
+function renderCockpit(nodes, pos){
+  var listHost = $("cockpit_node_list");
+  var detailHost = $("cockpit_detail_view");
+  var countEl = $("cockpit_node_count");
+  if(!listHost || !detailHost) return;
+  if(countEl) countEl.textContent = nodes.length;
+
+  if(!nodes.length){
+    listHost.innerHTML = '<div class="empty">No nodes connected</div>';
+    detailHost.innerHTML = '<div class="empty">No node registered yet</div>';
     return;
   }
-  var visible = alerts.filter(function(a){
+
+  if(!s.cockpitSelectedKey || !nodes.some(function(n){ return n.key === s.cockpitSelectedKey; })){
+    s.cockpitSelectedKey = nodes[0].key;
+  }
+
+  listHost.innerHTML = nodes.map(function(n){
+    var activeCls = n.key === s.cockpitSelectedKey ? " active" : "";
+    var roleCls = n.role === "sender" ? "role-pill sender" : "role-pill receiver";
+    var posCount = (n.positions && n.positions.count !== undefined) ? n.positions.count : "-";
+    var lotsStr = (n.positions && n.positions.lots !== undefined) ? n.positions.lots + " Lots" : "";
+    var eqStr = n.equity ? ("$" + n.equity) : (n.balance ? ("$" + n.balance) : "-");
+    var pingStr = n.ping_ms ? (n.ping_ms + "ms") : "-";
+    return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
+           '<div class="node-entry-top">' +
+           '<strong>' + esc(n.key) + ' \u00b7 ' + esc(n.name || n.role) + '</strong>' +
+           '<span class="ping-tag ping-ok">' + esc(pingStr) + '</span>' +
+           '</div>' +
+           '<div class="node-entry-sub">' +
+           '<span class="' + roleCls + '">' + esc(n.role) + '</span> ' +
+           esc(n.ver ? ("v" + n.ver) : "") + ' \u00b7 ' + posCount + ' pos (' + lotsStr + ') \u00b7 ' + eqStr +
+           '</div></div>';
+  }).join("");
+
+  var sel = nodes.find(function(n){ return n.key === s.cockpitSelectedKey; }) || nodes[0];
+  if(!sel) return;
+
+  var selOps = "";
+  if(sel.role === "receiver"){
+    var pzOp = sel.paused ? "resume" : "pause";
+    var pzText = sel.paused ? "Resume Node" : "Pause Node";
+    selOps = '<button type="button" class="btn-sm btn-primary" data-cockpit-op="config" data-ck="' + esc(sel.key) + '">📥 Visual Config</button> ' +
+             '<button type="button" class="btn-sm" data-cockpit-op="reqcfg" data-ck="' + esc(sel.key) + '">🔄 Query Live INI</button> ' +
+             '<button type="button" class="btn-sm" data-cockpit-op="' + pzOp + '" data-ck="' + esc(sel.key) + '">' + pzText + '</button> ' +
+             '<button type="button" class="btn-sm btn-danger" data-cockpit-op="closeall" data-ck="' + esc(sel.key) + '">Close All</button> ' +
+             '<button type="button" class="btn-sm" data-cockpit-op="reload" data-ck="' + esc(sel.key) + '">Reload</button>';
+  } else {
+    selOps = '<button type="button" class="btn-sm btn-primary" data-cockpit-op="positions" data-ck="' + esc(sel.key) + '">📊 Inspect Positions</button> ' +
+             '<button type="button" class="btn-sm" data-cockpit-op="config" data-ck="' + esc(sel.key) + '">⚙️ Config</button>';
+  }
+
+  var eqVal = sel.equity ? ("$" + sel.equity) : (sel.balance ? ("$" + sel.balance) : "-");
+  var balVal = sel.balance ? ("$" + sel.balance) : "-";
+  var posVal = (sel.positions && sel.positions.count !== undefined)
+    ? (sel.positions.count + " pos (" + (sel.positions.lots || 0) + " lots)") : "-";
+  var hashVal = (sel.role === "receiver" && cfgState.data && cfgState.data.current_setting)
+    ? "Live Setting Synced" : (sel.role === "receiver" ? "IH Content-Hash Gated" : "N/A (Sender)");
+
+  var nodePos = (pos || []).filter(function(p){ return p.sid === sel.key || p.sid === sel.acc; });
+  var posRows = nodePos.map(function(p){
+    var syms = (p.symbols || []).map(function(x){ return esc(x.symbol) + "×" + esc(x.count) + "/" + esc(x.lots); }).join(" ");
+    return '<tr><td>' + esc(p.sid) + '</td><td class="num">' + esc(p.count) + '</td><td class="num">' + esc(p.lots) + '</td><td>' + (syms || '-') + '</td><td><code>' + esc(p.receipt || '-') + '</code></td></tr>';
+  }).join("");
+  if(!posRows){
+    posRows = '<tr><td colspan="5" class="empty" style="text-align:center">No active positions reported for this node</td></tr>';
+  }
+
+  detailHost.innerHTML =
+    '<div class="cockpit-banner">' +
+    '<div>' +
+    '<h2 style="font-size:1.5em;font-weight:800;margin:0;letter-spacing:-0.02em">' + esc(sel.key) + ' \u00b7 ' + esc(sel.name || sel.role) + '</h2>' +
+    '<div style="font-size:0.9em;color:var(--dim);margin-top:4px">' +
+    'Role: <span class="role-pill ' + sel.role + '">' + esc(sel.role) + '</span> ' +
+    '\u00b7 Platform: ' + esc(sel.ver ? ("v" + sel.ver) : "MT Terminal") +
+    ' \u00b7 Latency: ' + esc(sel.ping_ms ? (sel.ping_ms + "ms") : "-") +
+    ' \u00b7 Status: <span class="dot ' + sel.liveness + '"></span>' + esc(sel.liveness) +
+    (sel.paused ? ' \u00b7 <strong style="color:var(--warn)">PAUSED</strong>' : '') +
+    '</div></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' + selOps + '</div>' +
+    '</div>' +
+    '<div class="cockpit-kpi-grid">' +
+    '<div class="spec-card"><div class="spec-card-lbl">Account Equity</div><div class="spec-card-val">' + esc(eqVal) + '</div></div>' +
+    '<div class="spec-card"><div class="spec-card-lbl">Account Balance</div><div class="spec-card-val">' + esc(balVal) + '</div></div>' +
+    '<div class="spec-card"><div class="spec-card-lbl">Managed Positions</div><div class="spec-card-val">' + esc(posVal) + '</div></div>' +
+    '<div class="spec-card"><div class="spec-card-lbl">Config Hash (IH)</div><div class="spec-card-val" style="color:var(--ok)">' + esc(hashVal) + '</div></div>' +
+    '</div>' +
+    '<section style="margin-top:20px">' +
+    '<h2><span>Node Position Snapshot &amp; Symbol Exposure</span></h2>' +
+    '<div style="overflow-x:auto"><table>' +
+    '<thead><tr><th>Source Identifier</th><th class="num">Positions</th><th class="num">Lots</th><th>Symbols</th><th>Receipt Hash (H)</th></tr></thead>' +
+    '<tbody>' + posRows + '</tbody></table></div></section>';
+}
+
+function renderAlerts(alerts){
+  var bar = $("alerts");
+  if(!bar) return;
+  var visible = (alerts || []).filter(function(a){
     var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
     return !s.dismissedAlerts[k];
   });
   if(!visible.length){
-    bar.className = "";
-    bar.innerHTML = "";
+    bar.className = "msg-center-body empty";
+    bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>All systems nominal \u00b7 No active alerts or warnings</span></div>';
     return;
   }
-  bar.className = "on";
+  bar.className = "msg-center-body on";
   var nodeLiveness = {};
   if(s.data && s.data.nodes){
     s.data.nodes.forEach(function(n){ nodeLiveness[n.key] = n.liveness; });
   }
-  var items = visible.slice(0, 5).map(function(a){
+  var nowSec = Math.floor(Date.now() / 1000);
+  var items = visible.slice(0, 8).map(function(a){
+    var diff = nowSec - (a.ts || nowSec);
+    var ago = "just now";
+    if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
+    else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
+    else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
     var when = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
     var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
     var isRecovered = (a.kind === "node.recovered" || (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online"));
     var sevClass = (a.kind === "node.recovered") ? "ok" : (isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn"));
     var statusBadge = (a.kind === "node.recovered")
-      ? ' <span class="ares">RECOVERED \u00b7 ONLINE</span>'
-      : (isRecovered ? ' <span class="ares">RESOLVED \u00b7 NODE IS ONLINE</span>' : '');
-    return '<div class="a ' + sevClass + '">' +
-           '<div class="atxt">' + esc(when) + " \u00b7 " + esc(a.kind) + " \u00b7 " + esc(a.node || "-") +
-           statusBadge + " \u00b7 " + esc(JSON.stringify(a.detail)) + '</div>' +
-           '<button type="button" class="ax" data-ak="' + esc(k) + '" title="dismiss this alert">&times;</button>' +
-           '</div>';
+      ? ' <span class="ares">RECOVERED</span>'
+      : (isRecovered ? ' <span class="ares">RESOLVED</span>' : '');
+    var detailText = typeof a.detail === "string" ? a.detail : JSON.stringify(a.detail);
+    return '<div class="msg-item ' + sevClass + '">' +
+           '<div class="msg-left">' +
+           '<span class="msg-badge ' + sevClass + '">' + esc(a.kind || "ALERT") + '</span>' +
+           '<span class="msg-desc"><strong>' + esc(a.node || "System") + '</strong>: ' + statusBadge + ' ' + esc(detailText) + '</span>' +
+           '</div>' +
+           '<div class="msg-right">' +
+           '<span class="msg-time">' + ago + ' (' + esc(when) + ')</span>' +
+           '<button type="button" class="ax" data-ak="' + esc(k) + '" title="Dismiss this alert">&times;</button>' +
+           '</div></div>';
   }).join("");
 
-  bar.innerHTML =
-    '<div class="ahead">' +
-    '<span>Recent alerts</span>' +
-    '<button type="button" data-act="dismiss-all">dismiss all</button>' +
-    '</div>' + items;
+  bar.innerHTML = items;
 }
-
 // --- NODES ---------------------------------------------------------------
 //
 // Rebuilt only when the SET of keys changes. In between, the cells are
@@ -2285,15 +2777,13 @@ function renderNodes(nodes){
   var keys = nodes.map(function(n){ return n.key; }).join("\u0000");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
+      var pzText = n.paused ? "Resume" : "Pause";
+      var pzOp = n.paused ? "resume" : "pause";
       var ops = (n.role === "receiver")
-        ? "<button class='opbtn' data-op='positions'>positions</button>" +
-          "<button class='opbtn' data-op='config'>config</button>" +
-          "<button class='opbtn' data-op='pause'>pause</button>" +
-          "<button class='opbtn' data-op='resume'>resume</button>" +
-          "<button class='opbtn danger' data-op='closeall'>close all</button>" +
-          "<button class='opbtn' data-op='reload'>reload</button>" +
+        ? "<button class='btn-sm btn-primary opbtn' data-op='config'>Visual Config</button> " +
+          "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>" +
           "<span class='opmsg'></span>"
-        : "<button class='opbtn' data-op='positions'>positions</button>" +
+        : "<button class='btn-sm opbtn' data-op='config'>Config</button>" +
           "<span class='opmsg'></span>";
       return "<tr data-k=\"" + esc(n.key) + "\">" +
              "<td data-label=\"Node\"><span class='dot'></span><span class='k'></span> <span class='role-pill'></span></td>" +
@@ -2320,6 +2810,7 @@ function renderNodes(nodes){
         nm:  trs[i].querySelector(".nmv"),
         ver: trs[i].querySelector(".ver-tag"),
         pz:  trs[i].querySelector(".pzchip"),
+        btnPz: trs[i].querySelector("button[data-op='pause'], button[data-op='resume']"),
         ps:  trs[i].querySelector(".ps"),
         fin: trs[i].querySelector(".fin"),
         wt:  trs[i].querySelector(".wt"),
@@ -2341,6 +2832,11 @@ function renderNodes(nodes){
       r.ver.textContent = n.ver ? "v" + n.ver : "";
     }
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
+    if(r.btnPz && n.role === "receiver"){
+      var pzOpCur = n.paused ? "resume" : "pause";
+      r.btnPz.setAttribute("data-op", pzOpCur);
+      r.btnPz.textContent = n.paused ? "Resume" : "Pause";
+    }
 
     // Positions & Financials
     if(n.positions && n.positions.count !== undefined){
@@ -2818,6 +3314,100 @@ function startDashboard(){
       renderAlerts(s.data && s.data.alerts || []);
     }
   });
+
+  // Batch pause & batch reload buttons
+  var btnBP = $("btn-batch-pause");
+  if(btnBP){
+    btnBP.addEventListener("click", function(){
+      confirmDialog({
+        title: "Batch Pause Receivers",
+        desc: "Pause all active receiver nodes?",
+        detail: "This will issue a pause command to every registered receiver terminal.",
+        confirmText: "Pause All Receivers"
+      }).then(function(ok){
+        if(ok) sendGlobal("pause");
+      });
+    });
+  }
+
+  var btnBR = $("btn-batch-reload");
+  if(btnBR){
+    btnBR.addEventListener("click", function(){
+      confirmDialog({
+        title: "Batch Reload Receivers",
+        desc: "Reload configuration on all active receiver nodes?",
+        detail: "This will issue a reload command to every registered receiver terminal to re-read copier.ini.",
+        confirmText: "Reload All Receivers"
+      }).then(function(ok){
+        if(ok) sendGlobal("reload");
+      });
+    });
+  }
+
+  // Cockpit sidebar click delegation
+  var cList = $("cockpit_node_list");
+  if(cList){
+    cList.addEventListener("click", function(ev){
+      var item = ev.target.closest(".node-entry");
+      if(!item) return;
+      var k = item.getAttribute("data-ck");
+      if(k){
+        s.cockpitSelectedKey = k;
+        renderCockpit(s.data && s.data.nodes || [], s.data && s.data.positions || []);
+      }
+    });
+  }
+
+  // Cockpit detail workspace button delegation
+  var cDetail = $("cockpit_detail_view");
+  if(cDetail){
+    cDetail.addEventListener("click", function(ev){
+      var btn = ev.target.closest("button[data-cockpit-op]");
+      if(!btn) return;
+      var op = btn.getAttribute("data-cockpit-op");
+      var k = btn.getAttribute("data-ck");
+      if(!k) return;
+      if(op === "config"){
+        openConfigModal(k);
+      } else if(op === "positions"){
+        openPositionsModal(k);
+      } else if(op === "reqcfg"){
+        sendCommand(k, "reqcfg");
+      } else if(op === "closeall"){
+        confirmDialog({
+          title: "Emergency Close All Positions",
+          desc: "Close ALL open positions on receiver " + esc(k) + " immediately?",
+          detail: "This will send market close orders for all positions held by this node.",
+          danger: true,
+          confirmText: "Close All Positions"
+        }).then(function(ok){
+          if(ok) sendCommand(k, "closeall");
+        });
+      } else {
+        sendCommand(k, op);
+      }
+    });
+  }
+
+  // Restore saved theme
+  var savedTheme = localStorage.getItem("mtc_theme") || "light";
+  document.documentElement.setAttribute("data-theme", savedTheme);
+  updateThemeBtn(savedTheme);
+
+  // Restore saved font scale
+  var savedFont = localStorage.getItem("mtc_font_size");
+  if(savedFont){
+    applyScale(savedFont);
+    var rng = $("zoomRange");
+    if(rng) rng.value = savedFont;
+  }
+
+  // Restore saved tab
+  var savedTab = localStorage.getItem("mtc_active_tab");
+  if(savedTab === "cockpit"){
+    switchMainTab("cockpit");
+  }
+
   refreshWritesState();
 }
 

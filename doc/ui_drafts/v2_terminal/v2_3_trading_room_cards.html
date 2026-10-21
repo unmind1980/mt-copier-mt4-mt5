@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2-3: 交易室模块卡片流 (字体放大彻底防挤压变形)</title>
+<style>
+  :root {
+    --font-base: 14px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "SF Mono", Consolas, Menlo, monospace;
+  }
+  [data-theme="light"] {
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --card-header: #f8fafc;
+    --border: #e2e8f0;
+    --border-hover: #94a3b8;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --accent: #3b82f6;
+    --green: #10b981;
+    --green-bg: #ecfdf5;
+    --amber: #f59e0b;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --card: #131b2e;
+    --card-header: #1a253e;
+    --border: #222f4c;
+    --border-hover: #3b82f6;
+    --text: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #60a5fa;
+    --green: #34d399;
+    --green-bg: rgba(52, 211, 153, 0.12);
+    --amber: #fbbf24;
+    --shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--font-base);
+    line-height: 1.5;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 28px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .controls-bar { display: flex; align-items: center; gap: 10px; }
+  .btn {
+    padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: var(--card); color: var(--text);
+  }
+  .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+    padding: 24px 28px;
+  }
+  .node-tile {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    transition: all 0.2s;
+  }
+  .node-tile:hover { transform: translateY(-2px); border-color: var(--border-hover); }
+  .tile-header {
+    padding: 12px 16px;
+    background: var(--card-header);
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .tile-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .metric-line { display: flex; justify-content: space-between; font-size: 0.95em; }
+  .mono { font-family: var(--font-mono); font-weight: 600; }
+  .badge {
+    padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
+    font-family: var(--font-mono); text-transform: uppercase;
+  }
+  .badge-sender { background: #eff6ff; color: #1d4ed8; }
+  .badge-receiver { background: #faf5ff; color: #7e22ce; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1 style="font-size:1.15em;font-weight:700">⚡ 交易室独立卡片布局 (V2-3)</h1>
+    <div style="font-size:0.85em;color:var(--text-muted)">每个节点独立卡片封装，字号无论调多大都不会发生表格横向挤压变形</div>
+  </div>
+  <div class="controls-bar">
+    <div style="display:flex;gap:4px;background:var(--card-header);padding:2px;border-radius:6px;border:1px solid var(--border)">
+      <button class="btn font-btn" data-size="12" onclick="setFontSize('12')">小 12px</button>
+      <button class="btn font-btn active" data-size="14" onclick="setFontSize('14')">中 14px (默认)</button>
+      <button class="btn font-btn" data-size="16" onclick="setFontSize('16')">大 16px</button>
+    </div>
+    <button class="btn" onclick="toggleTheme()">
+      <span id="theme_icon">🌙</span> <span id="theme_text">夜间模式</span>
+    </button>
+  </div>
+</header>
+
+<div class="card-grid">
+  <div class="node-tile" style="border-top:3px solid var(--accent)">
+    <div class="tile-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge badge-sender">SENDER</span>
+        <strong>Alpari Main FX</strong>
+      </div>
+      <span style="color:var(--green);font-size:0.85em;font-weight:600">● 18ms</span>
+    </div>
+    <div class="tile-body">
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账号 &amp; 平台</span>
+        <span class="mono">#1001 · MT5.x64</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">当前持仓</span>
+        <span class="mono"><strong>6 笔</strong> (1.20 Lots)</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账户权益</span>
+        <span class="mono" style="color:var(--green)">$12,450.80</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">运行状态</span>
+        <span style="color:var(--accent);font-size:0.9em">广播正常 (SNAP 15s)</span>
+      </div>
+      <div style="margin-top:6px;border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn" style="padding:4px 10px;font-size:12px">查看持仓</button>
+        <button class="btn" style="padding:4px 10px;font-size:12px">配置</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="node-tile" style="border-top:3px solid #a855f7">
+    <div class="tile-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge badge-receiver">RECEIVER</span>
+        <strong>Prop Master Alpha</strong>
+      </div>
+      <span style="color:var(--green);font-size:0.85em;font-weight:600">● 22ms</span>
+    </div>
+    <div class="tile-body">
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账号 &amp; 平台</span>
+        <span class="mono">#2001 · MT5.x64</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">同步持仓</span>
+        <span class="mono"><strong>20 笔</strong> (5.70 Lots)</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账户权益</span>
+        <span class="mono" style="color:var(--green)">$105,420.50</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">收敛状态</span>
+        <span style="color:var(--green);font-size:0.9em">● 100% 收敛同步 (0等待)</span>
+      </div>
+      <div style="margin-top:6px;border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn active" style="padding:4px 10px;font-size:12px">可视化配置</button>
+        <button class="btn" style="padding:4px 10px;font-size:12px">暂停</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="node-tile" style="border-top:3px solid var(--amber)">
+    <div class="tile-header">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge badge-receiver">RECEIVER</span>
+        <strong>FTMO Stage 2</strong>
+      </div>
+      <span style="color:var(--amber);font-size:0.85em;font-weight:600">● 142ms</span>
+    </div>
+    <div class="tile-body">
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账号 &amp; 平台</span>
+        <span class="mono">#2002 · MT4.x86</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">同步持仓</span>
+        <span class="mono"><strong>6 笔</strong> (1.20 Lots)</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">账户权益</span>
+        <span class="mono">$108,940.10</span>
+      </div>
+      <div class="metric-line">
+        <span style="color:var(--text-muted)">延迟门控</span>
+        <span style="color:var(--amber);font-size:0.9em">▲ 2笔等待 (利润回撤门控)</span>
+      </div>
+      <div style="margin-top:6px;border-top:1px dashed var(--border);padding-top:10px;display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn active" style="padding:4px 10px;font-size:12px">可视化配置</button>
+        <button class="btn" style="padding:4px 10px;font-size:12px">暂停</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  const icon = document.getElementById("theme_icon");
+  const txt = document.getElementById("theme_text");
+  if(icon) icon.textContent = next === "light" ? "🌙" : "☀️";
+  if(txt) txt.textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+function setFontSize(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.querySelectorAll(".font-btn").forEach(b => {
+    b.classList.toggle("active", b.getAttribute("data-size") === size);
+  });
+  const lbl = document.getElementById("cur_size_lbl");
+  if(lbl) lbl.textContent = size + "px";
+}
+</script>
+
+</body>
+</html>

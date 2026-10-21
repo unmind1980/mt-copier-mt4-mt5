@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MT-Copier 交易控制中心 (V2 综合预览版: 主仪表盘 + 分体驾驶舱 + 实时字号缩放)</title>
+<style>
+  :root {
+    --font-base: 13.5px;
+    --font-heading: 16px;
+    --font-mono: "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-header: #f1f5f9;
+    --sidebar: #f8fafc;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --accent: #2563eb;
+    --accent-bg: #eff6ff;
+    --green: #059669;
+    --green-bg: #ecfdf5;
+    --green-border: #a7f3d0;
+    --red: #dc2626;
+    --red-bg: #fef2f2;
+    --amber: #d97706;
+    --amber-bg: #fffbeb;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.08);
+  }
+  [data-theme="dark"] {
+    --bg: #090d16;
+    --surface: #131b2e;
+    --surface-header: #1a253e;
+    --sidebar: #0e1626;
+    --border: #222f4c;
+    --border-strong: #334366;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-bg: rgba(56, 189, 248, 0.12);
+    --green: #34d399;
+    --green-bg: rgba(52, 211, 153, 0.12);
+    --green-border: rgba(52, 211, 153, 0.3);
+    --red: #f87171;
+    --red-bg: rgba(248, 113, 113, 0.15);
+    --amber: #fbbf24;
+    --amber-bg: rgba(251, 191, 36, 0.15);
+    --shadow: 0 2px 6px rgba(0,0,0,0.3);
+    --shadow-md: 0 6px 12px rgba(0,0,0,0.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--font-base);
+    line-height: 1.5;
+    transition: background 0.2s, color 0.2s;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  /* Sticky Header */
+  .app-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow);
+  }
+  .brand-zone {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-logo {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(135deg, #2563eb, #06b6d4);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 16px; font-weight: 800;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  }
+  .brand-text h1 {
+    font-size: 16px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em;
+  }
+  .brand-text .meta {
+    font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);
+  }
+
+  /* Main Navigation Tabs */
+  .main-tabs {
+    display: flex;
+    gap: 6px;
+    background: var(--surface-header);
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .tab-trigger {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tab-trigger:hover { color: var(--text-primary); }
+  .tab-trigger.active {
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: var(--shadow);
+  }
+
+  /* Utility controls: Font zoomer & theme toggle */
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .font-zoom-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface-header);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .font-slider {
+    cursor: pointer;
+    accent-color: var(--accent);
+    width: 80px;
+  }
+  .zoom-badge {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 44px;
+    text-align: right;
+  }
+  .btn-theme {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-primary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s;
+  }
+  .btn-theme:hover { background: var(--surface-header); }
+  .btn-kill {
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 700;
+    border: 1px solid #fca5a5;
+    background: var(--red-bg);
+    color: var(--red);
+    cursor: pointer;
+  }
+  .btn-kill:hover { background: #b91c1c; color: #fff; }
+
+  /* Tab View container */
+  .tab-view { display: none; }
+  .tab-view.active { display: block; }
+
+  /* ========================================================= */
+  /* TAB 1: Main Dashboard Layout (V2-1 + Elastic Table)       */
+  /* ========================================================= */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+    padding: 18px 24px 0;
+  }
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .kpi-lbl { font-size: 0.85em; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .kpi-val { font-size: 1.7em; font-weight: 800; font-family: var(--font-mono); color: var(--text-primary); margin-top: 4px; }
+  .kpi-sub { font-size: 0.88em; margin-top: 3px; }
+
+  .layout-grid {
+    display: grid;
+    grid-template-columns: 2.2fr 1fr;
+    gap: 18px;
+    padding: 18px 24px 24px;
+  }
+  @media(max-width: 1200px) { .layout-grid { grid-template-columns: 1fr; } }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .box-h {
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 18px;
+    font-size: 0.95em; font-weight: 700; color: var(--text-primary);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  /* Table styling */
+  .table-responsive { width: 100%; overflow-x: auto; }
+  table.data-table {
+    width: 100%; border-collapse: collapse; font-size: 0.94em;
+  }
+  table.data-table th {
+    background: var(--surface-header); color: var(--text-muted); font-weight: 600;
+    text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.86em;
+    white-space: nowrap;
+  }
+  table.data-table td {
+    padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle;
+    white-space: nowrap;
+  }
+  table.data-table tr:hover { background: var(--accent-bg); }
+  .num { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+  
+  .badge {
+    padding: 3px 8px; border-radius: 4px; font-size: 0.82em; font-weight: 700;
+    font-family: var(--font-mono); text-transform: uppercase; display: inline-block;
+  }
+  .badge-sender { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+  .badge-receiver { background: #f3e8ff; color: #7e22ce; border: 1px solid #e9d5ff; }
+  .badge-online { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+  .badge-warn { background: var(--amber-bg); color: var(--amber); border: 1px solid #fde68a; }
+
+  .btn-sm {
+    padding: 4px 10px; border-radius: 5px; font-size: 0.86em; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-primary);
+    transition: all 0.15s;
+  }
+  .btn-sm:hover { background: var(--surface-header); border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ========================================================= */
+  /* TAB 2: Split Cockpit Layout (V2-6)                        */
+  /* ========================================================= */
+  .cockpit-wrapper {
+    display: flex;
+    height: calc(100vh - 66px);
+    overflow: hidden;
+  }
+  .cockpit-sidebar {
+    width: 380px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .cockpit-sidebar-head {
+    padding: 12px 18px;
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.88em; font-weight: 700; color: var(--text-muted); text-transform: uppercase;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .node-nav-item {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, border-left-color 0.15s;
+    border-left: 4px solid transparent;
+  }
+  .node-nav-item:hover { background: var(--surface-header); }
+  .node-nav-item.active {
+    background: var(--surface);
+    border-left-color: var(--accent);
+  }
+  .node-nav-top {
+    display: flex; justify-content: space-between; align-items: center; font-size: 1em;
+  }
+  .node-nav-sub {
+    font-size: 0.88em; color: var(--text-muted); font-family: var(--font-mono); margin-top: 4px;
+  }
+
+  .cockpit-detail {
+    flex: 1;
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 24px 32px;
+  }
+  .detail-header-card {
+    background: var(--surface-header);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .spec-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .spec-card-lbl { font-size: 0.84em; font-weight: 600; color: var(--text-muted); text-transform: uppercase; }
+  .spec-card-val { font-size: 1.45em; font-weight: 700; font-family: var(--font-mono); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Top Navigation Bar -->
+<header class="app-header">
+  <div class="brand-zone">
+    <div class="brand-logo">⚡</div>
+    <div class="brand-text">
+      <h1>MT-COPIER HUB PRO</h1>
+      <div class="meta">CENTRAL NODE // 100 SENDERS CAPABLE</div>
+    </div>
+  </div>
+
+  <!-- Center Tab Navigator -->
+  <div class="main-tabs">
+    <button class="tab-trigger active" onclick="switchView(dash)">
+      <span>📊</span>
+      <span>综合主仪表盘 (Main Dashboard)</span>
+    </button>
+    <button class="tab-trigger" onclick="switchView(cockpit)">
+      <span>🎛️</span>
+      <span>分体式驾驶舱 (Split Cockpit)</span>
+    </button>
+  </div>
+
+  <!-- Right Actions: Zoom Slider & Theme Toggle -->
+  <div class="header-actions">
+    <!-- Font Size Slider (from V2-4) -->
+    <div class="font-zoom-ctrl" title="拖动滑块无级缩放字号，卡片与表格自适应绝对不变形">
+      <span style="color:var(--text-muted)">字号:</span>
+      <input type="range" class="font-slider" id="zoomSlider" min="11" max="18" step="0.5" value="13.5" oninput="applyZoom(this.value)">
+      <span class="zoom-badge" id="zoomBadge">13.5px</span>
+    </div>
+
+    <!-- Theme Switcher -->
+    <button class="btn-theme" onclick="toggleTheme()">
+      <span id="theme_icon">🌙</span>
+      <span id="theme_text">夜间模式</span>
+    </button>
+
+    <button class="btn-kill">🚨 全局急停</button>
+  </div>
+</header>
+
+<!-- ========================================================= -->
+<!-- VIEW 1: Main Dashboard (V2-1 + V2-4 Elastic Table)        -->
+<!-- ========================================================= -->
+<div id="view_dash" class="tab-view active">
+  <div class="kpi-row">
+    <div class="kpi-card">
+      <div class="kpi-lbl">在线节点总数</div>
+      <div class="kpi-val">24 <span style="font-size:0.6em;color:var(--green)">● ALL READY</span></div>
+      <div class="kpi-sub" style="color:var(--text-muted)">4 Senders · 20 Receivers</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-lbl">当前持仓订单</div>
+      <div class="kpi-val">342 笔</div>
+      <div class="kpi-sub" style="color:var(--accent)">合并交易量: 84.50 Lots</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-lbl">账户总体权益</div>
+      <div class="kpi-val">$1,248,590.20</div>
+      <div class="kpi-sub" style="color:var(--green)">+1.15% 距离回撤警戒线</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-lbl">网络往返延迟 (RTT)</div>
+      <div class="kpi-val">19.4 ms</div>
+      <div class="kpi-sub" style="color:var(--green)">IH 配置哈希验证 (稳态零字节)</div>
+    </div>
+  </div>
+
+  <div class="layout-grid">
+    <!-- Left: Primary Fleet Table -->
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div class="box">
+        <div class="box-h">
+          <span>节点集群实时状态 (支持顶部滑块任意缩放字号，排版自适应不变形)</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm">批量暂停</button>
+            <button class="btn-sm">批量重载</button>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>角色</th>
+                <th>账号与终端</th>
+                <th>延迟</th>
+                <th>状态</th>
+                <th class="num">持仓笔数</th>
+                <th class="num">手数</th>
+                <th class="num">账户权益</th>
+                <th>运行与等待状态</th>
+                <th style="text-align:center">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="badge badge-sender">SENDER</span></td>
+                <td><strong>#1001</strong> · Alpari Main (MT5)</td>
+                <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">18 ms</td>
+                <td><span class="badge badge-online">ONLINE</span></td>
+                <td class="num">6</td>
+                <td class="num">1.20</td>
+                <td class="num">$12,450.80</td>
+                <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+                <td style="text-align:center"><button class="btn-sm">配置</button></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-sender">SENDER</span></td>
+                <td><strong>#1002</strong> · ICMarkets (MT4)</td>
+                <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">34 ms</td>
+                <td><span class="badge badge-online">ONLINE</span></td>
+                <td class="num">14</td>
+                <td class="num">4.50</td>
+                <td class="num">$45,210.00</td>
+                <td style="color:var(--accent)">广播正常 (SNAP 15s)</td>
+                <td style="text-align:center"><button class="btn-sm">配置</button></td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-receiver">RECEIVER</span></td>
+                <td><strong>#2001</strong> · Prop Alpha (MT5)</td>
+                <td style="color:var(--green);font-family:var(--font-mono);font-weight:600">22 ms</td>
+                <td><span class="badge badge-online">ONLINE</span></td>
+                <td class="num">20</td>
+                <td class="num">5.70</td>
+                <td class="num">$105,420.50</td>
+                <td style="color:var(--green)">已收敛同步 (0等待)</td>
+                <td style="text-align:center">
+                  <button class="btn-sm btn-primary">可视化配置</button>
+                  <button class="btn-sm">暂停</button>
+                </td>
+              </tr>
+              <tr>
+                <td><span class="badge badge-receiver">RECEIVER</span></td>
+                <td><strong>#2002</strong> · FTMO Stage 2 (MT4)</td>
+                <td style="color:var(--amber);font-family:var(--font-mono);font-weight:600">142 ms</td>
+                <td><span class="badge badge-online">ONLINE</span></td>
+                <td class="num">6</td>
+                <td class="num">1.20</td>
+                <td class="num">$108,940.10</td>
+                <td style="color:var(--amber)">2笔订单延迟等待 (回撤门控)</td>
+                <td style="text-align:center">
+                  <button class="btn-sm btn-primary">可视化配置</button>
+                  <button class="btn-sm">暂停</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Active Exposure Matrix -->
+      <div class="box">
+        <div class="box-h">
+          <span>合并持仓暴露监控</span>
+          <span style="font-size:0.85em;color:var(--text-muted)">共 342 笔持仓</span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>UID</th>
+                <th>品种</th>
+                <th>方向</th>
+                <th class="num">手数</th>
+                <th class="num">开仓价</th>
+                <th class="num">止损 SL</th>
+                <th class="num">止盈 TP</th>
+                <th>来源信号</th>
+                <th>同步率</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>#9821401</td>
+                <td><code>U7A912F4</code></td>
+                <td><strong>XAUUSD</strong></td>
+                <td><span style="color:var(--green);font-weight:700">BUY</span></td>
+                <td class="num">1.00</td>
+                <td class="num">2684.50</td>
+                <td class="num">2672.00</td>
+                <td class="num">2710.00</td>
+                <td>Alpari Main</td>
+                <td><span class="badge badge-online">20/20 全部同步</span></td>
+              </tr>
+              <tr>
+                <td>#9821422</td>
+                <td><code>B12C44D8</code></td>
+                <td><strong>EURUSD</strong></td>
+                <td><span style="color:var(--red);font-weight:700">SELL</span></td>
+                <td class="num">2.50</td>
+                <td class="num">1.08420</td>
+                <td class="num">1.08850</td>
+                <td class="num">1.07900</td>
+                <td>ICMarkets</td>
+                <td><span class="badge badge-online">18/20 (2门控)</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Side: IH Hashes & Log Stream -->
+    <div style="display:flex;flex-direction:column;gap:18px">
+      <div class="box">
+        <div class="box-h">
+          <span>当前配置哈希对比 (IH 状态)</span>
+          <button class="btn-sm">全量核查</button>
+        </div>
+        <div style="padding:14px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px">
+            <span>#2001 Prop Alpha</span>
+            <span style="color:var(--green);font-family:var(--font-mono);font-weight:600">8afba809 (一致)</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px">
+            <span>#2002 FTMO</span>
+            <span style="color:var(--green);font-family:var(--font-mono);font-weight:600">5b780b2c (一致)</span>
+          </div>
+          <div style="display:flex;justify-content:space-between">
+            <span>#2003 VPS Backup</span>
+            <span style="color:var(--amber);font-family:var(--font-mono);font-weight:600">10ca0c3b (漂移拉取中)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-h">
+          <span>ZMQ 协议实时遥测流 (10 Hz)</span>
+        </div>
+        <div style="padding:12px;font-family:var(--font-mono);font-size:0.86em;line-height:1.6;color:var(--text-secondary);background:var(--surface-header);max-height:260px;overflow-y:auto">
+          <div>[23:20:01] <span style="color:var(--green)">STAT</span> #2001: 20 held · 0 delay · 18ms</div>
+          <div>[23:20:01] FORWARD 252033316 SNAP hash=4a1c09bf (12 items)</div>
+          <div>[23:20:02] <span style="color:var(--accent)">IH_COMPARE</span> #2001 hash match: 0B transferred</div>
+          <div>[23:20:02] HBT2 node sender:1001 quiet 0s</div>
+          <div>[23:20:03] <span style="color:var(--green)">PONG</span> probe answered in 18ms</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================= -->
+<!-- VIEW 2: Split Cockpit (V2-6 分体式驾驶舱)                  -->
+<!-- ========================================================= -->
+<div id="view_cockpit" class="tab-view">
+  <div class="cockpit-wrapper">
+    <!-- Left Navigation List -->
+    <div class="cockpit-sidebar">
+      <div class="cockpit-sidebar-head">
+        <span>节点列表 (24 个)</span>
+        <span style="font-size:11px">可单击切换明细</span>
+      </div>
+
+      <div class="node-nav-item active" onclick="selectNode(this, '#2001 Prop Master Alpha', 'MT5.x64', '$105,420.50', '20 笔 (5.70 Lots)', '8afba809 (一致)')">
+        <div class="node-nav-top">
+          <strong>Prop Master Alpha (#2001)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 22ms</span>
+        </div>
+        <div class="node-nav-sub">RECEIVER · MT5 · 20 Pos · $105.4k 权益</div>
+      </div>
+
+      <div class="node-nav-item" onclick="selectNode(this, '#1001 Alpari Main FX', 'MT5.x64', '$12,450.80', '6 笔 (1.20 Lots)', 'N/A (Sender)')">
+        <div class="node-nav-top">
+          <strong>Alpari Main FX (#1001)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 18ms</span>
+        </div>
+        <div class="node-nav-sub">SENDER · MT5 · 6 Pos · $12.4k 权益</div>
+      </div>
+
+      <div class="node-nav-item" onclick="selectNode(this, '#2002 FTMO Stage 2 Challenge', 'MT4.x86', '$108,940.10', '6 笔 (1.20 Lots)', '5b780b2c (一致)')">
+        <div class="node-nav-top">
+          <strong>FTMO Stage 2 (#2002)</strong>
+          <span style="color:var(--amber);font-size:0.85em;font-weight:700">▲ 142ms</span>
+        </div>
+        <div class="node-nav-sub">RECEIVER · MT4 · 2 延迟门控中</div>
+      </div>
+
+      <div class="node-nav-item" onclick="selectNode(this, '#1002 ICMarkets Scalp', 'MT4.x86', '$45,210.00', '14 笔 (4.50 Lots)', 'N/A (Sender)')">
+        <div class="node-nav-top">
+          <strong>ICMarkets Scalp (#1002)</strong>
+          <span style="color:var(--green);font-size:0.85em;font-weight:700">● 34ms</span>
+        </div>
+        <div class="node-nav-sub">SENDER · MT4 · 14 Pos · $45.2k 权益</div>
+      </div>
+    </div>
+
+    <!-- Right Workspace Detail Panel -->
+    <div class="cockpit-detail">
+      <div class="detail-header-card">
+        <div>
+          <h2 id="ck_node_name" style="font-size:1.5em;font-weight:800;letter-spacing:-0.02em">Prop Master Alpha (#2001)</h2>
+          <div id="ck_node_meta" style="font-size:0.9em;color:var(--text-muted);margin-top:4px">终端环境: MT5.x64 · 策略收敛同步正常 · 独立时钟对齐</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn-sm btn-primary" style="padding:8px 16px;font-size:13px">📥 打开可视化配置器</button>
+          <button class="btn-sm" style="padding:8px 14px;font-size:13px">🔄 实时拉取 live INI</button>
+          <button class="btn-sm" style="padding:8px 14px;font-size:13px">暂停接收</button>
+        </div>
+      </div>
+
+      <!-- Core metrics row for this selected node -->
+      <div class="grid-3">
+        <div class="spec-card">
+          <div class="spec-card-lbl">账户实时净值 (Equity)</div>
+          <div class="spec-card-val" id="ck_equity">$105,420.50</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-card-lbl">同步持仓手数</div>
+          <div class="spec-card-val" id="ck_positions">20 笔 (5.70 Lots)</div>
+        </div>
+        <div class="spec-card">
+          <div class="spec-card-lbl">配置哈希状态 (IH)</div>
+          <div class="spec-card-val" id="ck_hash" style="color:var(--green)">8afba809 (一致)</div>
+        </div>
+      </div>
+
+      <!-- Detail Positions Table for selected node -->
+      <div class="box">
+        <div class="box-h">
+          <span>该账户当前持仓与跟单对齐流水 (明细宽区，字号无论多大都有独立水平滑动条)</span>
+          <span style="font-size:0.85em;color:var(--text-muted)">更新于 1 秒前</span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>UID</th>
+                <th>品种</th>
+                <th>买卖</th>
+                <th class="num">本地手数</th>
+                <th class="num">开仓成交价</th>
+                <th class="num">实时止损 SL</th>
+                <th class="num">实时止盈 TP</th>
+                <th>对应 Sender</th>
+                <th>滑点与状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>#10824901</td>
+                <td><code>U7A912F4</code></td>
+                <td><strong>XAUUSD</strong></td>
+                <td><span style="color:var(--green);font-weight:700">BUY</span></td>
+                <td class="num">0.50</td>
+                <td class="num">2684.52</td>
+                <td class="num">2672.00</td>
+                <td class="num">2710.00</td>
+                <td>Alpari (#1001)</td>
+                <td><span class="badge badge-online">+0.2 pip · 正常</span></td>
+              </tr>
+              <tr>
+                <td>#10824902</td>
+                <td><code>B12C44D8</code></td>
+                <td><strong>EURUSD</strong></td>
+                <td><span style="color:var(--red);font-weight:700">SELL</span></td>
+                <td class="num">1.25</td>
+                <td class="num">1.08421</td>
+                <td class="num">1.08850</td>
+                <td class="num">1.07900</td>
+                <td>ICMarkets (#1002)</td>
+                <td><span class="badge badge-online">+0.1 pip · 正常</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Tab Switching
+function switchView(viewName) {
+  document.querySelectorAll(".tab-trigger").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".tab-view").forEach(v => v.classList.remove("active"));
+  if(viewName === "dash") {
+    document.querySelector(".tab-trigger:nth-child(1)").classList.add("active");
+    document.getElementById("view_dash").classList.add("active");
+  } else {
+    document.querySelector(".tab-trigger:nth-child(2)").classList.add("active");
+    document.getElementById("view_cockpit").classList.add("active");
+  }
+}
+
+// Theme Toggle
+function toggleTheme() {
+  const html = document.documentElement;
+  const cur = html.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  html.setAttribute("data-theme", next);
+  document.getElementById("theme_icon").textContent = next === "light" ? "🌙" : "☀️";
+  document.getElementById("theme_text").textContent = next === "light" ? "夜间模式" : "白天白底";
+}
+
+// Font Zoom Slider (from V2-4)
+function applyZoom(size) {
+  document.documentElement.style.setProperty("--font-base", size + "px");
+  document.getElementById("zoomBadge").textContent = size + "px";
+}
+
+// Cockpit Node Selection
+function selectNode(el, name, meta, eq, pos, hash) {
+  document.querySelectorAll(".node-nav-item").forEach(item => item.classList.remove("active"));
+  el.classList.add("active");
+  document.getElementById("ck_node_name").textContent = name;
+  document.getElementById("ck_node_meta").textContent = "终端环境: " + meta + " · 策略收敛同步正常 · 独立时钟对齐";
+  document.getElementById("ck_equity").textContent = eq;
+  document.getElementById("ck_positions").textContent = pos;
+  document.getElementById("ck_hash").textContent = hash;
+  if(hash.includes("N/A")) {
+    document.getElementById("ck_hash").style.color = "var(--text-muted)";
+  } else {
+    document.getElementById("ck_hash").style.color = "var(--green)";
+  }
+}
+</script>
+</body>
+</html>

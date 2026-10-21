@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Draft 6: Enterprise 100-Account Compact Matrix</title>
+<style>
+  :root {
+    --bg: #1e222d;
+    --bar: #131722;
+    --row-alt: #2a2e39;
+    --border: #363c4e;
+    --text: #d1d4dc;
+    --green: #26a69a;
+    --red: #ef5350;
+    --blue: #2962ff;
+    --font: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
+    --mono: "Consolas", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 12px; }
+  .control-bar {
+    background: var(--bar);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .filter-input {
+    background: #2a2e39; border: 1px solid var(--border); color: #fff;
+    padding: 4px 10px; border-radius: 4px; font-size: 12px; width: 260px;
+  }
+  .btn-tool {
+    background: #2a2e39; border: 1px solid var(--border); color: #d1d4dc;
+    padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  }
+  .btn-tool:hover { background: #363c4e; color: #fff; }
+  .btn-tool.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  
+  table.matrix-tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+  table.matrix-tbl th {
+    background: var(--bar); color: #787b86; padding: 6px 10px; text-align: left;
+    border-bottom: 1px solid var(--border); position: sticky; top: 0;
+  }
+  table.matrix-tbl td {
+    padding: 5px 10px; border-bottom: 1px solid rgba(54, 60, 78, 0.4); white-space: nowrap;
+  }
+  table.matrix-tbl tr:hover { background: #2a2e39; }
+  .tag { padding: 1px 4px; border-radius: 3px; font-size: 10px; font-weight: bold; }
+  .tag-s { background: #1e3a5f; color: #60a5fa; }
+  .tag-r { background: #3b1d54; color: #c084fc; }
+  .badge-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div class="control-bar">
+  <div style="display:flex;gap:12px;align-items:center">
+    <strong>FLEET MATRIX (100 ACCOUNTS CAPACITY)</strong>
+    <input type="text" class="filter-input" placeholder="Filter by Account, Symbol, or Magic...">
+    <button class="btn-tool active">All (24)</button>
+    <button class="btn-tool">Senders (4)</button>
+    <button class="btn-tool">Receivers (20)</button>
+    <button class="btn-tool">Delayed / Gated (2)</button>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn-tool">Batch Pause Selected</button>
+    <button class="btn-tool">Batch Reload Config</button>
+    <button class="btn-tool" style="background:#b91c1c;color:#fff;border-color:#ef4444">Emergency Kill All</button>
+  </div>
+</div>
+
+<table class="matrix-tbl">
+  <thead>
+    <tr>
+      <th style="width:24px"><input type="checkbox"></th>
+      <th>Role</th>
+      <th>Account ID</th>
+      <th>Terminal Name</th>
+      <th>Terminal Type</th>
+      <th>Ping</th>
+      <th>Positions</th>
+      <th>Lots</th>
+      <th>Balance</th>
+      <th>Equity</th>
+      <th>Convergence Details</th>
+      <th>Configuration IH</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><input type="checkbox"></td>
+      <td><span class="tag tag-s">SENDER</span></td>
+      <td>1001</td>
+      <td>Alpari Main FX</td>
+      <td>MT5.x64</td>
+      <td style="color:var(--green)">18 ms</td>
+      <td>6</td>
+      <td>1.20</td>
+      <td>$12,000.00</td>
+      <td>$12,450.80</td>
+      <td>Broadcasting SNAP 15s</td>
+      <td><code>8afba809</code></td>
+      <td><button class="btn-tool">Cfg</button></td>
+    </tr>
+    <tr>
+      <td><input type="checkbox"></td>
+      <td><span class="tag tag-r">RECEIVER</span></td>
+      <td>2001</td>
+      <td>Prop Master Fleet 1</td>
+      <td>MT5.x64</td>
+      <td style="color:var(--green)">22 ms</td>
+      <td>20</td>
+      <td>5.70</td>
+      <td>$102,000.00</td>
+      <td>$105,420.50</td>
+      <td><span class="badge-dot" style="background:var(--green)"></span>0 Queued · 0 Gated</td>
+      <td><code>8afba809</code> (Match)</td>
+      <td><button class="btn-tool">Visual Cfg</button> <button class="btn-tool">Pause</button></td>
+    </tr>
+    <tr>
+      <td><input type="checkbox"></td>
+      <td><span class="tag tag-r">RECEIVER</span></td>
+      <td>2002</td>
+      <td>FTMO Challenge Stage 2</td>
+      <td>MT4.x86</td>
+      <td style="color:#f59e0b">142 ms</td>
+      <td>6</td>
+      <td>1.20</td>
+      <td>$50,000.00</td>
+      <td>$48,900.10</td>
+      <td><span class="badge-dot" style="background:#f59e0b"></span>2 Delayed (Pullback)</td>
+      <td><code>5b780b2c</code> (Match)</td>
+      <td><button class="btn-tool">Visual Cfg</button> <button class="btn-tool">Pause</button></td>
+    </tr>
+  </tbody>
+</table>
+</body>
+</html>
