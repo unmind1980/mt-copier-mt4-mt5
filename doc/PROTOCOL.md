@@ -53,12 +53,12 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `ACK`     | node → hub, in reply to a `CFG`                                                           | `ID=..;OK=1;REV=..;WARN=..` or `ID=..;OK=0;ERR=..`                                                          |
 | `CFGR`    | node → hub, when a node wants its config again                                            | `REQ=1;ROLE=..;ACC=..;REV=..`                                                                               |
 | `CFGRPT`  | node → hub, reports active running configuration (inputs & senders) to hub                | `ROLE=..;ACC=..;REV=..;INI=<escaped ini>`                                                                  |
-| `REG`     | node → hub, on connect (×3) — "here I am"                                                | `ROLE=sender\|receiver;ACC=<acc>;VER=..;NAME=..;UP=..;REV=..;PING=..` — a receiver's `REG` also carries `INI=<escaped ini>` and `PAUSED=0\|1` |
+| `REG`     | node → hub, on connect (×3) and on WHO reply — "here I am"                                | `ROLE=sender\|receiver;ACC=<acc>;VER=..;NAME=..;UP=..;REV=..;PING=..` — a receiver's `REG` carries `IH=<16 hex content hash>` and `PAUSED=0\|1` (legacy clients may send `INI=<escaped ini>`) |
 | `HBT2`    | node → hub, every 5 s (central channel only)                                              | `ROLE=..;ACC=..;VER=..;NAME=..;UP=..;REV=..;PAUSED=0\|1;PING=..` |
 | `WHO`     | hub → all nodes, every 5 s while the table is empty, then every 60 s                       | `NONCE=<n>`                                                                                                  |
 | `PING`    | every 10 s on the peer channel (direct or the hub channel)                               | `MS=..;FROM=..`                                                                                              |
 | `PONG`    | in reply to a `PING`, or to a `WHO`                                                      | `MS=..;FROM=..;TO=hub`                                                                                       |
-| `CMD`     | hub → node, on an operator action                                                         | `ID=..;OP=pause\|resume\|closeall\|reload[;ARGS=..]`                                                         |
+| `CMD`     | hub → node, on operator action or automated telemetry query                                | `ID=..;OP=pause\|resume\|closeall\|reload\|reqpos\|reqcfg[;ARGS=..]`                                       |
 
 ### `CFG` / `ACK` / `CFGR` — config push
 
@@ -103,13 +103,19 @@ saying in the same breath as the success.
 > the receiver answers `OK=0` immediately rather than staying silent, preventing
 > the hub from fruitlessly walking its retry ladder. See `hub/README.md`.
 
-### `CFGRPT` & `REG` INI reporting — live running configuration
+### `CFGRPT` & `REG` INI reporting — live running configuration (Hash Matching & On-Demand Pull)
 
-To allow the Central Hub to observe and manage all runtime parameters without blind guesses, the receiver EA serialises its full active configuration (including the `[common]` section with all ~45 EA inputs and all configured `[senderN]` mapping sections) into INI format:
+To allow the Central Hub to observe and manage all runtime parameters without blind guesses or wasteful continuous multi-megabyte wire floods, the receiver EA and Hub operate on a **content-hash verification and on-demand pull** model:
 
-1. **On `REG` registration**: The receiver appends `INI=<escaped ini>` to its `REG` message. The hub unescapes this payload and saves it into `s.node_current_ini` with the current timestamp.
-2. **On configuration application (`CFGRPT`)**: After accepting a config push via `ACK`, the receiver EA broadcasts a `CFGRPT` message to `@hub` containing `ROLE=receiver;ACC=<acc>;REV=<rev>;INI=<escaped ini>`.
-3. **Hub API & Dashboard**: `GET /api/v1/nodes/:id/config` returns `current_setting` and `current_setting_ts`. The dashboard provides a one-click button `📥 Load Current Setting from Node` that populates all form fields and the raw INI editor from the live node configuration.
+1. **On `REG` registration & periodic WHO replies**: Instead of repeatedly broadcasting full INI text, the receiver computes a 64-bit dual-lane FNV-1a content hash (`CopierCfgHash`) and appends only `IH=<16 hex chars>` (~32 bytes) along with `PAUSED=` and `REV=`.
+2. **Hub verification & on-demand pull (`reqcfg`)**:
+   - The Hub checks whether the reported `IH` matches the hash stored in `s.node_current_ini`.
+   - **If hash matches**: configuration is identical to what the Hub holds; **zero bytes of INI text are transferred** (steady-state transfer overhead drops by 99.9%).
+   - **If hash differs or Hub has no record** (e.g. freshly restarted Hub or locally modified node config): Hub issues an automated read-only command `reqcfg` to `@<receiver nid>` (throttled to at most once per 60s per node).
+   - **Backward compatibility**: If a legacy receiver sends `INI=<escaped ini>`, the Hub unescapes it and automatically calculates/records the hash.
+3. **On configuration application or pull request (`CFGRPT`)**:
+   - When a receiver accepts a config push via `ACK`, or receives a `reqcfg` query from Hub, it broadcasts a `CFGRPT` message to `@hub` containing `ROLE=receiver;ACC=<acc>;REV=<rev>;INI=<escaped ini>`.
+4. **Hub API & Dashboard**: `GET /api/v1/nodes/:id/config` returns `current_setting` and `current_setting_ts`. The dashboard provides a one-click button `📥 Load Current Setting from Node` that populates all form fields and the raw INI editor from the live node configuration.
 
 ### `RCPT` — how the receipt reaches a sender in central mode
 

@@ -527,7 +527,7 @@ surface as it stands.
 | GET | `/api/v1/commands` | the command journal (in-flight and terminal) |
 | GET | `/api/v1/commands/{id}` | one command's state |
 | POST | `/api/v1/commands` | G10 global: one command per known receiver; operator + `--writes on` |
-| POST | `/api/v1/nodes/{id}/commands` | `pause`/`resume`/`closeall`/`reload` → **202** + `command_id` (operator + `--writes on`); `reqpos` (on-demand position refresh, any authenticated role, works with `--writes off`) |
+| POST | `/api/v1/nodes/{id}/commands` | `pause`/`resume`/`closeall`/`reload` → **202** + `command_id` (operator + `--writes on`); `reqpos`/`reqcfg` (read-only telemetry/config queries, any authenticated role, works with `--writes off`) |
 | GET · POST | `/api/v1/users` | M9 user management; **admin only** |
 | DELETE | `/api/v1/users/{id}` | remove a user; **admin only** |
 | GET · POST | `/api/v1/notifications` | external alert channels, secrets masked on read; upsert needs operator |
