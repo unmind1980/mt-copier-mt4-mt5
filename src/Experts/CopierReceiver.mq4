@@ -540,12 +540,38 @@ struct CopierAction
                          // tested (TRIM keys carry the target volume, MODIFY
                          // keys carry the target stops)
   };
+//--- The action queue is a FIXED array with a moving head, not a shifting one.
+//---
+//--- It used to be contiguous from index 0 and ShiftQueue() moved the whole
+//--- live region down by one struct per executed action. CopierAction carries
+//--- four strings (uid, sym, key, and the key's suffix), so at the 256-entry
+//--- bound that was ~256 struct assignments per action - several thousand per
+//--- tick while a burst drains, all of it spent moving data that does not
+//--- change. Advancing g_qHead is one integer increment.
+//---
+//--- Live entries are ALWAYS g_q[g_qHead .. g_qHead+g_qn-1]. Never index g_q
+//--- directly: use g_q[g_qHead+i]. When the tail reaches the end of the array
+//--- the live region is slid back to 0 by CompactQueue(), which costs one
+//--- O(n) pass per CP_MAX_ACTIONS/2 dequeues instead of one per dequeue.
 CopierAction g_q[CP_MAX_ACTIONS];
-int    g_qn=0;
+int    g_qHead=0;      // index of the OLDEST live action
+int    g_qn=0;         // number of live actions, contiguous from g_qHead
 
 CopierTransport g_tp;
 CopierLog       g_log;
 CopierSeenRing  g_seen;
+
+//--- Receive buffers for the per-tick drain, allocated ONCE.
+//---
+//--- These used to be `string topics[],msgs[]` declared inside the tick: the
+//--- transport resized them to CP_DRAIN_MAX and shrank them back on every
+//--- pass, so a 10 Hz loop did 20 heap operations a second to hold two or
+//--- three frames. As file-level arrays the transport takes the static path
+//--- (no ArrayResize at all) and only the first `n` entries are ever read -
+//--- the count returned by DrainFrames is the ONLY valid length, never
+//--- ArraySize().
+string          g_drainTopics[CP_DRAIN_MAX];
+string          g_drainMsgs[CP_DRAIN_MAX];
 //--- Actions that FAILED, parked for a short while so a refused request is
 //--- not repeated on every converge pass. Deliberately bounded by the
 //--- snapshot period: the snapshot re-derives the action anyway, so waiting
@@ -753,7 +779,21 @@ void MapAdd(const int si,const string from,const string to)
       //--- differently, and that is deliberate.
       if(g_mapSender[i]==si && g_mapFrom[i]==from) { g_mapTo[i]=to; return; }
      }
-   if(g_nMap>=CP_MAX_TOTAL_MAPS) return;
+   if(g_nMap>=CP_MAX_TOTAL_MAPS)
+     {
+      //--- The table is FIXED (CP_MAX_TOTAL_MAPS = senders x per-sender
+      //--- limit), so this is a real ceiling and not a transient. Dropping the
+      //--- row silently would leave a symbol routed under its own name, which
+      //--- usually "works" and hides the misconfiguration until a trade lands
+      //--- on the wrong instrument - the same class of failure the ini loader
+      //--- was just taught to shout about.
+      if(g_once.ShouldEmit("mapfull"))
+         g_log.Error("symbol map is FULL ("+(string)CP_MAX_TOTAL_MAPS
+                     +" entries): mapping "+from+" -> "+to+" was DROPPED, so"
+                     +" that symbol will be resolved by name instead. Raise"
+                     +" CP_MAX_SYMBOL_MAP or trim the per-sender maps.");
+      return;
+     }
    g_mapFrom[g_nMap]=from;
    g_mapTo[g_nMap]=to;
    g_mapSender[g_nMap]=si;
@@ -1119,10 +1159,10 @@ void PendingOpensForSender(const int si, int &cnt, double &lots)
    lots = 0.0;
    for(int i = 0; i < g_qn; i++)
      {
-      if(g_q[i].senderIdx == si && g_q[i].kind == CP_ACT_OPEN)
+      if(g_q[g_qHead+i].senderIdx == si && g_q[g_qHead+i].kind == CP_ACT_OPEN)
         {
          cnt++;
-         lots += g_q[i].lots;
+         lots += g_q[g_qHead+i].lots;
         }
      }
   }
@@ -2113,7 +2153,8 @@ bool ActionQueued(const int si,const int kind,const string uid)
   {
    for(int i=0;i<g_qn;i++)
      {
-      if(g_q[i].senderIdx==si && g_q[i].kind==kind && g_q[i].uid==uid) return true;
+      if(g_q[g_qHead+i].senderIdx==si && g_q[g_qHead+i].kind==kind
+         && g_q[g_qHead+i].uid==uid) return true;
      }
    return false;
   }
@@ -2155,7 +2196,14 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) return false;
    if(ActionQueued(si,kind,uid)) return false;
-   if(g_qn>=CP_MAX_ACTIONS)
+   if(g_qHead+g_qn>=CP_MAX_ACTIONS)
+     {
+      //--- the tail hit the end of the array: reclaim the dead prefix first,
+      //--- then re-check. Compaction is the ONLY O(n) pass left on this path
+      //--- and it happens once per CP_MAX_ACTIONS/2 dequeues.
+      CompactQueue();
+     }
+   if(g_qHead+g_qn>=CP_MAX_ACTIONS)
      {
       //--- COUNTED, not logged. A burst that fills the queue defers one
       //--- action per overflow per pass, so logging here produced 585 lines
@@ -2169,33 +2217,52 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
       g_qDeferred++;
       return false;
      }
-   g_q[g_qn].senderIdx=si;
-   g_q[g_qn].kind=kind;
-   g_q[g_qn].uid=uid;
-   g_q[g_qn].sym=sym;
-   g_q[g_qn].side=side;
-   g_q[g_qn].lots=lots;
-   g_q[g_qn].ticket=ticket;
-   g_q[g_qn].senderTicket=senderTicket;
+   int t=g_qHead+g_qn;
+   g_q[t].senderIdx=si;
+   g_q[t].kind=kind;
+   g_q[t].uid=uid;
+   g_q[t].sym=sym;
+   g_q[t].side=side;
+   g_q[t].lots=lots;
+   g_q[t].ticket=ticket;
+   g_q[t].senderTicket=senderTicket;
    //--- every field is written on every push. g_q is a fixed array of
    //--- structs and slots are reused, so a field left unset would silently
    //--- inherit the previous occupant's value.
-   g_q[g_qn].sl=sl;
-   g_q[g_qn].tp=tp;
-   g_q[g_qn].ordKind=ordKind;
-   g_q[g_qn].ptype=ptype;
-   g_q[g_qn].pprice=pprice;
-   g_q[g_qn].pstop=pstop;
-   g_q[g_qn].pexpire=pexpire;
-   g_q[g_qn].key=key;
+   g_q[t].sl=sl;
+   g_q[t].tp=tp;
+   g_q[t].ordKind=ordKind;
+   g_q[t].ptype=ptype;
+   g_q[t].pprice=pprice;
+   g_q[t].pstop=pstop;
+   g_q[t].pexpire=pexpire;
+   g_q[t].key=key;
    g_qn++;
    return true;
   }
 
+//--- Slide the live region back to index 0. The only O(n) operation on the
+//--- queue, and only when the tail runs out of room - i.e. once per
+//--- CP_MAX_ACTIONS/2 executed actions, not once per action.
+void CompactQueue()
+  {
+   if(g_qHead<=0) return;
+   for(int i=0;i<g_qn;i++) g_q[i]=g_q[g_qHead+i];
+   g_qHead=0;
+  }
+
 void ShiftQueue()
   {
-   for(int i=1;i<g_qn;i++) g_q[i-1]=g_q[i];
+   if(g_qn<=0) return;
+   //--- release the strings the slot held: with a moving head the slot is not
+   //--- overwritten until the next compaction, so leaving them referenced
+   //--- would keep up to CP_MAX_ACTIONS dead actions alive in memory
+   g_q[g_qHead].uid="";
+   g_q[g_qHead].sym="";
+   g_q[g_qHead].key="";
+   g_qHead++;
    g_qn--;
+   if(g_qn<=0) g_qHead=0;              // empty: reset so the array is reusable
   }
 
 double PipSize(const CopierSymInfo &si)
@@ -2210,9 +2277,15 @@ double PipSize(const CopierSymInfo &si)
 void RotateQueue()
   {
    if(g_qn<2) return;
-   CopierAction h=g_q[0];
-   for(int i=1;i<g_qn;i++) g_q[i-1]=g_q[i];
-   g_q[g_qn-1]=h;
+   if(g_qHead+g_qn>=CP_MAX_ACTIONS) CompactQueue();
+   //--- Still no room at the tail even after compaction: the array is
+   //--- genuinely full of live entries, so leave the order alone. The caller's
+   //--- `skipped` counter still bounds the pass, so this cannot spin.
+   if(g_qHead+g_qn>=CP_MAX_ACTIONS) return;
+   //--- head to tail in ONE assignment: the live region [H, H+Q-1] becomes
+   //--- [H+1, H+Q], which is the same Q entries with the head last.
+   g_q[g_qHead+g_qn]=g_q[g_qHead];
+   g_qHead++;
   }
 
 void ExecuteQueue()
@@ -2223,7 +2296,7 @@ void ExecuteQueue()
    //--- blocked does not spin through itself ten times a second.
    while(g_qn>0 && done<MaxActionsPerTick && skipped<=g_qn)
      {
-      CopierAction a=g_q[0];
+      CopierAction a=g_q[g_qHead];
       int err=0;
       bool ok=false;
 
@@ -2939,10 +3012,26 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
 
    long nowMs=CopierNowMs();
    if(oi<0) oi=StopsOvIndex(desired.uid,true);
-   if(g_senderCfg[si].stopsThrottleSeconds>0 && g_stLastMs[oi]>=0
-      && nowMs-g_stLastMs[oi]<(long)g_senderCfg[si].stopsThrottleSeconds*1000)
-      return;
-   g_stLastMs[oi]=nowMs;
+   //--- The table is FIXED (CP_MAX_STOPS_OV) since the zero-allocation pass,
+   //--- so it can refuse a new row. Indexing -1 would be a hard array-bounds
+   //--- fault (MQL 4002) that aborts the tick and repeats on every tick for
+   //--- as long as the condition holds - a stopped EA, not a noisy log.
+   //--- Nothing is lost by skipping: the throttle is an optimisation, and the
+   //--- modify below still goes out.
+   if(oi<0)
+     {
+      if(g_once.ShouldEmit("stopsovfull"))
+         g_log.Warn("stop-override table is full ("+(string)CP_MAX_STOPS_OV
+                    +" UIDs); stop changes for new UIDs are no longer"
+                    +" throttled. This clears as positions close.");
+     }
+   else
+     {
+      if(g_senderCfg[si].stopsThrottleSeconds>0 && g_stLastMs[oi]>=0
+         && nowMs-g_stLastMs[oi]<(long)g_senderCfg[si].stopsThrottleSeconds*1000)
+         return;
+      g_stLastMs[oi]=nowMs;
+     }
 
    //--- the target stops are part of the dedup key: a SECOND change to a
    //--- different level is a different action, not a duplicate. Without
@@ -3118,7 +3207,18 @@ CopierCachedOrder g_posCache[CP_MAX_POSITIONS];
 //--- zero-initialised on every 100 ms tick - 2048 structs, strings included,
 //--- ~225 KB of memory traffic per call - and on MT4 it also ate that much
 //--- stack. Only the first `an` entries are ever written or read.
+//---
+//--- Two arrays are unavoidable: the fast path READS the old generation while
+//--- writing the new one, and the mapping is a permutation (a row can move),
+//--- so writing in place would clobber a row that has not been read yet. MQL4
+//--- only allows one-dimensional arrays of structs, so a 2-D double buffer
+//--- with a flipped index is not available - hence the copy-back below, made
+//--- conditional by g_cacheSrc so that a steady-state tick copies NOTHING.
 CopierCachedOrder g_posCacheNext[CP_MAX_POSITIONS];
+//--- Per row: 1 = the next generation differs from the cache and must be
+//--- copied back, -1 = identical, copy is a no-op. Written for every i<an on
+//--- every scan, so it never needs clearing.
+int               g_cacheSrc[CP_MAX_POSITIONS];
 int               g_posCacheCount=0;
 long              g_lastFullScanMs=0;
 int               g_lastOrdersTotal=-1;
@@ -3219,19 +3319,36 @@ int ScanAndResolveAccountPositions()
       if(matchIdx>=0)
         {
          //--- FAST PATH: O(1) hit, zero allocations, reuse cached UID
-         g_posCacheNext[i]=g_posCache[matchIdx];
+         //---
+         //--- When the row did not move (matchIdx == i) the next generation is
+         //--- byte-for-byte the current one: the previous scan's copy-back left
+         //--- g_posCacheNext[i] equal to g_posCache[i], and every numeric field
+         //--- just compared equal. Copying it would be a struct assignment with
+         //--- four string refcounts, per row, ten times a second, to arrive at
+         //--- the value already there. g_cacheSrc[i]=-1 says "skip it".
+         if(matchIdx==i) g_cacheSrc[i]=-1;
+         else
+           {
+            g_posCacheNext[i]=g_posCache[matchIdx];
+            g_cacheSrc[i]=1;                 // the row moved: copy back
+           }
          g_rawScratch[i].uid=g_posCache[matchIdx].uid;
          g_rawScratch[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
          if(StringLen(g_rawScratch[i].cmt)==0)
            {
             g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
-            g_posCacheNext[i].cmt=g_rawScratch[i].cmt;
+            //--- an in-place field update when the row did not move: copying
+            //--- the whole next-generation row back just to carry one string
+            //--- would also carry its (possibly stale) numerics with it
+            if(matchIdx==i) g_posCache[i].cmt=g_rawScratch[i].cmt;
+            else            g_posCacheNext[i].cmt=g_rawScratch[i].cmt;
            }
          g_acctAllPos[i]=g_rawScratch[i];
         }
       else
         {
          //--- SLOW PATH: resolve UID on ticket change or numeric change
+         g_cacheSrc[i]=1;                  // the next row is rebuilt from scratch
          if(!forceFullScan) g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
          string uid=ResolveUid(g_rawScratch[i]);
          g_rawScratch[i].uid=uid;
@@ -3292,7 +3409,18 @@ int ScanAndResolveAccountPositions()
         }
      }
 
-   for(int i=0;i<an;i++) g_posCache[i]=g_posCacheNext[i];
+   //--- Copy back ONLY the rows that actually differ. On a steady-state tick
+   //--- (no order opened, closed, moved or re-priced) that is zero rows, so
+   //--- the per-tick cost of the cache drops from `an` struct assignments with
+   //--- four string refcounts each to `an` integer tests.
+   //---
+   //--- Invariant this relies on: for every i<an, g_posCacheNext[i] equals
+   //--- g_posCache[i] at the end of each scan - either because it was copied,
+   //--- or because it was never touched and already matched. The two places
+   //--- that used to break it (a cmt refresh, a moved row) now write through
+   //--- the same rule.
+   for(int i=0;i<an;i++)
+      if(g_cacheSrc[i]>0) g_posCache[i]=g_posCacheNext[i];
    g_posCacheCount=an;
 
    return an;
@@ -3349,13 +3477,13 @@ string EncodeReceiverWaitList()
    int count=0;
    for(int i=0;i<g_qn;i++)
      {
-      if(g_q[i].kind!=CP_ACT_OPEN) continue;
+      if(g_q[g_qHead+i].kind!=CP_ACT_OPEN) continue;
       if(count>0) out+=CP_SEP_REC;
-      out+=g_q[i].uid+CP_SEP_ITEM
-          +g_q[i].sym+CP_SEP_ITEM
-          +(string)g_q[i].side+CP_SEP_ITEM
-          +CopierFmtDouble(g_q[i].lots,2)+CP_SEP_ITEM
-          +CopierFmtDouble(g_q[i].pprice>0.0?g_q[i].pprice:0.0,5)+CP_SEP_ITEM
+      out+=g_q[g_qHead+i].uid+CP_SEP_ITEM
+          +g_q[g_qHead+i].sym+CP_SEP_ITEM
+          +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
+          +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
+          +CopierFmtDouble(g_q[g_qHead+i].pprice>0.0?g_q[g_qHead+i].pprice:0.0,5)+CP_SEP_ITEM
           +"queued"+CP_SEP_ITEM
           +"Queued in broker dispatch";
       count++;
@@ -3453,9 +3581,9 @@ void PendingOpens(int &count,double &lots)
    lots=0.0;
    for(int i=0;i<g_qn;i++)
      {
-      if(g_q[i].kind!=CP_ACT_OPEN) continue;
+      if(g_q[g_qHead+i].kind!=CP_ACT_OPEN) continue;
       count++;
-      lots+=g_q[i].lots;
+      lots+=g_q[g_qHead+i].lots;
      }
   }
 
@@ -3553,9 +3681,9 @@ int AccountExposure(const CopierPos &all[],const int an,
      }
    for(int i=0;i<g_qn;i++)
      {
-      if(g_q[i].kind!=CP_ACT_OPEN) continue;      // a close is not exposure
-      if(g_q[i].sym!=sym) continue;
-      if(sameDirOnly && g_q[i].side!=side) continue;
+      if(g_q[g_qHead+i].kind!=CP_ACT_OPEN) continue;      // a close is not exposure
+      if(g_q[g_qHead+i].sym!=sym) continue;
+      if(sameDirOnly && g_q[g_qHead+i].side!=side) continue;
       n++;
      }
    return n;
@@ -4241,7 +4369,9 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    g_ready[si]=true;
   }
 
-//--- index of `uid` in the stop-override table, growing it on demand.
+//--- index of `uid` in the stop-override table, appending on demand.
+//--- The table is FIXED at CP_MAX_STOPS_OV (no ArrayResize), so a full table
+//--- is a real state and returns -1: every caller MUST check before indexing.
 int StopsOvIndex(const string uid,const bool create)
   {
    for(int i=0;i<g_stCount;i++)
@@ -4676,6 +4806,16 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    CopierPos p;
    if(!CopierPayloadModifyParse(e.payload,p)) return;
    int idx=StopsOvIndex(p.uid,true);
+   //--- fixed table, so a full one must be tolerated rather than indexed at -1
+   if(idx<0)
+     {
+      if(g_once.ShouldEmit("stopsovfull"))
+         g_log.Warn("stop-override table is full ("+(string)CP_MAX_STOPS_OV
+                    +" UIDs); this MODIFY for "+p.uid+" is dropped and the"
+                    +" stop will follow the next snapshot instead, which"
+                    +" carries the same levels (slower, not lost).");
+      return;
+     }
    g_stHasOv[idx]=true;
    g_stOvSl[idx]=p.sl;
    g_stOvTp[idx]=p.tp;
@@ -5740,8 +5880,12 @@ void OnTimer()
    //--- The topics are not used here: routing is by the envelope's SID, on both
    //--- channels, because that is what the whole convergence model is built on.
    //--- The topic only ever decided DELIVERY, and ZMQ has already done that.
-   string topics[],msgs[];
-   int n=g_tp.DrainFrames(topics,msgs,CP_DRAIN_MAX);
+   //---
+   //--- The buffers are file-level statics (g_drainTopics / g_drainMsgs), so
+   //--- the drain does no allocation at all. `n` is the ONLY valid length -
+   //--- the arrays are CP_DRAIN_MAX long forever, and their tails hold frames
+   //--- from previous ticks.
+   int n=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
    if(n>=CP_DRAIN_MAX && g_once.ShouldEmit("drainfull"))
       g_log.Warn("drain hit the per-tick bound of "+(string)CP_DRAIN_MAX
                  +" message(s) - there is more waiting, so the EA is falling"
@@ -5754,7 +5898,7 @@ void OnTimer()
       int lastSnap=-1;
       for(int i=0;i<n;i++)
         {
-         if(CopierDecodeEnv(msgs[i],e)!=CP_ERR_NONE) continue;
+         if(CopierDecodeEnv(g_drainMsgs[i],e)!=CP_ERR_NONE) continue;
          if(e.type==CP_T_SNAP) lastSnap=i;
         }
 
@@ -5762,19 +5906,19 @@ void OnTimer()
       //--- snapshot is still applied before it
       for(int i=0;i<n;i++)
         {
-         if(CopierDecodeEnv(msgs[i],e)!=CP_ERR_NONE)
+         if(CopierDecodeEnv(g_drainMsgs[i],e)!=CP_ERR_NONE)
            {
             //--- malformed: let HandleMessage report it, in one place
-            HandleMessage(msgs[i],CP_STREAM_EVENTS);
+            HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
             continue;
            }
          if(e.type==CP_T_SNAP)
            {
             if(i!=lastSnap) { g_snapSkipped++; continue; }
-            HandleMessage(msgs[i],CP_STREAM_SNAP);
+            HandleMessage(g_drainMsgs[i],CP_STREAM_SNAP);
             continue;
            }
-         HandleMessage(msgs[i],CP_STREAM_EVENTS);
+         HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
         }
      }
 

@@ -75,6 +75,7 @@ mod commands;
 mod config;
 mod curve;
 mod envelope;
+mod lockx;
 mod notifications;
 mod positions;
 mod registry;
@@ -87,6 +88,7 @@ use envelope::{envelope_hdr, envelope_kv, envelope_kv_opt, envelope_payload, env
 use positions::{parse_snap, Positions};
 use registry::Liveness;
 use stats::Stats;
+use crate::lockx::LockExt;
 
 /// Set by the Ctrl-C handler, read by the loop.
 ///
@@ -1175,7 +1177,7 @@ fn main() {
     //--- dashboard can show the public key - the one value every node's
     //--- HubPublicKey input needs, and public by definition.
     if let Some((pubkey, learn)) = &curve_for_api {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock_or_recover();
         s.curve_public = pubkey.clone();
         s.curve_learn = *learn;
     }
@@ -1263,7 +1265,7 @@ fn main() {
         //--- anonymous viewer - read-only by construction, since every write
         //--- endpoint demands operator/admin and the role gate still runs.
         //--- For throwaway local runs; a real hub never starts this way.
-        shared.lock().unwrap().auth_enabled = false;
+        shared.lock_or_recover().auth_enabled = false;
         println!("[hub] M9 login DISABLED (--users none): all requests are");
         println!("[hub]     anonymous viewers. Write endpoints still 403.");
         audit.record("hub", "", "user.auth_disabled", "", None, None, "ok");
@@ -1315,7 +1317,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        shared.lock().unwrap().users = store;
+        shared.lock_or_recover().users = store;
     } //--- end of the M9 bootstrap (or its --users none bypass)
 
     let mut last_rcpt_relayed: std::collections::HashMap<(String, String), (String, Instant)> =
@@ -1488,7 +1490,7 @@ fn main() {
                                 let node_rev: u64 =
                                     envelope_kv(&payload, "REV").parse().unwrap_or(0);
                                 if node_rev > 0 {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     s.node_rev
                                         .insert(format!("{}:{}", role, acc), node_rev);
                                 }
@@ -1509,18 +1511,18 @@ fn main() {
                                     let ini_esc = envelope_kv(&payload, "INI");
                                     if !ini_esc.is_empty() && role == "receiver" {
                                         let current_ini = config::unescape_ini(&ini_esc);
-                                        let mut s = shared.lock().unwrap();
+                                        let mut s = shared.lock_or_recover();
                                         s.node_current_ini.insert(format!("{}:{}", role, acc), (current_ini, unix_secs()));
                                     }
                                     //--- captured BEFORE the update, because
                                     //--- "it had no name and now it does" is
                                     //--- the event worth reporting.
                                     let was_unnamed = {
-                                        let s = shared.lock().unwrap();
+                                        let s = shared.lock_or_recover();
                                         s.reg.is_unnamed(&role, &acc)
                                     };
                                     let is_new = {
-                                        let mut s = shared.lock().unwrap();
+                                        let mut s = shared.lock_or_recover();
                                         let n = s.reg.on_reg(&role, &acc, &ver, &name, up, now);
                                         n
                                     };
@@ -1578,7 +1580,7 @@ fn main() {
                                     // it as well as the registry does.
                                     let nm = envelope_kv(&payload, "NAME");
                                     let is_new = {
-                                        let mut s = shared.lock().unwrap();
+                                        let mut s = shared.lock_or_recover();
                                         s.reg.on_hbt(&role, &acc, &ver, &nm, up, now)
                                     };
                                     poke();
@@ -1633,7 +1635,7 @@ fn main() {
                                 //--- it registered earlier). Baseline on the
                                 //--- first observation, jump-detect ever after.
                                 if node_ts > 0 {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
                                 }
                                 //--- M5b on the dashboard: the node's own
@@ -1644,12 +1646,12 @@ fn main() {
                                 {
                                     let paused = envelope_kv(&payload, "PAUSED");
                                     if !paused.is_empty() {
-                                        let mut s = shared.lock().unwrap();
+                                        let mut s = shared.lock_or_recover();
                                         s.reg.note_paused(&role, &acc, paused == "1");
                                     }
                                 }
                                 if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     s.reg.note_ping(&role, &acc, ping_ms);
                                 }
 
@@ -1866,7 +1868,7 @@ fn main() {
                             };
                             if !ini_esc.is_empty() {
                                 let current_ini = config::unescape_ini(&ini_esc);
-                                let mut s = shared.lock().unwrap();
+                                let mut s = shared.lock_or_recover();
                                 s.node_current_ini.insert(key.clone(), (current_ini, unix_secs()));
                                 if rev > 0 {
                                     s.node_rev.insert(key.clone(), rev);
@@ -1924,7 +1926,7 @@ fn main() {
                                 //--- round trips through a contended lock for
                                 //--- one line of state.
                                 if !login.is_empty() {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     if !risk.is_empty() || held.is_some() || wait_total.is_some() || equity.is_some() {
                                         s.reg.note_stat(
                                             "receiver",
@@ -1990,7 +1992,7 @@ fn main() {
                                 //--- operator to ignore the line.
                                 let warm = started.elapsed() < Duration::from_secs(60);
                                 let (sid_is_sender, any_sender_known) = {
-                                    let s = shared.lock().unwrap();
+                                    let s = shared.lock_or_recover();
                                     let key = format!("sender:{}", sid);
                                     let nodes = s.reg.nodes();
                                     (
@@ -2089,7 +2091,7 @@ fn main() {
                             let pos_now = Instant::now();
 
                             let should_parse = {
-                                let s = shared.lock().unwrap();
+                                let s = shared.lock_or_recover();
                                 match s.pos.view_for(&sid) {
                                     Some(existing) => existing.receipt != new_receipt || new_receipt.is_empty(),
                                     None => true, // First snapshot seen from this sender
@@ -2099,7 +2101,7 @@ fn main() {
                             if should_parse {
                                 let view = parse_snap(snap_payload);
                                 let (declared, carried, mismatched_now) = {
-                                    let mut s = shared.lock().unwrap();
+                                    let mut s = shared.lock_or_recover();
                                     let before = s.pos.mismatched;
                                     s.pos.on_snap(&sid, &view, pos_now);
                                     (view.declared, view.records, s.pos.mismatched - before)
@@ -2133,7 +2135,7 @@ fn main() {
                                 }
                             } else {
                                 // Touch timestamp so eviction does not prune it while unchanged
-                                let mut s = shared.lock().unwrap();
+                                let mut s = shared.lock_or_recover();
                                 s.pos.touch(&sid, pos_now);
                             }
                             poke();
@@ -2159,7 +2161,7 @@ fn main() {
         if args.stats_every > 0.0 && last_stats.elapsed().as_secs_f64() >= args.stats_every {
             last_stats = Instant::now();
             st.print_and_reset();
-            let snap = { let s = shared.lock().unwrap(); s.clone_view() };
+            let snap = { let s = shared.lock_or_recover(); s.clone_view() };
             print_positions(&snap);
         }
 
@@ -2171,7 +2173,7 @@ fn main() {
         if last_alerts.elapsed().as_secs_f64() >= alerts::EVERY_SECS {
             last_alerts = Instant::now();
             let fired = {
-                let mut s = shared.lock().unwrap();
+                let mut s = shared.lock_or_recover();
                 alerts::evaluate(&mut s, unix_secs())
             };
             for a in fired {
@@ -2184,7 +2186,7 @@ fn main() {
                 audit.record("hub", "", &a.action(), &a.node, None, Some(a.detail.clone()), "firing");
                 //--- Dispatch alert to external notification channels
                 {
-                    let s = shared.lock().unwrap();
+                    let s = shared.lock_or_recover();
                     if let Some(tx) = &s.notif_tx {
                         let _ = tx.send(a.clone());
                     }
@@ -2200,7 +2202,7 @@ fn main() {
         //--- a slow sweep, because a node whose one REG was dropped is
         //--- otherwise invisible for the rest of its life.
         let who_every = {
-            let s = shared.lock().unwrap();
+            let s = shared.lock_or_recover();
             if s.reg.is_empty() {
                 WHO_EVERY_SECS
             } else {
@@ -2222,7 +2224,7 @@ fn main() {
             wire_audit_throttle.retain(|_, t| t.elapsed() < Duration::from_secs(60));
             let now = Instant::now();
             let counts = {
-                let mut s = shared.lock().unwrap();
+                let mut s = shared.lock_or_recover();
                 //--- Liveness transitions are recorded BEFORE eviction, so a
                 //--- node that goes straight from online to forgotten still
                 //--- leaves both records in order.
@@ -2346,7 +2348,7 @@ fn main() {
                     );
                 }
 
-                let s = shared.lock().unwrap();
+                let s = shared.lock_or_recover();
                 (
                     s.reg.count(Liveness::Online, now),
                     s.reg.count(Liveness::Stale, now),
@@ -2451,7 +2453,7 @@ fn main() {
     st.print_and_reset();
     st.print_totals();
     //--- last chance to see what the senders were carrying
-    let final_view = { let s = shared.lock().unwrap(); s.clone_view() };
+    let final_view = { let s = shared.lock_or_recover(); s.clone_view() };
     print_positions(&final_view);
 
     //--- The node table, in full. On a hub that is being shut down this is the
@@ -2465,7 +2467,7 @@ fn main() {
     //--- needs the same treatment `print_positions` got.
     let now = Instant::now();
     {
-        let s = shared.lock().unwrap();
+        let s = shared.lock_or_recover();
         let nodes = s.reg.nodes();
         if nodes.is_empty() {
             println!("[hub] no node ever registered");

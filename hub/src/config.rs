@@ -49,6 +49,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use crate::lockx::LockExt;
 
 use serde_json::{json, Value};
 
@@ -171,13 +172,13 @@ impl ConfigStore {
 
     /// (revisions stored, nodes with a config, torn lines)
     pub fn stats(&self) -> (u64, usize, u64) {
-        let i = self.inner.lock().unwrap();
+        let i = self.inner.lock_or_recover();
         (i.count, i.current.len(), i.torn)
     }
 
     /// The current revision for a node, if it has ever had one.
     pub fn current(&self, node: &str) -> Option<Revision> {
-        self.inner.lock().unwrap().current.get(node).cloned()
+        self.inner.lock_or_recover().current.get(node).cloned()
     }
 
     /// Every node that has a stored config, with its revision number.
@@ -218,7 +219,7 @@ impl ConfigStore {
         kind: &str,
         base_rev: u64,
     ) -> Result<Revision, StoreError> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if inner.file.is_none() {
             return Err(StoreError::Disabled);
         }
@@ -265,7 +266,7 @@ impl ConfigStore {
         ip: &str,
     ) -> Result<Revision, StoreError> {
         let body = self.revision_body(node, to_rev).ok_or(StoreError::NotFound)?;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if inner.file.is_none() {
             return Err(StoreError::Disabled);
         }

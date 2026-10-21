@@ -62,6 +62,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use crate::lockx::LockExt;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -207,7 +208,7 @@ impl CommandStore {
 
     /// (total commands known, pending, torn lines)
     pub fn stats(&self) -> (usize, usize, u64) {
-        let i = self.inner.lock().unwrap();
+        let i = self.inner.lock_or_recover();
         let pending = i
             .commands
             .values()
@@ -237,7 +238,7 @@ impl CommandStore {
         now_secs: u64,
     ) -> Command {
         let id = command_id_cfg(node, rev);
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if let Some(c) = inner.commands.get_mut(&id) {
             if c.state == STATE_PENDING {
                 c.next_at = Instant::now();
@@ -303,7 +304,7 @@ impl CommandStore {
     /// Register an operational command. Always a NEW command: an operator
     /// asking for `pause` a second time means it a second time.
     pub fn issue_op(&self, node: &str, op: &str, args: &str, actor: &str, ip: &str) -> Command {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         let seq = inner.seq.get(node).copied().unwrap_or(0) + 1;
         inner.seq.insert(node.to_string(), seq);
         let id = if self.salt.is_empty() {
@@ -334,7 +335,7 @@ impl CommandStore {
     }
 
     pub fn command(&self, id: &str) -> Option<Command> {
-        self.inner.lock().unwrap().commands.get(id).cloned()
+        self.inner.lock_or_recover().commands.get(id).cloned()
     }
 
     /// Newest first, with stable tie-breaking on id.
@@ -378,7 +379,7 @@ impl CommandStore {
     /// a third time would come back up as a first try and wait a full 2 s
     /// before resending. See `load`, which restores `attempts`.
     pub fn due(&self, now: Instant) -> Vec<Command> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         let ids: Vec<String> = inner.commands.keys().cloned().collect();
         let mut out = Vec::new();
         // Collected rather than appended inline: the loop below holds a
@@ -422,7 +423,7 @@ impl CommandStore {
     /// worth reporting rather than ignoring: it means a node acknowledged
     /// something the hub has no record of sending.
     pub fn ack(&self, id: &str, ok: bool, rev: u64, err: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         let updated = match inner.commands.get_mut(id) {
             None => return false,
             Some(c) => {

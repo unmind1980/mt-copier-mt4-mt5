@@ -49,6 +49,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use crate::audit::Audit;
+use crate::lockx::LockExt;
 use crate::commands::CommandStore;
 use crate::alerts::AlertEngine;
 use crate::notifications::{NotificationChannel, NotificationStore};
@@ -406,7 +407,7 @@ fn positions_json_list(pos: &Positions) -> Vec<Value> {
 /// `GET /api/v1/nodes`
 async fn nodes(State(st): State<SharedState>) -> Json<Value> {
     let (nodes, counts, uptime) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let now = Instant::now();
         // One order, shared with the WebSocket. See nodes_json_list: this
         // used to sort by `key` here while the WS push sorted by `last_seen`,
@@ -435,7 +436,7 @@ async fn nodes(State(st): State<SharedState>) -> Json<Value> {
 /// the hub learned while relaying receipts.
 async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> Json<Value> {
     let out = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let now = Instant::now();
         let found = s.reg.nodes().into_iter().find(|n| n.key == id);
         match found {
@@ -512,7 +513,7 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
 /// receivers and no edges. That is honest: it really does not know.
 async fn topology(State(st): State<SharedState>) -> Json<Value> {
     let out = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let now = Instant::now();
 
         //--- Partition the ONE node list rather than building a second one.
@@ -568,7 +569,7 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
 /// honest fix is to make both read the same place.
 async fn positions(State(st): State<SharedState>) -> Json<Value> {
     let out = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let rows: Vec<Value> = positions_json_list(&s.pos);
         json!({
             "senders": Value::Array(rows),
@@ -629,7 +630,7 @@ async fn audit_log(
     //--- lock, drop it, do the I/O. The accessors below take the AUDIT's
     //--- own mutex briefly - a different, uncontended one.
     let (audit, since) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.audit), since)
     };
     let (records, stats) = audit.read(limit, since);
@@ -673,7 +674,7 @@ async fn audit_log(
 /// quiet when the market is quiet is worse than none.
 async fn healthz(State(st): State<SharedState>) -> Json<Value> {
     let (uptime, zmq) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Instant::now() - s.started, s.zmq_port)
     };
     Json(json!({
@@ -692,7 +693,7 @@ async fn healthz(State(st): State<SharedState>) -> Json<Value> {
 /// "yes, and there is nobody here" - which is what `total` says.
 async fn readyz(State(st): State<SharedState>) -> Json<Value> {
     let (total, online) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let now = Instant::now();
         (s.reg.len(), s.reg.count(Liveness::Online, now))
     };
@@ -797,7 +798,7 @@ async fn handle_socket(
 /// incremental message is a new `t` rather than a change to this one.
 fn snapshot_text(st: &SharedState) -> String {
     let body = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let now = Instant::now();
         json!({
             "hub_uptime_secs": now.saturating_duration_since(s.started).as_secs(),
@@ -833,7 +834,7 @@ fn curve_json(s: &Shared) -> Value {
 ///
 /// Or 404 if CURVE is disabled on this hub.
 async fn curve_hub_key_download(State(st): State<SharedState>) -> axum::response::Response {
-    let s = st.lock().unwrap();
+    let s = st.lock_or_recover();
     if s.curve_public.is_empty() {
         return (
             axum::http::StatusCode::NOT_FOUND,
@@ -921,7 +922,7 @@ async fn require_session(
     //--- face unusable. Answer as an anonymous viewer instead - the role gate
     //--- in every write handler still runs, so this remains read-only by
     //--- construction, and a denied write is still audited (actor "anonymous").
-    if !st.lock().unwrap().auth_enabled {
+    if !st.lock_or_recover().auth_enabled {
         req.extensions_mut().insert(Session {
             user_id: "anonymous".to_string(),
             role: UserRole::Viewer,
@@ -942,7 +943,7 @@ async fn require_session(
                 .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
         });
     if let Some(t) = token {
-        let sess = st.lock().unwrap().users.session(&t, unix_secs());
+        let sess = st.lock_or_recover().users.session(&t, unix_secs());
         if let Some(sess) = sess {
             req.extensions_mut().insert(sess);
             //--- The raw token too, for the one handler that must tell the
@@ -970,7 +971,7 @@ async fn require_session(
 fn deny(st: &SharedState, sess: &Session, need: &str) -> axum::response::Response {
     use axum::response::IntoResponse;
     let audit = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         Arc::clone(&s.audit)
     };
     audit.record(
@@ -1002,7 +1003,7 @@ async fn auth_nonce(
     use axum::response::IntoResponse;
     let now = unix_secs();
     let created = {
-        let mut s = st.lock().unwrap();
+        let mut s = st.lock_or_recover();
         // 10-second single-use challenge window
         s.users.create_nonce(&b.id, now, 10)
     };
@@ -1050,7 +1051,7 @@ async fn login(
     //--- exists so a password-spray cannot make the hub burn 4096 SHA-256
     //--- rounds per request. It is GLOBAL on purpose - see LoginGuard in
     //--- users.rs for why a per-name lockout would be a weapon.
-    if let Some(wait) = { st.lock().unwrap().users.login_blocked(now) } {
+    if let Some(wait) = { st.lock_or_recover().users.login_blocked(now) } {
         return (
             axum::http::StatusCode::TOO_MANY_REQUESTS,
             [(axum::http::header::RETRY_AFTER, wait.to_string())],
@@ -1066,7 +1067,7 @@ async fn login(
             // Scheme B: the expensive half (the 4096-round hash) is computed
             // by the CLIENT; the server consumes the nonce and does one
             // constant-time hex compare. Cheap enough to keep in the lock.
-            let mut s = st.lock().unwrap();
+            let mut s = st.lock_or_recover();
             s.users.login_with_proof(&b.id, nonce, proof, now)
         } else if let Some(pwd) = &b.password {
             //--- Legacy / fallback direct-password auth (tests, automation).
@@ -1077,7 +1078,7 @@ async fn login(
             //--- every login. Read the stored hash under a short lock, hash
             //--- with NO lock, mint under a short one.
             let stored = {
-                let s = st.lock().unwrap();
+                let s = st.lock_or_recover();
                 s.users.stored_hash(&b.id)
             };
             match stored {
@@ -1085,7 +1086,7 @@ async fn login(
                     //--- Re-check under the lock: the user may have been
                     //--- disabled while we were hashing, and mint_session
                     //--- refuses that rather than handing out a stale pass.
-                    let mut s = st.lock().unwrap();
+                    let mut s = st.lock_or_recover();
                     s.users.mint_session(&b.id, now)
                 }
                 _ => Err("invalid credentials".to_string()),
@@ -1097,7 +1098,7 @@ async fn login(
     match r {
         Ok((token, sess)) => {
             let audit = {
-                let mut s = st.lock().unwrap();
+                let mut s = st.lock_or_recover();
                 // A good password clears this name's failure count, so an
                 // operator who mistyped twice and then got it right starts
                 // from zero next time.
@@ -1130,7 +1131,7 @@ async fn login(
         // Deliberately does NOT say whether the id exists.
         Err(_) => {
             let (delay_ms, audit) = {
-                let mut s = st.lock().unwrap();
+                let mut s = st.lock_or_recover();
                 let d = s.users.note_login_failure(&b.id, now);
                 (d, Arc::clone(&s.audit))
             };
@@ -1167,7 +1168,7 @@ async fn logout(
         .and_then(cookie_token);
     let mut who = String::new();
     if let Some(t) = &tok {
-        let mut s = st.lock().unwrap();
+        let mut s = st.lock_or_recover();
         if let Some(sess) = s.users.session(t, unix_secs()) {
             who = sess.user_id.clone();
         }
@@ -1197,7 +1198,7 @@ async fn whoami(
     use axum::response::IntoResponse;
     //--- --users none: tell the dashboard it is already "in", or its overlay
     //--- would demand a login the hub has no door for.
-    let disabled = st.lock().unwrap().auth_enabled == false;
+    let disabled = st.lock_or_recover().auth_enabled == false;
     if disabled {
         return Json(json!({ "user": "anonymous", "role": "viewer",
                             "note": "login disabled (--users none)" }))
@@ -1208,7 +1209,7 @@ async fn whoami(
         .and_then(|v| v.to_str().ok())
         .and_then(cookie_token);
     if let Some(t) = tok {
-        if let Some(s) = st.lock().unwrap().users.session(&t, unix_secs()) {
+        if let Some(s) = st.lock_or_recover().users.session(&t, unix_secs()) {
             return Json(json!({ "user": s.user_id, "role": s.role.as_str() })).into_response();
         }
     }
@@ -1245,7 +1246,7 @@ async fn users_list(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let s = st.lock().unwrap();
+    let s = st.lock_or_recover();
     let list: Vec<Value> = s
         .users
         .users()
@@ -1285,7 +1286,7 @@ async fn users_upsert(
     //--- path was fixed: it is real CPU, and the router thread waits on this
     //--- mutex for every position update.
     let existing_pass = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         s.users.get(&b.id).map(|u| u.pass.clone())
     };
     let pass = if b.password.is_empty() {
@@ -1310,7 +1311,7 @@ async fn users_upsert(
         disabled: b.disabled,
     };
     let audit = {
-        let mut s = st.lock().unwrap();
+        let mut s = st.lock_or_recover();
         if let Err(e) = s.users.upsert(u) {
             return (
                 axum::http::StatusCode::CONFLICT,
@@ -1347,7 +1348,7 @@ async fn users_delete(
         return deny(&st, &sess, "admin");
     }
     let removed = {
-        let mut s = st.lock().unwrap();
+        let mut s = st.lock_or_recover();
         match s.users.remove(&id) {
             Ok(()) => {
                 let _ = s.users.save();
@@ -1401,7 +1402,7 @@ async fn change_password(
     //--- every position update in flight. The login path was fixed for this
     //--- reason; this one had been left behind.
     let (auth_enabled, stored) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (s.auth_enabled, s.users.get(&sess.user_id).map(|u| u.pass.clone()))
     };
     if !auth_enabled {
@@ -1413,7 +1414,7 @@ async fn change_password(
     }
     let old_ok = stored.map(|h| verify_password(&b.old, &h)).unwrap_or(false);
     let audit = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         Arc::clone(&s.audit)
     };
     if !old_ok {
@@ -1433,7 +1434,7 @@ async fn change_password(
             .into_response();
     }
     let changed = {
-        let mut s = st.lock().unwrap();
+        let mut s = st.lock_or_recover();
         match s.users.set_password(&sess.user_id, &b.new) {
             Err(e) => Err(e),
             Ok(()) => {
@@ -1560,7 +1561,7 @@ pub fn spawn(
                     .build()
                     .unwrap_or_default();
                 let notif_store_worker = {
-                    let mut s = st.lock().unwrap();
+                    let mut s = st.lock_or_recover();
                     s.notif_tx = Some(alert_tx);
                     s.notif_store.clone()
                 };
@@ -1568,7 +1569,7 @@ pub fn spawn(
                 tokio::spawn(async move {
                     while let Some(alert) = alert_rx.recv().await {
                         let channels = {
-                            let s = notif_store_worker.lock().unwrap();
+                            let s = notif_store_worker.lock_or_recover();
                             s.matching_channels_for_alert(&alert)
                         };
                         for ch in channels {
@@ -1625,7 +1626,7 @@ async fn node_config(State(st): State<SharedState>, Path(id): Path<String>) -> J
     //--- of a file read - on an endpoint the dashboard hits every time the
     //--- config modal opens. Grab the handles under the lock, read outside.
     let (cfg, cmd_store, node_rev, current_setting, current_setting_ts) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let (current_setting, current_setting_ts) = match s.node_current_ini.get(&id) {
             Some((ini, ts)) => (Some(ini.clone()), Some(*ts)),
             None => (None, None),
@@ -1669,7 +1670,7 @@ async fn node_config(State(st): State<SharedState>, Path(id): Path<String>) -> J
         })),
         "history": Value::Array(hist),
         "commands": Value::Array(cmds),
-        "writes_enabled": st.lock().unwrap().writes,
+        "writes_enabled": st.lock_or_recover().writes,
     }))
 }
 
@@ -1697,7 +1698,7 @@ async fn put_node_config(
     //--- after an incident - and M9 exists precisely so there IS a person.
     let actor = sess.user_id.clone();
     let (writes, node_rev) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (
             s.writes,
             s.node_rev.get(&id).copied().unwrap_or(0),
@@ -1750,7 +1751,7 @@ async fn put_node_config(
     //--- counter is monotonic under their own lock, so two concurrent pushes
     //--- still cannot mint the same revision.
     let (cfg, cmds, audit) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.cfg), Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     //--- Disabled is a configuration choice (503); a failed write is a disk
@@ -1818,7 +1819,7 @@ async fn rollback_node_config(
     }
 
     let id = normalise_node(&id);
-    let writes = st.lock().unwrap().writes;
+    let writes = st.lock_or_recover().writes;
     if !writes {
         return (
             axum::http::StatusCode::FORBIDDEN,
@@ -1827,14 +1828,14 @@ async fn rollback_node_config(
             .into_response();
     }
     let node_rev = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         s.node_rev.get(&id).copied().unwrap_or(0)
     };
     let actor = sess.user_id.clone();
     //--- Stores cloned out of the state lock: each fsyncs under its own
     //--- mutex, and none of them needs the global one. See put_node_config.
     let (cfg, cmds, audit) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.cfg), Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     let r = match cfg.rollback(&id, to_rev, &actor, "") {
@@ -1888,7 +1889,7 @@ async fn rollback_node_config(
 /// them one at a time.
 async fn config_list(State(st): State<SharedState>) -> Json<Value> {
     let (nodes, path, enabled, writes) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let rows: Vec<Value> = s
             .cfg
             .nodes()
@@ -1966,7 +1967,7 @@ async fn post_command(
 
     let id = normalise_node(&id);
     let (writes, known) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let known = s.reg.nodes().iter().any(|n| n.key == id);
         (s.writes, known)
     };
@@ -2013,7 +2014,7 @@ async fn post_command(
     //--- Out of the state lock: the command journal fsyncs, the audit fsyncs,
     //--- and neither needs the lock the router thread is waiting on.
     let (cmds, audit) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     let cmd = cmds.issue_op(&id, &op, "", &actor, "");
@@ -2066,7 +2067,7 @@ async fn commands_global(
     }
 
     //--- THE GATE, identical to the per-node endpoint's.
-    let writes = st.lock().unwrap().writes;
+    let writes = st.lock_or_recover().writes;
     if !writes {
         return (
             axum::http::StatusCode::FORBIDDEN,
@@ -2106,7 +2107,7 @@ async fn commands_global(
 
     //--- Every known receiver, in a deterministic order, one command each.
     let nodes: Vec<String> = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         let mut v: Vec<String> = s
             .reg
             .nodes()
@@ -2123,7 +2124,7 @@ async fn commands_global(
     //--- held. A fleet-wide `closeall` is exactly when the router thread must
     //--- not be blocked.
     let (cmds, audit) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     let mut issued: Vec<Value> = Vec::new();
@@ -2172,7 +2173,7 @@ async fn commands_list(State(st): State<SharedState>) -> Json<Value> {
     //--- lock and do the cloning outside it, so a large journal does not hold
     //--- up the router thread.
     let (cmd_store, writes) = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         (Arc::clone(&s.cmds), s.writes)
     };
     let list: Vec<Value> = cmd_store.commands().into_iter().map(command_json).collect();
@@ -2180,7 +2181,7 @@ async fn commands_list(State(st): State<SharedState>) -> Json<Value> {
 }
 
 async fn command_one(State(st): State<SharedState>, Path(id): Path<String>) -> Json<Value> {
-    let c = { st.lock().unwrap().cmds.command(&id) };
+    let c = { st.lock_or_recover().cmds.command(&id) };
     match c {
         Some(c) => Json(command_json(c)),
         None => Json(json!({ "error": "no such command", "id": id })),
@@ -2209,7 +2210,7 @@ fn command_json(c: crate::commands::Command) -> Value {
 /// file remains the durable record; `?limit=` bounds the answer, not the
 /// store.
 async fn alerts_list(State(st): State<SharedState>) -> Json<Value> {
-    let s = st.lock().unwrap();
+    let s = st.lock_or_recover();
     Json(json!({ "alerts": Value::Array(s.alerts.recent_json(200)) }))
 }
 
@@ -2260,8 +2261,8 @@ fn default_notif_severity() -> String {
 async fn notifications_list(
     State(st): State<SharedState>,
 ) -> Json<Value> {
-    let s = st.lock().unwrap();
-    let channels = s.notif_store.lock().unwrap().list_safe();
+    let s = st.lock_or_recover();
+    let channels = s.notif_store.lock_or_recover().list_safe();
     Json(json!({ "channels": Value::Array(channels) }))
 }
 
@@ -2292,8 +2293,8 @@ async fn notifications_upsert(
     };
 
     let (saved, err) = {
-        let s = st.lock().unwrap();
-        let mut store = s.notif_store.lock().unwrap();
+        let s = st.lock_or_recover();
+        let mut store = s.notif_store.lock_or_recover();
         match store.upsert(ch) {
             Ok(c) => (Some(c), None),
             Err(e) => (None, Some(e.to_string())),
@@ -2311,7 +2312,7 @@ async fn notifications_upsert(
     let saved_channel = saved.unwrap();
     //--- Out of the lock: `record` fsyncs.
     let audit = {
-        let s = st.lock().unwrap();
+        let s = st.lock_or_recover();
         Arc::clone(&s.audit)
     };
     audit.record(
@@ -2343,14 +2344,14 @@ async fn notifications_delete(
     }
 
     let removed = {
-        let s = st.lock().unwrap();
-        let mut store = s.notif_store.lock().unwrap();
+        let s = st.lock_or_recover();
+        let mut store = s.notif_store.lock_or_recover();
         store.remove(&id).unwrap_or(false)
     };
 
     if removed {
         let audit = {
-            let s = st.lock().unwrap();
+            let s = st.lock_or_recover();
             Arc::clone(&s.audit)
         };
         //--- Out of the lock: `record` fsyncs.
@@ -2391,8 +2392,8 @@ async fn notifications_test(
 
     let target_channel = if let Some(mut ch) = req.channel {
         if !ch.id.is_empty() {
-            let s = st.lock().unwrap();
-            let store = s.notif_store.lock().unwrap();
+            let s = st.lock_or_recover();
+            let store = s.notif_store.lock_or_recover();
             if let Some(existing) = store.get(&ch.id) {
                 //--- The STORED type, not the incoming one: masking ran under
                 //--- the stored type, so restoring has to as well. See
@@ -2406,8 +2407,8 @@ async fn notifications_test(
         }
         ch
     } else if let Some(id) = req.id {
-        let s = st.lock().unwrap();
-        let store = s.notif_store.lock().unwrap();
+        let s = st.lock_or_recover();
+        let store = s.notif_store.lock_or_recover();
         match store.get(&id) {
             Some(c) => c.clone(),
             None => {

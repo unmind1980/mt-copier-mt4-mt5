@@ -113,7 +113,13 @@ private:
      {
       int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
       if(ArrayIsDynamic(out)) ArrayResize(out,limit);
-      if(CheckPointer(s)==POINTER_INVALID) return 0;
+      if(CheckPointer(s)==POINTER_INVALID)
+        {
+         //--- same reason as DrainFrames: leave the array EMPTY, not sized
+         //--- for `limit` and still holding the previous tick's payloads
+         if(ArrayIsDynamic(out)) ArrayResize(out,0);
+         return 0;
+        }
 
       int got=0;
       for(int i=0;i<limit;i++)
@@ -403,7 +409,16 @@ public:
       int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
       if(ArrayIsDynamic(topics))   ArrayResize(topics,limit);
       if(ArrayIsDynamic(payloads)) ArrayResize(payloads,limit);
-      if(CheckPointer(m_sub)==POINTER_INVALID) return 0;
+      if(CheckPointer(m_sub)==POINTER_INVALID)
+        {
+         //--- Shrink back before leaving: the arrays were sized for `limit`
+         //--- above, and a caller that ever walks them by ArraySize() rather
+         //--- than by the returned count would read the PREVIOUS tick's
+         //--- frames. Zero-length is the only honest answer here.
+         if(ArrayIsDynamic(topics))   ArrayResize(topics,0);
+         if(ArrayIsDynamic(payloads)) ArrayResize(payloads,0);
+         return 0;
+        }
 
       int got=0;
       for(int i=0;i<limit;i++)

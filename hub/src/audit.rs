@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use flate2::read::GzDecoder;
+use crate::lockx::LockExt;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde_json::{json, Value};
@@ -121,7 +122,7 @@ impl ArchiveShift {
     /// and pruning past `max_backups`. Deletes the uncompressed scratch file
     /// either way. The writer's active file is untouched by all of this.
     fn finish(&self, rotating: &Path, file_len: u64) -> io::Result<()> {
-        let _serial = self.lock.lock().unwrap();
+        let _serial = self.lock.lock_or_recover();
 
         // 4. Compress the scratch file into a temporary .gz
         let gz_tmp = PathBuf::from(format!(
@@ -303,12 +304,12 @@ impl Audit {
     }
 
     pub fn counts(&self) -> (u64, u64, u64) {
-        let i = self.inner.lock().unwrap();
+        let i = self.inner.lock_or_recover();
         (i.seq, i.wrote, i.failed)
     }
 
     pub fn rotations(&self) -> u64 {
-        self.inner.lock().unwrap().rotations
+        self.inner.lock_or_recover().rotations
     }
 
     #[allow(dead_code)]
@@ -325,7 +326,7 @@ impl Audit {
     #[allow(dead_code)]
     pub fn wait_for_rotation(&self) {
         let handle = {
-            let mut worker = self.shifter.active_worker.lock().unwrap();
+            let mut worker = self.shifter.active_worker.lock_or_recover();
             worker.take()
         };
         if let Some(h) = handle {
@@ -346,7 +347,7 @@ impl Audit {
     /// the archive on a background thread instead.
     #[allow(dead_code)]
     pub fn rotate(&self) -> std::io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
         if let Some((rotating, len)) = self.swap_locked(&mut inner)? {
             // Drop the writer lock before the slow half: the swap already
             // made the log writable again, so there is no reason to hold it.
@@ -448,7 +449,7 @@ impl Audit {
         after: Option<Value>,
         result: &str,
     ) -> u64 {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock_or_recover();
 
         // Check if rotation is needed before appending.
         // Fast swap runs under this writer lock (microseconds); the slow
@@ -466,7 +467,7 @@ impl Audit {
                     });
                 match spawn_res {
                     Ok(handle) => {
-                        let mut slot = worker_slot.lock().unwrap();
+                        let mut slot = worker_slot.lock_or_recover();
                         *slot = Some(handle);
                     }
                     Err(e) => {

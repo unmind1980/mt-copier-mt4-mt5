@@ -279,9 +279,28 @@ string           g_snapHash="";
 //--- hash does not move, so only the receiver that was actually behind is
 //--- affected. Content changes are the periodic broadcast's job, not this one.
 string           g_snapPayload="";
+//--- Receive buffers for the per-tick drains, allocated ONCE.
+//---
+//--- Both drain paths used to declare their arrays inside OnTimer, so the
+//--- transport resized them to CP_DRAIN_MAX and shrank them back every tick -
+//--- two heap operations ten times a second, forever, to carry a handful of
+//--- frames. As file-level arrays the transport takes its static path (no
+//--- ArrayResize at all). The returned count is the ONLY valid length; the
+//--- tails keep frames from previous ticks and must never be read.
+string           g_drainStatus[CP_DRAIN_MAX];   // direct channel: XPUB status/PONG
+string           g_drainTopics[CP_DRAIN_MAX];   // central channel: topic frame
+string           g_drainMsgs[CP_DRAIN_MAX];     // central channel: payload frame
+
 //--- Per-peer count of CONSECUTIVE heartbeats that reported a stale receipt.
 //--- Keyed the same way the peer table is (by the name the peer reports).
-#define CP_MAX_STALE_PEERS 16
+//---
+//--- 64, not 16: in CENTRAL mode ONE sender serves every receiver in the
+//--- fleet, so the number of distinct receipt senders is the number of
+//--- receivers, not the number of links. At 16 the table filled on any real
+//--- deployment, and the overflow used to alias onto slot 0 (see
+//--- SnapStaleIndex). Each slot is a string plus five 8-byte counters, so 64
+//--- of them is a few KB - cheap insurance against a silent wrong answer.
+#define CP_MAX_STALE_PEERS 64
 string           g_snapStaleWho[CP_MAX_STALE_PEERS];
 int              g_snapStaleN[CP_MAX_STALE_PEERS];
 //--- Slice B timing, parallel to the arrays above.
@@ -976,6 +995,21 @@ void SnapTrack(const string who,const string reported)
 
    long now=CopierNowMs();
    int idx=SnapStaleIndex(who);
+   //--- Table full: this peer is past CP_MAX_STALE_PEERS distinct receipt
+   //--- senders. Skipping the tracking is a degradation, not a failure - the
+   //--- periodic SnapshotSeconds broadcast still reaches it. Tracking it in
+   //--- somebody else's slot would be a WRONG answer for both peers, which is
+   //--- strictly worse than an untracked one.
+   if(idx<0)
+     {
+      if(g_once.ShouldEmit("snapstale|full"))
+         g_log.Warn("receipt tracking table is full ("+(string)CP_MAX_STALE_PEERS
+                    +" peers); receipt "+(string)who+" is not tracked, so no"
+                    +" targeted repair for it - it still gets the periodic"
+                    +" SnapshotSeconds broadcast. Raise CP_MAX_STALE_PEERS if"
+                    +" this persists.");
+      return;
+     }
 
    //--- cadence, measured from the receipts themselves. Smoothed by halving
    //--- so one delayed heartbeat does not redefine "slow" for the next window.
@@ -1096,15 +1130,17 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
      }
   }
 
-//--- index of `who` in the stale-run arrays, growing them on demand. Kept
-//--- separate from CopierPeerTable because that table's slots are shared with
-//--- liveness and are trimmed when a peer goes away - a run counter that
-//--- vanished mid-count would reset the very number being measured.
+//--- index of `who` in the stale-run arrays. Fixed capacity since the
+//--- zero-allocation pass, so the table can be FULL - and a full table must
+//--- return -1, never 0. Returning 0 aliased the 17th peer onto peer 0, so
+//--- one receiver's heartbeats rewrote another's receipt cadence and stale
+//--- run: the real peer 0 then either never triggered its repair, or
+//--- triggered one on somebody else's evidence.
 int SnapStaleIndex(const string who)
   {
    for(int i=0;i<g_snapStaleCount;i++)
       if(g_snapStaleWho[i]==who) return i;
-   if(g_snapStaleCount>=CP_MAX_STALE_PEERS) return 0; // bounded
+   if(g_snapStaleCount>=CP_MAX_STALE_PEERS) return -1; // full
    int n=g_snapStaleCount;
    g_snapStaleWho[n]=who;
    g_snapStaleN[n]=0;
@@ -1439,14 +1475,13 @@ void OnTimer()
    //--- never read grows its receive queue until it starts dropping, and a
    //--- sender that quietly discards what its receivers report is a worse
    //--- failure than a verbose one.
-   string st[];
-   int sn=g_tp.DrainStatus(st,CP_DRAIN_MAX);
+   int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
    for(int i=0;i<sn;i++)
      {
       //--- subscription bytes arrive here too - that is how XPUB works - so
       //--- every message is DECODED rather than assumed to be status.
       CopierEnv se;
-      if(CopierDecodeEnv(st[i],se)!=CP_ERR_NONE) continue;
+      if(CopierDecodeEnv(g_drainStatus[i],se)!=CP_ERR_NONE) continue;
 
       //--- PONG: an echo of our broadcast probe. FROM names the receiver that
       //--- answered, which is the only way to attribute it - our probe carried
@@ -1575,12 +1610,11 @@ void OnTimer()
    //--- not as silence in the log.
    if(g_hubOn)
      {
-      string htop[],hpay[];
-      int hn=g_tp.DrainFrames(htop,hpay,CP_DRAIN_MAX);
+      int hn=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
       for(int i=0;i<hn;i++)
         {
          CopierEnv he;
-         if(CopierDecodeEnv(hpay[i],he)!=CP_ERR_NONE) continue;
+         if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
 
          if(he.type==CP_T_PONG)
            {

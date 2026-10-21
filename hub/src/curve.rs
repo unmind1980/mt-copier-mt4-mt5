@@ -47,6 +47,7 @@
 //! restart is not implemented either - the file is read once at startup.
 
 use std::path::Path;
+use crate::lockx::LockExt;
 
 /// The hub's own keypair, as Z85 (40 characters each).
 ///
@@ -392,7 +393,7 @@ pub fn spawn_zap_handler(
                 ("400", "this hub requires CURVE", Vec::new())
             } else {
                 let key = describe_credential(&cred);
-                let mut l = shared.lock().unwrap();
+                let mut l = shared.lock_or_recover();
                 //--- Learn mode means "accept anyone who can authenticate,
                 //--- and write down who they were".
                 let known = l.permits_credential(&cred);
