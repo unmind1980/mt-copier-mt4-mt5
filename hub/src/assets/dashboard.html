@@ -2850,7 +2850,7 @@ function renderNodes(nodes){
     s.nodeKeys = null; s.nodeRows = null;
     return;
   }
-  var keys = nodes.map(function(n){ return n.key; }).join(" ");
+  var keys = nodes.map(function(n){ return n.key; }).join("" + String.fromCharCode(0) + "");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
       var pzText = n.paused ? "Resume" : "Pause";
@@ -2861,7 +2861,7 @@ function renderNodes(nodes){
           "<span class='opmsg'></span>"
         : "<button class='btn-sm opbtn' data-op='config'>Config</button>" +
           "<span class='opmsg'></span>";
-      return "<tr data-k="" + esc(n.key) + "">" +
+      return "<tr data-k='" + esc(n.key) + "'>" +
              "<td class='role-cell'><span class='role-pill'></span></td>" +
              "<td class='nm-cell'><span class='dot'></span><span class='k-acc'></span> <span class='ver-tag'></span><span class='pzchip' style='display:none'>PAUSED</span></td>" +
              "<td class='ping-cell'><span class='ping-val'></span></td>" +
@@ -2881,13 +2881,13 @@ function renderNodes(nodes){
       "<th>Account &amp; Terminal Name</th>" +
       "<th>Latency (Ping)</th>" +
       "<th>Status</th>" +
-      "<th class="num">Positions</th>" +
-      "<th class="num">Volume</th>" +
-      "<th class="num">Equity</th>" +
-      "<th class="num">Balance</th>" +
+      "<th class='num'>Positions</th>" +
+      "<th class='num'>Volume</th>" +
+      "<th class='num'>Equity</th>" +
+      "<th class='num'>Balance</th>" +
       "<th>Gating &amp; Delays</th>" +
       "<th>Config Hash (IH)</th>" +
-      "<th style="text-align:center">Actions</th>" +
+      "<th style='text-align:center'>Actions</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table></div>";
     s.nodeKeys = keys;
     s.nodeRows = {};

@@ -60,6 +60,31 @@ def main(path):
     fns = re.findall(r"function ([A-Za-z_$][\w$]*)\s*\(", m.group(1))
     dup_fns = sorted({f for f in fns if fns.count(f) > 1})
     if dup_fns: bad.append(f"duplicate functions: {dup_fns}")
+    # Node.js syntax check if node is available
+    import subprocess, shutil, tempfile
+    node_exe = None
+    candidates = [
+        os.path.expanduser(r"~\.workbuddy-ai\binaries\node\versions\22.22.2-6\node.exe"),
+        shutil.which("node")
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            node_exe = c
+            break
+    if node_exe:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(m.group(1))
+            tname = tf.name
+        try:
+            res = subprocess.run([node_exe, "-c", tname], capture_output=True, text=True)
+            if res.returncode != 0:
+                bad.append("Node.js syntax check failed: " + res.stderr.strip())
+        finally:
+            try:
+                os.remove(tname)
+            except OSError:
+                pass
+
     if bad:
         for b in bad: print("FAIL:", b)
         return 1
