@@ -217,17 +217,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 持仓** | `hub/src/positions.rs` | 读取 `R=` 时透明解压，解析逐单持仓明细 |
 | **Hub 注册表** | `hub/src/registry.rs` | `NodeEntry` 结构扩展，解析 `waiting`、`equity`、`balance`、`ping_ms` 及 `POS`/`WAITLIST` 明细 |
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、节点 `ping_ms`、只读 `reqpos` 命令放行 |
-| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝并限制日志/计数升级告警）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`）、状态已恢复时跳过慢路径 `everOpened` 冗余扫描、`g_reopenExpected.Forget` 预期重开消费清除、券商订单上限检查计入在途 `pendCount`、开仓动作自动置位 `g_mapDirty`、心跳与 STAT 实时上报 `PING` |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING` |
-| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取（支持 ticket 重载）；MT4 开仓 130 错误 ECN 自动降级与 `OrderModify` 补上止损止盈 |
+| **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝并限制日志/计数升级告警）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`）、状态已恢复时跳过慢路径 `everOpened` 冗余扫描、`g_reopenExpected.Forget` 预期重开消费清除、券商订单上限检查计入在途 `pendCount`、开仓动作自动置位 `g_mapDirty`、心跳与 STAT 实时上报 `PING`、`LocalForSender` 静态暂存区 `g_locScratch` 与 `g_acctAllPos`/`g_waitItems`/`StopsOvIndex`/`DedupLocal`/`g_mapFrom` 全量定长化（零 `ArrayResize`）、跨平台 `CopierIsTradeDisabled` 快速重试、`CloseAllOurs` 兼顾各信号源忽略列表 |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING`、`BuildCurrent` 全程写入静态暂存区（`g_curScratch`/`g_prevSlotScratch`/`g_rawScratch`）实现零 `ArrayResize`、`SnapStaleIndex` 六组并列数组定长化 `[CP_MAX_PEERS]`、`OnDeinit` 退出前对脏状态强制落盘 |
+| **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取（支持 ticket 重载）；MT4 开仓 130 错误 ECN 自动降级与 `OrderModify` 补上止损止盈；新增 `CopierIsTradeDisabled()` 跨平台识别 MT4 `4109` 与 MT5 `10027/10026/10017`；`CopierReadPositions` 识别静态预分配数组时直接下标写入，跳过倍增扩容 |
 | **规格头文件** | `src/Include/Copier/CopierSizing.mqh` | 增加 `CopierEmergencyTp()` 应急止盈计算（与 `CopierEmergencySl` 对称），供 `QueueModifyIfNeeded` 后备保护止盈不被误清除 |
-| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通；新增 `CheckSlot()` 纯数值原位比对与 `UpdateNumericAt()` 原位更新 |
+| **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通；新增 `CheckSlot()` 纯数值原位比对与 `UpdateNumericAt()` 原位更新；`CopyTo()` 预查 `m_n` 一次性界定容量，消除逐单扩容 |
+| **传输头文件** | `src/Include/Copier/CopierTransport.mqh` | `DrainFrames()` 排空畸形报文的第 3 帧及以后残帧（防套接字帧错位）；`DrainFrames`/`DrainSocket` 对静态预分配数组直接下标写入，动态数组进入前预分、结束后收缩 |
+| **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载；`CP_INI_MAX` 扩容至 2048 行，超限不再静默截断而是报错返回 `false`；`CP_INI_MAX_BYTES = 262144` 字节上限 |
+| **密钥头文件** | `src/Include/Copier/CopierCurveKey.mqh` | CURVE 密钥对单文件读写与派生校验；中枢公钥文件首行放宽为可选，裸 40 字符或 `PUBLIC=` 单行均可直接加载（手动粘贴回退不再是死代码） |
+| **过滤头文件** | `src/Include/Copier/CopierFilter.mqh` | 交易时段/品种/魔术过滤；`CopierTradingTimes` 跨午夜语义（`22:00-02:00` 为一个整窗）；`DayTradingTimes` 按当日星期匹配，跨午夜需显式分拆书写（已在注释与 README 说明） |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
 | **定义头文件** | `src/Include/Copier/CopierDefs.mqh` | `CopierFmtDouble` 浮点数去尾零优化、`CopierUidValid()` 单字符零分配优化 |
-| **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载 |
 | **风控头文件** | `src/Include/Copier/CopierRisk.mqh` | 信号源级与账户级双层风控守卫模型 |
 | **运维脚本** | `tools/hublog.bat` / `hubrs.bat` | 启动前多实例进程查验，冲突友好报警 |
-| **测试套件** | `tools/` | `snapshot_receipt_test.py` (47 pass), `snapshot_repair_test.py` (19 pass), `dash_check.py` (166 IDs) |
+| **测试套件** | `tools/` | Rust 单元测试 129 项；Python 契约测试 `snapshot_receipt_test.py` (47 pass)、`snapshot_repair_test.py` (19 pass)、`hub_stat_path_test.py` (20 pass)、`hub_positions_test.py` (13 pass)、`hub_proto_test.py`、`curve_keyfile_test.py` 等 20 个脚本；`dash_check.py` (166 IDs) |
 | **部署与编译** | `tools/deploy.sh` / `compile.sh` | 部署清理通配符精细化、支持 4 大目标跨架构全自动编译 |
 
 ---

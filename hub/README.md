@@ -359,7 +359,10 @@ copy it straight across.
    `Terminal\Common\Files\copier_hub.key` — so one shared file serves every
    terminal on the machine. Write the hub's 40-char public key into that file
    (format: `copier-hub-key v1` header line, then `PUBLIC=<key>`) and nothing
-   is typed into any dialog.
+   is typed into any dialog. The header is a **convenience, not a
+   requirement**: a file containing nothing but the 40-character key, or a
+   single `PUBLIC=<key>` line, loads exactly the same — so a key copied out of
+   `--curve-show` and pasted into an empty file works without editing it.
 3. **Let the nodes register themselves** — `--curve-learn on`. The hub
    already knows each connecting node's public key (libzmq hands it over
    with the handshake; that is the whole reason ZAP can decide anything), so

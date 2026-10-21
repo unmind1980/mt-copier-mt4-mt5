@@ -295,6 +295,7 @@ The receiver operates in two modes:
    - Set `HubEndpoint = <hub_ip>:<hub_port>` (e.g. `127.0.0.1:6000`).
    - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
    - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
+   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 2048` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 262144` (256 KB). Sixteen `[senderN]` sections at roughly 30 keys each, plus `[common]` and the per-sender `symbol.X=Y` maps, fit comfortably; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
    - Live settings sync: The receiver reports its active configuration (`CFGRPT` / `REG`) so operators can inspect and clone running settings in the Web Dashboard via **📥 Load Current Setting from Node**.
    - **Multi-tier Telemetry & On-Demand Refresh**: Receiver sends 1s receipts for instant sync, 5s summary figures (`HELD`, `LOTS`, `WAIT`, `EQ`, `BL`), and 60s detailed lists (`POS`, `WAITLIST`). In Direct mode, detailed lists are automatically skipped to keep communication ultra-lean. In WebUI, operators can click `[🔄 Request Update]` in the orders table header to request an immediate on-demand refresh without waiting for the 60s routine clock.
    - **Full Order & Pipeline Inspection in Dashboard**: The Web Dashboard (#posmodal) provides line-by-line inspection with 5 filter tabs (`All`, `Opened`, `Waiting`, `Managed`, `Orphan / Manual`) and visual breakdown across the 3-stage waiting pipeline (Broker Queue, Gate Delayed, Market Closed). All filter tabs are persistent DOM elements with 0ms transition latency and zero flicker.
@@ -730,13 +731,14 @@ found by running it, not by reading it.
 
 `CopierPosTable` originally had a constructor of the form  
 `CopierPosTable():m_n(0) {}` — it set the counter and never touched the  
-512-element `m_p[]` array. `CopierPos` contains `string` members, and MQL  
-does **not** reliably zero-initialise an array of structs that contain  
-strings. The table therefore started life with slots that reported  
-`used == true` while holding an empty UID.
+`CP_MAX_POSITIONS`-element `m_p[]` array. `CopierPos` contains `string`  
+members, and MQL does **not** reliably zero-initialise an array of structs  
+that contain strings. The table therefore started life with slots that  
+reported `used == true` while holding an empty UID.
 
-The symptoms were misleading. `PruneTo()` walked all 512 slots, found the  
-phantoms, saw that their (empty) UIDs were not in the desired set, and  
+The symptoms were misleading. `PruneTo()` walked all `CP_MAX_POSITIONS`  
+slots, found the phantoms, saw that their (empty) UIDs were not in the  
+desired set, and  
 "removed" them — so it reported removing far more rows than were ever  
 written, and the count came out wrong, while `Find()` and `CopyTo()` looked  
 perfectly healthy. It took a Python re-implementation of the exact algorithm  
@@ -1417,5 +1419,8 @@ is mandatory when the editor and the terminal are different installs), and
 - **System Handoff & Operations Manual**: [`doc/HANDOFF.md`](doc/HANDOFF.md) — Comprehensive handoff guide, live architecture, waiting telemetry pipeline, mobile dashboard redesign, operations, and QA record.
 - **Central Hub Implementation Plan**: [`doc/CENTRAL-HUB-PLAN.md`](doc/CENTRAL-HUB-PLAN.md) — Complete plan for the central hub architecture, topics, and RBAC matrix.
 - **Protocol Specification**: [`doc/PROTOCOL.md`](doc/PROTOCOL.md) — Complete wire protocol definitions, snapshot formats, and hashing algorithms.
+- **Snapshot Demand & Repair Plan**: [`doc/SNAPSHOT-DEMAND-PLAN.md`](doc/SNAPSHOT-DEMAND-PLAN.md) — Why the snapshot is pull-on-evidence, the receipt/hash handshake, and the repair ladder.
+- **Phase 1 Design Notes**: [`doc/PHASE1-DESIGN.md`](doc/PHASE1-DESIGN.md) — Original bidirectional-channel design decisions, kept for the reasoning behind them.
+- **Hub Operations Manual**: [`hub/README.md`](hub/README.md) — Building, running, CURVE allow-list, CLI flags, HTTP API and the dashboard.
 - **Pilot Acceptance Guides**: [`doc/PILOT.md`](doc/PILOT.md) (MT5), [`doc/PILOT-MT4.md`](doc/PILOT-MT4.md) (MT4 cross-platform pilot).
 
