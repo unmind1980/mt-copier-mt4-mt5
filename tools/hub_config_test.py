@@ -602,6 +602,83 @@ def main():
             except OSError:
                 pass
 
+
+    # =====================================================================
+    print()
+    print("== 11. IH hash matching and reqcfg on-demand pull ==")
+    hub, out, cmds_path = start(True, audit_path, cfg_path)
+    try:
+        ctx = zmq.Context()
+        node = ctx.socket(zmq.XSUB)
+        node.setsockopt(zmq.LINGER, 0)
+        node.connect(f"tcp://127.0.0.1:{ZMQ_PORT}")
+        node.send(b"\x01@" + RECV.encode())
+        time.sleep(1.0)
+
+        # 1. Receiver reports REG with an unknown hash IH=1122334455667788
+        # Hub has no record for this receiver -> triggers reqcfg command
+        env_reg = (
+            f"V=1|SID={RECV}|SSID={RECV}|SEQ=10|TS=1000|MS=1000|T=REG|"
+            f"P=ROLE=receiver;ACC={RECV};REV=1;VER=1.0;NAME=rec1;IH=1122334455667788"
+        ).encode("latin-1")
+        node.send_multipart([b"@hub", env_reg])
+
+        # Expect T=CMD;OP=reqcfg on @RECV
+        got_cmd = None
+        deadline = time.time() + 4
+        while time.time() < deadline:
+            try:
+                parts = node.recv_multipart(zmq.NOBLOCK)
+            except zmq.Again:
+                time.sleep(0.1)
+                continue
+            if len(parts) >= 2 and b"T=CMD" in parts[1] and b"OP=reqcfg" in parts[1]:
+                got_cmd = parts[1].decode("latin-1")
+                break
+        check("hub issues reqcfg when receiver reports unseen IH hash", got_cmd is not None, got_cmd or "none")
+
+        # 2. Receiver responds with CFGREPORT containing the full INI
+        sample_ini = "[sender0]\nid=acct0\nmagic=7000\n"
+        ini_esc = sample_ini.replace("\n", "%0A").replace("=", "%3D")
+        env_rpt = (
+            f"V=1|SID={RECV}|SSID={RECV}|SEQ=11|TS=1001|MS=1001|T=CFGRPT|"
+            f"P=ROLE=receiver;ACC={RECV};REV=1;INI={ini_esc}"
+        ).encode("latin-1")
+        node.send_multipart([b"@hub", env_rpt])
+        time.sleep(0.5)
+
+        # Verify current_setting in GET /api/v1/nodes/receiver:<acc>/config
+        st, d = js("GET", f"/api/v1/nodes/{NODE}/config")
+        check("GET /config returns updated current_setting", st == 200 and d.get("current_setting") == sample_ini, str(d.get("current_setting")))
+
+        # 3. Receiver reports REG again with the MATCHING hash
+        # Reference hash for sample_ini is 8afba809f6b5dcad
+        matching_hash = "8afba809f6b5dcad"
+        env_reg_match = (
+            f"V=1|SID={RECV}|SSID={RECV}|SEQ=12|TS=1002|MS=1002|T=REG|"
+            f"P=ROLE=receiver;ACC={RECV};REV=1;VER=1.0;NAME=rec1;IH={matching_hash}"
+        ).encode("latin-1")
+        node.send_multipart([b"@hub", env_reg_match])
+
+        # Verify NO new command is sent (queue stays clear)
+        got_unexpected = None
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            try:
+                parts = node.recv_multipart(zmq.NOBLOCK)
+            except zmq.Again:
+                time.sleep(0.1)
+                continue
+            if len(parts) >= 2 and b"T=CMD" in parts[1]:
+                got_unexpected = parts[1].decode("latin-1")
+                break
+        check("hub does NOT issue reqcfg when IH matches stored hash (0 bytes transferred)", got_unexpected is None, str(got_unexpected))
+
+        node.close()
+        ctx.term()
+    finally:
+        stop(hub, out, cmds_path)
+
     # =====================================================================
     print("== 9. the sender ceiling is REACHABLE, and both ends agree on the byte bound ==")
     #--- The capacity is a promise made to whoever downloads this, so it gets

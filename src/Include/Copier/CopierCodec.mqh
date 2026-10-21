@@ -338,6 +338,75 @@ string CopierDecompressField(const string field)
    return field;
   }
 
+//=====================================================================
+// A content hash for a whole config, 16 hex characters.
+//
+// WHY THIS EXISTS
+// ===============
+// A receiver used to answer the hub's 60-second WHO sweep with its ENTIRE
+// effective config, escaped, inside every REG - for CP_MAX_SENDERS senders
+// that is ~110 KB per receiver per minute, forever, and the hub only ever
+// used it to answer one question: "is what this node runs still what I last
+// saw?".
+//
+// So the node now answers that question in 32 bytes: `IH=<hash>`. The full
+// config is sent when it CHANGES (CFGREPORT after a CFG apply) or when the
+// hub explicitly asks for it (`reqcfg`). Nothing is sent at all in the steady
+// state, which is the point.
+//
+// WHY TWO LANES
+// =============
+// FNV-1a over 32 bits is the same primitive `CopierUidIndex` already uses, and
+// 32 bits is enough to make a *missed* change unlikely (about one chance in
+// two billion per change) but it is the kind of "unlikely" that is unpleasant
+// to argue about in a change detector. Two independent lanes give 64 effective
+// bits for the price of a second accumulator, and both lanes stay inside
+// `uint`, which is the only arithmetic that is provably identical on every
+// MetaTrader build this file compiles under - a `ulong` literal big enough for
+// a 64-bit FNV basis is NOT representable exactly in MQL4 (it exceeds 2^53, so
+// the double it would be parsed from already lost the low bits).
+//
+// The definition is mirrored in hub/src/config.rs and asserted against the
+// same vectors in both test suites, so the two cannot drift.
+//=====================================================================
+string CopierHex8(const uint v)
+  {
+   string out="";
+   for(int i=7;i>=0;i--)
+     {
+      uint nib=(v>>(4*i)) & 15;
+      out+=ShortToString((ushort)((nib<10)?('0'+nib):('a'+nib-10)));
+     }
+   return out;
+  }
+
+string CopierCfgHash(const string s)
+  {
+   uint a=2166136261;                 // FNV-1a offset basis
+   uint b=0x9E3779B9;                 // lane 2: Knuth's golden-ratio constant
+   int n=StringLen(s);
+   if(n>0)
+     {
+      uchar data[];
+      if(StringToCharArray(s,data,0,n,CP_UTF8)>0)
+        {
+         int nb=ArraySize(data);
+         //--- StringToCharArray may append a terminator; the hash is over the
+         //--- BYTES OF THE TEXT, so a trailing 0 must not be mixed in. Both
+         //--- sides agree because the reference implementation hashes exactly
+         //--- n characters' worth of UTF-8.
+         for(int i=0;i<nb;i++)
+           {
+            if(data[i]==0 && i==nb-1) break;
+            uint c=(uint)data[i];
+            a=(a^c)*16777619;
+            b=(b^c)*0x85EBCA6B;
+           }
+        }
+     }
+   return CopierHex8(a)+CopierHex8(b);
+  }
+
 string CopierEncodeSnapshot(const CopierPos &pos[],const int count)
   {
    string payload="N="+(string)count;

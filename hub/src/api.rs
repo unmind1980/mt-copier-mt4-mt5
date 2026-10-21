@@ -78,6 +78,17 @@ const WS_HEARTBEAT_SECS: u64 = 15;
 /// line the ZMQ thread prints, they are windowed rather than current, and
 /// exposing them would invite treating a 30-second figure as instantaneous.
 /// The numbers an operator wants here are `reg` and `pos`.
+/// One node's last known live configuration.
+#[derive(Clone, Debug, Default)]
+pub struct CurrentSetting {
+    /// The unescaped ini the node itself reported.
+    pub ini: String,
+    /// When it was recorded, unix seconds.
+    pub ts: u64,
+    /// `CopierCfgHash` of exactly that text - the reference for the node's `IH=`.
+    pub hash: String,
+}
+
 pub struct Shared {
     pub reg: Registry,
     pub pos: Positions,
@@ -115,7 +126,15 @@ pub struct Shared {
     /// gets a fresh answer from the next REG.
     pub node_rev: std::collections::HashMap<String, u64>,
     /// The current effective configuration ini reported directly by the receiver node.
-    pub node_current_ini: std::collections::HashMap<String, (String, u64)>,
+    /// What each node last reported as its live config, plus WHEN, plus a
+    /// content hash of that same text.
+    ///
+    /// The hash is the reference the node's 32-byte `IH=` is compared against:
+    /// equal means "still what we last saw" and nothing is transferred. It is
+    /// computed over the SAME text the node hashed, so a mismatch can only come
+    /// from the node's settings actually differing - never from formatting,
+    /// which is what hashing the *pushed* config instead would have made it.
+    pub node_current_ini: std::collections::HashMap<String, CurrentSetting>,
     /// M6. The alert engine: the recent ring the API and the dashboard read,
     /// and the dedup/re-arm state the rules consult. The audit log holds the
     /// durable record; this holds the cheap one.
@@ -1628,7 +1647,7 @@ async fn node_config(State(st): State<SharedState>, Path(id): Path<String>) -> J
     let (cfg, cmd_store, node_rev, current_setting, current_setting_ts) = {
         let s = st.lock_or_recover();
         let (current_setting, current_setting_ts) = match s.node_current_ini.get(&id) {
-            Some((ini, ts)) => (Some(ini.clone()), Some(*ts)),
+            Some(c) => (Some(c.ini.clone()), Some(c.ts)),
             None => (None, None),
         };
         (
@@ -1958,7 +1977,7 @@ async fn post_command(
         }
     };
 
-    let is_read_only = op == "reqpos";
+    let is_read_only = crate::commands::is_read_only_op(&op);
 
     // M9: operator or admin (the plan's §17.2 matrix), unless read-only telemetry request.
     if !is_read_only && sess.role < UserRole::Operator {

@@ -1214,6 +1214,7 @@ fn main() {
     let mut last_rcpt_drop = Instant::now() - Duration::from_secs(60);
     let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
         std::collections::HashMap::new();
+    let mut last_cfg_pull: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
 
     //--- The API thread, if it was asked for. Spawned before the loop so a
     //--- bind failure is reported before the first frame is forwarded rather
@@ -1508,11 +1509,42 @@ fn main() {
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
                                 if ty == "REG" {
                                     let name = envelope_kv(&payload, "NAME");
+                                    let node_key = format!("{}:{}", role, acc);
+                                    let ih = envelope_kv(&payload, "IH");
                                     let ini_esc = envelope_kv(&payload, "INI");
-                                    if !ini_esc.is_empty() && role == "receiver" {
-                                        let current_ini = config::unescape_ini(&ini_esc);
-                                        let mut s = shared.lock_or_recover();
-                                        s.node_current_ini.insert(format!("{}:{}", role, acc), (current_ini, unix_secs()));
+
+                                    if role == "receiver" {
+                                        if !ini_esc.is_empty() {
+                                            // Backward compatibility: legacy receiver reporting full INI on REG
+                                            let current_ini = config::unescape_ini(&ini_esc);
+                                            let chash = config::cfg_hash(&current_ini);
+                                            let mut s = shared.lock_or_recover();
+                                            s.node_current_ini.insert(node_key.clone(), api::CurrentSetting {
+                                                ini: current_ini,
+                                                ts: unix_secs(),
+                                                hash: chash,
+                                            });
+                                        } else if !ih.is_empty() {
+                                            // Modern receiver: 32-byte content hash comparison
+                                            let needs_pull = {
+                                                let s = shared.lock_or_recover();
+                                                match s.node_current_ini.get(&node_key) {
+                                                    Some(cur) => cur.hash != ih,
+                                                    None => true, // hub has no record yet (e.g. freshly restarted)
+                                                }
+                                            };
+                                            if needs_pull {
+                                                let throttled = last_cfg_pull
+                                                    .get(&node_key)
+                                                    .map(|t| t.elapsed() < Duration::from_secs(60))
+                                                    .unwrap_or(false);
+                                                if !throttled {
+                                                    last_cfg_pull.insert(node_key.clone(), Instant::now());
+                                                    println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg", node_key, ih);
+                                                    cmds.issue_op(&node_key, "reqcfg", "", "hub", "127.0.0.1");
+                                                }
+                                            }
+                                        }
                                     }
                                     //--- captured BEFORE the update, because
                                     //--- "it had no name and now it does" is
@@ -1868,8 +1900,13 @@ fn main() {
                             };
                             if !ini_esc.is_empty() {
                                 let current_ini = config::unescape_ini(&ini_esc);
+                                let chash = config::cfg_hash(&current_ini);
                                 let mut s = shared.lock_or_recover();
-                                s.node_current_ini.insert(key.clone(), (current_ini, unix_secs()));
+                                s.node_current_ini.insert(key.clone(), api::CurrentSetting {
+                                    ini: current_ini,
+                                    ts: unix_secs(),
+                                    hash: chash,
+                                });
                                 if rev > 0 {
                                     s.node_rev.insert(key.clone(), rev);
                                 }
@@ -2372,7 +2409,7 @@ fn main() {
         //--- Gated on `writes` as well as on there being a command, except for
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
         for c in cmds.due(Instant::now()) {
-            if !args.writes && c.op != "reqpos" {
+            if !args.writes && !commands::is_read_only_op(&c.op) {
                 continue;
             }
             match c.kind.as_str() {

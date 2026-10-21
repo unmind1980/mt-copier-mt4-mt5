@@ -96,10 +96,24 @@ pub const REVIVE_COOLDOWN_SECS: u64 = 60;
 /// a command: `POST {"op":"paus"}` that were accepted would sit on the ladder
 /// for 82 seconds and then be reported as `unknown`, which reads like "the
 /// node did not answer" rather than "you misspelled it".
-pub const OPS: [&str; 5] = ["pause", "resume", "closeall", "reload", "reqpos"];
+pub const OPS: [&str; 6] = [
+    "pause", "resume", "closeall", "reload", "reqpos", "reqcfg",
+];
 
 pub fn is_known_op(op: &str) -> bool {
     OPS.contains(&op)
+}
+
+/// The commands that only ever ASK a node something, and are therefore safe to
+/// dispatch when `--writes off`.
+///
+/// A set rather than the single `op == "reqpos"` comparison it replaced: the
+/// second read-only op (`reqcfg`) is exactly what a hardcoded comparison
+/// forgets, and forgetting it would silently stop the hub from ever pulling a
+/// current config on a read-only hub - the node looks up to date forever and
+/// the dashboard's Current Setting is stale with nothing to say so.
+pub fn is_read_only_op(op: &str) -> bool {
+    matches!(op, "reqpos" | "reqcfg")
 }
 
 /// One command, whatever kind.

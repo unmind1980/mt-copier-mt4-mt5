@@ -630,6 +630,20 @@ fn hex_val(c: u8) -> Option<u8> {
 /// number exists or whether a symbol maps to anything; that is the node's
 /// business. It knows that an ini with no `[section]`, or with a line that is
 /// neither a section nor a `key=value`, is not one anybody meant to send.
+
+/// 64-bit two-lane FNV-1a content hash for ini text, formatted as 16 lowercase hex characters.
+///
+/// MUST match `CopierCfgHash` in `CopierCodec.mqh` exactly.
+pub fn cfg_hash(text: &str) -> String {
+    let mut a: u32 = 2166136261;
+    let mut b: u32 = 0x9E3779B9;
+    for &byte in text.as_bytes() {
+        a = (a ^ (byte as u32)).wrapping_mul(16777619);
+        b = (b ^ (byte as u32)).wrapping_mul(0x85EBCA6B);
+    }
+    format!("{:08x}{:08x}", a, b)
+}
+
 pub fn validate_ini(ini: &str) -> Result<(), String> {
     /// Generous, and still far below `CP_MAX_MSG_LEN` even after escaping -
     /// which matters, because an oversized one would be refused by the
@@ -886,6 +900,14 @@ mod tests {
         assert!(validate_ini("[unclosed\nk=v\n").is_err());
         assert!(validate_ini("[s]\nthis line has no equals\n").is_err());
         assert!(validate_ini("[s]\n=v\n").is_err(), "empty key");
+    }
+
+    #[test]
+    fn cfg_hash_vectors_match_specification() {
+        assert_eq!(cfg_hash(""), "811c9dc59e3779b9");
+        assert_eq!(cfg_hash("a"), "e40c292cf89c5d48");
+        assert_eq!(cfg_hash("abc"), "1a47e90b823ec10f");
+        assert_eq!(cfg_hash("[sender0]\nid=alpari01\nmagic=7000\n"), "8afba809f6b5dcad");
     }
 
     #[test]

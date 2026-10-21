@@ -445,6 +445,7 @@ long    g_lastSyncMs=0;              // snapshot-receipt cadence (SyncHeartbeatS
 long    g_lastSummaryMs=0;           // summary telemetry cadence (routine 5s)
 long    g_lastPosDetailMs=0;         // detailed position/waitlist table cadence (routine 60s)
 bool    g_forcePosReport=false;      // WebUI on-demand position update request
+bool    g_forceCfgReport=false;      // hub asked for the current config (reqcfg)
 long    g_lastPruneMs=0;             // stop-override table sweep
 long    g_statusSeq=0;
 int     g_riskBlocked=0;             // entries refused by a risk switch since the last STAT
@@ -843,6 +844,7 @@ string MapSymbol(const int si,const string sym,const string suffix)
 //--- using the same ';' the wire format already uses for key=value pairs.
 bool LoadConfigFromInputs()
   {
+   InvalidateIniHash();
    ResetRuntimeInputsFromInputs();
    g_nSenders=1;
 
@@ -1167,6 +1169,28 @@ void PendingOpensForSender(const int si, int &cnt, double &lots)
      }
   }
 
+//--- The config's content hash, and whether the cached one is still good.
+//---
+//--- Serialising the whole config is the expensive half of answering "what am
+//--- I running" - at 100 senders it builds a ~100 KB string - and REG needs
+//--- only the hash. Caching it here means a REG costs one string append; the
+//--- cache is invalidated by BOTH config load paths, and recomputed lazily on
+//--- first use, so it can never be stale with respect to a load.
+string g_iniHash="";
+bool   g_iniHashOk=false;
+
+void InvalidateIniHash() { g_iniHashOk=false; }
+
+string CurrentIniHash()
+  {
+   if(!g_iniHashOk)
+     {
+      g_iniHash=CopierCfgHash(SerializeCurrentConfigToIni());
+      g_iniHashOk=true;
+     }
+   return g_iniHash;
+  }
+
 string SerializeCurrentConfigToIni()
   {
    string out = "; copier.ini (active current settings)\n";
@@ -1348,6 +1372,7 @@ void SendCurrentConfigReport()
 //--- waiting for a file it can only receive by starting.
 bool LoadConfigForHub()
   {
+   InvalidateIniHash();
    g_hubOn=true;
    g_nid=CopierNid(CopierAccountLogin());
    g_hubEp=CopierNormalizeEndpoint(HubEndpoint);   // bare IP:port gains tcp://
@@ -4828,6 +4853,25 @@ void HandleCmd(const CopierEnv &e)
       return;
      }
 
+   //--- reqcfg: the hub wants the full current config, because the hash it
+   //--- was sent on REG does not match what it holds (or it holds nothing -
+   //--- it just restarted). This is the pull half of the `IH=` scheme: REG
+   //--- answers "has anything changed" in 32 bytes, and only a mismatch costs
+   //--- the ~100 KB transfer.
+   //---
+   //--- CFGREPORT is the existing answer, so this adds no new message type -
+   //--- and it is the same report a CFG apply already sends, which means the
+   //--- hub's store stays correct no matter which door the config arrives by.
+   if(op=="reqcfg" || op=="cfgrefresh")
+     {
+      g_forceCfgReport=true;
+      g_cmdId=id;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      SendCfgAck(g_cmdAck);
+      g_log.Info("CMD "+id+": current config requested by the hub - reporting it");
+      return;
+     }
+
    //--- The hub validates OP at the door, so reaching this line means a hub
    //--- a version apart, or a hand-crafted frame. Answer rather than leave
    //--- the ladder running against an op that will never become known.
@@ -4996,8 +5040,15 @@ void HubAnnounce(const bool isReg)
    e.payload+=CP_SEP_KV+"PAUSED="+(g_cmdPaused?"1":"0");
    long rtt=g_peers.RttFor(g_hubPeerName);
    if(rtt>=0) e.payload+=CP_SEP_KV+"PING="+(string)rtt;
+   //--- The WHOLE USED TO RIDE HERE. Every REG answered the hub's 60-second
+   //--- sweep with the entire escaped config - ~110 KB per receiver per minute
+   //--- forever at 100 senders - to answer one yes/no question. It now carries
+   //--- 32 bytes of content hash instead, and the hub pulls the full config
+   //--- (reqcfg) only when that hash differs from what it holds or when it has
+   //--- nothing on record. The full text still goes out on CFGREPORT, i.e.
+   //--- whenever the config actually changed.
    if(isReg)
-      e.payload+=CP_SEP_KV+"INI="+CopierIniEscape(SerializeCurrentConfigToIni());
+      e.payload+=CP_SEP_KV+"IH="+CurrentIniHash();
    //--- Dropped silently on purpose: one lost heartbeat is nothing, and a log
    //--- line per failure would be a line per five seconds on a hub that is
    //--- simply not running yet. The hub's WHO sweep is the recovery path.
@@ -6262,6 +6313,19 @@ void OnTimer()
      {
       g_lastPruneMs=now;
       StopsPrune(CopierNowMs());
+     }
+
+   //--- The pull half of the IH= scheme. The hub asked for the full config
+   //--- (because our hash did not match what it held, or it had just restarted
+   //--- and holds nothing); CFGREPORT is the answer, and it is the same message
+   //--- a CFG apply already sends, so the hub's store is correct whichever door
+   //--- it arrives by. Handled here rather than inline in HandleCmd so the
+   //--- command is answered immediately and the heavy serialisation happens on
+   //--- the next tick, not inside the command dispatch.
+   if(g_forceCfgReport)
+     {
+      g_forceCfgReport=false;
+      SendCurrentConfigReport();
      }
 
    bool dueStatus =(StatusEnabled && now-g_lastStatusMs>=60000);
