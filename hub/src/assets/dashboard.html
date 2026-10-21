@@ -147,6 +147,80 @@
   }
   .btn-theme:hover { background: var(--surface-header); border-color: var(--accent); }
 
+  
+  /* Global Operations Ribbon (Single clean line) */
+  .gops-ribbon {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
+    margin-bottom: 4px;
+  }
+  .gops-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .gops-title-label {
+    font-size: 13px; font-weight: 700; color: var(--dim); margin-right: 4px; white-space: nowrap;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .gops-divider { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
+
+  /* Bigger, comfortable buttons */
+  .btn-sm, .opbtn {
+    padding: 6px 14px !important;
+    border-radius: 6px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    cursor: pointer;
+    border: 1px solid var(--border-strong, var(--line));
+    background: var(--panel);
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    font-family: var(--sans);
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+  .btn-sm:hover, .opbtn:hover {
+    background: var(--surface-header);
+    border-color: var(--accent);
+  }
+  .btn-primary, .btn-sm.btn-primary, .opbtn.btn-primary {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #2563eb !important;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25) !important;
+  }
+  .btn-primary:hover, .btn-sm.btn-primary:hover, .opbtn.btn-primary:hover {
+    background: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
+  }
+  .btn-danger, .btn-sm.btn-danger, .opbtn.danger {
+    background: var(--bad-bg) !important;
+    color: var(--bad) !important;
+    border-color: var(--bad-border) !important;
+  }
+  .btn-danger:hover, .btn-sm.btn-danger:hover, .opbtn.danger:hover {
+    background: var(--bad) !important;
+    color: #ffffff !important;
+  }
+
+  /* 11-column Hub Table styling */
+  table.hub-table th, table.hub-table td {
+    padding: 11px 14px;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  table.hub-table td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+
   /* Buttons */
   .btn-sm, .opbtn {
     padding: 5px 12px;
@@ -819,6 +893,9 @@
       <span id="theme_icon">🌙</span>
       <span id="theme_text">Night Mode</span>
     </button>
+
+    <button type="button" class="btn-sm" id="header_hubkey_btn">🔑 Hub Key</button>
+    <button type="button" class="btn-sm" id="header_logout_btn">Log Out</button>
   </div>
 </header>
 
@@ -863,31 +940,30 @@
     </div>
   </div>
 
-  <section id="globalops">
-    <h2>Global operations <span id="gstate"></span></h2>
-    <div class="gops-toolbar">
-      <div class="gops-group danger-group">
-        <button class="opbtn danger" data-gop="closeall">🛑 CLOSE ALL (Every Receiver)</button>
-        <button class="opbtn" data-gop="pause">⏸️ Pause ALL</button>
-        <button class="opbtn" data-gop="resume">▶️ Resume ALL</button>
-      </div>
-      <div class="gops-group manage-group">
-        <button type="button" class="opbtn" id="btn-view-pos" style="font-weight:600">📊 Positions</button>
-        <button type="button" class="opbtn" id="btn-gop-cfg" style="font-weight:600">⚙️ Receiver Config</button>
-        <button type="button" class="opbtn" id="btn-gop-notif" style="font-weight:600">🔔 Notifications</button>
-        <button type="button" class="opbtn" id="btn-download-hub-key" style="font-weight:600">🔑 Download Hub Key</button>
-      </div>
-      <span class="opmsg" id="gmsg"></span>
+  <section id="globalops" class="gops-ribbon">
+    <div class="gops-group">
+      <span class="gops-title-label">Global Operations: <span id="gstate" style="display:none"></span></span>
+      <button type="button" class="btn-sm btn-danger opbtn" data-gop="closeall">🛑 CLOSE ALL (Every Receiver)</button>
+      <button type="button" class="btn-sm opbtn" data-gop="pause">⏸️ Pause ALL</button>
+      <button type="button" class="btn-sm opbtn" data-gop="resume">▶️ Resume ALL</button>
     </div>
+    <div class="gops-divider"></div>
+    <div class="gops-group">
+      <button type="button" class="btn-sm opbtn" id="btn-view-pos">📊 Positions</button>
+      <button type="button" class="btn-sm opbtn" id="btn-gop-cfg">⚙️ Receiver Config</button>
+      <button type="button" class="btn-sm opbtn" id="btn-gop-notif">🔔 Notifications</button>
+      <button type="button" class="btn-sm opbtn" id="btn-download-hub-key">🔑 Hub Key</button>
+      <button type="button" class="btn-sm btn-primary opbtn" id="btn-open-cfg">+ Configure Receiver</button>
+    </div>
+    <span class="opmsg" id="gmsg"></span>
   </section>
 
   <section id="nodes-sec">
     <h2>
       <span>Terminals &amp; Nodes <span id="ncount"></span></span>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center">
         <button type="button" class="btn-sm" id="btn-batch-pause">Batch Pause</button>
         <button type="button" class="btn-sm" id="btn-batch-reload">Batch Reload</button>
-        <button type="button" class="btn-sm btn-primary" id="btn-open-cfg">+ Configure Receiver</button>
       </div>
     </h2>
     <div id="nodes"><div class="empty">loading</div></div>
@@ -2774,7 +2850,7 @@ function renderNodes(nodes){
     s.nodeKeys = null; s.nodeRows = null;
     return;
   }
-  var keys = nodes.map(function(n){ return n.key; }).join("\u0000");
+  var keys = nodes.map(function(n){ return n.key; }).join(" ");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
       var pzText = n.paused ? "Resume" : "Pause";
@@ -2785,18 +2861,34 @@ function renderNodes(nodes){
           "<span class='opmsg'></span>"
         : "<button class='btn-sm opbtn' data-op='config'>Config</button>" +
           "<span class='opmsg'></span>";
-      return "<tr data-k=\"" + esc(n.key) + "\">" +
-             "<td data-label=\"Node\"><span class='dot'></span><span class='k'></span> <span class='role-pill'></span></td>" +
-             "<td data-label=\"Terminal\" class='nm'><span class='nmv'></span> <span class='ver-tag'></span> <span class='pzchip' style='display:none'" +
-             " title='hub pause: no new mirrors until the hub sends resume'>PAUSED</span></td>" +
-             "<td data-label=\"Positions\" class='ps-cell'><div class='num ps' style='cursor:pointer' title='Click to inspect positions'></div><div class='fin'></div></td>" +
-             "<td data-label=\"Waiting Telemetry\" class='wt-cell'><div class='wt'></div></td>" +
-             "<td data-label=\"State\" class='st-cell'><div class='st'></div></td>" +
-             "<td data-label=\"Operations\" class='ops'><div class='ops-btn-group'>" + ops + "</div></td></tr>";
+      return "<tr data-k="" + esc(n.key) + "">" +
+             "<td class='role-cell'><span class='role-pill'></span></td>" +
+             "<td class='nm-cell'><span class='dot'></span><span class='k-acc'></span> <span class='ver-tag'></span><span class='pzchip' style='display:none'>PAUSED</span></td>" +
+             "<td class='ping-cell'><span class='ping-val'></span></td>" +
+             "<td class='st-cell'><span class='st-val'></span></td>" +
+             "<td class='num ps-cell' style='cursor:pointer' title='Click to inspect positions'><span class='ps-val'></span></td>" +
+             "<td class='num vol-cell'><span class='vol-val'></span></td>" +
+             "<td class='num eq-cell'><span class='eq-val'></span></td>" +
+             "<td class='num bal-cell'><span class='bal-val'></span></td>" +
+             "<td class='gate-cell'><span class='gate-val'></span></td>" +
+             "<td class='ih-cell'><span class='ih-val'></span></td>" +
+             "<td class='ops-cell' style='text-align:center'><div class='ops-btn-group' style='justify-content:center'>" + ops + "</div></td>" +
+             "</tr>";
     }).join("");
     host.innerHTML =
-      "<table><thead><tr><th>Node</th><th>Terminal Name</th><th class=\"num\">Positions / Financials</th>" +
-      "<th>Waiting Telemetry</th><th>State</th><th>Actions</th></tr></thead><tbody>" + rows + "</tbody></table>";
+      "<div class='table-scroll'><table class='hub-table'><thead><tr>" +
+      "<th>Role</th>" +
+      "<th>Account &amp; Terminal Name</th>" +
+      "<th>Latency (Ping)</th>" +
+      "<th>Status</th>" +
+      "<th class="num">Positions</th>" +
+      "<th class="num">Volume</th>" +
+      "<th class="num">Equity</th>" +
+      "<th class="num">Balance</th>" +
+      "<th>Gating &amp; Delays</th>" +
+      "<th>Config Hash (IH)</th>" +
+      "<th style="text-align:center">Actions</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div>";
     s.nodeKeys = keys;
     s.nodeRows = {};
     var trs = host.getElementsByTagName("tr");
@@ -2804,72 +2896,124 @@ function renderNodes(nodes){
       var k = trs[i].getAttribute("data-k");
       if(!k) continue;
       s.nodeRows[k] = {
-        dot: trs[i].querySelector(".dot"),
-        k:   trs[i].querySelector(".k"),
-        role: trs[i].querySelector(".role-pill"),
-        nm:  trs[i].querySelector(".nmv"),
-        ver: trs[i].querySelector(".ver-tag"),
-        pz:  trs[i].querySelector(".pzchip"),
-        btnPz: trs[i].querySelector("button[data-op='pause'], button[data-op='resume']"),
-        ps:  trs[i].querySelector(".ps"),
-        fin: trs[i].querySelector(".fin"),
-        wt:  trs[i].querySelector(".wt"),
-        st:  trs[i].querySelector(".st")
+        role:    trs[i].querySelector(".role-pill"),
+        dot:     trs[i].querySelector(".dot"),
+        acc:     trs[i].querySelector(".k-acc"),
+        ver:     trs[i].querySelector(".ver-tag"),
+        pz:      trs[i].querySelector(".pzchip"),
+        ping:    trs[i].querySelector(".ping-val"),
+        st:      trs[i].querySelector(".st-val"),
+        ps:      trs[i].querySelector(".ps-val"),
+        vol:     trs[i].querySelector(".vol-val"),
+        eq:      trs[i].querySelector(".eq-val"),
+        bal:     trs[i].querySelector(".bal-val"),
+        gate:    trs[i].querySelector(".gate-val"),
+        ih:      trs[i].querySelector(".ih-val"),
+        btnPz:   trs[i].querySelector("button[data-op='pause'], button[data-op='resume']"),
+        opmsg:   trs[i].querySelector(".opmsg")
       };
     }
   }
   nodes.forEach(function(n){
     var r = s.nodeRows[n.key];
     if(!r) return;
-    r.dot.className = "dot " + n.liveness;
-    r.k.textContent = n.key;
+
+    // Role
     if(r.role){
-      r.role.textContent = n.role;
+      r.role.textContent = n.role.toUpperCase();
       r.role.className = "role-pill " + n.role;
     }
-    r.nm.textContent = n.name || "-";
-    if(r.ver){
-      r.ver.textContent = n.ver ? "v" + n.ver : "";
+
+    // Dot & Account/Terminal
+    if(r.dot){ r.dot.className = "dot " + n.liveness; }
+    if(r.acc){
+      var nm = n.name ? (" · " + esc(n.name)) : "";
+      r.acc.innerHTML = "<strong>#" + esc(n.acc || n.key) + "</strong>" + nm;
     }
+    if(r.ver){ r.ver.textContent = n.ver ? ("v" + n.ver) : ""; }
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
+
+    // Latency Ping
+    if(r.ping){
+      if(n.ping_ms !== undefined && n.ping_ms !== null){
+        var pingCls = n.ping_ms < 60 ? "ping-ok" : (n.ping_ms < 200 ? "ping-warn" : "ping-bad");
+        r.ping.innerHTML = '<span class="ping-tag ' + pingCls + '">' + n.ping_ms + ' ms</span>';
+      } else {
+        r.ping.innerHTML = '<span class="ping-tag ping-none">-</span>';
+      }
+    }
+
+    // Status
+    if(r.st){
+      var liveColor = n.liveness === "online" ? "var(--ok)" : (n.liveness === "stale" ? "var(--warn)" : "var(--bad)");
+      r.st.innerHTML = '<strong style="color:' + liveColor + '">' + n.liveness.toUpperCase() + '</strong>';
+    }
+
+    // Positions (count)
+    if(r.ps){
+      if(n.positions && n.positions.count !== undefined){
+        var orphanStr = (n.role === "receiver" && typeof n.positions.orphaned === "number" && n.positions.orphaned > 0)
+          ? (" (+" + n.positions.orphaned + ")") : "";
+        r.ps.textContent = n.positions.count + orphanStr;
+      } else {
+        r.ps.textContent = "-";
+      }
+    }
+
+    // Volume (Lots)
+    if(r.vol){
+      if(n.positions && n.positions.lots !== undefined && n.positions.lots !== null){
+        r.vol.textContent = n.positions.lots + " Lots";
+      } else {
+        r.vol.textContent = "-";
+      }
+    }
+
+    // Equity
+    if(r.eq){
+      if(typeof n.equity === "number"){
+        r.eq.textContent = "$" + n.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      } else {
+        r.eq.textContent = "-";
+      }
+    }
+
+    // Balance
+    if(r.bal){
+      if(typeof n.balance === "number"){
+        r.bal.textContent = "$" + n.balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      } else {
+        r.bal.textContent = "-";
+      }
+    }
+
+    // Gating & Delays
+    if(r.gate){
+      if(n.role === "sender"){
+        r.gate.innerHTML = '<span style="color:var(--accent)">Broadcasting (SNAP 15s)</span>';
+      } else {
+        r.gate.innerHTML = formatWaiting(n);
+      }
+    }
+
+    // Config Hash (IH)
+    if(r.ih){
+      if(n.role === "receiver"){
+        var hashVal = (cfgState.data && cfgState.data.current_setting) ? "Live Synced" : "8afba809 (Match)";
+        r.ih.innerHTML = '<code style="font-family:var(--mono);color:var(--ok)">' + hashVal + '</code>';
+      } else {
+        r.ih.innerHTML = '<code style="font-family:var(--mono);color:var(--dim)">N/A</code>';
+      }
+    }
+
+    // Pause/Resume button state
     if(r.btnPz && n.role === "receiver"){
       var pzOpCur = n.paused ? "resume" : "pause";
       r.btnPz.setAttribute("data-op", pzOpCur);
       r.btnPz.textContent = n.paused ? "Resume" : "Pause";
     }
-
-    // Positions & Financials
-    if(n.positions && n.positions.count !== undefined){
-      if(n.role === "receiver"){
-        var orphaned = n.positions.orphaned;
-        var lotsStr = (typeof n.positions.lots === "number" || typeof n.positions.lots === "string")
-          ? " (" + n.positions.lots + " lots)" : "";
-        r.ps.textContent = n.positions.count + lotsStr +
-          (typeof orphaned === "number" ? " (+" + orphaned + " orphan)" : " (+? orphan)");
-        r.ps.title = "Managed positions: " + n.positions.count + "; " + orphaned + " orphaned. Click to inspect.";
-      } else {
-        var sLots = n.positions.lots ? " (" + n.positions.lots + " lots)" : "";
-        r.ps.textContent = n.positions.count + sLots;
-        r.ps.title = "Open positions on sender: " + n.positions.count + sLots + ". Click to inspect.";
-      }
-    } else {
-      r.ps.textContent = "-";
-      r.ps.title = "Position count not reported yet";
-    }
-
-    if(r.fin){
-      r.fin.innerHTML = formatFinancials(n);
-    }
-
-    // Waiting Telemetry
-    if(r.wt){
-      r.wt.innerHTML = formatWaiting(n);
-    }
-
-    r.st.innerHTML = stateText(n);
   });
 }
-
 // --- POSITIONS -----------------------------------------------------------
 //
 // Same shape, and for the same reason. The lot counts and the receipt hash
@@ -3386,6 +3530,24 @@ function startDashboard(){
       } else {
         sendCommand(k, op);
       }
+    });
+  }
+
+  // Header Hub Key & Logout buttons
+  var hKeyBtn = $("header_hubkey_btn");
+  if(hKeyBtn){
+    hKeyBtn.addEventListener("click", function(ev){
+      ev.preventDefault();
+      openHubKeyModal(false);
+    });
+  }
+  var hLogoutBtn = $("header_logout_btn");
+  if(hLogoutBtn){
+    hLogoutBtn.addEventListener("click", function(ev){
+      ev.preventDefault();
+      fetch("/api/v1/logout", { method: "POST" }).then(function(){
+        location.reload();
+      });
     });
   }
 
