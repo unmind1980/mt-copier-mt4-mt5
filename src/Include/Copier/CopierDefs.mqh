@@ -29,7 +29,32 @@
 //--- Raise CP_MAX_MSG_LEN with this or large snapshots are rejected.
 #define CP_MAX_POSITIONS   2048   // open-position table, fixed size
 #define CP_SEEN_RING       4096   // dedup ring buffer, fixed size
-#define CP_MAX_SENDERS     16     // receivers subscribing to N senders
+//--- Senders one receiver can mirror, and peers one sender can track.
+//---
+//--- 100, NOT 16, and the number is chosen to match a limit the operator
+//--- already knows: MT5's chart ceiling (maxcharts, about 100 by default; MT4
+//--- is the same order of magnitude). In DIRECT mode one receiver is one
+//--- chart, so "how many senders can I mirror" was answered by the TERMINAL -
+//--- about 100 - while HUB mode answered it with this constant, which used to
+//--- be 16. That asymmetry was indefensible in public documentation: the same
+//--- deployment could mirror 100 senders one way and silently 16 the other,
+//--- with nothing in any log saying so.
+//---
+//--- So both modes now share one ceiling, and the honest framing is "hub mode
+//--- costs one chart where direct mode costs one chart per sender". Raising
+//--- this PAST the terminal's chart ceiling would make the hub-mode number
+//--- larger than what direct mode can express, which is the reverse mistake
+//--- and just as hard to explain.
+//---
+//--- What it costs - published in README so a downloader can decide, and all
+//--- three bounds move together or a valid config is refused:
+//---   * the per-sender slice of g_desired is CP_MAX_POSITIONS entries, and it
+//---     is allocated ONLY for senders actually configured, so a 1-sender
+//---     receiver still allocates 2048 and not 100x that
+//---   * a full 100-sender config measures ~5,000 ini rows / ~100 KB (hub key
+//---     set) up to ~7,400 / ~270 KB (receiver serializer) - which is what
+//---     CP_INI_MAX, CP_INI_MAX_BYTES and the hub's MAX_INI_BYTES are sized for
+#define CP_MAX_SENDERS     100    // senders per receiver (hub) / peers per sender
 //--- Outbound trade-action queue.
 //---
 //--- 64 was too small for a burst. Measured live: a sender opening ~74

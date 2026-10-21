@@ -30,7 +30,16 @@
 
 #include <Copier/CopierDefs.mqh>
 
-#define CP_MAX_PEERS 16
+//--- How many peers one sender tracks. 100, the same ceiling as
+//--- CP_MAX_SENDERS - see the note there for why the two must agree: a
+//--- deployment that can mirror 100 senders can also be mirrored by 100
+//--- receivers, and a table that silently evicted the 17th made the sender
+//--- blind to receivers the receiver side believed it was serving.
+//---
+//--- Eviction is unchanged (longest-silent first) and still a real state, not
+//--- a failure: past 100 the panel and the RTT measurement drop the oldest,
+//--- while the data path - a PUB broadcast - keeps serving everyone.
+#define CP_MAX_PEERS 100
 //--- How long a baseline stays valid. Short enough that clock drift cannot
 //--- masquerade as delay; long enough that a busy link still gets a clean
 //--- sample to re-baseline on.
@@ -129,6 +138,23 @@ public:
      {
       if(StringLen(name)==0) return;
       m_seen[Slot(name)]=CopierNowMs();
+     }
+
+   //--- The same two writes by INDEX, for callers that are already walking the
+   //--- table. The name-based forms scan it, so calling them from a loop over
+   //--- it is quadratic: at CP_MAX_PEERS 100 that is 10,000 string compares a
+   //--- tick in the PING broadcast alone, to reach a slot whose index is in
+   //--- hand. There is no correctness difference - both bounds-check.
+   void              SeenAt(const int i)
+     {
+      if(i<0 || i>=CP_MAX_PEERS) return;
+      m_seen[i]=CopierNowMs();
+     }
+
+   void              ProbeSentAt(const int i,const long ms)
+     {
+      if(i<0 || i>=CP_MAX_PEERS) return;
+      m_ping[i]=ms;
      }
 
    //--- Remember when a probe went out, so the echo can be matched to it.

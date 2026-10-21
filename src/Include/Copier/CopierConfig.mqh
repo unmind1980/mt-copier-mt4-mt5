@@ -27,7 +27,23 @@
 
 #include "CopierDefs.mqh"
 
-#define CP_INI_MAX 2048
+//--- Rows the parser holds. 12288, not 2048. MEASURED, by hub_config_test.py,
+//--- which builds a full CP_MAX_SENDERS config: ~5,000 rows with the hub's key
+//--- set and ~7,400 with the receiver's own serializer (~74 keys per
+//--- [senderN], ~44 in [common]). 2048 was already short of SIXTEEN senders
+//--- once symbol maps are added, and at 100 it fails the load outright - a
+//--- loud, correct failure, but one that would block the documented capacity.
+//--- Memory: three arrays of 12288 string members, ~600 KB worst case.
+//---
+//--- This, CP_INI_MAX_BYTES and the hub's MAX_INI_BYTES are ONE decision split
+//--- across two languages; hub_config_test.py asserts the byte bounds match.
+#define CP_INI_MAX 12288
+//--- Distinct section BLOCKS the section-range index can hold. A config for
+//--- CP_MAX_SENDERS senders is [common] + one block per sender, so the sender
+//--- ceiling plus slack. Past it the index keeps the first blocks and their
+//--- lookups stay correct; a name beyond the bound scans no range and reads as
+//--- absent, which the overflow message in Load() covers.
+#define CP_INI_SECTIONS (CP_MAX_SENDERS+32)
 
 class CopierIni
   {
@@ -46,6 +62,42 @@ public:
                      CopierIni():m_n(0) {}
 
    int               Count() const { return m_n; }
+
+   //--- Section RANGES, built once after the rows are in.
+   //---
+   //--- Every lookup here used to scan all m_n rows, which is quadratic in
+   //--- practice: a config load reads ~74 keys per sender, so 100 senders is
+   //--- ~7,400 Get() calls over ~7,400 rows - ~55 million string compares on
+   //--- EVERY load, including every CFG push from the hub, which stalls the
+   //--- EA for seconds. Grouping the rows by their (consecutive) section makes
+   //--- a lookup scan that section's ~74 rows instead of the whole file.
+   //---
+   //--- Ranges, not a name->range map, on purpose: the same section name may
+   //--- legitimately appear twice (a duplicated [sender3]), and a range list
+   //--- keeps both reachable. The number of blocks is capped, so the scan over
+   //--- ranges stays bounded however many rows there are.
+   string            m_secName[CP_INI_SECTIONS];
+   int               m_secStart[CP_INI_SECTIONS];
+   int               m_secLen[CP_INI_SECTIONS];
+   int               m_nSec;
+
+   void              BuildSections()
+     {
+      m_nSec=0;
+      int i=0;
+      while(i<m_n)
+        {
+         int start=i;
+         while(i<m_n && StringCompare(m_sec[i],m_sec[start],false)==0) i++;
+         if(m_nSec<CP_INI_SECTIONS)
+           {
+            m_secName[m_nSec] =m_sec[start];
+            m_secStart[m_nSec]=start;
+            m_secLen[m_nSec]  =i-start;
+            m_nSec++;
+           }
+        }
+     }
 
    bool              Load(const string path)
      {
@@ -91,34 +143,37 @@ public:
          Print("CopierIni: ERROR - ",path," exceeded CP_INI_MAX (",CP_INI_MAX," lines)! Config truncated.");
          return false;
         }
+      BuildSections();
       return true;
      }
 
    bool              HasSection(const string section) const
      {
-      for(int i=0;i<m_n;i++)
-        {
-         if(StringCompare(m_sec[i],section,false)==0) return true;
-        }
+      for(int s=0;s<m_nSec;s++)
+         if(StringCompare(m_secName[s],section,false)==0) return true;
       return false;
      }
 
    bool              Has(const string section,const string key) const
      {
-      for(int i=0;i<m_n;i++)
+      for(int s=0;s<m_nSec;s++)
         {
-         if(StringCompare(m_sec[i],section,false)==0 && StringCompare(m_key[i],key,false)==0)
-            return true;
+         if(StringCompare(m_secName[s],section,false)!=0) continue;
+         int e=m_secStart[s]+m_secLen[s];
+         for(int i=m_secStart[s];i<e;i++)
+            if(StringCompare(m_key[i],key,false)==0) return true;
         }
       return false;
      }
 
    string            Get(const string section,const string key,const string deflt="") const
      {
-      for(int i=0;i<m_n;i++)
+      for(int s=0;s<m_nSec;s++)
         {
-         if(StringCompare(m_sec[i],section,false)==0 && StringCompare(m_key[i],key,false)==0)
-            return m_val[i];
+         if(StringCompare(m_secName[s],section,false)!=0) continue;
+         int e=m_secStart[s]+m_secLen[s];
+         for(int i=m_secStart[s];i<e;i++)
+            if(StringCompare(m_key[i],key,false)==0) return m_val[i];
         }
       return deflt;
      }
@@ -146,7 +201,10 @@ public:
       return (v=="1" || v=="true" || v=="yes" || v=="on");
      }
 
-   //--- number of consecutive [senderN] sections present
+   //--- number of CONSECUTIVE [senderN] sections present, from sender0 up.
+   //--- Stops at the first gap: [sender0][sender2] reads as ONE sender, which
+   //--- is deliberate (position in the file IS the identity) and must be
+   //--- reported rather than discovered from a mirror that never appears.
    int               SenderCount() const
      {
       int n=0;
@@ -155,6 +213,38 @@ public:
          if(StringLen(Get("sender"+(string)i,"id",""))>0) n=i+1;
         }
       return n;
+     }
+
+   //--- The HIGHEST `senderN` index the file actually declares, gaps included,
+   //--- or -1 when there is no sender<N> section at all.
+   //---
+   //--- Exists so the caller can tell apart three situations that all used to
+   //--- look like "fewer senders than I configured":
+   //---    every section present            -> declared+1 == SenderCount()
+   //---    a gap truncates the count         -> declared+1 >  SenderCount()
+   //---    more sections than the build holds -> declared  >=  CP_MAX_SENDERS
+   //--- Scans the section list rather than the rows, so it is O(blocks) and
+   //--- does not inherit the cost of Get().
+   int               SenderDeclaredMax() const
+     {
+      int maxN=-1;
+      for(int s=0;s<m_nSec;s++)
+        {
+         string nm=m_secName[s];
+         int n=StringLen(nm);
+         if(n<7) continue;                       // "sender" + >= 1 digit
+         if(StringFind(nm,"sender")!=0) continue;
+         bool digits=true;
+         for(int c=6;c<n;c++)
+           {
+            int ch=StringGetCharacter(nm,c);
+            if(ch<'0' || ch>'9') { digits=false; break; }
+           }
+         if(!digits) continue;
+         int idx=(int)StringToInteger(StringSubstr(nm,6));
+         if(idx>maxN) maxN=idx;
+        }
+      return maxN;
      }
 
    //--- raw enumeration, so callers can walk "symbol.X=Y" entries
@@ -251,7 +341,13 @@ long CopierResolveMagic(const string rawIniValue,bool &pinned)
 #ifndef CP_CFG_REV_PATH
 #define CP_CFG_REV_PATH "copier_cfg.rev"
 #endif
-#define CP_INI_MAX_BYTES 262144
+//--- Mirrors MAX_INI_BYTES in hub/src/config.rs, and MUST stay equal to it:
+//--- the hub validates at the door and the node validates again, and a node
+//--- limit BELOW the hub's accepts a config the receiver then refuses. The
+//--- reverse is worse - the hub would reject what it just wrote itself.
+//--- 512 KB is ~2x the ~270 KB a full 100-sender config can reach, and far
+//--- under CP_MAX_MSG_LEN, so the escaped CFG payload still fits one frame.
+#define CP_INI_MAX_BYTES 524288
 
 int CopierHexVal(const int ch)
   {

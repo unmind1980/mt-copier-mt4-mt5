@@ -29,6 +29,14 @@
 //--- the panel past CP_PANEL_MAX_ROWS and silently drop the rows BELOW it
 //--- (the peer list, the risk line) - which are the ones that explain why.
 #define CP_PANEL_ORPHAN_SHOW 5
+//--- How many peer rows are printed in detail before the rest collapse.
+//--- With CP_MAX_SENDERS at 100 the peer list can be 100 rows, and the panel
+//--- is a rectangle on a chart: Begin() clamps to CP_PANEL_MAX_ROWS, so rows
+//--- past it were dropped with nothing on screen to say so. EIGHT keeps the
+//--- block readable while the "Peers connected: N" line above stays the truth,
+//--- and the counterpart summary line names the rest. A truncated list is only
+//--- a problem when it is SILENT - that is the thing this fixes.
+#define CP_PANEL_PEER_SHOW 8
 
 class CopierPanel
   {

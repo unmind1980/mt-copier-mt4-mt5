@@ -1382,8 +1382,39 @@ bool LoadConfigForHub()
    //--- rows stay underneath the new ones.
    MapClear();
 
+   //--- How many senders the file DECLARES, and how many this build can take.
+   //--- Two numbers, reported separately, because they used to be one and the
+   //--- difference was invisible: SenderCount() stops at the first gap AND at
+   //--- CP_MAX_SENDERS, so a file that declared sender0..sender99 on a build
+   //--- holding 16 loaded sixteen of them and said nothing about the other 84.
+   //--- "I configured 30 senders and only some appear" was unanswerable.
+   int declaredMax=ini.SenderDeclaredMax();
    g_nSenders=ini.SenderCount();
    if(g_nSenders>CP_MAX_SENDERS) g_nSenders=CP_MAX_SENDERS;
+   if(declaredMax>=CP_MAX_SENDERS)
+     {
+      //--- ERROR: the operator's intent cannot be honoured at all. This is the
+      //--- one message that makes the ceiling discoverable from the outside.
+      g_log.Error("central mode: "+CP_INI_PATH+" declares up to [sender"
+                  +(string)declaredMax+"], but this build supports "
+                  +CP_MAX_SENDERS+" sender(s). Sections sender0..sender"
+                  +(string)(CP_MAX_SENDERS-1)+" were loaded; sender"
+                  +(string)CP_MAX_SENDERS+" onward were NOT. Raise"
+                  +" CP_MAX_SENDERS, or split this receiver."
+                  +" (The ceiling is the same one that bounds how many senders"
+                  +" DIRECT mode can mirror - the terminal's chart limit.)");
+     }
+   else if(declaredMax>=0 && declaredMax+1>g_nSenders)
+     {
+      //--- A gap: numbering must be consecutive from sender0, because position
+      //--- in the file is a sender's identity. Reported, not silently collapsed.
+      g_log.Error("central mode: "+CP_INI_PATH+" numbers senders with a gap -"
+                  +" the highest section is [sender"+(string)declaredMax+"]"
+                  +" but only "+(string)g_nSenders+" consecutive section(s)"
+                  +" from sender0 are present. Sender numbering must be"
+                  +" consecutive (sender0, sender1, ...); sections after the"
+                  +" first missing index are ignored.");
+     }
    //--- Same resize as the no-ini branch above: a CFG push re-runs this
    //--- whole function, and the count can go from N to M in either
    //--- direction. g_desired is indexed as si*CP_MAX_POSITIONS + i, so its
@@ -5750,7 +5781,11 @@ void UpdatePanel()
    //--- bottom of the background - the panel would look broken rather than
    //--- simply shorter.
    int orphanRows=(ShowOrphanedList?(2+CP_PANEL_ORPHAN_SHOW):0);
-   int rows=11+np+orphanRows;
+   //--- Detail rows for the first few peers; the rest get ONE summary line
+   //--- instead of being dropped off the bottom of the panel.
+   int peerShow=(np>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:np;
+   int peerMore=(np>peerShow)?1:0;
+   int rows=11+peerShow+peerMore+orphanRows;
    g_panel.Begin(rows);
 
    int r=0;
@@ -5824,7 +5859,7 @@ void UpdatePanel()
    g_panel.Row(r++,"Peers connected: "+IntegerToString(np)+((g_hubOn)?"  (incl. hub)":""),
                (np>0)?CP_PANEL_OK:CP_PANEL_BAD);
 
-   for(int i=0;i<np && i<CP_MAX_PEERS;i++)
+   for(int i=0;i<peerShow && i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
@@ -5850,6 +5885,13 @@ void UpdatePanel()
                                     :((st==CP_PEER_CONNECT)?CP_PANEL_DIM
                                                            :CP_PANEL_OK));
      }
+
+   //--- The rest, named as a count rather than vanished: the panel is a
+   //--- rectangle and 100 peer rows do not fit on any chart.
+   if(peerMore)
+      g_panel.Row(r++,"  ... and "+(string)(np-peerShow)+" more peer(s)"
+                      +" - the hub dashboard lists every one",
+                  CP_PANEL_DIM);
 
    if(g_risk.AnyTripped())
       g_panel.Row(r++,"RISK: "+g_risk.BlockKey(),CP_PANEL_WARN);

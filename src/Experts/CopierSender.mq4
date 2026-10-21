@@ -315,7 +315,12 @@ string           g_drainMsgs[CP_DRAIN_MAX];     // central channel: payload fram
 //--- deployment, and the overflow used to alias onto slot 0 (see
 //--- SnapStaleIndex). Each slot is a string plus five 8-byte counters, so 64
 //--- of them is a few KB - cheap insurance against a silent wrong answer.
-#define CP_MAX_STALE_PEERS 64
+//--- Same ceiling again: one entry per receiver that can report a receipt.
+//--- It must be >= CP_MAX_PEERS, or a peer can be tracked for liveness and
+//--- NOT tracked for snapshot repair - which is exactly the silent split this
+//--- family of constants kept producing. 64 was already over the old peer
+//--- ceiling of 16; both are 100 now.
+#define CP_MAX_STALE_PEERS 100
 string           g_snapStaleWho[CP_MAX_STALE_PEERS];
 int              g_snapStaleN[CP_MAX_STALE_PEERS];
 //--- Slice B timing, parallel to the arrays above.
@@ -882,10 +887,12 @@ void CheckPeers()
       //--- accepts one matching a probe still outstanding), and the round trip
       //--- is never measured - the panel sits on "connected" forever while
       //--- both ends are dutifully answering each other.
+      //--- by INDEX, not by name: the table is being walked here, and
+      //--- ProbeSent(name) scans the table again - quadratic at 100 peers.
       for(int k=0;k<CP_MAX_PEERS;k++)
         {
          string pn=g_peers.NameAt(k);
-         if(StringLen(pn)>0) g_peers.ProbeSent(pn,now);
+         if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
      }
 
@@ -1220,7 +1227,15 @@ void UpdatePanel()
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
    //--- per receiver + a spacer. Keep this in step with the Row() calls below
    //--- or the last line silently disappears off the background.
-   int rows=8+np;
+   //---
+   //--- At 100 receivers that is 100 rows, which is more than any chart can
+   //--- show, so the per-receiver detail is capped and the remainder is one
+   //--- summary line. Same rule as the receiver's panel, and for the same
+   //--- reason: a truncated list that does not SAY it is truncated is the
+   //--- failure mode, not the truncation.
+   int peerShow=(np>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:np;
+   int peerMore=(np>peerShow)?1:0;
+   int rows=8+peerShow+peerMore;
    if(rows<9) rows=9;
 
    g_panel.Begin(rows);
@@ -1252,7 +1267,7 @@ void UpdatePanel()
                    +((g_hubOn)?"  (incl. hub)":""),
                (np>0)?CP_PANEL_OK:CP_PANEL_WARN);
 
-   for(int i=0;i<np && i<CP_MAX_PEERS;i++)
+   for(int i=0;i<peerShow && i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
@@ -1284,6 +1299,11 @@ void UpdatePanel()
                                     :((st==CP_PEER_CONNECT)?CP_PANEL_DIM
                                                            :CP_PANEL_OK));
      }
+
+   if(peerMore)
+      g_panel.Row(r++,"  ... and "+(string)(np-peerShow)+" more receiver(s)"
+                      +" - the hub dashboard lists every one",
+                  CP_PANEL_DIM);
 
    g_panel.Row(r++," ",CP_PANEL_TEXT);
    g_panel.End();

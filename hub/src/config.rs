@@ -634,7 +634,19 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
     /// Generous, and still far below `CP_MAX_MSG_LEN` even after escaping -
     /// which matters, because an oversized one would be refused by the
     /// transport with a much less useful message.
-    const MAX_INI_BYTES: usize = 256 * 1024;
+    ///
+    /// 512 KB, and it MUST equal `CP_INI_MAX_BYTES` in `CopierConfig.mqh`:
+    /// one decision, two languages. The hub validates a config at the door and
+    /// the node validates the same bytes again, so a bound that is higher here
+    /// than there accepts a file the receiver then refuses - a CFG that
+    /// "pushed fine" and silently never applied. `hub_config_test.py` asserts
+    /// the two are equal, so this cannot drift again.
+    ///
+    /// Sized against a full `CP_MAX_SENDERS` (100) config, measured by
+    /// `hub_config_test.py`: ~5,000 rows / ~100 KB with this key set, up to
+    /// ~7,400 rows / ~270 KB with the receiver's own round-trip serializer.
+    /// 512 KB leaves headroom for symbol maps and long IgnoreUids lists.
+    const MAX_INI_BYTES: usize = 512 * 1024;
 
     if ini.trim().is_empty() {
         return Err("empty".to_string());

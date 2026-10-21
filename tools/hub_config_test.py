@@ -602,6 +602,86 @@ def main():
             except OSError:
                 pass
 
+    # =====================================================================
+    print("== 9. the sender ceiling is REACHABLE, and both ends agree on the byte bound ==")
+    #--- The capacity is a promise made to whoever downloads this, so it gets
+    #--- asserted rather than typed into a README: a config for every sender
+    #--- the EA can take must be accepted by the hub, and the node's own byte
+    #--- bound must equal the hub's. A gap in either direction is a config that
+    #--- "pushed fine" and silently never applied.
+    with open(os.path.join(REPO, "hub", "src", "config.rs"), encoding="utf-8") as fh:
+        rs = fh.read()
+    with open(os.path.join(REPO, "src", "Include", "Copier", "CopierConfig.mqh"),
+              encoding="utf-8") as fh:
+        mqh = fh.read()
+    with open(os.path.join(REPO, "src", "Include", "Copier", "CopierDefs.mqh"),
+              encoding="utf-8") as fh:
+        defs = fh.read()
+
+    import re
+    re_hub = re.search(r"const MAX_INI_BYTES: usize = (\d+) \* 1024;", rs)
+    re_mql_bytes = re.search(r"#define CP_INI_MAX_BYTES (\d+)", mqh)
+    re_senders = re.search(r"#define CP_MAX_SENDERS\s+(\d+)", defs)
+    re_rows = re.search(r"#define CP_INI_MAX (\d+)", mqh)
+    check("all four constants are readable from source",
+          bool(re_hub and re_mql_bytes and re_senders and re_rows),
+          f"hub={re_hub and re_hub.group(1)}KB "
+          f"node={re_mql_bytes and re_mql_bytes.group(1)}B "
+          f"senders={re_senders and re_senders.group(1)} "
+          f"rows={re_rows and re_rows.group(1)}")
+
+    ceiling = int(re_senders.group(1)) if re_senders else -1
+    rows_bound = int(re_rows.group(1)) if re_rows else -1
+    bytes_bound = int(re_mql_bytes.group(1)) if re_mql_bytes else -1
+    hub_bytes = int(re_hub.group(1)) * 1024 if re_hub else -1
+
+    if re_hub and re_mql_bytes:
+        check("the hub's byte bound EQUALS the node's (one bound, two languages)",
+              hub_bytes == bytes_bound,
+              f"hub {hub_bytes} vs node {bytes_bound}")
+
+    if ceiling > 0 and rows_bound > 0 and bytes_bound > 0:
+        #--- The same shape SerializeCurrentConfigToIni() actually writes, key
+        #--- for key and long-named-key for long-named-key: a three-key stub
+        #--- would fit any row bound and prove nothing. This is the config a
+        #--- hub-pushed CFG carries, so this is the size the bound must hold.
+        per_sender_keys = [
+            "id", "magic", "lotmode", "lotparam", "suffix",
+            "deviationpoints", "emergencyslpips", "emergencytppips",
+            "reopenclosedmirrors", "dedupduplicates", "ignorenewentrysignals",
+            "ignoreallexitsignals", "ignoreuids", "nobuy", "nosell",
+            "permittedsymbols", "permittedmagic", "minsenderlotsize",
+            "maxsenderlotsize", "checkforexistingposition",
+            "requirepositionfillwithinseconds", "requirepositionfillwithinminutes",
+            "requirepositionfillwithinhours", "fillwithinminutesbar",
+            "pendingfillgraceseconds", "waitforseconds", "waitforminutes",
+            "waitforhours", "waitforprofitpips", "waitforminutesbar",
+            "includetradingtimes", "daytradingtimes", "inverttrades",
+            "mirrorstops", "stoplosstakeprofit", "secondsfrommodify",
+            "ignorebasketorder", "maxlotsperposition", "maxtotallots",
+            "maxopenpositions", "dailylosspct", "maxdrawdownpct",
+            "stopsthrottleseconds", "ordercomment", "custompipsizes",
+            "includetradingtimesdays", "daytradingtimesdays", "notes",
+        ]
+        blocks = ["[common]\nmaxlotsperposition=10.0\nmaxopenpositions=100\n"]
+        for i in range(ceiling):
+            body = "".join(f"{k}=v{i}\n" for k in per_sender_keys)
+            blocks.append(f"[sender{i}]\n{body}symbol.EURUSD=EURUSD.m\n")
+        full = "".join(blocks)
+        rows = sum(1 for ln in full.splitlines()
+                   if ln.strip() and not ln.strip().startswith((";", "#")))
+        size = len(full.encode("utf-8"))
+        check(f"a FULL {ceiling}-sender config fits the node's row bound",
+              rows < rows_bound, f"{rows} rows of {rows_bound}")
+        check(f"...and its byte bound", size < bytes_bound,
+              f"{size} bytes of {bytes_bound}")
+        hub, out, cmds_path = start(True, audit_path, cfg_path)
+        try:
+            st, d = js("PUT", f"/api/v1/nodes/{NODE}/config", full)
+            check(f"the hub ACCEPTS a {ceiling}-sender config", st == 202, f"status {st}")
+        finally:
+            stop(hub, out, cmds_path)
+
     print()
     p = sum(1 for _, ok, _ in CHECKS if ok)
     f = len(CHECKS) - p

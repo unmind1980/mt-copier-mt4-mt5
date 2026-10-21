@@ -633,6 +633,61 @@ void TestConfig()
      }
    Ok("config: enumerates symbol entries",found==1);
 
+   //--- The section index the lookups run on. It is not an optimisation you
+   //--- can see in a result - only in a wrong one - so it is asserted:
+   //---   a key in the SECOND section must be found (the naive
+   //---   "scan from the first match of the section name" bug),
+   //---   a section repeated later in the file stays reachable,
+   //---   and a key that exists in one section is NOT visible from another.
+   OkStr("config: index finds a key in the second section",
+          ini.Get("sender1","id"),"icmarkets");
+   OkStr("config: index finds a key after the last section boundary",
+          ini.Get("sender1","events"),"tcp://10.0.0.9:5555");
+   Ok("config: a key of sender0 is not visible from sender1",
+       ini.Get("sender1","events","none")=="tcp://10.0.0.9:5555"
+       && ini.Get("sender0","snap","none")=="none");
+
+   //--- declared-vs-present. These are the two numbers that make "I configured
+   //--- N senders and only some appeared" answerable, so they are asserted
+   //--- rather than left to the log line.
+   OkInt("config: declared max with two consecutive sections",ini.SenderDeclaredMax(),1);
+
+   FileDelete(path);
+
+   //--- a file with a gap and one with a number past the ceiling
+   FileDelete(path);
+   h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE) { Ok("config: write gap fixture",false); return; }
+   FileWrite(h,"[sender0]");
+   FileWrite(h,"id=a");
+   FileWrite(h,"[sender2]");            // sender1 missing
+   FileWrite(h,"id=c");
+   FileClose(h);
+
+   CopierIni gap;
+   Ok("config: load gap fixture",gap.Load(path));
+   OkInt("config: a gap truncates the count to one",gap.SenderCount(),1);
+   OkInt("config: ...but the declared max still sees sender2",gap.SenderDeclaredMax(),2);
+   FileDelete(path);
+
+   //--- a section whose name is not a number, and one that is prefixed
+   //--- differently, must not be counted as a sender
+   FileDelete(path);
+   h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(h==INVALID_HANDLE) { Ok("config: write odd-name fixture",false); return; }
+   FileWrite(h,"[sender0]");
+   FileWrite(h,"id=a");
+   FileWrite(h,"[senderx]");            // letters, not digits
+   FileWrite(h,"id=zz");
+   FileWrite(h,"[common]");
+   FileWrite(h,"maxlotsperposition=1.0");
+   FileClose(h);
+
+   CopierIni odd;
+   Ok("config: load odd-name fixture",odd.Load(path));
+   OkInt("config: a non-numeric sender section is not a sender",odd.SenderDeclaredMax(),0);
+   OkInt("config: ...and it does not extend the count",odd.SenderCount(),1);
+   OkStr("config: ...but its keys are still readable",odd.Get("senderx","id"),"zz");
    FileDelete(path);
   }
 

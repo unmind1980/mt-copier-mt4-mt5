@@ -219,12 +219,13 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Hub 接口** | `hub/src/api.rs` | `/api/v1/nodes` 序列化输出等待开仓指标、逐单明细列表、节点 `ping_ms`、只读 `reqpos` 命令放行 |
 | **Hub 锁** | `hub/src/lockx.rs` | `LockExt::lock_or_recover()`：mutex 中毒时用 `into_inner()` 恢复而非 panic，全站 102 处 `.lock().unwrap()` 已替换 |
 | **Receiver EA** | `src/Experts/CopierReceiver.mq4` | 上报 `WAIT` 系列指标、`EncodeReceiverPositions`/`WaitList`、三级 STAT 遥测调度、Direct 模式跳过大包、1.5s 挂单成交宽限期、坏快照防误清仓锁（`N` 与解码数不一致即拒绝并限制日志/计数升级告警）、快慢双路径缓存、converge 用 `CopierUidIndex` 消除 O(N²)、注释按需读取、身份表启动保护（`g_acctScanned`）、状态已恢复时跳过慢路径 `everOpened` 冗余扫描、`g_reopenExpected.Forget` 预期重开消费清除、券商订单上限检查计入在途 `pendCount`、开仓动作自动置位 `g_mapDirty`、心跳与 STAT 实时上报 `PING`、`LocalForSender` 静态暂存区 `g_locScratch` 与 `g_acctAllPos`/`g_waitItems`/`StopsOvIndex`/`DedupLocal`/`g_mapFrom` 全量定长化（零 `ArrayResize`）、跨平台 `CopierIsTradeDisabled` 快速重试、`CloseAllOurs` 兼顾各信号源忽略列表、动作队列 `g_qHead` 偏移消除 O(n) 搬移、持仓缓存按需拷回（稳态零深拷贝）、drain 静态接收缓冲 |
-| **Sender EA** | `src/Experts/CopierSender.mq4` | `AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING`、`BuildCurrent` 全程写入静态暂存区（`g_curScratch`/`g_prevSlotScratch`/`g_rawScratch`）实现零 `ArrayResize`、`SnapStaleIndex` 六组并列数组定长化 `[CP_MAX_STALE_PEERS]` 且表满返回 -1 不再别名、drain 静态接收缓冲、`OnDeinit` 退出前对脏状态强制落盘、每 tick 布尔标记改为世代戳（消除 4KB memset） |
+| **Sender EA** | `src/Experts/CopierSender.mq4` | 面板 peer 行上限 8 行 + "and N more" 汇总；`CP_MAX_STALE_PEERS` 64 → 100；`AutoPort` 留空推导、持久化状态文件改绑账号、`H=""` 新节点首握即刻补发、快照周期调整至 15s、挂单成交 0.5s 缓冲快照且避让常规快照、`ticket -> prevSlot` 槽位直通索引消除 18 万次字符串比较、按需读取 OrderComment、`BuildCurrent` 引入 Ticket 哈希索引彻底消除 61 万次线性整数槽扫、稳态槽位纯数值零深拷贝与索引免重建、心跳实时上报 `PING`、`BuildCurrent` 全程写入静态暂存区（`g_curScratch`/`g_prevSlotScratch`/`g_rawScratch`）实现零 `ArrayResize`、`SnapStaleIndex` 六组并列数组定长化 `[CP_MAX_STALE_PEERS]` 且表满返回 -1 不再别名、drain 静态接收缓冲、`OnDeinit` 退出前对脏状态强制落盘、每 tick 布尔标记改为世代戳（消除 4KB memset） |
 | **模型头文件** | `src/Include/Copier/CopierModel.mqh` | `CopierReadPositions()` 支持 `readComment` 跳过注释读取并批量扩容；新增 `CopierReadCommentByTicket()` 单笔定向读取（支持 ticket 重载）；MT4 开仓 130 错误 ECN 自动降级与 `OrderModify` 补上止损止盈；新增 `CopierIsTradeDisabled()` 跨平台识别 MT4 `4109` 与 MT5 `10027/10026/10017`；`CopierReadPositions` 识别静态预分配数组时直接下标写入，跳过倍增扩容；新增唯一 pip 规则函数 `CopierPipOf()`（原先四处 inline 复制） |
 | **规格头文件** | `src/Include/Copier/CopierSizing.mqh` | 增加 `CopierEmergencyTp()` 应急止盈计算（与 `CopierEmergencySl` 对称），供 `QueueModifyIfNeeded` 后备保护止盈不被误清除 |
+| **对端头文件** | `src/Include/Copier/CopierPeers.mqh` | `CP_MAX_PEERS` 16 → **100**（与 `CP_MAX_SENDERS` 同一上限）；满表仍淘汰最久沉默者，但数据通路是广播、不受影响；新增 `SeenAt(i)` / `ProbeSentAt(i)` 下标写入，消除遍历表时的二次扫描 |
 | **状态头文件** | `src/Include/Copier/CopierState.mqh` | `CopierSeenRing` 增加 `GetTime()`、`m_used` 计数、`ForgetUidActions()`、`PruneExpired()`；`CopierSeenRing` 进一步引入紧凑占用索引 `m_occ[]`，全部查询只遍历占用项；新增 `CopierUidIndex`（uid→index 哈希索引）；`CopierPosTable` 增加 `UpdateAt`/`RemoveAt`/`InsertEmpty` 与空槽游标；新增 `RebuildTicketIndex()` 与 2048 槽开放寻址 `FindByTicket` 哈希直通；新增 `CheckSlot()` 纯数值原位比对与 `UpdateNumericAt()` 原位更新；`CopyTo()` 预查 `m_n` 一次性界定容量，消除逐单扩容；`CopierBackoff` 由线性查找升级为 256 槽开放寻址哈希索引（含重建式安全擦除） |
 | **传输头文件** | `src/Include/Copier/CopierTransport.mqh` | `DrainFrames()` 排空畸形报文的第 3 帧及以后残帧（防套接字帧错位）；`DrainFrames`/`DrainSocket` 对静态预分配数组直接下标写入，动态数组进入前预分、结束后收缩 |
-| **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载；`CP_INI_MAX` 扩容至 2048 行，超限不再静默截断而是报错返回 `false`；`CP_INI_MAX_BYTES = 262144` 字节上限 |
+| **配置头文件** | `src/Include/Copier/CopierConfig.mqh` | `copier.ini` 多信号源分层继承解析、`[senderN]` 独立参数加载；`CP_INI_MAX` 扩容至 12288 行，超限不再静默截断而是报错返回 `false`；`CP_INI_MAX_BYTES = 524288`（与 hub `MAX_INI_BYTES` 同值，测试断言）；新增**段区间索引** `BuildSections()` 使 `Get`/`Has` 只扫描所属段（100 sender 下省下约 5,500 万次字符串比较）；新增 `SenderDeclaredMax()` 区分"跳号"与"超出上限" |
 | **密钥头文件** | `src/Include/Copier/CopierCurveKey.mqh` | CURVE 密钥对单文件读写与派生校验；中枢公钥文件首行放宽为可选，裸 40 字符或 `PUBLIC=` 单行均可直接加载（手动粘贴回退不再是死代码） |
 | **过滤头文件** | `src/Include/Copier/CopierFilter.mqh` | 交易时段/品种/魔术过滤；`CopierTradingTimes` 跨午夜语义（`22:00-02:00` 为一个整窗）；`DayTradingTimes` 按当日星期匹配，跨午夜需显式分拆书写（已在注释与 README 说明）；日排期查询改为 `HitAt()` 带基址偏移直接读扁平数组，零局部数组拷贝 |
 | **编解码头文件** | `src/Include/Copier/CopierCodec.mqh` | 增加 `CopierCompressField` 与 `CopierDecompressField`，支持 500 字节门限自适应 Zip+Z85 编解码 |
@@ -446,4 +447,19 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 九次审计：拓扑容量统一到 100，且“超限不再静默”（2026-10-21 18:40；A30/A31/B27/B28 全部闭环落地）
 
+| # | 级别 | 位置 | 问题与修复实现 |
+| :--- | :--- | :--- | :--- |
+| **A30** | 中 | `CopierDefs.mqh` / `CopierPeers.mqh` / `CopierSender.mq4` | **已修复**：三个拓扑上限各不一致——hub mode 的 `CP_MAX_SENDERS` 是 16（且 `SenderCount()` 只扫 `sender0..sender15`，超出的段**从未被读到**，无任何日志）；direct mode 的 `CP_MAX_PEERS` 也是 16，满时**静默淘汰**最久沉默的 receiver（RTT、掉线告警、面板行一起消失）；快照修复的 `CP_MAX_STALE_PEERS` 又是 64。同一个部署两种模式能力不同，对外无法解释。**修法**：三者统一为 **100**，与终端图表上限（MT5 `maxcharts`，默认约 100）对齐——direct mode 的 100 一直由终端给，hub mode 现在给同一个数，代价是“1 个图表 vs 每 sender 1 个图表”而不是“16 个” |
+| **A31** | 中 | `CopierReceiver.mq4` `LoadCentralConfig` | **已修复**：sender 超限与编号跳号都是**静默**的（`SenderCount()` 遇到第一个缺号即停，超限段根本不进扫描）。**修法**：`CopierIni` 新增 `SenderDeclaredMax()` 返回文件声明的最高 `senderN`（含跳号），调用方把它与 `SenderCount()` 对比并分别打 ERROR——超限时说清“加载了 sender0..sender99、sender100 起未加载”，跳号时说清“编号必须从 sender0 连续”。这是让上限**可被发现**的唯一途径 |
+| **B27** | 中·性能 | `CopierConfig.mqh` `CopierIni` | **已修复（100 sender 的前置条件）**：所有 `Get()` 都是 O(m_n) 全表扫描，而一次配置加载要读 ~50–74 键/sender——100 sender 就是 ~5,000–7,400 次 Get × 同量级行数 ≈ **数千万次字符串比较**（`hub_config_test.py` 实测满配为 5,003 行 / 100,964 字节），且每次 hub 推送 CFG 都会重跑，EA 会卡住数秒。**修法**：新增段区间索引 `m_secName/m_secStart/m_secLen/m_nSec`（`BuildSections()`），查找只扫描所属段的 ~74 行；重复段（同名 `[sender3]` 出现两次）仍各自可达。顺带把 `CP_INI_MAX` 2048 → 12288、`CP_INI_MAX_BYTES` 与 hub 的 `MAX_INI_BYTES` 同步提到 512 KB（三者必须同值，否则 hub 接受、receiver 拒绝；测试从两侧源码读值并断言相等） |
+| **B28** | 低 | `CopierPanel.mqh` + 两个 EA 的面板 | **已修复**：100 个 peer 时面板 100 行，`Begin()` 直接截到 24 行，**超出的行无声消失**。**修法**：新增 `CP_PANEL_PEER_SHOW = 8`，只详细打印前 8 个，其余归并为一行 "... and N more peer(s) - the hub dashboard lists every one"；sender 面板同样处理。顺带给 `CopierPeerTable` 补 `SeenAt(i)` / `ProbeSentAt(i)` 下标写入，消除 PING 广播里 100×100 的二次扫描 |
+
+**配套回归**：`hub_config_test.py` 新增第 9 节——从源码读出 hub 与 MQL 两侧的字节上限并断言**相等**，生成一份"满配 100 sender"的 ini 断言它装得进行数/字节上限，并真的 PUT 给 hub 确认返回 202。`CopierSelfTest.mq4` 的 `TestConfig()` 补入段索引三态（第二段可查、跨段不可见、非数字段名不算 sender）与跳号/声明数断言。
+
+---
+
+---
+
+*交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*

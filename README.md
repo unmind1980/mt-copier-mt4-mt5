@@ -295,7 +295,7 @@ The receiver operates in two modes:
    - Set `HubEndpoint = <hub_ip>:<hub_port>` (e.g. `127.0.0.1:6000`).
    - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
    - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
-   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 2048` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 262144` (256 KB). Sixteen `[senderN]` sections at roughly 30 keys each, plus `[common]` and the per-sender `symbol.X=Y` maps, fit comfortably; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
+   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 12288` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 524288` (512 KB) — the **same** byte bound the hub enforces, asserted equal by `hub_config_test.py`. A full config for the whole `CP_MAX_SENDERS` (100) sender ceiling measures **~5,000 rows / ~100 KB** with the hub’s key set and **~7,400 rows / ~270 KB** with the receiver’s own round-trip serializer (which writes a few more keys per sender) — both figures are produced by `hub_config_test.py`, and both leave ample headroom for symbol maps and long `IgnoreUids` lists; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
    - Live settings sync: The receiver reports its active configuration (`CFGRPT` / `REG`) so operators can inspect and clone running settings in the Web Dashboard via **📥 Load Current Setting from Node**.
    - **Multi-tier Telemetry & On-Demand Refresh**: Receiver sends 1s receipts for instant sync, 5s summary figures (`HELD`, `LOTS`, `WAIT`, `EQ`, `BL`), and 60s detailed lists (`POS`, `WAITLIST`). In Direct mode, detailed lists are automatically skipped to keep communication ultra-lean. In WebUI, operators can click `[🔄 Request Update]` in the orders table header to request an immediate on-demand refresh without waiting for the 60s routine clock.
    - **Full Order & Pipeline Inspection in Dashboard**: The Web Dashboard (#posmodal) provides line-by-line inspection with 5 filter tabs (`All`, `Opened`, `Waiting`, `Managed`, `Orphan / Manual`) and visual breakdown across the 3-stage waiting pipeline (Broker Queue, Gate Delayed, Market Closed). All filter tabs are persistent DOM elements with 0ms transition latency and zero flicker.
@@ -922,6 +922,72 @@ to re-run a script and paste a log, "FAIL x == 1" is worthless.
 
 ## Anti-bloat contract
 
+## Capacity — and where each number comes from
+
+Every limit in this system is a fixed constant, and each one has a REASON.  
+A ceiling nobody can explain is a ceiling somebody has to discover by  
+hitting it, which is why the table below says where each figure comes from  
+and what it costs.
+
+| capacity | limit | where the number comes from | what it costs |
+| :--- | :--- | :--- | :--- |
+| senders per receiver, **hub mode** | `CP_MAX_SENDERS` = **100** | aligned with the terminal's chart ceiling (MT5 `maxcharts`, about 100 by default; MT4 is the same order of magnitude) | one chart |
+| senders per receiver, **direct mode** | **100** charts | the terminal itself — one receiver per chart | one chart **per sender** |
+| receivers per sender | `CP_MAX_PEERS` = **100** | the same ceiling as `CP_MAX_SENDERS`; the data path is a broadcast, so the table is only observability | nothing on the wire |
+| positions per position table | `CP_MAX_POSITIONS` = **2048** | independent of the two above; sized so a large account fits with slots to spare | ~1.2 MB per 2 senders' worth of desired set |
+
+**Both modes hold the same 100 ceiling on purpose.** Direct mode's ceiling has  
+always been the terminal's chart limit — you could never mirror more senders  
+than you had charts. Hub mode answered the same question with an internal  
+constant that used to read 16, so the same deployment could mirror 100 senders  
+one way and silently 16 the other. That is indefensible to explain and it is  
+now fixed: hub mode costs **one chart** where direct mode costs **one chart  
+per sender**, and the ceiling is the same in both.
+
+### What the numbers cost, honestly
+
+Measured or derived from the source, so you can decide before deploying:
+
+- **Memory** — the per-sender slice of the desired set (`CP_MAX_POSITIONS`  
+  entries) is allocated **only for the senders actually configured**. A  
+  1-sender receiver allocates 2048 entries, not 100× that. A fully-populated  
+  100-sender receiver allocates up to 204,800 entries (~25–30 MB), which is  
+  a static, non-growing figure, not a leak.
+- **Config size** — a full 100-sender `copier.ini` measures **~5,000 rows /  
+  ~100 KB** with the hub's key set, and **~7,400 rows / ~270 KB** with the  
+  receiver's own round-trip serializer (a few more keys per sender). Both  
+  numbers come out of `hub_config_test.py` rather than out of an estimate.  
+  The parser holds `CP_INI_MAX = 12288` rows and `CP_INI_MAX_BYTES = 524288`  
+  (512 KB), and the hub enforces **the same byte bound** — asserted equal by  
+  the test suite so the two cannot drift.
+- **CPU** — convergence is **linear** in senders, not quadratic: the per-uid  
+  and per-ticket lookups are hashed. Budget roughly one pass over the account  
+  per sender per tick; at 300 positions and 100 senders that is on the order  
+  of 30,000 operations per tick, ~10× a second.
+- **Charts** — 1 (hub mode) or 100 (direct mode).
+
+### What happens at the ceiling
+
+Nothing is ever silently truncated:
+
+- More `[senderN]` sections in `copier.ini` than this build holds → an  
+  **ERROR in the log naming the number**, saying which sections were dropped.
+- A gap in the numbering (`sender0`, `sender2`, …) → an **ERROR**, because  
+  position in the file is a sender's identity and a missing index silently  
+  deletes every sender after it.
+- More peers than the sender's table holds → the longest-silent peer stops  
+  being *observed* (no RTT, no panel row) but keeps being *served*; the data  
+  path is a broadcast and does not notice.
+- An ini over either byte or row bound → the load **fails with an explicit  
+  error** rather than applying a partial config.
+
+The on-chart panel lists the first 8 peers in detail and then one summary  
+line ("... and N more — the hub dashboard lists every one"), because a  
+rectangle on a chart cannot hold 100 rows and a truncated list that does not  
+say so is the failure mode.
+
+---
+
 Every container has a fixed bound. There is no map, no dictionary, and no  
 array that grows with time:
 
@@ -929,7 +995,7 @@ array that grows with time:
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | open-position table    | `CP_MAX_POSITIONS` (2048), slots reused immediately                                                                                                              |
 | dedup ring             | 4096 keys, TTL-expired                                                                                                                                            |
-| per-sender desired set | `CP_MAX_SENDERS` × `CP_MAX_POSITIONS`                                                                                                                                            |
+| per-sender desired set | `CP_MAX_SENDERS` × `CP_MAX_POSITIONS` **for the senders actually configured** — 100 × 2048 = 204,800 entries at most; a 1-sender receiver still allocates 2048, not 100× that |
 | action queue           | 256                                                                                                                                                               |
 | log files              | 1 MB × 3, oldest recycled                                                                                                                                         |
 | state file             | 256 lines, rewritten whole, never appended                                                                                                                        |
