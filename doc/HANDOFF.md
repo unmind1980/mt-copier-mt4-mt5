@@ -447,6 +447,14 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 十三次审计：彻底消除遮挡弹窗，全量持仓与等待流水无缝常驻 Split Cockpit（2026-10-22 10:45）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **B32** | **极高·工作流与用户体验** | `hub/src/assets/dashboard.html` | **彻底消除遮挡弹窗，点击节点行直达分体驾驶舱**：<br>1. **移除全屏覆盖的 posmodal 遮罩弹窗**：原先点击主表节点行或 Positions 会弹出一个遮挡整个页面的大弹窗。现已彻底移除该弹出机制。<br>2. **主表行点击直达 Split Cockpit**：用户在 Terminals & Nodes 表格点击任意一行的任意位置（或点击 Positions / Waiting 单元格），系统平滑切换到 **Split Cockpit（分体驾驶舱）**，左侧自动选中高亮该节点项（`.node-entry.active`），右侧面板立刻对齐呈现该节点的全部明细。<br>3. **全套流水与逐单大表常驻右侧面板**：将原弹窗中的全套核心功能（节点状态横幅、Managed/Orphan/Gross 3大持仓卡片、3阶段等待管道状态、5级订单过滤器、逐单订单明细表，以及 Sender 上的 Open Positions Summary 与 Symbol 曝光表）完整移入 `#cockpit_detail_view`，成为 Split Cockpit 常驻的原生主工作台。<br>4. **快捷控制与实时联动**：在右侧横幅增加了该节点的直接操作按钮（`Visual Config`、`Query Live INI`、`Pause/Resume`、`Close All` 等），左侧切换节点或每秒收到新遥测数据时，右侧订单流水实时无缝联动刷新。 |
+
+---
+
 ### 十二次审计：Web UI 现代化视觉改版（高对比白天白底双模 + 无级字号缩放 + 双 Tab 驾驶舱 + 消息中心；2026-10-22 00:50）
 
 | # | 级别 | 位置 | 改进与重构实现 |
