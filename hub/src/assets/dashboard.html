@@ -1720,6 +1720,11 @@
                 <input type="number" step="1" id="c_fillwithinminutesbar" placeholder="0 (off)">
                 <span class="hint">Market open bars</span>
               </div>
+              <div class="cfgfield">
+                <label for="c_pendingfillgraceseconds">Pending Fill Grace (s)</label>
+                <input type="number" step="0.1" id="c_pendingfillgraceseconds" placeholder="1.5">
+                <span class="hint">Pending order fill buffer</span>
+              </div>
             </div>
           </div>
         </div>
@@ -2286,21 +2291,30 @@ function updateKpiCards(nodes, pos, d){
   var totalSenders = 0, totalReceivers = 0;
   var totalWaitOrders = 0, totalWaitLots = 0;
   var waitBreakdown = { queued: 0, delayed: 0, mkt_closed: 0 };
-  var totalOpenPos = 0, totalOpenLots = 0;
+  var senderOpenPos = 0, senderOpenLots = 0;
+  var receiverMirrors = 0, receiverLots = 0;
 
   nodes.forEach(function(n){
-    if(n.role === "sender") totalSenders++;
-    if(n.role === "receiver") totalReceivers++;
+    if(n.role === "sender"){
+      totalSenders++;
+      if(n.positions && typeof n.positions.count === "number"){
+        senderOpenPos += n.positions.count;
+        senderOpenLots += (parseFloat(n.positions.lots) || 0);
+      }
+    }
+    if(n.role === "receiver"){
+      totalReceivers++;
+      if(n.positions && typeof n.positions.count === "number"){
+        receiverMirrors += n.positions.count;
+        receiverLots += (parseFloat(n.positions.lots) || 0);
+      }
+    }
     if(n.waiting && typeof n.waiting.total === "number"){
       totalWaitOrders += n.waiting.total;
       totalWaitLots += (n.waiting.lots || 0);
       waitBreakdown.queued += (n.waiting.queued || 0);
       waitBreakdown.delayed += (n.waiting.delayed || 0);
       waitBreakdown.mkt_closed += (n.waiting.mkt_closed || 0);
-    }
-    if(n.positions && typeof n.positions.count === "number"){
-      totalOpenPos += n.positions.count;
-      totalOpenLots += (parseFloat(n.positions.lots) || 0);
     }
   });
 
@@ -2313,8 +2327,8 @@ function updateKpiCards(nodes, pos, d){
 
   var elKpiPos = $("kpi_pos_val");
   if(elKpiPos){
-    elKpiPos.textContent = totalOpenPos + " (" + totalOpenLots.toFixed(2) + " lots)";
-    $("kpi_pos_sub").textContent = pos.length + " Senders Broadcasting";
+    elKpiPos.textContent = senderOpenPos + " (" + senderOpenLots.toFixed(2) + " lots)";
+    $("kpi_pos_sub").textContent = pos.length + " Senders Broadcasting · " + receiverMirrors + " Mirrors (" + receiverLots.toFixed(2) + " lots)";
   }
 
   var elKpiWait = $("kpi_wait_val");
@@ -3686,10 +3700,15 @@ function accept(payload){
 // So the shape is converted here, once, rather than making render() know
 // about two payload shapes.
 function refresh(){
-  api("/api/v1/topology").then(function(t){
+  Promise.all([
+    api("/api/v1/topology"),
+    api("/api/v1/positions").catch(function(){ return { positions: [] }; })
+  ]).then(function(res){
+    var t = res[0] || {};
+    var p = (res[1] && res[1].positions) ? res[1].positions : [];
     accept({
       nodes: (t.senders || []).concat(t.receivers || []),
-      positions: [],
+      positions: p,
       hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0,
       alerts: t.alerts || [],
       curve: t.curve || null
@@ -4880,6 +4899,7 @@ var COMMON_KEYS = [
   { id: "c_requirepositionfillwithinminutes", key: "requirepositionfillwithinminutes", type: "int", def: "0" },
   { id: "c_requirepositionfillwithinhours", key: "requirepositionfillwithinhours", type: "int", def: "0" },
   { id: "c_fillwithinminutesbar", key: "fillwithinminutesbar", type: "int", def: "0" },
+  { id: "c_pendingfillgraceseconds", key: "pendingfillgraceseconds", type: "float", def: "1.5" },
   { id: "c_waitforseconds", key: "waitforseconds", type: "int", def: "0" },
   { id: "c_waitforminutes", key: "waitforminutes", type: "int", def: "0" },
   { id: "c_waitforhours", key: "waitforhours", type: "int", def: "0" },
@@ -5010,6 +5030,7 @@ var SENDER_KEY_LIST = [
   "checkforexistingposition", "waitforhours", "waitforminutes", "waitforseconds",
   "waitforprofitpips", "waitforminutesbar", "requirepositionfillwithinhours",
   "requirepositionfillwithinminutes", "requirepositionfillwithinseconds", "fillwithinminutesbar",
+  "pendingfillgraceseconds",
   "includetradingtimes", "daytradingtimes", "staleseconds"
 ];
 
@@ -5020,6 +5041,13 @@ function serializeIni(common, senders){
     var v = (common && common[item.key] !== undefined) ? common[item.key] : item.def;
     out.push(item.key + "=" + v);
   });
+  if(common){
+    for(var ck in common){
+      if(!COMMON_KEYS.some(function(it){ return it.key === ck; }) && typeof common[ck] === "string" && common[ck] !== ""){
+        out.push(ck + "=" + common[ck]);
+      }
+    }
+  }
   (senders || []).forEach(function(s, idx){
     out.push("");
     out.push("[sender" + idx + "]");
@@ -5041,6 +5069,11 @@ function serializeIni(common, senders){
         out.push(k + "=" + v);
       }
     });
+    for(var sk in s){
+      if(sk !== "secName" && sk !== "id" && sk !== "magic" && sk !== "lotmode" && sk !== "lotparam" && sk !== "suffix" && sk !== "symbols" && SENDER_KEY_LIST.indexOf(sk) < 0 && typeof s[sk] === "string" && s[sk] !== ""){
+        out.push(sk + "=" + s[sk]);
+      }
+    }
   });
   out.push("");
   return out.join("\n");
@@ -5182,6 +5215,7 @@ function renderSenderCards(senders){
            '<div class="cfgfield"><label>Fill Limit Minutes</label><input type="number" step="1" class="inp-s-requirepositionfillwithinminutes" placeholder="0" value="' + esc(s.requirepositionfillwithinminutes || '') + '"><span class="hint">Expire open (min)</span></div>' +
            '<div class="cfgfield"><label>Fill Limit Seconds</label><input type="number" step="1" class="inp-s-requirepositionfillwithinseconds" placeholder="0" value="' + esc(s.requirepositionfillwithinseconds || '') + '"><span class="hint">Expire open (sec)</span></div>' +
            '<div class="cfgfield"><label>Fill Limit M1 Bars</label><input type="number" step="1" class="inp-s-fillwithinminutesbar" placeholder="0" value="' + esc(s.fillwithinminutesbar || '') + '"><span class="hint">Expire after N bars</span></div>' +
+           '<div class="cfgfield"><label>Pending Fill Grace (s)</label><input type="number" step="0.1" class="inp-s-pendingfillgraceseconds" placeholder="1.5" value="' + esc(s.pendingfillgraceseconds !== undefined ? s.pendingfillgraceseconds : '') + '"><span class="hint">Fill buffer (sec)</span></div>' +
            '</div></div>' +
 
            // Panel: Schedule
@@ -5268,10 +5302,15 @@ function collectSendersFromCards(){
     sObj.requirepositionfillwithinminutes = val(".inp-s-requirepositionfillwithinminutes");
     sObj.requirepositionfillwithinseconds = val(".inp-s-requirepositionfillwithinseconds");
     sObj.fillwithinminutesbar = val(".inp-s-fillwithinminutesbar");
+    sObj.pendingfillgraceseconds = val(".inp-s-pendingfillgraceseconds");
 
     sObj.includetradingtimes = val(".inp-s-includetradingtimes");
     sObj.daytradingtimes = val(".inp-s-daytradingtimes");
     sObj.staleseconds = val(".inp-s-staleseconds");
+
+    if(cfgState.parsed && cfgState.parsed.senders && cfgState.parsed.senders[idx]){
+      sObj = Object.assign({}, cfgState.parsed.senders[idx], sObj);
+    }
 
     senders.push(sObj);
   });
@@ -5465,11 +5504,17 @@ $("cfgpullcurrentbtn").addEventListener("click", function(){
   $("cfgmsg").className = "opmsg";
   $("cfgmsg").textContent = "Requesting live configuration from terminal (reqcfg)...";
   $("cfgpullcurrentbtn").disabled = true;
-  postJson("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/commands", {op: "reqcfg", args: ""}, function(err, resp){
+  fetch("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/commands", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op: "reqcfg", args: "" })
+  }).then(function(r){
+    return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; });
+  }).then(function(res){
     $("cfgpullcurrentbtn").disabled = false;
-    if(err){
+    if(!res.ok || (res.j && res.j.error)){
       $("cfgmsg").className = "opmsg bad";
-      $("cfgmsg").textContent = "Failed to query live config: " + err;
+      $("cfgmsg").textContent = "Failed to query live config: " + ((res.j && res.j.error) || ("HTTP " + res.status));
       return;
     }
     $("cfgmsg").className = "opmsg ok";
@@ -5478,6 +5523,10 @@ $("cfgpullcurrentbtn").addEventListener("click", function(){
       if(!cfgState.target) return;
       loadNodeConfig(cfgState.target);
     }, 1500);
+  }).catch(function(err){
+    $("cfgpullcurrentbtn").disabled = false;
+    $("cfgmsg").className = "opmsg bad";
+    $("cfgmsg").textContent = "Failed to query live config: " + err.message;
   });
 });
 

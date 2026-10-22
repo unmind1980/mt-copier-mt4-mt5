@@ -185,8 +185,7 @@ impl ConfigStore {
     pub fn nodes(&self) -> Vec<(String, u64)> {
         let mut v: Vec<(String, u64)> = self
             .inner
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .current
             .iter()
             .map(|(k, r)| (k.clone(), r.rev))
@@ -329,7 +328,6 @@ impl ConfigStore {
                         .and_then(|x| x.as_str())
                         .map(|s| s.len())
                         .unwrap_or(0);
-                    o.remove("ini");
                     o.insert("ini_bytes".to_string(), json!(n));
                 }
                 out.push(brief);

@@ -57,7 +57,7 @@
 //! acked) and loading it is last-wins per id. Nothing is ever rewritten, so
 //! "what did the hub believe, and when" stays answerable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -156,6 +156,8 @@ struct Inner {
     /// file, so there is no separate "current state" record to fall out of
     /// step with the history.
     commands: HashMap<String, Command>,
+    /// Fast set of commands currently pending retry ladder execution.
+    in_flight: HashSet<String>,
     /// node -> highest op sequence ever issued. Also rebuilt from the file, so
     /// a restart does not hand out a number that was already used.
     seq: HashMap<String, u64>,
@@ -179,10 +181,16 @@ impl CommandStore {
             .read(true)
             .open(path)?;
         let (commands, seq, torn) = load(path);
+        let in_flight = commands
+            .iter()
+            .filter(|(_, c)| c.state == STATE_PENDING)
+            .map(|(k, _)| k.clone())
+            .collect();
         Ok(CommandStore {
             inner: Mutex::new(Inner {
                 file: Some(file),
                 commands,
+                in_flight,
                 seq,
                 torn,
             }),
@@ -203,6 +211,7 @@ impl CommandStore {
             inner: Mutex::new(Inner {
                 file: None,
                 commands: HashMap::new(),
+                in_flight: HashSet::new(),
                 seq: HashMap::new(),
                 torn: 0,
             }),
@@ -290,6 +299,7 @@ impl CommandStore {
                 c.ip = ip.to_string();
             }
             let updated = c.clone();
+            inner.in_flight.insert(id);
             inner.append(&updated);
             return updated;
         }
@@ -310,6 +320,7 @@ impl CommandStore {
             err: String::new(),
             next_at: Instant::now(),
         };
+        inner.in_flight.insert(id.clone());
         inner.commands.insert(id, c.clone());
         inner.append(&c);
         c
@@ -343,6 +354,7 @@ impl CommandStore {
             err: String::new(),
             next_at: Instant::now(),
         };
+        inner.in_flight.insert(c.id.clone());
         inner.commands.insert(c.id.clone(), c.clone());
         inner.append(&c);
         c
@@ -356,8 +368,7 @@ impl CommandStore {
     pub fn commands(&self) -> Vec<Command> {
         let mut v: Vec<Command> = self
             .inner
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .commands
             .values()
             .cloned()
@@ -370,8 +381,7 @@ impl CommandStore {
     pub fn for_node(&self, node: &str) -> Vec<Command> {
         let mut v: Vec<Command> = self
             .inner
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .commands
             .values()
             .filter(|c| c.node == node)
@@ -394,14 +404,25 @@ impl CommandStore {
     /// before resending. See `load`, which restores `attempts`.
     pub fn due(&self, now: Instant) -> Vec<Command> {
         let mut inner = self.inner.lock_or_recover();
-        let ids: Vec<String> = inner.commands.keys().cloned().collect();
+        let ids: Vec<String> = inner.in_flight.iter().cloned().collect();
         let mut out = Vec::new();
         // Collected rather than appended inline: the loop below holds a
         // mutable borrow of `inner.commands`, and appending needs `inner`.
         let mut changed: Vec<Command> = Vec::new();
+        let mut finished: Vec<String> = Vec::new();
         for id in ids {
-            let c = inner.commands.get_mut(&id).unwrap();
-            if c.state != STATE_PENDING || now < c.next_at {
+            let c = match inner.commands.get_mut(&id) {
+                Some(cmd) => cmd,
+                None => {
+                    finished.push(id);
+                    continue;
+                }
+            };
+            if c.state != STATE_PENDING {
+                finished.push(id);
+                continue;
+            }
+            if now < c.next_at {
                 continue;
             }
             let step = RETRY_LADDER_SECS.get(c.attempts as usize).copied();
@@ -424,8 +445,12 @@ impl CommandStore {
                     let snapshot = c.clone();
                     out.push(snapshot.clone());
                     changed.push(snapshot);
+                    finished.push(id);
                 }
             }
+        }
+        for f in finished {
+            inner.in_flight.remove(&f);
         }
         for c in &changed {
             inner.append(c);
@@ -438,6 +463,7 @@ impl CommandStore {
     /// something the hub has no record of sending.
     pub fn ack(&self, id: &str, ok: bool, rev: u64, err: &str) -> bool {
         let mut inner = self.inner.lock_or_recover();
+        inner.in_flight.remove(id);
         let updated = match inner.commands.get_mut(id) {
             None => return false,
             Some(c) => {
@@ -452,6 +478,17 @@ impl CommandStore {
         };
         inner.append(&updated);
         true
+    }
+
+    /// Retrieve recent unknown commands without cloning and sorting the entire history.
+    pub fn recent_unknown(&self, max_age_secs: u64, now: u64) -> Vec<Command> {
+        let inner = self.inner.lock_or_recover();
+        inner
+            .commands
+            .values()
+            .filter(|c| c.state == STATE_UNKNOWN && now.saturating_sub(c.ts) <= max_age_secs)
+            .cloned()
+            .collect()
     }
 }
 

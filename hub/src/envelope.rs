@@ -100,22 +100,22 @@ pub fn latin1(b: &[u8]) -> String {
     b.iter().map(|c| *c as char).collect()
 }
 
+const MAX_DECOMPRESSED_LEN: u64 = 4 * 1024 * 1024; // 4 MiB protection against Zip bombs
+
 /// Decompress a field payload with adaptive "0:" (raw) or "1:" (Z85-encoded Zlib/Deflate).
 pub fn decompress_field(field_bytes: &[u8]) -> String {
     if field_bytes.starts_with(b"1:") {
         if let Ok(z85_str) = std::str::from_utf8(&field_bytes[2..]) {
-            if let Ok(raw_bytes) = zmq::z85_decode(z85_str) {
-                // Try zlib first
-                let mut z = flate2::read::ZlibDecoder::new(&raw_bytes[..]);
-                let mut out = String::new();
-                if z.read_to_string(&mut out).is_ok() {
-                    return out;
+            if let Ok(raw_bytes) = zmq::z85_decode(z85_str.trim()) {
+                let mut buf = Vec::new();
+                let mut z = flate2::read::ZlibDecoder::new(&raw_bytes[..]).take(MAX_DECOMPRESSED_LEN + 1);
+                if z.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                    return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
-                // Fallback to deflate
-                let mut d = flate2::read::DeflateDecoder::new(&raw_bytes[..]);
-                out.clear();
-                if d.read_to_string(&mut out).is_ok() {
-                    return out;
+                buf.clear();
+                let mut d = flate2::read::DeflateDecoder::new(&raw_bytes[..]).take(MAX_DECOMPRESSED_LEN + 1);
+                if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                    return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
             }
         }

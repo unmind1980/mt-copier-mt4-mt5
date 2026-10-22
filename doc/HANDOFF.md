@@ -447,6 +447,32 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 十八次审计：全栈 19 项缺陷终结修复与系统加固（2026-10-22 20:15；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A49** | **高·风控** | `src/Experts/CopierReceiver.mq4:2520` | **`ExecuteQueue` 单 Sender 风控同 Tick 累加**：修复同一 Tick 内连续开出多单时，`sHeldCount`/`sHeldLots` 未累加本 Tick 成交单导致单发送端上限可被突破的问题，引入 `sAddedCount`/`sAddedLots` 同步守卫。 |
+| **A50** | **中·协议** | `src/Experts/CopierReceiver.mq4:6475` | **消除 `STAT` 报文重复 `EQ=/BL=` 字段**：`putPositionSummary` 已包含权益与余额，移除 `putFigures` 中的重复拼接，净化通信负载。 |
+| **A51** | **中·缓存** | `src/Experts/CopierReceiver.mq4:3270` | **`CopierCachedOrder` 补齐 `pstop` 字段**：快速缓存结构体与 Prediction 1/2 比对补齐 `pstop` 字段，确保 StopLimit 订单仅修改限价时正确更新。 |
+| **A52** | **中·平台** | `src/Include/Copier/CopierConfig.mqh:293, 588` | **`CopierConfig.mqh` 剩余 64 位解析修复**：`CopierResolveMagic` 与 `CopierReadIniRevision` 替换为 64 位 `CopierParseLong`，杜绝 32 位溢出。 |
+| **A53** | **中·编码** | `src/Include/Copier/CopierCodec.mqh:284` | **`CopierCompressField` UTF-8 多字节处理**：使用 `count=-1` 完整转换并在检测到末尾 `\0` 时安全截断，杜绝多字节截断和解压脏字节。 |
+| **A54** | **高·安全** | `hub/src/envelope.rs:104` | **`decompress_field` 4MB 解压上限与非 UTF-8 容错**：增加 `.take(4MB)` 彻底免疫 Zip Bomb 攻击，读取为字节流并使用 `from_utf8().unwrap_or_else(latin1)`，杜绝 ANSI 编码注释解压失败。 |
+| **A55** | **高·数据** | `hub/src/positions.rs:53, 273` | **`positions.rs` 补齐挂单 15 字段解析与市价回退**：补齐 `kind/ptype/pprice/pstop/pexpire` 解析，当挂单 `open_px==0.0` 时有效回退至触发价 `pprice`。 |
+| **A56** | **中·告警** | `hub/src/alerts.rs:340` | **`AlertEngine` 风控告警风暴消除**：记录 `last_risk_tripped` 与 `last_risk_blocked`，仅在状态变化或拦截数递增时告警，恢复 `"ok"` 或 0 时自动 `rearm`，消除 5 分钟循环轰炸。 |
+| **A57** | **中·稳定** | `commands.rs` / `config.rs` / `api.rs` | **锁机制统一与 `logout` 锁内 I/O 剥离**：替换残留的 4 处 `.lock().unwrap()` 为 `lock_or_recover()`，登出审计在锁外执行。 |
+| **A58** | **中·性能** | `hub/src/commands.rs:395` | **`CommandStore` 引入 `in_flight` 活跃索引**：每秒 `due()` 轮询仅遍历活跃待发指令，从 $O(N_{\text{全量历史}})$ 降为 $O(1)$；新增 `recent_unknown` 供告警调用。 |
+| **A59** | **中·I/O** | `hub/src/config.rs:324` | **`ConfigStore::history()` 保留 `ini` 文本**：移除不必要的 `remove("ini")`，使历史版本能够直接加载查看。 |
+| **A60** | **低·存储** | `hub/src/notifications.rs:356` | **`NotificationStore::save()` 补齐 `sync_all()`**：重命名临时文件前硬件强制落盘，防止断电 0 字节。 |
+| **B47** | **高·前端** | `hub/src/assets/dashboard.html:5468` | **修复 `#cfgpullcurrentbtn` `postJson` 缺失报错**：改用原生 `fetch` 与 `authHeaders` 重构，彻底修复点击按钮抛出 `ReferenceError` 导致按钮卡死的致命 Bug。 |
+| **B48** | **高·前端** | `hub/src/assets/dashboard.html:5648` | **修复 `#cfgloadhist` 历史 INI 加载失败**：与后端保留的 `rec.ini` 对齐，选择历史版本即可一键恢复并填入编辑器。 |
+| **B49** | **高·前端** | `hub/src/assets/dashboard.html` | **补齐 `pendingfillgraceseconds` 并防御未知键抹除**：表单、卡片和序列化补全该参数，保存时自动合并未知参数。 |
+| **B50** | **中·前端** | `hub/src/assets/dashboard.html:3688` | **HTTP 轮询降级模式拉取真实持仓**：`refresh()` 补齐对 `/api/v1/positions` 的请求，消灭 WebSocket 断开时持仓被清空的 Bug。 |
+| **B51** | **中·前端** | `hub/src/assets/dashboard.html:2291` | **顶部 KPI 卡片持仓隔离统计**：大字号仅展示 Sender 主账户持仓，副标题清晰呈现各跟单端总镜像仓位与手数，消除翻倍失真。 |
+| **B52** | **中·工具** | `tools/logcheck.py:42` | **`logcheck.py` 支持挂单与部分平仓正则**：识别 `place-pending`、`partial-close` 与 `remove-duplicate`，消灭误报孤儿平仓。 |
+| **B53** | **低·测试** | `tools/hub_config_test.py:655` | **测试注释哈希与章节编号校对**：纠正参考哈希注释与章节顺延编号。 |
+
+---
+
 ### 十七次审计：多空方向反转彻底根治、快照即时刷新、非阻塞传输与跨平台 64 位大订单支持（2026-10-22 18:15；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

@@ -40,8 +40,9 @@ from collections import OrderedDict, defaultdict
 LINE = re.compile(r"^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})\s+([EWID])\s+(.*)$")
 
 RE_EXEC_OPEN = re.compile(
-    r"^exec open (\S+) ([0-9A-Z]{8})(?: senderTkt=(\d+))? (\S+) lots=([0-9.]+)$")
-RE_EXEC_CLOSE = re.compile(r"^exec close (\S+) ([0-9A-Z]{8}) (\S+) lots=([0-9.]+)$")
+    r"^exec (?:open|place-pending) (\S+) ([0-9A-Z]{8})(?: senderTkt=(\d+))? (\S+)(?: ptype=\d+ trigger=[0-9.]+)? lots=([0-9.]+)$")
+RE_EXEC_CLOSE = re.compile(
+    r"^exec (?:close|partial-close|remove-duplicate) (\S+) ([0-9A-Z]{8})(?: senderTkt=\d+)? (\S+) lots=([0-9.]+)$")
 RE_SEND_OPEN = re.compile(
     r"^open ([0-9A-Z]{8}) tkt=(-?\d+) (\S+) side=(-?\d+) lots=([0-9.]+)$")
 RE_SEND_CLOSE = re.compile(r"^close ([0-9A-Z]{8}) tkt=(-?\d+) (\S+)$")

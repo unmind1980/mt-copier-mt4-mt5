@@ -652,7 +652,7 @@ def main():
         check("GET /config returns updated current_setting", st == 200 and d.get("current_setting") == sample_ini, str(d.get("current_setting")))
 
         # 3. Receiver reports REG again with the MATCHING hash
-        # Reference hash for sample_ini is 8afba809f6b5dcad
+        # Reference hash for sample_ini is 5b780b2ceb382f10
         matching_hash = "5b780b2ceb382f10"
         env_reg_match = (
             f"V=1|SID={RECV}|SSID={RECV}|SEQ=12|TS=1002|MS=1002|T=REG|"
@@ -680,7 +680,7 @@ def main():
         stop(hub, out, cmds_path)
 
     # =====================================================================
-    print("== 9. the sender ceiling is REACHABLE, and both ends agree on the byte bound ==")
+    print("== 12. the sender ceiling is REACHABLE, and both ends agree on the byte bound ==")
     #--- The capacity is a promise made to whoever downloads this, so it gets
     #--- asserted rather than typed into a README: a config for every sender
     #--- the EA can take must be accepted by the hub, and the node's own byte

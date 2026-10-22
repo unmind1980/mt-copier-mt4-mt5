@@ -354,6 +354,7 @@ impl NotificationStore {
             let mut f = File::create(&tmp_path)?;
             f.write_all(json_text.as_bytes())?;
             f.flush()?;
+            f.sync_all()?;
         }
         fs::rename(&tmp_path, &self.path)?;
         Ok(())

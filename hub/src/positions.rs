@@ -61,6 +61,11 @@ pub struct PositionItem {
     pub tp: f64,
     pub magic: i64,
     pub open_time: u64,
+    pub kind: i32,
+    pub ptype: i32,
+    pub pprice: f64,
+    pub pstop: f64,
+    pub pexpire: u64,
 }
 
 /// What one snapshot said, read-only.
@@ -283,6 +288,16 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         let tp = parse_f64(rec_field(rec, 7));
         let magic = parse_i64(rec_field(rec, 8));
         let open_time = parse_u64(rec_field(rec, 9));
+        let kind = parse_i32(rec_field(rec, 10));
+        let ptype = parse_i32(rec_field(rec, 11));
+        let pprice = parse_f64(rec_field(rec, 12));
+        let pstop = parse_f64(rec_field(rec, 13));
+        let pexpire = parse_u64(rec_field(rec, 14));
+        let effective_open_px = if kind == 1 && open_px == 0.0 && pprice > 0.0 {
+            pprice
+        } else {
+            open_px
+        };
 
         v.records += 1;
         v.lots += lots;
@@ -292,11 +307,16 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
             symbol: sym.clone(),
             side,
             lots,
-            open_px,
+            open_px: effective_open_px,
             sl,
             tp,
             magic,
             open_time,
+            kind,
+            ptype,
+            pprice,
+            pstop,
+            pexpire,
         });
 
         if let Some(slot) = v.symbols.iter_mut().find(|(s, _, _)| *s == sym) {
@@ -381,6 +401,10 @@ fn parse_u64(b: &[u8]) -> u64 {
 }
 
 fn parse_i64(b: &[u8]) -> i64 {
+    std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
+}
+
+fn parse_i32(b: &[u8]) -> i32 {
     std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 

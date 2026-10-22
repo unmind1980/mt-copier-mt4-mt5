@@ -2369,6 +2369,10 @@ void ExecuteQueue()
   {
    int done=0;
    int skipped=0;
+   int sAddedCount[CP_MAX_SENDERS];
+   double sAddedLots[CP_MAX_SENDERS];
+   ArrayInitialize(sAddedCount,0);
+   ArrayInitialize(sAddedLots,0.0);
    //--- `skipped` bounds a full rotation, so a queue in which EVERY action is
    //--- blocked does not spin through itself ten times a second.
    while(g_qn>0 && done<MaxActionsPerTick && skipped<=g_qn)
@@ -2518,9 +2522,10 @@ void ExecuteQueue()
            }
          if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
            {
-            int sHeldCount=LocalForSender(a.senderIdx,g_acctAllPos,g_acctAllPosCount);
-            double sHeldLots=0.0;
-            for(int k=0;k<sHeldCount;k++) sHeldLots+=g_locScratch[k].lots;
+            int sHeldBase=LocalForSender(a.senderIdx,g_acctAllPos,g_acctAllPosCount);
+            double sHeldLots=sAddedLots[a.senderIdx];
+            for(int k=0;k<sHeldBase;k++) sHeldLots+=g_locScratch[k].lots;
+            int sHeldCount=sHeldBase+sAddedCount[a.senderIdx];
             string sWhy="";
             if(!g_senderRisk[a.senderIdx].AllowOpen(a.lots,sHeldCount,sHeldLots,
                                                     0,0.0,sWhy))
@@ -2644,6 +2649,11 @@ void ExecuteQueue()
            {
             g_ourCount++;
             g_ourLots+=a.lots;
+            if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+              {
+               sAddedCount[a.senderIdx]++;
+               sAddedLots[a.senderIdx]+=a.lots;
+              }
             g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
                              +a.uid);
             //--- Consumed: the expected re-open has now landed. Clear it so a
@@ -3279,6 +3289,7 @@ struct CopierCachedOrder
    int               kind;
    int               ptype;
    double            pprice;
+   double            pstop;
    long              pexpire;
    string            uid;
    //--- The order comment, carried rather than re-read. Reading it is the
@@ -3375,7 +3386,8 @@ int ScanAndResolveAccountPositions()
                && g_posCache[i].openPx==g_rawScratch[i].openPx
                && g_posCache[i].sl==g_rawScratch[i].sl
                && g_posCache[i].tp==g_rawScratch[i].tp
-               && g_posCache[i].pprice==g_rawScratch[i].pprice)
+               && g_posCache[i].pprice==g_rawScratch[i].pprice
+               && g_posCache[i].pstop==g_rawScratch[i].pstop)
               {
                matchIdx=i;
               }
@@ -3397,7 +3409,8 @@ int ScanAndResolveAccountPositions()
                   && g_posCache[c].openPx==g_rawScratch[i].openPx
                   && g_posCache[c].sl==g_rawScratch[i].sl
                   && g_posCache[c].tp==g_rawScratch[i].tp
-                  && g_posCache[c].pprice==g_rawScratch[i].pprice)
+                  && g_posCache[c].pprice==g_rawScratch[i].pprice
+                  && g_posCache[c].pstop==g_rawScratch[i].pstop)
                  {
                   matchIdx=c;
                   break;
@@ -3492,6 +3505,7 @@ int ScanAndResolveAccountPositions()
          g_posCacheNext[i].kind     =g_rawScratch[i].kind;
          g_posCacheNext[i].ptype    =g_rawScratch[i].ptype;
          g_posCacheNext[i].pprice   =g_rawScratch[i].pprice;
+         g_posCacheNext[i].pstop    =g_rawScratch[i].pstop;
          g_posCacheNext[i].pexpire  =g_rawScratch[i].pexpire;
          g_posCacheNext[i].uid      =uid;
          g_posCacheNext[i].cmt      =g_rawScratch[i].cmt;
@@ -6463,9 +6477,7 @@ void OnTimer()
            }
          if(putFigures)
            {
-            st+=CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
-               +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2)
-               +CP_SEP_KV+"NSEND="+(string)g_nSenders
+            st+=CP_SEP_KV+"NSEND="+(string)g_nSenders
                +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
                +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
             putFigures=false;            // once per batch, not per sender

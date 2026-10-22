@@ -368,6 +368,11 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
                                 "tp": p.tp,
                                 "magic": p.magic,
                                 "open_time": p.open_time,
+                                "kind": p.kind,
+                                "ptype": p.ptype,
+                                "pprice": p.pprice,
+                                "pstop": p.pstop,
+                                "pexpire": p.pexpire,
                             })).collect::<Vec<_>>(),
                         })
                     })
@@ -417,6 +422,11 @@ fn positions_json_list(pos: &Positions) -> Vec<Value> {
                     "tp": p.tp,
                     "magic": p.magic,
                     "open_time": p.open_time,
+                    "kind": p.kind,
+                    "ptype": p.ptype,
+                    "pprice": p.pprice,
+                    "pstop": p.pstop,
+                    "pexpire": p.pexpire,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -491,6 +501,11 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
                                     "tp": p.tp,
                                     "magic": p.magic,
                                     "open_time": p.open_time,
+                                    "kind": p.kind,
+                                    "ptype": p.ptype,
+                                    "pprice": p.pprice,
+                                    "pstop": p.pstop,
+                                    "pexpire": p.pexpire,
                                 })).collect::<Vec<_>>(),
                             }),
                         );
@@ -1193,10 +1208,8 @@ async fn logout(
         }
         s.users.logout(t);
     }
-    st.lock()
-        .unwrap()
-        .audit
-        .record(&who, "", "auth.logout", &who, None, None, "ok");
+    let audit = st.lock_or_recover().audit.clone();
+    audit.record(&who, "", "auth.logout", &who, None, None, "ok");
     (
         axum::http::StatusCode::OK,
         [(

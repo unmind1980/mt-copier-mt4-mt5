@@ -288,7 +288,13 @@ string CopierCompressField(const string src)
      }
 
    uchar data[];
-   StringToCharArray(src,data,0,len,CP_UTF8);
+   int copied=StringToCharArray(src,data,0,-1,CP_UTF8);
+   if(copied<=0) return "0:"+src;
+   if(copied>0 && data[copied-1]==0)
+     {
+      copied--;
+      ArrayResize(data,copied);
+     }
 
    uchar key[];
    ArrayResize(key,0);

@@ -290,7 +290,7 @@ long CopierResolveMagic(const string rawIniValue,bool &pinned)
    if(StringLen(rawIniValue)>0)
      {
       pinned=true;
-      return (long)StringToInteger(rawIniValue);
+      return CopierParseLong(rawIniValue);
      }
    //--- MISSING. There is no fallback any more, deliberately.
    //---
@@ -585,7 +585,7 @@ bool CopierCfgRevLoad(string &id,long &rev)
       string line=CopierTrim(lines[i]);
       string v="";
       if(CopierKvGet(line,"ID",v))  id=v;
-      if(CopierKvGet(line,"REV",v)) rev=(long)StringToInteger(v);
+      if(CopierKvGet(line,"REV",v)) rev=CopierParseLong(v);
      }
    return true;
   }

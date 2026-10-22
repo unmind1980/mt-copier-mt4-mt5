@@ -136,6 +136,10 @@ pub struct AlertEngine {
     was_offline: HashMap<String, bool>,
     /// Timestamp (unix secs) when node went offline, used to calculate outage duration on recovery.
     offline_since: HashMap<String, u64>,
+    /// Last tripped risk key per node to prevent repeat spam.
+    last_risk_tripped: HashMap<String, String>,
+    /// Last alerted count of blocked entries per node.
+    last_risk_blocked: HashMap<String, u32>,
 }
 
 impl Default for AlertEngine {
@@ -151,6 +155,8 @@ impl AlertEngine {
             fired: HashMap::new(),
             was_offline: HashMap::new(),
             offline_since: HashMap::new(),
+            last_risk_tripped: HashMap::new(),
+            last_risk_blocked: HashMap::new(),
         }
     }
 
@@ -338,7 +344,9 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         }
 
         //--- risk: entries the receiver's risk gates are blocking right now.
-        if n.blocked > 0 {
+        //--- State-aware: alert only on incremental blocks, not repeatedly on unchanged counters.
+        let prev_blocked = s.alerts.last_risk_blocked.get(&n.key).copied().unwrap_or(0);
+        if n.blocked > prev_blocked {
             let a = Alert {
                 ts: now,
                 kind: "risk.blocked",
@@ -347,38 +355,44 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 detail: json!({ "blocked_entries": n.blocked }),
             };
             if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
+                s.alerts.last_risk_blocked.insert(n.key.clone(), n.blocked);
                 s.alerts.push(a.clone());
                 fired.push(a);
             }
+        } else if n.blocked == 0 && prev_blocked > 0 {
+            s.alerts.last_risk_blocked.remove(&n.key);
+            s.alerts.rearm("risk.blocked", &n.key);
         }
 
         //--- risk: a limit actually TRIPPED (the receiver flattened or is
         //--- flattening - CopierRisk's BlockKey names which one).
+        //--- State-aware: alert on new trip condition and rearm on return to "ok".
+        let prev_trip = s.alerts.last_risk_tripped.get(&n.key).cloned().unwrap_or_default();
         if !n.risk.is_empty() && n.risk != "ok" {
-            let a = Alert {
-                ts: now,
-                kind: "risk.tripped",
-                severity: Severity::Critical,
-                node: n.key.clone(),
-                detail: json!({ "trip": n.risk }),
-            };
-            if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
-                s.alerts.push(a.clone());
-                fired.push(a);
+            if n.risk != prev_trip {
+                let a = Alert {
+                    ts: now,
+                    kind: "risk.tripped",
+                    severity: Severity::Critical,
+                    node: n.key.clone(),
+                    detail: json!({ "trip": n.risk }),
+                };
+                if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
+                    s.alerts.last_risk_tripped.insert(n.key.clone(), n.risk.clone());
+                    s.alerts.push(a.clone());
+                    fired.push(a);
+                }
             }
+        } else if (n.risk == "ok" || n.risk.is_empty()) && !prev_trip.is_empty() {
+            s.alerts.last_risk_tripped.remove(&n.key);
+            s.alerts.rearm("risk.tripped", &n.key);
         }
     }
 
     //--- commands: every RECENT command the ladder gave up on. Keyed by the
     // id, so it fires exactly once per command, forever - and filtered by
     // age so a hub restart replays only last hour's corpses.
-    for c in s.cmds.commands() {
-        if c.state != crate::commands::STATE_UNKNOWN {
-            continue;
-        }
-        if now.saturating_sub(c.ts) > COMMAND_MAX_AGE_SECS {
-            continue;
-        }
+    for c in s.cmds.recent_unknown(COMMAND_MAX_AGE_SECS, now) {
         let a = Alert {
             ts: now,
             kind: "command.unknown",
