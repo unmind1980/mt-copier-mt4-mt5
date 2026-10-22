@@ -2950,7 +2950,8 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(sym,si2)) { rejected=true; return 0.0; }
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],1.0,si2,
-                                 0.0,0.0,rejected);
+                                 g_senderCfg[si].minsenderlotsize,
+                                 g_senderCfg[si].maxsenderlotsize,rejected);
    if(rejected || lots<=0.0) return 0.0;
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
@@ -2973,14 +2974,15 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
    double targetLots=0.0;
    if(g_lotMode[si]==CP_SIZE_FIXED)
      {
+      double baseLots=ComputeReceiverLots(si,local.sym,desired.lots,rejected);
       double origLots=GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
       if(origLots>0.0 && desired.lots<origLots)
         {
-         targetLots=CopierNormalizeLot(g_lotParam[si]*(desired.lots/origLots),si2);
+         targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
         }
       else
         {
-         targetLots=CopierNormalizeLot(g_lotParam[si],si2);
+         targetLots=baseLots;
         }
      }
    else
@@ -4380,6 +4382,7 @@ void ConvergeSender(const int si)
         }
 
       PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket);
+      ForgetSenderPeakLots(g_locScratch[i].uid);
      }
   }
 
@@ -4533,7 +4536,11 @@ void HandleSnapshot(const int si,const CopierEnv &e)
                   +" why.");
      }
    int base=si*CP_MAX_POSITIONS;
-   for(int i=0;i<n;i++) g_desired[base+i]=g_scratch[i];
+   for(int i=0;i<n;i++)
+     {
+      g_desired[base+i]=g_scratch[i];
+      GetOrUpdateSenderPeakLots(g_scratch[i].uid,g_scratch[i].lots);
+     }
    g_desiredCount[si]=n;
    g_ready[si]=true;
   }
@@ -5039,6 +5046,7 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
   {
    CopierPos p;
    if(!CopierPayloadOpenParse(e.payload,p)) return;
+   GetOrUpdateSenderPeakLots(p.uid,p.lots);
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<g_desiredCount[si];i++)
      {
@@ -5053,6 +5061,7 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
   {
    string uid="";
    if(!CopierKvGet(e.payload,"UID",uid)) return;
+   ForgetSenderPeakLots(uid);
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<g_desiredCount[si];i++)
      {

@@ -646,11 +646,16 @@ fn leftover_rotations(path: &Path) -> Vec<PathBuf> {
             let p = entry.path();
             if let Some(name) = p.file_name().and_then(|f| f.to_str()) {
                 if name.starts_with(&prefix) {
-                    out.push(p);
+                    if name.contains(".gz.tmp.") {
+                        let _ = fs::remove_file(&p);
+                    } else {
+                        out.push(p);
+                    }
                 }
             }
         }
     }
+    out.sort();
     out
 }
 

@@ -447,6 +447,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 二十次审计：固定手数全流程峰值追踪、最新单播快照哈希与审计临时文件清理（2026-10-23 00:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **NEW-01** | **P1 高危** | `CopierReceiver.mq4:781, 2974, 4384, 4536, 5048, 5060` | **固定手数全流程峰值追踪与容量回收**：① 在 `HandleOpenEvent` 与 `HandleSnapshot` 开仓建仓时记录 `GetOrUpdateSenderPeakLots`，杜绝首个快照前减仓被漏掉；② 在 `HandleCloseEvent` 与 `ConvergeSender` 平仓入队处调用 `ForgetSenderPeakLots`，使 500 个槽位循环复用永不耗尽；③ `QueueTrimIfNeeded` 的 `CP_SIZE_FIXED` 统一使用 `ComputeReceiverLots` 的基数进行缩放，受 `maxLotsPerPosition` 约束。 |
+| **NEW-02** | **P2 中危** | `CopierSender.mq4:285, 1091, 1172, 1360` | **最新单播/修复快照哈希双重认可**：引入 `g_latestSnapHash`，在 `RebuildSnapshotPayload` 中记录最新 payload 哈希；`SnapTrack` 同时认可 `g_snapHash`（上次全网广播版本）与 `g_latestSnapHash`（最新单播/修复版本），消灭新 Receiver 握手或修复后回执被误判为 `BEHIND` 的问题；并在 Direct 广播后同步更新 `g_snapHash`。 |
+| **NEW-03** | **P2 中危** | `CopierReceiver.mq4:2953` | **`ComputeReceiverLots` 补齐信号源最小/最大手数过滤**：传入 `g_senderCfg[si].minsenderlotsize` 与 `maxsenderlotsize`，使过滤边界在所有开仓与减仓对账路径完整生效。 |
+| **NEW-04** | **P3 低危** | `hub/src/audit.rs:649` | **审计日志残留临时文件过滤与清理**：`leftover_rotations` 自动检测并删除中途崩溃残留的 `.gz.tmp.` 临时文件，并对有效未压缩日志排序后安全恢复归档。 |
+
+---
+
 ### 十九次审计：全栈 21 项缺陷终结修复与系统加固（2026-10-22 22:30；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

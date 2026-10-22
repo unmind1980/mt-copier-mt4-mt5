@@ -282,6 +282,7 @@ int              g_stampGen=1;
 //--- receiver echoes back when it has ingested that exact state. A mismatch
 //--- means "this receiver is behind". See doc/SNAPSHOT-DEMAND-PLAN.md.
 string           g_snapHash="";
+string           g_latestSnapHash="";
 //--- The exact bytes of the last BROADCAST snapshot, kept so a repair can
 //--- re-send what the receiver actually missed.
 //---
@@ -1088,7 +1089,7 @@ void SnapTrack(const string who,const string reported)
 
    if(StringLen(g_snapHash)==0) return;      // we have not sent one yet
 
-   if(reported!=g_snapHash)
+   if(reported!=g_snapHash && (StringLen(g_latestSnapHash)==0 || reported!=g_latestSnapHash))
      {
       if(g_snapStaleN[idx]==0) g_snapStaleMs[idx]=now;
       g_snapStaleN[idx]=g_snapStaleN[idx]+1;
@@ -1170,6 +1171,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
       Emit(CP_T_SNAP,g_snapPayload,true);
+      g_snapHash=g_latestSnapHash;
+      g_lastSnapMs=now;
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot for new receiver "+who+" (direct channel)");
       else
@@ -1357,13 +1360,14 @@ void RebuildSnapshotPayload()
    int dn=g_prev.CopyTo(dense);
    for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
    g_snapPayload=CopierEncodeSnapshot(dense,dn);
+   g_latestSnapHash=CopierSnapshotHash(g_snapPayload);
   }
 
 void BroadcastSnapshot(const long now)
   {
    g_lastSnapMs=now;
    RebuildSnapshotPayload();
-   g_snapHash=CopierSnapshotHash(g_snapPayload);
+   g_snapHash=g_latestSnapHash;
    Emit(CP_T_SNAP,g_snapPayload,true);
   }
 
