@@ -291,25 +291,16 @@
     max-height: 280px;
     overflow-y: auto;
   }
-  .msg-item {
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 12px;
+  /* Clean base styles for message card container */
+  .msg-center-card {
+    background: var(--panel);
     border: 1px solid var(--line);
-    background: var(--surface-header);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,.03);
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    transition: transform 0.1s ease;
+    flex-direction: column;
   }
-  .msg-item:hover {
-    transform: translateX(2px);
-    border-color: var(--border-strong);
-  }
-  .msg-item.crit { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
-  .msg-item.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #92400e; }
-  .msg-item.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
   .msg-left { display: flex; align-items: center; gap: 8px; overflow: hidden; }
   .msg-badge {
     font-size: 10px; font-weight: 700; font-family: var(--mono); padding: 1px 5px; border-radius: 3px; text-transform: uppercase; flex-shrink: 0;
@@ -409,7 +400,7 @@
     white-space: nowrap !important;
   }
 
-  /* Message Center & Live Event Stream (Proposal C: Two-Line Professional Feed & Zero Jitter) */
+  /* Message Center & Live Event Stream (Proposal 2: Left Accent Border Bar + Full Width Alignment) */
   #alerts, .msg-center-body {
     display: flex !important;
     flex-direction: column;
@@ -418,32 +409,44 @@
     max-height: 280px;
     overflow-y: auto;
     background: var(--panel);
+    box-sizing: border-box;
+    width: 100%;
   }
   .msg-item {
-    padding: 9px 12px;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 10px 14px;
     border-radius: 6px;
     font-size: 12.5px;
     border: 1px solid var(--line);
+    border-left: 4px solid var(--border-strong);
     background: var(--surface-header);
-    display: flex;
-    flex-direction: column;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
     gap: 5px;
     transition: background 0.15s ease, border-color 0.15s ease;
+    text-align: left;
   }
   .msg-item:hover {
     border-color: var(--accent);
     background: var(--panel);
   }
-  /* Unread / Active Highlighting */
-  .msg-item.unread.crit { background: var(--bad-bg); border-color: var(--bad-border); }
-  .msg-item.unread.warn { background: var(--warn-bg); border-color: var(--warn-border); }
-  .msg-item.unread.ok   { background: var(--ok-bg); border-color: var(--ok-border); }
-  .msg-item.unread.info { background: var(--accent-bg); border-color: var(--border-strong); }
-  /* Read / Dismissed State (Calm, low saturation, text preserved) */
-  .msg-item.is-read {
-    opacity: 0.72;
+  /* Indicator line colors on left border */
+  .msg-item.ok, .msg-item.unread.ok { border-left-color: var(--ok) !important; }
+  .msg-item.warn, .msg-item.unread.warn { border-left-color: var(--warn) !important; }
+  .msg-item.crit, .msg-item.unread.crit { border-left-color: var(--bad) !important; }
+  .msg-item.info, .msg-item.unread.info { border-left-color: var(--accent) !important; }
+
+  /* Read vs Unread styling */
+  .msg-item.unread {
     background: var(--surface-header);
+  }
+  .msg-item.is-read {
+    opacity: 0.70;
+    background: var(--panel);
     border-color: var(--line);
+    border-left-color: var(--border-strong) !important;
   }
   .msg-item.is-read:hover {
     opacity: 1;
@@ -455,17 +458,21 @@
     border: 1px solid var(--line);
   }
 
-  /* Two-line row layout */
+  /* Two-line row layout (100% width stretch) */
   .msg-row-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    width: 100% !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
     gap: 8px;
+    box-sizing: border-box;
   }
   .msg-top-left {
-    display: flex;
-    align-items: center;
+    display: flex !important;
+    align-items: center !important;
     gap: 8px;
+    justify-content: flex-start !important;
+    text-align: left !important;
     overflow: hidden;
   }
   .msg-node-name {
@@ -478,10 +485,13 @@
     text-overflow: ellipsis;
   }
   .msg-top-right {
-    display: flex;
-    align-items: center;
+    margin-left: auto !important;
+    display: flex !important;
+    align-items: center !important;
     gap: 8px;
-    flex-shrink: 0;
+    flex-shrink: 0 !important;
+    justify-content: flex-end !important;
+    text-align: right !important;
   }
   .msg-time {
     font-size: 11px;
@@ -490,11 +500,15 @@
     white-space: nowrap;
   }
   .msg-row-content {
+    width: 100% !important;
     font-size: 12px;
     color: var(--text-secondary);
     line-height: 1.45;
     word-break: break-word;
     white-space: normal;
+    text-align: left !important;
+    box-sizing: border-box;
+    padding-top: 1px;
   }
   .msg-badge {
     font-size: 10px;
@@ -2473,14 +2487,14 @@ function renderPosNodeDetail(){
     var pzOp = n.paused ? "resume" : "pause";
     var pzText = n.paused ? "Resume Node" : "Pause Node";
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm btn-primary" onclick="openConfigModal(\'' + esc(n.key) + '\')">📥 Visual Config</button> ' +
+      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">📥 Visual Config</button> ' +
       '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'reqcfg\')">🔄 Query Live INI</button> ' +
       '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
       '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">Close All</button>' +
       '</div>';
   } else {
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm btn-primary" onclick="openConfigModal(\'' + esc(n.key) + '\')">⚙️ Config</button>' +
+      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">⚙️ Config</button>' +
       '</div>';
   }
 
@@ -3077,7 +3091,7 @@ function renderCockpit(nodes, pos){
   if(keys !== s.cockpitKeys){
     var items = nodes.map(function(n){
       var activeCls = n.key === activeKey ? " active" : "";
-      return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
+      return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '" onclick="selectPosNode(\'' + esc(n.key) + '\')">' +
              '<div class="node-entry-top">' +
              '<div><span class="dot"></span><span class="ck-name"></span></div>' +
              '<span class="ping-tag"></span>' +
@@ -3356,7 +3370,7 @@ function renderNodes(nodes){
       var pzText = n.paused ? "Resume" : "Pause";
       var pzOp = n.paused ? "resume" : "pause";
       var ops = (n.role === "receiver")
-        ? "<button class='btn-sm btn-primary opbtn' data-op='config'>Visual Config</button> " +
+        ? "<button class='btn-sm opbtn' data-op='config'>Visual Config</button> " +
           "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>" +
           "<span class='opmsg'></span>"
         : "<button class='btn-sm opbtn' data-op='config'>Config</button>" +
@@ -3986,6 +4000,37 @@ function startDashboard(){
   var savedTab = localStorage.getItem("mtc_active_tab");
   if(savedTab === "cockpit"){
     switchMainTab("cockpit");
+  }
+
+    // Split Cockpit sidebar click listener delegation
+  var cList = $("cockpit_node_list");
+  if(cList){
+    cList.addEventListener("click", function(ev){
+      var item = ev.target.closest(".node-entry");
+      if(!item) return;
+      var k = item.getAttribute("data-ck");
+      if(k){
+        selectPosNode(k);
+      }
+    });
+  }
+
+  // Header Hub Key & Logout buttons
+  var hKeyBtn = $("header_hubkey_btn");
+  if(hKeyBtn){
+    hKeyBtn.addEventListener("click", function(ev){
+      ev.preventDefault();
+      openHubKeyModal(false);
+    });
+  }
+  var hLogoutBtn = $("header_logout_btn");
+  if(hLogoutBtn){
+    hLogoutBtn.addEventListener("click", function(ev){
+      ev.preventDefault();
+      fetch("/api/v1/logout", { method: "POST" }).then(function(){
+        location.reload();
+      });
+    });
   }
 
   refreshWritesState();
