@@ -391,6 +391,84 @@
     font-size: calc(var(--font-base) * 1.1) !important;
   }
 
+  
+  /* Node Banner: Two clean aligned lines, zero drop, zero offset */
+  .node-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: var(--surface-header);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 14px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .node-banner-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .node-banner-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    line-height: 1.35;
+  }
+  .node-banner-sub {
+    font-size: 12.5px;
+    color: var(--dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    line-height: 1.35;
+  }
+  .node-banner-sub strong {
+    color: var(--ink);
+  }
+  .node-banner-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* Proposal C: Compact Waiting Strip (Normal state takes only ~28px) */
+  .waiting-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: var(--mono);
+    margin-bottom: 12px;
+  }
+  .waiting-strip.clear {
+    background: var(--ok-bg);
+    border: 1px solid var(--ok-border);
+    color: var(--ok);
+  }
+  .waiting-strip.active {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: #92400e;
+  }
+  .waiting-strip-icon {
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .waiting-strip-text {
+    flex: 1;
+    line-height: 1.35;
+  }
+
   /* Embedded Cockpit Detail Header & Footer */
   .cockpit-detail-container {
     display: flex;
@@ -1155,13 +1233,11 @@
             <div id="pos_node_banner"></div>
 
             <div id="pos_rec_view">
-              <div class="pos-section-title">📦 Currently Held Positions &amp; Mirrors</div>
-              <div id="pos_rec_held_cards" class="pos-card-grid"></div>
-
-              <div class="pos-section-title" style="margin-top:20px">⏳ Waiting to Open in Progress (Pipeline Breakdown)</div>
+              <!-- Proposal C: Compact Waiting Pipeline status strip directly above the table -->
               <div id="pos_rec_waiting_wrap"></div>
 
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:22px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
+              <!-- Main Orders & Positions Table (Top Priority, occupies primary view) -->
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
                 <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                   <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>
@@ -1184,6 +1260,10 @@
                 </table>
                 <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
               </div>
+
+              <!-- Summary Cards placed at the bottom as final summary statistics -->
+              <div class="pos-section-title" style="margin-top:24px">📦 Position &amp; Mirror Summary Statistics</div>
+              <div id="pos_rec_held_cards" class="pos-card-grid"></div>
             </div>
 
             <div id="pos_snd_view" style="display:none">
@@ -2279,6 +2359,15 @@ function renderPosNodeDetail(){
       '</div>';
   }
 
+  var finParts = [];
+  if(typeof n.equity === "number"){
+    finParts.push("Eq: <strong>$" + n.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
+  }
+  if(typeof n.balance === "number"){
+    finParts.push("Bal: <strong>$" + n.balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
+  }
+  var finSpan = finParts.length ? ('<span>\u00b7 ' + finParts.join(" &middot; ") + '</span>') : '';
+
   var bannerHtml =
     '<div class="node-banner">' +
     '  <div class="node-banner-info">' +
@@ -2291,8 +2380,8 @@ function renderPosNodeDetail(){
     '    </div>' +
     '    <div class="node-banner-sub">' +
     '      <span>Account: <strong>' + esc(n.acc || "-") + '</strong></span>' +
-    '      <span>· Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>' +
-    (finStr ? ('      <span>· ' + finStr + '</span>') : '') +
+    '      <span>\u00b7 Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>' +
+    finSpan +
     '    </div>' +
     '  </div>' +
     '  <div class="node-banner-meta" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
@@ -2344,64 +2433,48 @@ function renderPosNodeDetail(){
       s.lastHeldHtml = heldHtml;
     }
 
-    // B. Waiting Orders in Progress
+    // B. Waiting Orders in Progress (Proposal C: Compact single-line strip when clear)
     var waitHtml = "";
     if(totalWait > 0){
-      waitHtml += '<div class="waiting-banner active">';
-      waitHtml += '  <div class="waiting-banner-icon">⏳</div>';
-      waitHtml += '  <div class="waiting-banner-text">';
-      waitHtml += '    <div class="waiting-banner-title">';
-      waitHtml += '      <span>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots)</span>';
-      waitHtml += '      <span class="waiting-stage-badge active">IN PROGRESS</span>';
+      waitHtml += '<div class="waiting-strip active">';
+      waitHtml += '  <span class="waiting-strip-icon">⏳</span>';
+      waitHtml += '  <span class="waiting-strip-text"><strong>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots):</strong> ' + queued + ' in broker queue &middot; ' + delayed + ' gate delayed &middot; ' + mktClosed + ' market closed</span>';
+      waitHtml += '</div>';
+
+      waitHtml += '<div class="waiting-pipeline-grid">';
+      waitHtml += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
+      waitHtml += '    <div class="waiting-stage-head">';
+      waitHtml += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
+      waitHtml += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
       waitHtml += '    </div>';
-      waitHtml += '    <div class="waiting-banner-desc">';
-      waitHtml += '      These orders were signaled by Senders and are actively held in the receiver execution pipeline under broker queuing, timing gates, or market closed filters.';
+      waitHtml += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
+      waitHtml += '    <div class="waiting-stage-desc">Trade instruction waiting in local broker dispatch queue for order filling.</div>';
+      waitHtml += '  </div>';
+
+      waitHtml += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
+      waitHtml += '    <div class="waiting-stage-head">';
+      waitHtml += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
+      waitHtml += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
       waitHtml += '    </div>';
+      waitHtml += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
+      waitHtml += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, or pullback/spread safety gates.</div>';
+      waitHtml += '  </div>';
+
+      waitHtml += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
+      waitHtml += '    <div class="waiting-stage-head">';
+      waitHtml += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
+      waitHtml += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
+      waitHtml += '    </div>';
+      waitHtml += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
+      waitHtml += '    <div class="waiting-stage-desc">Market is closed or quotes halted outside configured trading schedule.</div>';
       waitHtml += '  </div>';
       waitHtml += '</div>';
     } else {
-      waitHtml += '<div class="waiting-banner clear">';
-      waitHtml += '  <div class="waiting-banner-icon">✅</div>';
-      waitHtml += '  <div class="waiting-banner-text">';
-      waitHtml += '    <div class="waiting-banner-title">';
-      waitHtml += '      <span>All Orders Executed (No Waiting in Progress)</span>';
-      waitHtml += '      <span class="waiting-stage-badge idle">CLEAR</span>';
-      waitHtml += '    </div>';
-      waitHtml += '    <div class="waiting-banner-desc">';
-      waitHtml += '      Receiver is in sync with signals. There are currently zero pending, delayed, or market-closed orders waiting in queue.';
-      waitHtml += '    </div>';
-      waitHtml += '  </div>';
+      waitHtml += '<div class="waiting-strip clear">';
+      waitHtml += '  <span class="waiting-strip-icon">✓</span>';
+      waitHtml += '  <span class="waiting-strip-text"><strong>Pipeline Execution: All Orders Synchronized</strong> (0 in broker queue &middot; 0 gate delayed &middot; 0 market closed)</span>';
       waitHtml += '</div>';
     }
-
-    waitHtml += '<div class="waiting-pipeline-grid">';
-    waitHtml += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
-    waitHtml += '    <div class="waiting-stage-head">';
-    waitHtml += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
-    waitHtml += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
-    waitHtml += '    </div>';
-    waitHtml += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
-    waitHtml += '    <div class="waiting-stage-desc">Trade instruction generated, waiting in local broker dispatch queue for order filling / network socket.</div>';
-    waitHtml += '  </div>';
-
-    waitHtml += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
-    waitHtml += '    <div class="waiting-stage-head">';
-    waitHtml += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
-    waitHtml += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
-    waitHtml += '    </div>';
-    waitHtml += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
-    waitHtml += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, M1 bar completion filter, or pullback/spread safety gates.</div>';
-    waitHtml += '  </div>';
-
-    waitHtml += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
-    waitHtml += '    <div class="waiting-stage-head">';
-    waitHtml += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
-    waitHtml += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
-    waitHtml += '    </div>';
-    waitHtml += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
-    waitHtml += '    <div class="waiting-stage-desc">Market is closed (weekend/holiday), quotes halted, or outside configured trading schedule. Monitored until session opens.</div>';
-    waitHtml += '  </div>';
-    waitHtml += '</div>';
 
     if(s.lastWaitingHtml !== waitHtml){
       $("pos_rec_waiting_wrap").innerHTML = waitHtml;
