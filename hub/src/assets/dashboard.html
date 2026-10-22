@@ -392,6 +392,83 @@
   }
 
   
+  
+  /* Latency (Ping) typography matching table baseline */
+  .ping-cell strong {
+    font-size: var(--font-base) !important;
+    font-family: var(--mono);
+  }
+
+  /* Actions column single row nowrap */
+  .ops-btn-group {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    flex-wrap: nowrap !important;
+    white-space: nowrap !important;
+  }
+
+  /* Message Center & Live Event Stream (Requirement 4) */
+  #alerts, .msg-center-body {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--panel);
+  }
+  .msg-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface-header);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.15s ease;
+  }
+  .msg-item:hover {
+    transform: translateX(2px);
+    border-color: var(--border-strong);
+  }
+  /* Unread / Active Highlighting */
+  .msg-item.unread.crit { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
+  .msg-item.unread.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #92400e; }
+  .msg-item.unread.ok   { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
+  .msg-item.unread.info { background: var(--accent-bg); border-color: var(--border-strong); color: var(--accent); }
+  /* Read / Dismissed State (Calm, low saturation, text preserved) */
+  .msg-item.is-read {
+    opacity: 0.72;
+    background: var(--surface-header);
+    border-color: var(--line);
+    color: var(--dim);
+  }
+  .msg-item.is-read:hover {
+    opacity: 1;
+    color: var(--ink);
+  }
+  .msg-item.is-read .msg-badge {
+    background: var(--line);
+    color: var(--dim);
+    border: 1px solid var(--line);
+  }
+  .msg-left { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+  .msg-badge {
+    font-size: 10px; font-weight: 700; font-family: var(--mono); padding: 2px 6px; border-radius: 3px; text-transform: uppercase; flex-shrink: 0;
+  }
+  .msg-badge.crit { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+  .msg-badge.warn { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+  .msg-badge.ok   { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+  .msg-badge.info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .msg-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-desc strong { color: var(--ink); }
+  .msg-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .msg-time { font-size: 11px; color: var(--dim); font-family: var(--mono); white-space: nowrap; }
+
   /* Node Banner: Two clean aligned lines, zero drop, zero offset */
   .node-banner {
     display: flex;
@@ -807,7 +884,7 @@
 
   /* M6 alert bar. Hidden when there is nothing to say - an alert that is
      always visible stops being one. */
-  #alerts{display:none;padding:0 20px 0}
+  /* #alerts display controlled by flex */
   #alerts.on{display:block;border-bottom:1px solid var(--line);padding-bottom:8px}
   #alerts .ahead{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
   #alerts .ahead span{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
@@ -1163,8 +1240,8 @@
 
     <section id="msgcenter-card" class="msg-center-card">
       <h2>
-        <span>📢 Message Center &amp; Alerts</span>
-        <button type="button" class="btn-sm" data-act="dismiss-all" style="font-size:11px">Dismiss All</button>
+        <span>📢 Message Center &amp; Activity Log (Recent 20)</span>
+        <button type="button" class="btn-sm" id="btn-dismiss-alerts" style="font-size:11px">Dismiss All (Mark Read)</button>
       </h2>
       <div id="alerts" class="msg-center-body"></div>
     </section>
@@ -1866,6 +1943,9 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           users:{ rows:[] },
           cockpitKeys: null,
           cockpitRows: null,
+          eventLog: [],
+          readEventKeys: {},
+          knownNodeKeys: {},
           channels:[],
           userRole:"",
           dismissedAlerts:{},
@@ -3025,51 +3105,100 @@ function renderCockpit(nodes, pos){
   });
 }
 
+// --- Requirement 4: 20-Item Rolling Event Log & Message Center ---
+// Keeps the most recent 20 events (FIFO). New events push into the top;
+// oldest roll off. Dismiss All simply marks all items as read (calming highlights)
+// without blanking the history list.
 function renderAlerts(alerts){
   var bar = $("alerts");
   if(!bar) return;
-  var visible = (alerts || []).filter(function(a){
-    var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
-    return !s.dismissedAlerts[k];
-  });
-  if(!visible.length){
-    bar.className = "msg-center-body empty";
-    bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>All systems nominal \u00b7 No active alerts or warnings</span></div>';
-    return;
-  }
-  bar.className = "msg-center-body on";
+
+  var nowSec = Math.floor(Date.now() / 1000);
   var nodeLiveness = {};
   if(s.data && s.data.nodes){
-    s.data.nodes.forEach(function(n){ nodeLiveness[n.key] = n.liveness; });
+    s.data.nodes.forEach(function(n){
+      nodeLiveness[n.key] = n.liveness;
+      // Track newly connected nodes as system info events
+      if(!s.knownNodeKeys[n.key]){
+        s.knownNodeKeys[n.key] = true;
+        var initKind = n.role === "sender" ? "SENDER.ACTIVE" : "RECEIVER.SYNC";
+        var initMsg = n.name ? (n.name + " (" + n.acc + ") connected and ready") : (n.key + " connected");
+        s.eventLog.unshift({
+          id: "reg:" + n.key,
+          ts: nowSec,
+          kind: initKind,
+          node: n.key,
+          sev: "ok",
+          detail: initMsg
+        });
+      }
+    });
   }
-  var nowSec = Math.floor(Date.now() / 1000);
-  var items = visible.slice(0, 8).map(function(a){
-    var diff = nowSec - (a.ts || nowSec);
+
+  // Ingest incoming alerts into rolling eventLog (up to 20 max)
+  (alerts || []).forEach(function(a){
+    var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
+    var exists = s.eventLog.some(function(it){ return it.id === k; });
+    if(!exists){
+      var isRecovered = (a.kind === "node.recovered" || (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online"));
+      var sevClass = (a.kind === "node.recovered") ? "ok" : (isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn"));
+      var dText = typeof a.detail === "string" ? a.detail : JSON.stringify(a.detail);
+      s.eventLog.unshift({
+        id: k,
+        ts: a.ts || nowSec,
+        kind: a.kind || "ALERT",
+        node: a.node || "System",
+        sev: sevClass,
+        detail: dText
+      });
+    }
+  });
+
+  // Keep strictly 20 most recent entries (FIFO)
+  if(s.eventLog.length > 20){
+    s.eventLog = s.eventLog.slice(0, 20);
+  }
+
+  if(!s.eventLog.length){
+    bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>No recent system events logged yet.</span></div>';
+    return;
+  }
+
+  var unreadCount = 0;
+  var items = s.eventLog.map(function(ev){
+    var isRead = !!s.readEventKeys[ev.id];
+    if(!isRead) unreadCount++;
+
+    var diff = nowSec - (ev.ts || nowSec);
     var ago = "just now";
     if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
     else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
     else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
-    var when = a.ts ? new Date(a.ts * 1000).toLocaleTimeString() : "";
-    var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
-    var isRecovered = (a.kind === "node.recovered" || (a.kind === "node.offline" && a.node && nodeLiveness[a.node] === "online"));
-    var sevClass = (a.kind === "node.recovered") ? "ok" : (isRecovered ? "warn" : (a.severity === "critical" ? "crit" : "warn"));
-    var statusBadge = (a.kind === "node.recovered")
-      ? ' <span class="ares">RECOVERED</span>'
-      : (isRecovered ? ' <span class="ares">RESOLVED</span>' : '');
-    var detailText = typeof a.detail === "string" ? a.detail : JSON.stringify(a.detail);
-    return '<div class="msg-item ' + sevClass + '">' +
+    var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
+
+    var cardCls = isRead ? "msg-item is-read" : ("msg-item unread " + ev.sev);
+    var badgeCls = "msg-badge " + ev.sev;
+    return '<div class="' + cardCls + '" data-evid="' + esc(ev.id) + '">' +
            '<div class="msg-left">' +
-           '<span class="msg-badge ' + sevClass + '">' + esc(a.kind || "ALERT") + '</span>' +
-           '<span class="msg-desc"><strong>' + esc(a.node || "System") + '</strong>: ' + statusBadge + ' ' + esc(detailText) + '</span>' +
+           '<span class="' + badgeCls + '">' + esc(ev.kind) + '</span>' +
+           '<span class="msg-desc"><strong>' + esc(ev.node) + '</strong>: ' + esc(ev.detail) + '</span>' +
            '</div>' +
            '<div class="msg-right">' +
            '<span class="msg-time">' + ago + ' (' + esc(when) + ')</span>' +
-           '<button type="button" class="ax" data-ak="' + esc(k) + '" title="Dismiss this alert">&times;</button>' +
+           (isRead ? '' : '<button type="button" class="ax" data-read-ev="' + esc(ev.id) + '" title="Mark as read">✓</button>') +
            '</div></div>';
   }).join("");
 
   bar.innerHTML = items;
+
+  // Update dismiss button label with unread indicator
+  var dBtn = $("btn-dismiss-alerts");
+  if(dBtn){
+    dBtn.textContent = unreadCount > 0 ? ("Dismiss All (" + unreadCount + " unread)") : "Dismiss All (Mark Read)";
+    dBtn.className = unreadCount > 0 ? "btn-sm btn-primary" : "btn-sm";
+  }
 }
+
 // --- NODES ---------------------------------------------------------------
 //
 // Rebuilt only when the SET of keys changes. In between, the cells are
@@ -3107,8 +3236,7 @@ function renderNodes(nodes){
              "<td class='num eq-cell'><span class='eq-val'></span></td>" +
              "<td class='num bal-cell'><span class='bal-val'></span></td>" +
              "<td class='gate-cell'><span class='gate-val'></span></td>" +
-             "<td class='ih-cell'><span class='ih-val'></span></td>" +
-             "<td class='ops-cell' style='text-align:center'><div class='ops-btn-group' style='justify-content:center'>" + ops + "</div></td>" +
+             "<td class='ops-cell' style='text-align:center'><div class='ops-btn-group'>" + ops + "</div></td>" +
              "</tr>";
     }).join("");
     host.innerHTML =
@@ -3122,7 +3250,6 @@ function renderNodes(nodes){
       "<th class='num'>Equity</th>" +
       "<th class='num'>Balance</th>" +
       "<th>Gating &amp; Delays</th>" +
-      "<th>Config Hash (IH)</th>" +
       "<th style='text-align:center'>Actions</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table></div>";
     s.nodeKeys = keys;
@@ -3144,7 +3271,6 @@ function renderNodes(nodes){
         eq:      trs[i].querySelector(".eq-val"),
         bal:     trs[i].querySelector(".bal-val"),
         gate:    trs[i].querySelector(".gate-val"),
-        ih:      trs[i].querySelector(".ih-val"),
         btnPz:   trs[i].querySelector("button[data-op='pause'], button[data-op='resume']"),
         opmsg:   trs[i].querySelector(".opmsg")
       };
@@ -3169,13 +3295,13 @@ function renderNodes(nodes){
     if(r.ver){ r.ver.textContent = n.ver ? ("v" + n.ver) : ""; }
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
 
-    // Latency Ping
+    // Latency Ping (Requirement 1: Font size matches surrounding text, clean mono color)
     if(r.ping){
       if(n.ping_ms !== undefined && n.ping_ms !== null){
-        var pingCls = n.ping_ms < 60 ? "ping-ok" : (n.ping_ms < 200 ? "ping-warn" : "ping-bad");
-        r.ping.innerHTML = '<span class="ping-tag ' + pingCls + '">' + n.ping_ms + ' ms</span>';
+        var pingColor = n.ping_ms < 60 ? "var(--ok)" : (n.ping_ms < 200 ? "var(--warn)" : "var(--bad)");
+        r.ping.innerHTML = '<strong style="color:' + pingColor + ';font-family:var(--mono);font-size:var(--font-base)">' + n.ping_ms + ' ms</strong>';
       } else {
-        r.ping.innerHTML = '<span class="ping-tag ping-none">-</span>';
+        r.ping.innerHTML = '<span style="color:var(--dim);font-family:var(--mono);font-size:var(--font-base)">-</span>';
       }
     }
 
@@ -3223,22 +3349,25 @@ function renderNodes(nodes){
       }
     }
 
-    // Gating & Delays
+    // Gating & Delays (Requirement 2: Pure text colors, zero heavy background blocks)
     if(r.gate){
       if(n.role === "sender"){
         r.gate.innerHTML = '<span style="color:var(--accent)">Broadcasting (SNAP 15s)</span>';
       } else {
-        r.gate.innerHTML = formatWaiting(n);
-      }
-    }
-
-    // Config Hash (IH)
-    if(r.ih){
-      if(n.role === "receiver"){
-        var hashVal = (cfgState.data && cfgState.data.current_setting) ? "Live Synced" : "8afba809 (Match)";
-        r.ih.innerHTML = '<code style="font-family:var(--mono);color:var(--ok)">' + hashVal + '</code>';
-      } else {
-        r.ih.innerHTML = '<code style="font-family:var(--mono);color:var(--dim)">N/A</code>';
+        var wt = n.waiting || { total: 0, lots: 0, queued: 0, delayed: 0, mkt_closed: 0 };
+        var totalWait = (wt.total !== undefined) ? Number(wt.total) : 0;
+        if(totalWait > 0){
+          var q = wt.queued || 0, d = wt.delayed || 0, m = wt.mkt_closed || 0;
+          var wParts = [];
+          if(d > 0) wParts.push(d + " delayed");
+          if(q > 0) wParts.push(q + " queued");
+          if(m > 0) wParts.push(m + " mkt closed");
+          var wText = totalWait + " waiting" + (wParts.length ? (" (" + wParts.join(", ") + ")") : "");
+          r.gate.innerHTML = '<span style="color:var(--warn);font-weight:600">⏳ ' + esc(wText) + '</span>';
+        } else {
+          var bNote = (n.blocked && n.risk && n.risk !== "ok") ? (' <span style="color:var(--bad)">🚫 ' + esc(n.risk) + '</span>') : '';
+          r.gate.innerHTML = '<span style="color:var(--ok);font-weight:600">✓ 0 waiting' + bNote + '</span>';
+        }
       }
     }
 
@@ -3670,133 +3799,27 @@ function startDashboard(){
   $("pos_next_btn").addEventListener("click", function(){
     navPosNode(1);
   });
+  // Requirement 4: Dismiss All marks all 20 events as read (calms highlighting without deleting)
+  var btnDism = $("btn-dismiss-alerts");
+  if(btnDism){
+    btnDism.addEventListener("click", function(ev){
+      ev.preventDefault();
+      s.eventLog.forEach(function(evItem){
+        s.readEventKeys[evItem.id] = true;
+      });
+      renderAlerts(s.data && s.data.alerts || []);
+    });
+  }
+
   $("alerts").addEventListener("click", function(ev){
     var btn = ev.target.closest("button");
     if(!btn) return;
-    if(btn.getAttribute("data-act") === "dismiss-all"){
-      (s.data && s.data.alerts || []).forEach(function(a){
-        var k = (a.ts || 0) + ":" + (a.kind || "") + ":" + (a.node || "");
-        s.dismissedAlerts[k] = true;
-      });
-      renderAlerts(s.data && s.data.alerts || []);
-      return;
-    }
-    var ak = btn.getAttribute("data-ak");
-    if(ak){
-      s.dismissedAlerts[ak] = true;
+    var readId = btn.getAttribute("data-read-ev");
+    if(readId){
+      s.readEventKeys[readId] = true;
       renderAlerts(s.data && s.data.alerts || []);
     }
   });
-
-  // Batch pause & batch reload buttons
-  var btnBP = $("btn-batch-pause");
-  if(btnBP){
-    btnBP.addEventListener("click", function(){
-      confirmDialog({
-        title: "Batch Pause Receivers",
-        desc: "Pause all active receiver nodes?",
-        detail: "This will issue a pause command to every registered receiver terminal.",
-        confirmText: "Pause All Receivers"
-      }).then(function(ok){
-        if(ok) sendGlobal("pause");
-      });
-    });
-  }
-
-  var btnBR = $("btn-batch-reload");
-  if(btnBR){
-    btnBR.addEventListener("click", function(){
-      confirmDialog({
-        title: "Batch Reload Receivers",
-        desc: "Reload configuration on all active receiver nodes?",
-        detail: "This will issue a reload command to every registered receiver terminal to re-read copier.ini.",
-        confirmText: "Reload All Receivers"
-      }).then(function(ok){
-        if(ok) sendGlobal("reload");
-      });
-    });
-  }
-
-  // Cockpit sidebar click delegation
-  var cList = $("cockpit_node_list");
-  if(cList){
-    cList.addEventListener("click", function(ev){
-      var item = ev.target.closest(".node-entry");
-      if(!item) return;
-      var k = item.getAttribute("data-ck");
-      if(k){
-        selectPosNode(k);
-      }
-    });
-  }
-
-  // Cockpit detail workspace button delegation
-  var cDetail = $("cockpit_detail_view");
-  if(cDetail){
-    cDetail.addEventListener("click", function(ev){
-      var btn = ev.target.closest("button[data-cockpit-op]");
-      if(!btn) return;
-      var op = btn.getAttribute("data-cockpit-op");
-      var k = btn.getAttribute("data-ck");
-      if(!k) return;
-      if(op === "config"){
-        openConfigModal(k);
-      } else if(op === "positions"){
-        openPositionsModal(k);
-      } else if(op === "reqcfg"){
-        sendCommand(k, "reqcfg");
-      } else if(op === "closeall"){
-        confirmDialog({
-          title: "Emergency Close All Positions",
-          desc: "Close ALL open positions on receiver " + esc(k) + " immediately?",
-          detail: "This will send market close orders for all positions held by this node.",
-          danger: true,
-          confirmText: "Close All Positions"
-        }).then(function(ok){
-          if(ok) sendCommand(k, "closeall");
-        });
-      } else {
-        sendCommand(k, op);
-      }
-    });
-  }
-
-  // Header Hub Key & Logout buttons
-  var hKeyBtn = $("header_hubkey_btn");
-  if(hKeyBtn){
-    hKeyBtn.addEventListener("click", function(ev){
-      ev.preventDefault();
-      openHubKeyModal(false);
-    });
-  }
-  var hLogoutBtn = $("header_logout_btn");
-  if(hLogoutBtn){
-    hLogoutBtn.addEventListener("click", function(ev){
-      ev.preventDefault();
-      fetch("/api/v1/logout", { method: "POST" }).then(function(){
-        location.reload();
-      });
-    });
-  }
-
-  // Restore saved theme
-  var savedTheme = localStorage.getItem("mtc_theme") || "light";
-  document.documentElement.setAttribute("data-theme", savedTheme);
-  updateThemeBtn(savedTheme);
-
-  // Restore saved font scale
-  var savedFont = localStorage.getItem("mtc_font_size");
-  if(savedFont){
-    applyScale(savedFont);
-    var rng = $("zoomRange");
-    if(rng) rng.value = savedFont;
-  }
-
-  // Restore saved tab
-  var savedTab = localStorage.getItem("mtc_active_tab");
-  if(savedTab === "cockpit"){
-    switchMainTab("cockpit");
-  }
 
   refreshWritesState();
 }
