@@ -78,6 +78,10 @@ hub_users_test.py
 hub_curve_test.py
 hub_notifications_test.py
 hub_audit_rotation_test.py
+curve_keyfile_test.py
+hub_proto_test.py
+inputcheck.py
+zmq_topic_test.py
 "
 
 echo "== Python contract tests =="

@@ -402,7 +402,12 @@ impl CommandStore {
     /// the ladder it was - otherwise a `closeall` that was about to be retried
     /// a third time would come back up as a first try and wait a full 2 s
     /// before resending. See `load`, which restores `attempts`.
+    #[allow(dead_code)]
     pub fn due(&self, now: Instant) -> Vec<Command> {
+        self.due_gated(now, true)
+    }
+
+    pub fn due_gated(&self, now: Instant, writes_enabled: bool) -> Vec<Command> {
         let mut inner = self.inner.lock_or_recover();
         let ids: Vec<String> = inner.in_flight.iter().cloned().collect();
         let mut out = Vec::new();
@@ -420,6 +425,11 @@ impl CommandStore {
             };
             if c.state != STATE_PENDING {
                 finished.push(id);
+                continue;
+            }
+            if !writes_enabled && !is_read_only_op(&c.op) {
+                // When writes are disabled, do not consume retry ladder for write commands;
+                // keep them frozen in pending state until restarted with writes on.
                 continue;
             }
             if now < c.next_at {

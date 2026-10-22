@@ -314,7 +314,7 @@ string CopierCompressField(const string src)
    string z85Str="";
    if(!Z85::encode(z85Str,comp)) return "0:"+src;
 
-   return "1:"+z85Str;
+   return "1:"+(string)pad+":"+z85Str;
   }
 
 string CopierDecompressField(const string field)
@@ -325,14 +325,41 @@ string CopierDecompressField(const string field)
      }
    if(StringSubstr(field,0,2)=="1:")
      {
-      string z85Str=StringSubstr(field,2);
+      string z85Str="";
+      int pad=-1;
+      if(StringLen(field)>=4 && StringGetCharacter(field,3)==':')
+        {
+         pad=(int)StringToInteger(StringSubstr(field,2,1));
+         z85Str=StringSubstr(field,4);
+        }
+      else
+        {
+         z85Str=StringSubstr(field,2);
+        }
       uchar comp[];
       if(Z85::decode(z85Str,comp))
         {
+         if(pad>0 && ArraySize(comp)>=pad)
+           {
+            ArrayResize(comp,ArraySize(comp)-pad);
+           }
          uchar key[];
          ArrayResize(key,0);
          uchar decomp[];
          int decompLen=CryptDecode(CRYPT_ARCH_ZIP,comp,key,decomp);
+         if(decompLen<=0 && pad<0)
+           {
+            // Backward-compat for legacy streams: try stripping 1..3 null padding bytes
+            int totalSz=ArraySize(comp);
+            for(int trim=1;trim<=3 && totalSz-trim>0;trim++)
+              {
+               uchar trimmed[];
+               ArrayResize(trimmed,totalSz-trim);
+               ArrayCopy(trimmed,comp,0,0,totalSz-trim);
+               decompLen=CryptDecode(CRYPT_ARCH_ZIP,trimmed,key,decomp);
+               if(decompLen>0) break;
+              }
+           }
          if(decompLen>0)
            {
             return CharArrayToString(decomp,0,decompLen,CP_UTF8);

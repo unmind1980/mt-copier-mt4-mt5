@@ -90,7 +90,7 @@ def encode_snapshot(records):
             comp = zlib.compress(recs.encode('utf-8'))
             pad = (4 - (len(comp) % 4)) % 4
             padded = comp + b'\x00' * pad
-            r_val = "1:" + z85.encode(padded).decode('ascii')
+            r_val = "1:" + str(pad) + ":" + z85.encode(padded).decode('ascii')
         else:
             r_val = "0:" + recs
         payload += CP_SEP_KV + "R=" + r_val
@@ -268,7 +268,15 @@ def main():
     r_val = re.search(r";R=1:([^;]+)", big_p).group(1)
     import zmq.utils.z85 as z85
     import zlib
-    raw = z85.decode(r_val)
+    if len(r_val) >= 2 and r_val[1] == ':' and r_val[0] in '0123':
+        pad = int(r_val[0])
+        z85_payload = r_val[2:]
+    else:
+        pad = 0
+        z85_payload = r_val
+    raw = z85.decode(z85_payload)
+    if pad > 0:
+        raw = raw[:-pad]
     decomp = zlib.decompress(raw).decode("utf-8")
     decomp_recs = decomp.split("~")
     check("decompressed length is 300 records", len(decomp_recs) == 300)

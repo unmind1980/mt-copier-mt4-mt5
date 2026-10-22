@@ -73,6 +73,8 @@ private:
       //--- on how that converts is a coin toss.
       uint h=(uint)(ticket & 0xFFFF);
       h^=(uint)((ticket>>16) & 0xFFFF);
+      h^=(uint)((ticket>>32) & 0xFFFF);
+      h^=(uint)((ticket>>48) & 0xFFFF);
       h*=16777619;                       // FNV-32 prime
       h^=(h>>13);
       h*=16777619;

@@ -391,9 +391,19 @@ void ParseFilter(const string csv,string &out[],bool &exclude,bool &active)
    string s=CopierTrim(csv);
    if(StringLen(s)==0) return;
    if(StringSubstr(s,0,1)=="!") { exclude=true; s=CopierTrim(StringSubstr(s,1)); }
-   int n=StringSplit(s,',',out);
-   for(int i=0;i<n;i++) out[i]=CopierTrim(out[i]);
-   active=(n>0);
+   string parts[];
+   int n=StringSplit(s,',',parts);
+   int kept=0;
+   for(int i=0;i<n;i++)
+     {
+      string item=CopierTrim(parts[i]);
+      if(StringLen(item)==0) continue;
+      int sz=ArraySize(out);
+      ArrayResize(out,sz+1);
+      out[sz]=item;
+      kept++;
+     }
+   active=(kept>0);
   }
 
 bool SymbolAllowed(const string sym) { return g_symFilter.Allows(sym); }
@@ -404,7 +414,7 @@ bool MagicAllowed(const long magic)
    bool found=false;
    for(int i=0;i<ArraySize(g_magicFilter);i++)
      {
-      if((long)StringToInteger(g_magicFilter[i])==magic) { found=true; break; }
+      if(CopierParseLong(g_magicFilter[i])==magic) { found=true; break; }
      }
    return g_magicExclude ? !found : found;
   }
@@ -1341,15 +1351,20 @@ void UpdatePanel()
    g_panel.End();
   }
 
-void RefreshSnapshotCache(const long now)
+void RebuildSnapshotPayload()
   {
-   g_lastSnapMs=now;
    CopierPos dense[];
    int dn=g_prev.CopyTo(dense);
    for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
-   string snap=CopierEncodeSnapshot(dense,dn);
-   g_snapHash=CopierSnapshotHash(snap);
-   g_snapPayload=snap;
+   g_snapPayload=CopierEncodeSnapshot(dense,dn);
+  }
+
+void BroadcastSnapshot(const long now)
+  {
+   g_lastSnapMs=now;
+   RebuildSnapshotPayload();
+   g_snapHash=CopierSnapshotHash(g_snapPayload);
+   Emit(CP_T_SNAP,g_snapPayload,true);
   }
 
 void OnTimer()
@@ -1410,6 +1425,7 @@ void OnTimer()
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(stopsDiff)
               {
+               g_stateDirty=true;
                g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                           +" side="+(string)g_curScratch[i].side
                           +" entry="+DoubleToString(g_curScratch[i].openPx,5)
@@ -1482,11 +1498,15 @@ void OnTimer()
      }
 
    //--- When positions changed (open/close/modify/drift), immediately refresh the cached
-   //--- snapshot payload and receipt hash so any targeted repair or bootstrap emitted before
+   //--- snapshot payload so any targeted repair or bootstrap emitted before
    //--- the next routine 15s broadcast always carries the true current state.
+   //--- NOTE: We deliberately do NOT advance g_lastSnapMs nor change g_snapHash here:
+   //--- advancing g_lastSnapMs would starve routine broadcasts, and advancing g_snapHash
+   //--- before broadcasting SNAP would cause all receivers' next heartbeats to falsely
+   //--- look behind and trigger redundant repair storms.
    if(g_stateDirty)
      {
-      RefreshSnapshotCache(now);
+      RebuildSnapshotPayload();
      }
 
    //--- 6) snapshot
@@ -1511,8 +1531,7 @@ void OnTimer()
 
    if(dueSnap)
      {
-      RefreshSnapshotCache(now);
-      Emit(CP_T_SNAP,g_snapPayload,true);
+      BroadcastSnapshot(now);
      }
 
    //--- 7) heartbeat with account state (needed for equity-relative sizing)

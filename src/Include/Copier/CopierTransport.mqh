@@ -437,10 +437,12 @@ public:
             payload=m1.getData();
             //--- Drain and drop any unexpected additional frames (>2) to prevent
             //--- socket frame misalignment on subsequent message reads.
-            while(m1.more())
+            bool hasMore=m1.more();
+            while(hasMore)
               {
                ZmqMsg extra;
                if(!m_sub.recv(extra,true)) break;
+               hasMore=extra.more();
               }
            }
          if(got>=ArraySize(topics) || got>=ArraySize(payloads)) break;

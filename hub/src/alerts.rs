@@ -234,6 +234,8 @@ impl AlertEngine {
     pub fn forget(&mut self, node_key: &str) {
         self.was_offline.remove(node_key);
         self.offline_since.remove(node_key);
+        self.last_risk_tripped.remove(node_key);
+        self.last_risk_blocked.remove(node_key);
         self.fired.retain(|(_, k), _| k != node_key);
     }
 }

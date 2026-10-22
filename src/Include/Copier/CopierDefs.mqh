@@ -442,7 +442,13 @@ long CopierNowMs()
 #ifdef __MQL5__
    return (long)GetTickCount64();
 #else
-   return (long)GetTickCount();
+   static uint s_last=0;
+   static long s_epoch=0;
+   uint cur=GetTickCount();
+   if(cur<s_last)
+      s_epoch+=((long)1<<32);
+   s_last=cur;
+   return s_epoch+(long)cur;
 #endif
   }
 

@@ -348,10 +348,8 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
             //--- `null` for either role means "nothing to report yet", which
             //--- is not an error, and is shown as a dash rather than a 0.
             let pv = if n.role == Role::Sender {
-                pos.sorted()
-                    .iter()
-                    .find(|(sid, _)| *sid == n.acc)
-                    .map(|(_, v)| {
+                pos.view_for(&n.acc)
+                    .map(|v| {
                         json!({
                             "count": v.count,
                             "lots": trim_lots(v.lots),
@@ -479,9 +477,7 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
                     // sender that has registered but never sent a snapshot is
                     // not an error - it is a node with nothing to report yet,
                     // and `null` says exactly that.
-                    if let Some((_sid, v)) =
-                        s.pos.top(64).into_iter().find(|(sid, _)| *sid == n.acc)
-                    {
+                    if let Some(v) = s.pos.view_for(&n.acc) {
                         obj.insert(
                             "positions".to_string(),
                             json!({
@@ -515,20 +511,14 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
                 }
 
                 if n.role == Role::Receiver {
-                    let targets: Vec<Value> = s
+                    let mut targets: Vec<String> = s
                         .mirrors
                         .iter()
-                        .flat_map(|(sender, recvs)| {
-                            recvs.keys().map(move |_| sender.clone())
-                        })
-                        .filter(|sender| {
-                            s.mirrors
-                                .get(sender)
-                                .map(|r| r.contains_key(&n.acc))
-                                .unwrap_or(false)
-                        })
-                        .map(Value::String)
+                        .filter(|(_, recvs)| recvs.contains_key(&n.acc))
+                        .map(|(sender, _)| sender.clone())
                         .collect();
+                    targets.sort();
+                    let targets: Vec<Value> = targets.into_iter().map(Value::String).collect();
                     obj.insert("mirrors".to_string(), Value::Array(targets));
                 }
 
@@ -1191,15 +1181,25 @@ async fn login(
     }
 }
 
+fn header_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(cookie_token)
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
+        })
+}
+
 async fn logout(
     axum::extract::State(st): axum::extract::State<SharedState>,
     headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let tok = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(cookie_token);
+    let tok = header_token(&headers);
     let mut who = String::new();
     if let Some(t) = &tok {
         let mut s = st.lock_or_recover();
@@ -1236,10 +1236,7 @@ async fn whoami(
                             "note": "login disabled (--users none)" }))
         .into_response();
     }
-    let tok = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(cookie_token);
+    let tok = header_token(&headers);
     if let Some(t) = tok {
         if let Some(s) = st.lock_or_recover().users.session(&t, unix_secs()) {
             return Json(json!({ "user": s.user_id, "role": s.role.as_str() })).into_response();

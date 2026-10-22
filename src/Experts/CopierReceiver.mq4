@@ -747,6 +747,48 @@ CopierPosTable  g_recKnown;  // UID <-> identifier, because the comment is
 //--- NOTE it must be CLEARED per use: as a local it was constructed fresh on
 //--- every call, and a global is constructed once.
 CopierPosTable  g_saveScratch;
+CopierPos       g_scanScratch[CP_MAX_POSITIONS]; // Global scratch for position sweeps (avoids 400KB stack frame)
+
+//--- Track sender's peak/initial lots per UID for proportional partial-close in FIXED lot mode
+struct CopierUidPeakLots
+  {
+   string uid;
+   double peakLots;
+  };
+CopierUidPeakLots g_uidPeakLots[CP_MAX_POSITIONS];
+int               g_uidPeakLotsCount=0;
+
+double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
+  {
+   for(int i=0;i<g_uidPeakLotsCount;i++)
+     {
+      if(g_uidPeakLots[i].uid==uid)
+        {
+         if(curLots>g_uidPeakLots[i].peakLots) g_uidPeakLots[i].peakLots=curLots;
+         return g_uidPeakLots[i].peakLots;
+        }
+     }
+   if(g_uidPeakLotsCount<CP_MAX_POSITIONS)
+     {
+      int n=g_uidPeakLotsCount++;
+      g_uidPeakLots[n].uid=uid;
+      g_uidPeakLots[n].peakLots=curLots;
+      return curLots;
+     }
+   return curLots;
+  }
+
+void ForgetSenderPeakLots(const string uid)
+  {
+   for(int i=0;i<g_uidPeakLotsCount;i++)
+     {
+      if(g_uidPeakLots[i].uid==uid)
+        {
+         g_uidPeakLots[i]=g_uidPeakLots[--g_uidPeakLotsCount];
+         return;
+        }
+     }
+  }
 
 CopierSeenRing  g_mktClosed;
 #define CP_MKTCLOSED_MS 60000
@@ -1953,28 +1995,27 @@ void SaveReceiverMap()
 //--- answer - most likely a broker that rewrote or truncated the comment.
 void ReportUnreadableOwnOrders()
   {
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
+   int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
    int bad=0;
    for(int i=0;i<an;i++)
      {
       int si=-1;
       for(int k=0;k<g_nSenders;k++)
         {
-         if(all[i].magic==g_magic[k]) { si=k; break; }
+         if(g_scanScratch[i].magic==g_magic[k]) { si=k; break; }
         }
       if(si<0) continue;                                     // not ours
       //--- an unreadable comment is EXPECTED after a partial close (MT5
       //--- overwrites it, MT4 replaces the ticket). It is only a problem if
       //--- none of the three sources can name the position - then nothing
       //--- will ever match it, and it can never be closed.
-      if(StringLen(ResolveUid(all[i]))>0) continue;
+      if(StringLen(ResolveUid(g_scanScratch[i]))>0) continue;
 
       bad++;
-      g_log.Error("order "+all[i].sym+" ticket="+(string)all[i].ticket
-                  +" magic="+(string)all[i].magic+" ("+g_sid[si]+")"
+      g_log.Error("order "+g_scanScratch[i].sym+" ticket="+(string)g_scanScratch[i].ticket
+                  +" magic="+(string)g_scanScratch[i].magic+" ("+g_sid[si]+")"
                   +" carries our magic but its comment yields no UID"
-                  +" [comment=\""+all[i].cmt+"\"]"
+                  +" [comment=\""+g_scanScratch[i].cmt+"\"]"
                   +" - it can never be matched or closed by the copier");
      }
    if(bad>0)
@@ -1999,31 +2040,30 @@ void ReportUnreadableOwnOrders()
 //--- fix. Without this, reordering sections looks like it worked.
 void ReportOrphanedMirrors()
   {
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
+   int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
    int bad=0;
    for(int i=0;i<an;i++)
      {
       //--- only positions WE tagged. Another EA may legitimately use any
       //--- magic, and none of those are ours to comment on.
-      string uid=CopierUidFromComment(all[i].cmt);
+      string uid=CopierUidFromComment(g_scanScratch[i].cmt);
       if(StringLen(uid)==0) continue;
 
       bool owned=false;
       for(int k=0;k<g_nSenders;k++)
         {
-         if(all[i].magic==g_magic[k]) { owned=true; break; }
+         if(g_scanScratch[i].magic==g_magic[k]) { owned=true; break; }
         }
       if(owned) continue;
 
       bad++;
-      g_log.Error("ORPHAN: "+all[i].sym+" ticket="+(string)all[i].ticket
-                  +" uid="+uid+" magic="+(string)all[i].magic
+      g_log.Error("ORPHAN: "+g_scanScratch[i].sym+" ticket="+(string)g_scanScratch[i].ticket
+                  +" uid="+uid+" magic="+(string)g_scanScratch[i].magic
                   +" - it carries this copier's comment tag but no sender is"
                   +" configured with that magic (a reordered copier.ini or a"
                   +" changed MagicBase moves a sender onto a new one)."
                   +" Nothing will manage or close it. To adopt it, add"
-                  +" magic="+(string)all[i].magic+" to that sender's section;"
+                  +" magic="+(string)g_scanScratch[i].magic+" to that sender's section;"
                   +" otherwise close it by hand.");
      }
    if(bad>0)
@@ -2904,6 +2944,21 @@ void ExecuteQueue()
 // would need a second position under the same UID, which breaks the
 // one-UID-one-position mapping the whole design rests on.
 //=====================================================================
+double ComputeReceiverLots(const int si,const string sym,const double senderLots,bool &rejected)
+  {
+   rejected=false;
+   CopierSymInfo si2;
+   if(!CopierGetSymbolInfo(sym,si2)) { rejected=true; return 0.0; }
+   double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],1.0,si2,
+                                 0.0,0.0,rejected);
+   if(rejected || lots<=0.0) return 0.0;
+   if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
+     {
+      lots=CopierNormalizeLot(g_senderCfg[si].maxLotsPerPosition,si2);
+     }
+   return lots;
+  }
+
 void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local)
   {
    if(local.kind!=CP_ORD_MARKET) return;
@@ -2915,8 +2970,23 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
    //--- to determine the local target volume. Comparing local.lots directly against
    //--- desired.lots would falsely trim mirrors whenever the sizing multiplier > 1.0.
    bool rejected=false;
-   double targetLots=CopierComputeLots(desired.lots,g_lotMode[si],g_lotParam[si],1.0,si2,
-                                       0.0,0.0,rejected);
+   double targetLots=0.0;
+   if(g_lotMode[si]==CP_SIZE_FIXED)
+     {
+      double origLots=GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
+      if(origLots>0.0 && desired.lots<origLots)
+        {
+         targetLots=CopierNormalizeLot(g_lotParam[si]*(desired.lots/origLots),si2);
+        }
+      else
+        {
+         targetLots=CopierNormalizeLot(g_lotParam[si],si2);
+        }
+     }
+   else
+     {
+      targetLots=ComputeReceiverLots(si,local.sym,desired.lots,rejected);
+     }
    if(rejected || targetLots<=0.0) return;
 
    double diff=local.lots-targetLots;
@@ -3208,16 +3278,10 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
          if(g_desired[base+d].uid==loc[i].uid)
            {
             double rawLots=g_desired[base+d].lots;
-            CopierSymInfo dsi;
-            if(CopierGetSymbolInfo(loc[i].sym,dsi))
-              {
-               bool rej=false;
-               double tLots=CopierComputeLots(rawLots,g_lotMode[si],g_lotParam[si],1.0,dsi,0.0,0.0,rej);
-               if(!rej && tLots>0.0) want=tLots;
-               else                  want=rawLots;
-              }
-            else
-               want=rawLots;
+            bool rej=false;
+            double tLots=ComputeReceiverLots(si,loc[i].sym,rawLots,rej);
+            if(!rej && tLots>0.0) want=tLots;
+            else                  want=rawLots;
             break;
            }
         }
@@ -3706,22 +3770,21 @@ void PendingOpens(int &count,double &lots)
 //--- the hub's closeall command (M5b); the reason string is only for the log.
 int CloseAllOurs(const string reason)
   {
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
+   int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
    int queued=0;
    for(int i=0;i<an;i++)
      {
       int si=-1;
       for(int k=0;k<g_nSenders;k++)
         {
-         if(all[i].magic==g_magic[k]) { si=k; break; }
+         if(g_scanScratch[i].magic==g_magic[k]) { si=k; break; }
         }
       if(si<0) continue;                      // not ours
-      string uid=ResolveUid(all[i]);
+      string uid=ResolveUid(g_scanScratch[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
-      PushAction(si,CP_ACT_CLOSE,uid,all[i].sym,all[i].side,all[i].lots,
-                 all[i].ticket);
+      PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
+                 g_scanScratch[i].ticket);
       queued++;
      }
    if(StringLen(reason)>0)
@@ -3994,8 +4057,7 @@ void ConvergeSender(const int si)
 
       //--- 3. Lot calculation
       bool rejected=false;
-      double lots=CopierComputeLots(d.lots,g_lotMode[si],g_lotParam[si],1.0,si2,
-                                    0.0,0.0,rejected);
+      double lots=ComputeReceiverLots(si,rsym,d.lots,rejected);
       if(rejected || lots<=0.0)
         {
          g_log.Warn("lot sizing rejected "+d.uid+" "+rsym
@@ -4887,13 +4949,30 @@ void HandleCmd(const CopierEnv &e)
          return;
         }
       int added=ResubscribeSenders(beforeSid,beforeN);
-   ClearQueue();
+      ClearQueue();
+
+      int warnings=0;
+      for(int i=0;i<g_nSenders;i++)
+        {
+         long was=0;
+         for(int j=0;j<beforeN;j++)
+            if(beforeSid[j]==g_sid[i]) { was=beforeMagic[j]; break; }
+         if(was!=0 && was!=g_magic[i]) warnings++;
+        }
+      if(beforeN!=g_nSenders) warnings++;
+
       g_cmdId=id;
-      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev+";WARN="+(string)warnings;
       SendCfgAck(g_cmdAck);
+      SendCurrentConfigReport();
       g_log.Info("CMD "+id+": reload applied - "
                  +IntegerToString(beforeN)+" -> "+IntegerToString(g_nSenders)
-                 +" sender(s), "+IntegerToString(added)+" new subscription(s)");
+                 +" sender(s), "+IntegerToString(added)+" new subscription(s), "
+                 +IntegerToString(warnings)+" warning(s)");
+      if(warnings>0)
+         g_log.Warn("CMD "+id+": "+IntegerToString(warnings)+" warning(s) - a magic"
+                    +" or sender-set change leaves positions that are no longer"
+                    +" managed. Check the panel's orphan rows.");
       return;
      }
 
@@ -5708,17 +5787,16 @@ void OnDeinit(const int reason)
    //--- positions whose comment the terminal has overwritten
    SaveReceiverMap();
 
-   CopierPos all[];
-   int an=CopierReadPositions(all,CP_MAX_POSITIONS);
+   int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
    string held="";
    int hc=0;
    for(int i=0;i<an;i++)
      {
-      string uid=CopierUidFromComment(all[i].cmt);
+      string uid=CopierUidFromComment(g_scanScratch[i].cmt);
       if(StringLen(uid)==0)
         {
          CopierPos prev;
-         if(g_recKnown.GetByTicket(all[i].ticket,prev)) uid=prev.uid;
+         if(g_recKnown.GetByTicket(g_scanScratch[i].ticket,prev)) uid=prev.uid;
         }
       if(StringLen(uid)==0) continue;
       held+=(hc>0?",":"")+uid;
@@ -6070,34 +6148,49 @@ void OnTimer()
                  +" PollMs here.");
    if(n>0)
      {
-      //--- Conflate snapshots PER SENDER (e.sid) in arrival order:
-      //--- if a later SNAP in this batch belongs to the SAME sender, skip this one.
-      //--- Otherwise apply it, ensuring every distinct sender's latest snapshot is ingested.
-      CopierEnv e;
+      //--- Conflate snapshots PER SENDER (e.sid) in arrival order in O(N) time:
+      //--- Step 1: Decode each message ONCE into pre-allocated scratch arrays
+      //--- Step 2: Backward pass records the latest SNAP for each sender
+      //--- Step 3: Forward pass executes messages, skipping superseded SNAPs
+      static CopierEnv s_envs[CP_DRAIN_MAX];
+      static int       s_errs[CP_DRAIN_MAX];
+      static bool      s_isLatestSnap[CP_DRAIN_MAX];
+
       for(int i=0;i<n;i++)
         {
-         if(CopierDecodeEnv(g_drainMsgs[i],e)!=CP_ERR_NONE)
+         s_errs[i]=CopierDecodeEnv(g_drainMsgs[i],s_envs[i]);
+         s_isLatestSnap[i]=false;
+        }
+
+      string seenSnapSid[CP_MAX_SENDERS];
+      int seenCount=0;
+      for(int i=n-1;i>=0;i--)
+        {
+         if(s_errs[i]==CP_ERR_NONE && s_envs[i].type==CP_T_SNAP)
            {
-            //--- malformed: let HandleMessage report it, in one place
+            bool seen=false;
+            for(int s=0;s<seenCount;s++)
+              {
+               if(seenSnapSid[s]==s_envs[i].sid) { seen=true; break; }
+              }
+            if(!seen)
+              {
+               if(seenCount<CP_MAX_SENDERS) seenSnapSid[seenCount++]=s_envs[i].sid;
+               s_isLatestSnap[i]=true;
+              }
+           }
+        }
+
+      for(int i=0;i<n;i++)
+        {
+         if(s_errs[i]!=CP_ERR_NONE)
+           {
             HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
             continue;
            }
-         if(e.type==CP_T_SNAP)
+         if(s_envs[i].type==CP_T_SNAP)
            {
-            bool hasNewerForSender=false;
-            CopierEnv eLater;
-            for(int k=i+1;k<n;k++)
-              {
-               if(CopierDecodeEnv(g_drainMsgs[k],eLater)==CP_ERR_NONE)
-                 {
-                  if(eLater.type==CP_T_SNAP && eLater.sid==e.sid)
-                    {
-                     hasNewerForSender=true;
-                     break;
-                    }
-                 }
-              }
-            if(hasNewerForSender)
+            if(!s_isLatestSnap[i])
               {
                g_snapSkipped++;
                continue;

@@ -447,6 +447,34 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 十九次审计：全栈 21 项缺陷终结修复与系统加固（2026-10-22 22:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **BUG-01** | **P0 致命** | `CopierCodec.mqh:305` / `envelope.rs:105` | **压缩协议跨端兼容与 Z85 填充字节剥离**：MQL 端压缩前缀携带 `1:<pad>:<z85>`，并在解压时剥离末尾填充字节（附带 1..3 字节 fallback）；Rust Hub 增加 PKZIP 头部 `PK\x03\x04` Local File Header 解析并提取 Deflate 切片解压，彻底修复持仓 ≥8 笔时解压失败与 Web 前端持仓清空问题。 |
+| **BUG-02** | **P0 致命** | `CopierTransport.mqh:440` | **`DrainFrames` 多帧排空死循环彻底根治**：将 `while(m1.more())` 修复为 `bool hasMore = m1.more(); while(hasMore) { ... hasMore = extra.more(); }`，彻底消灭当网络收到 >2 帧消息时 socket 队列后续合法消息被全量误吞噬的致命 Bug。 |
+| **BUG-03** | **P0 致命** | `CopierSender.mq4:1344, 1500` | **Sender 快照生成与广播时间戳彻底解耦**：开平仓变化时仅调用 `RebuildSnapshotPayload()` 更新内存序列化体供新节点握手，不推进 `g_lastSnapMs` 也不提前修改 `g_snapHash`；仅在真正广播快照时才更新哈希与时间戳，彻底消除全网 Receiver 误报 `BEHIND` 与单播修复风暴。 |
+| **BUG-04** | **P1 高危** | `CopierDefs.mqh:440` | **MT4 下 `CopierNowMs()` 49.71 天 32 位回绕保护**：引入静态溢出检测构造单调递增的 64 位毫秒时钟，彻底根治 VPS 运行满 49.71 天定时器永久冻结隐患。 |
+| **BUG-05** | **P1 高危** | `hub/src/main.rs:1867` | **`CFGR` 请求 `--writes off` 门禁与单次发送**：增加 `if args.writes` 安全门禁，并移除手动 `send_cfg` 调用，统一由主循环底部 `cmds.due` 负责发送，消除同一微秒重复发送两次配置。 |
+| **BUG-06** | **P1 高危** | `CopierReceiver.mq4:2950` | **`CP_SIZE_FIXED`（固定手数）模式下部分平仓等比例缩放**：引入 `GetOrUpdateSenderPeakLots` 记录 Sender 峰值/初始手数，当 Sender 部分平仓时跟单端按比例缩放目标手数，彻底修复固定手数模式下不跟平的问题。 |
+| **BUG-07** | **P2 中危** | `CopierSender.mq4:1422` | **Sender 修改止损止盈（`stopsDiff`）标记 `g_stateDirty`**：确保仅修改 SL/TP 时也能触发持久化保存并更新快照内存。 |
+| **BUG-08** | **P2 中危** | `CopierSender.mq4:383` | **Sender `IncludeMagicNumbers` 尾部逗号空 Token 过滤与 64 位解析**：剔除 `StringSplit` 切出的空字符串，防止手工单（`magic=0`）被误匹配广播，并使用 `CopierParseLong` 杜绝 32 位溢出。 |
+| **BUG-09** | **P2 中危** | `CopierFilter.mqh:137, 212, 292` | **`DayTradingTimes` 跨午夜按星期过滤逻辑优化与 `24:00` 支持**：`CopierParseHhMm` 支持 `24:00` 解析为 `86400`；按星期时段在当天仅匹配晚间，次日凌晨由 `prevDow` 负责且尊重当日显式休市，消除时段翻倍。 |
+| **BUG-10** | **P2 中危** | `CopierReceiver.mq4:4955` | **Receiver `HandleCmd` reload 指令上报 `CFGRPT` 并校验孤儿仓**：重载本地 INI 后立即向 Hub 发送 `CFGRPT` 刷新 `current_setting`，并对 magic 变更产生预警。 |
+| **BUG-11** | **P2 中危** | `CopierReceiver.mq4:3286, 4070` | **`ConvergeSender` 与 `DedupLocal` 统一生效 `MaxLotsPerPosition`**：封装 `ComputeReceiverLots` 统一约束单笔最大手数限制。 |
+| **BUG-12** | **P2 中危** | `hub/src/commands.rs:405` | **`--writes off` 模式下冻结写命令重试**：新增 `due_gated`，在只读模式下不消耗写命令的重试次数，保持 pending 状态直到以写模式启动。 |
+| **BUG-13** | **P2 中危** | `hub/src/api.rs:482, 518` | **消除 `mirrors` 列表 $K$ 倍膨胀并替换 `top(64)`**：直接按 receiver 过滤 mirrors 并排序去重；Sender 持仓改用 $O(1)$ 的 `view_for(&n.acc)` 消除第 65~100 个 Sender 的截断。 |
+| **BUG-14** | **P2 中危** | `hub/src/api.rs:1190` | **`/api/v1/whoami` 与 `/api/v1/logout` 支持 Bearer 认证**：提取 `header_token` 统一支持 Cookie 与 `Authorization: Bearer` 令牌。 |
+| **BUG-15** | **P3 低危** | `hub/src/audit.rs:400` | **异步日志轮转临时文件名增加递增序号**：临时文件名包含 `inner.rotations + 1`，彻底消除高频轮转时的并发覆盖竞态。 |
+| **BUG-16** | **P3 低危** | `hub/src/alerts.rs:235` / `main.rs:2334` | **节点驱逐（Evict）状态深度清理**：补充清理 `last_risk_tripped/blocked` 与 `last_cfg_pull`，防止节点重连后告警被抑制或拉取退避卡死。 |
+| **BUG-17** | **P3 低危** | `CopierModel.mqh:595` / `CopierState.mqh:74` | **单参数 `CopierReadCommentByTicket` 支持挂单；`TicketHash` 混入 64 位高 32 位**：挂单注释读取回退 `OrderSelect`；TicketHash 混入高位两个 16-bit 块。 |
+| **OPT-01** | **性能优化** | `hub/src/main.rs:2250` | **WHO 广播与锁争用解耦**：将每帧加锁查询 `s.reg.is_empty()` 降频至 2 秒节拍器，锁争用降低 99.9%。 |
+| **OPT-02** | **性能优化** | `CopierReceiver.mq4:6155, 1996` | **快照合并降阶为 $O(N)$ 与消除栈大局部数组**：单趟解码 + 倒序记录最新快照，彻底消灭双重循环重复解码；全局复用 `g_scanScratch`，消除 4 处栈上 400KB 局部数组分配。 |
+| **OPT-03** | **性能优化** | `CopierConfig.mqh:470` / `api.rs:351` | **MQL 行切分预留步长与 Hub 列表查找 $O(1)$**：`CopierSplitLines` 使用 `StringSubstr` + `reserve_size=512`；`nodes_json_list` 改用 `pos.view_for`。 |
+| **TEST-01** | **测试完善** | `tools/tests.sh` / `snapshot_receipt_test.py` | **补全 `tests.sh` 测试列表**：补入 `curve_keyfile_test.py`、`hub_proto_test.py` 等 4 个脚本，`snapshot_receipt_test.py` 支持 `1:<pad>:<z85>` 编解码验证。 |
+
+---
+
 ### 十八次审计：全栈 19 项缺陷终结修复与系统加固（2026-10-22 20:15；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

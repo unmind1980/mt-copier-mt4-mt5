@@ -134,6 +134,7 @@ long CopierParseHhMm(const string s)
    if(n<2) return -1;
    int h=(int)StringToInteger(CopierTrim(p[0]));
    int m=(int)StringToInteger(CopierTrim(p[1]));
+   if(h==24 && m==0) return 86400;
    if(h<0 || h>23 || m<0 || m>59) return -1;
    return (long)h*3600+(long)m*60;
   }
@@ -202,14 +203,19 @@ private:
    //--- that reached the hours gate. Reading the row in place is the same
    //--- answer with no copy and no local array to construct.
    bool              HitAt(const long &fr[],const long &to[],const int base,
-                           const int n,const int sec) const
+                           const int n,const int sec,const bool allowMorningWrap=true) const
      {
       for(int i=0;i<n;i++)
         {
          long a=fr[base+i],b=to[base+i];
          if(a==b) return true;                    // all day
          if(a<b) { if(sec>=a && sec<=b) return true; }
-         else    { if(sec>=a || sec<=b) return true; }   // wraps midnight
+         else
+           {
+            // wraps midnight: in blanket mode, matches both evening (>=a) and morning (<=b).
+            // in per-day mode, today matches only evening (>=a); next day's morning is handled by prevDow.
+            if(sec>=a || (allowMorningWrap && sec<=b)) return true;
+           }
         }
       return false;
      }
@@ -217,7 +223,7 @@ private:
    bool              Hit(const long &fr[],const long &to[],const int n,
                          const int sec) const
      {
-      return HitAt(fr,to,0,n,sec);
+      return HitAt(fr,to,0,n,sec,true);
      }
 
 public:
@@ -289,8 +295,10 @@ public:
 
       //--- 1) Check if the previous day had a midnight-wrapping session (a > b)
       //--- that extends into today's early morning (sec <= b).
+      //--- An explicit closed day (e.g. "Tue=" where m_daySet[dow] is true and m_dN[dow]==0)
+      //--- is respected and prevents spillover into today.
       int prevDow=(dow+6)%7;
-      if(m_daySet[prevDow])
+      if(m_daySet[prevDow] && (!m_daySet[dow] || m_dN[dow]>0))
         {
          int pn=m_dN[prevDow];
          int pBase=prevDow*CP_TT_MAX;
@@ -306,7 +314,7 @@ public:
       if(m_daySet[dow])
         {
          int n=m_dN[dow];
-         return HitAt(m_dFrom,m_dTo,dow*CP_TT_MAX,n,sec);
+         return HitAt(m_dFrom,m_dTo,dow*CP_TT_MAX,n,sec,false);
         }
       return Hit(m_from,m_to,m_n,sec);
      }

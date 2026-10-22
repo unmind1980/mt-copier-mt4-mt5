@@ -594,10 +594,14 @@ string CopierReadCommentByTicket(const CopierPos &p)
 
 string CopierReadCommentByTicket(const long ticket)
   {
-   CopierPos p;
-   p.ticket=ticket;
-   p.kind=CP_ORD_MARKET;
-   return CopierReadCommentByTicket(p);
+#ifdef __MQL5__
+   if(PositionSelectByTicket((ulong)ticket)) return PositionGetString(POSITION_COMMENT);
+   if(OrderSelect((ulong)ticket)) return OrderGetString(ORDER_COMMENT);
+   return "";
+#else
+   if(OrderSelect((int)ticket,SELECT_BY_TICKET)) return OrderComment();
+   return "";
+#endif
   }
 
 //=====================================================================

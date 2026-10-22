@@ -469,25 +469,30 @@ bool CopierIniValidate(const string ini,string &err)
 int CopierSplitLines(const string s,string &out[])
   {
    ArrayResize(out,0);
-   string cur="";
    int n=StringLen(s);
+   if(n<=0) return 0;
+   int start=0;
    for(int i=0;i<n;i++)
      {
-      int c=StringGetCharacter(s,i);
+      ushort c=StringGetCharacter(s,i);
       if(c=='\n')
         {
+         int len=i-start;
+         if(len>0 && StringGetCharacter(s,i-1)=='\r') len--;
          int m=ArraySize(out);
-         ArrayResize(out,m+1);
-         out[m]=cur;
-         cur="";
-         continue;
-      }
-      if(c=='\r') continue;                    // handled by the \n that follows
-      cur+=ShortToString((ushort)c);
+         ArrayResize(out,m+1,512);
+         out[m]=(len>0)?StringSubstr(s,start,len):"";
+         start=i+1;
+        }
      }
-   int m=ArraySize(out);
-   ArrayResize(out,m+1);
-   out[m]=cur;
+   if(start<=n)
+     {
+      int len=n-start;
+      if(len>0 && StringGetCharacter(s,n-1)=='\r') len--;
+      int m=ArraySize(out);
+      ArrayResize(out,m+1,512);
+      out[m]=(len>0)?StringSubstr(s,start,len):"";
+     }
    return ArraySize(out);
   }
 

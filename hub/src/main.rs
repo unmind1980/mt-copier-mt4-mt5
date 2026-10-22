@@ -1876,23 +1876,20 @@ fn main() {
                             } else {
                                 format!("{}:{}", crole, cacc)
                             };
-                            match cfg.current(&key) {
-                                Some(r) => {
-                                    let c = cmds.issue_cfg(&key, r.rev, "", "");
-                                    println!(
-                                        "[hub] {} asked for its config - sending {} (rev {})",
-                                        key, c.id, r.rev
-                                    );
-                                    if let Err(e) =
-                                        send_cfg(&sock, &mut state, &key, &c.id, r.rev, &r.ini)
-                                    {
-                                        eprintln!("[hub] CFG send failed: {}", e);
+                            if args.writes {
+                                match cfg.current(&key) {
+                                    Some(r) => {
+                                        let c = cmds.issue_cfg(&key, r.rev, "", "");
+                                        println!(
+                                            "[hub] {} asked for its config - queued {} (rev {})",
+                                            key, c.id, r.rev
+                                        );
                                     }
+                                    None => println!(
+                                        "[hub] {} asked for its config but this hub has none",
+                                        key
+                                    ),
                                 }
-                                None => println!(
-                                    "[hub] {} asked for its config but this hub has none",
-                                    key
-                                ),
                             }
                         }
 
@@ -2251,19 +2248,21 @@ fn main() {
         //--- ask may go out before a node has finished reconnecting - and then
         //--- a slow sweep, because a node whose one REG was dropped is
         //--- otherwise invisible for the rest of its life.
-        let who_every = {
-            let s = shared.lock_or_recover();
-            if s.reg.is_empty() {
-                WHO_EVERY_SECS
-            } else {
-                WHO_SWEEP_SECS
-            }
-        };
-        if last_who.elapsed().as_secs_f64() >= who_every {
-            last_who = Instant::now();
-            who_nonce += 1;
-            if let Err(e) = send_who(&sock, who_nonce, &mut state) {
-                eprintln!("[hub] WHO failed: {}", e);
+        if last_who.elapsed().as_secs_f64() >= WHO_EVERY_SECS {
+            let who_every = {
+                let s = shared.lock_or_recover();
+                if s.reg.is_empty() {
+                    WHO_EVERY_SECS
+                } else {
+                    WHO_SWEEP_SECS
+                }
+            };
+            if last_who.elapsed().as_secs_f64() >= who_every {
+                last_who = Instant::now();
+                who_nonce += 1;
+                if let Err(e) = send_who(&sock, who_nonce, &mut state) {
+                    eprintln!("[hub] WHO failed: {}", e);
+                }
             }
         }
 
@@ -2333,6 +2332,7 @@ fn main() {
                 //--- one row per node ever seen, never removed.
                 for key in &forgotten {
                     last_liveness.remove(key);
+                    last_cfg_pull.remove(key);
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry
                 //--- can keep a receiver online on heartbeats alone while its
@@ -2421,7 +2421,7 @@ fn main() {
         //---
         //--- Gated on `writes` as well as on there being a command, except for
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
-        for c in cmds.due(Instant::now()) {
+        for c in cmds.due_gated(Instant::now(), args.writes) {
             if !args.writes && !commands::is_read_only_op(&c.op) {
                 continue;
             }

@@ -102,17 +102,48 @@ pub fn latin1(b: &[u8]) -> String {
 
 const MAX_DECOMPRESSED_LEN: u64 = 4 * 1024 * 1024; // 4 MiB protection against Zip bombs
 
-/// Decompress a field payload with adaptive "0:" (raw) or "1:" (Z85-encoded Zlib/Deflate).
+/// Decompress a field payload with adaptive "0:" (raw) or "1:" (Z85-encoded Zlib/Deflate/PKZIP).
 pub fn decompress_field(field_bytes: &[u8]) -> String {
     if field_bytes.starts_with(b"1:") {
-        if let Ok(z85_str) = std::str::from_utf8(&field_bytes[2..]) {
-            if let Ok(raw_bytes) = zmq::z85_decode(z85_str.trim()) {
+        let rest = &field_bytes[2..];
+        let (pad, z85_slice) = if rest.len() >= 2 && rest[1] == b':' && rest[0] >= b'0' && rest[0] <= b'3' {
+            ((rest[0] - b'0') as usize, &rest[2..])
+        } else {
+            (0, rest)
+        };
+        if let Ok(z85_str) = std::str::from_utf8(z85_slice) {
+            if let Ok(mut raw_bytes) = zmq::z85_decode(z85_str.trim()) {
+                if pad > 0 && raw_bytes.len() >= pad {
+                    raw_bytes.truncate(raw_bytes.len() - pad);
+                }
+                // Check if this is a PKZIP container (MQL CryptEncode CRYPT_ARCH_ZIP output)
+                if raw_bytes.starts_with(b"PK\x03\x04") && raw_bytes.len() >= 30 {
+                    let comp_size = u32::from_le_bytes(raw_bytes[18..22].try_into().unwrap_or([0; 4])) as usize;
+                    let name_len = u16::from_le_bytes(raw_bytes[26..28].try_into().unwrap_or([0; 2])) as usize;
+                    let extra_len = u16::from_le_bytes(raw_bytes[28..30].try_into().unwrap_or([0; 2])) as usize;
+                    let data_start = 30 + name_len + extra_len;
+                    if data_start <= raw_bytes.len() {
+                        let data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
+                            data_start + comp_size
+                        } else {
+                            raw_bytes.len()
+                        };
+                        let compressed_slice = &raw_bytes[data_start..data_end];
+                        let mut buf = Vec::new();
+                        let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);
+                        if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                            return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
+                        }
+                    }
+                }
+                // Try zlib first
                 let mut buf = Vec::new();
                 let mut z = flate2::read::ZlibDecoder::new(&raw_bytes[..]).take(MAX_DECOMPRESSED_LEN + 1);
                 if z.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
                     return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
                 buf.clear();
+                // Fallback to deflate
                 let mut d = flate2::read::DeflateDecoder::new(&raw_bytes[..]).take(MAX_DECOMPRESSED_LEN + 1);
                 if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
                     return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));

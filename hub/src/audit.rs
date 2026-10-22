@@ -398,9 +398,10 @@ impl Audit {
         // active path no longer exists — step 3 must succeed or the log is
         // unwritable, which is why it comes immediately after.
         let rotating_path = PathBuf::from(format!(
-            "{}.rotating.{}",
+            "{}.rotating.{}.{}",
             self.path.display(),
-            std::process::id()
+            std::process::id(),
+            inner.rotations + 1
         ));
         let _ = fs::remove_file(&rotating_path);
 
