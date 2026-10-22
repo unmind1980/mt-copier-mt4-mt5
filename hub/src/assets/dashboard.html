@@ -5702,17 +5702,34 @@ $("cfgloadhist").addEventListener("click", function(){
   var rec = (cfgState.data && cfgState.data.history || []).filter(function(x){
     return String(x.rev) === String(rev);
   })[0];
-  if(rec && rec.ini){
-    $("cfgraw").value = rec.ini;
-    var parsedHist = parseIni(rec.ini);
+  if(!rec){
+    $("cfgmsg").className = "opmsg warn";
+    $("cfgmsg").textContent = "Revision " + rev + " is not in the history list.";
+    return;
+  }
+  // The history list carries metadata only (ini_bytes), not the body: fifty
+  // revisions of a 100-sender config is ~13 MB, and this dialog loads one.
+  $("cfgmsg").className = "opmsg";
+  $("cfgmsg").textContent = "Loading Rev " + rev + "…";
+  fetch("/api/v1/nodes/" + encodeURIComponent(cfgState.target) + "/config/revision/" + encodeURIComponent(rev)).then(function(r){
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function(j){
+    if(!j || typeof j.ini !== "string" || !j.ini){
+      $("cfgmsg").className = "opmsg warn";
+      $("cfgmsg").textContent = "Revision " + rev + " has no INI payload.";
+      return;
+    }
+    $("cfgraw").value = j.ini;
+    var parsedHist = parseIni(j.ini);
     populateCommonToForm(parsedHist.common);
     renderSenderCards(parsedHist.senders);
     $("cfgmsg").className = "opmsg";
     $("cfgmsg").textContent = "Loaded Rev " + rev + " into editor. Review and click 'Save & Push' to apply.";
-  } else {
-    $("cfgmsg").className = "opmsg warn";
-    $("cfgmsg").textContent = "Revision " + rev + " has no INI payload in history.";
-  }
+  }).catch(function(e){
+    $("cfgmsg").className = "opmsg bad";
+    $("cfgmsg").textContent = "Could not load Rev " + rev + ": " + e.message;
+  });
 });
 
 $("cfgrollbackbtn").addEventListener("click", function(){

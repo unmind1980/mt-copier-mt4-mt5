@@ -306,6 +306,14 @@ impl ConfigStore {
     }
 
     /// The most recent `limit` revisions, newest last.
+    ///
+    /// The INI BODY IS NOT INCLUDED. It used to be, so the dashboard could
+    /// restore a revision with one click - but a list is not a document:
+    /// fifty revisions of a 100-sender config is ~13 MB of JSON for a dialog
+    /// that shows fifty rows, and the whole file is re-read and re-parsed on
+    /// every call. Callers that need one body ask for it by revision
+    /// (`GET .../config/revision/{rev}`), which reads the file once for one
+    /// row instead of once for all of them.
     pub fn history(&self, node: &str, limit: usize) -> Vec<Value> {
         let text = match std::fs::read_to_string(&self.path) {
             Ok(t) => t,
@@ -328,6 +336,7 @@ impl ConfigStore {
                         .and_then(|x| x.as_str())
                         .map(|s| s.len())
                         .unwrap_or(0);
+                    o.remove("ini");
                     o.insert("ini_bytes".to_string(), json!(n));
                 }
                 out.push(brief);
@@ -337,6 +346,23 @@ impl ConfigStore {
             out.drain(0..out.len() - limit);
         }
         out
+    }
+
+    /// One revision, body included. `None` when that revision does not exist.
+    pub fn revision(&self, node: &str, rev: u64) -> Option<Revision> {
+        let body = self.revision_body(node, rev)?;
+        Some(Revision {
+            node: node.to_string(),
+            rev,
+            //--- ts/actor/kind are not needed by the caller (it already has
+            //--- them from the history list); the body is the point.
+            ts: 0,
+            actor: String::new(),
+            ip: String::new(),
+            ini: body,
+            kind: String::new(),
+            from_rev: 0,
+        })
     }
 
 }
@@ -826,9 +852,42 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
+    /// The history LIST must not carry bodies, and the body must still be
+    /// reachable one revision at a time.
+    ///
+    /// Both halves matter. Sending every body made the config dialog pull
+    /// ~13 MB of JSON for fifty revisions of a 100-sender config; dropping the
+    /// body without providing `revision()` would have made "load revision"
+    /// impossible, which is the bug this pair exists to prevent from coming
+    /// back.
     #[test]
-    fn a_rollback_to_a_revision_that_never_existed_is_refused() {
-        let p = tmp("rollback_bad");
+    fn history_omits_the_body_and_one_revision_still_returns_it() {
+        let p = tmp("hist_body");
+        let c = ConfigStore::open(&p).unwrap();
+        c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
+        c.put("receiver:1", "a=22\n", "op", "ip", "push", 0).unwrap();
+
+        let h = c.history("receiver:1", 10);
+        assert_eq!(h.len(), 2);
+        for row in &h {
+            assert!(
+                row.get("ini").is_none(),
+                "the history list still carries a full ini body"
+            );
+        }
+        assert_eq!(h[0]["ini_bytes"], 4, "a=1\\n");
+        assert_eq!(h[1]["ini_bytes"], 5, "a=22\\n");
+
+        let r1 = c.revision("receiver:1", 1).expect("rev 1 must be readable");
+        assert_eq!(r1.ini, "a=1\n");
+        let r2 = c.revision("receiver:1", 2).expect("rev 2 must be readable");
+        assert_eq!(r2.ini, "a=22\n");
+        assert!(c.revision("receiver:1", 99).is_none());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_rollback_to_a_revision_that_never_existed_is_refused() {        let p = tmp("rollback_bad");
         let c = ConfigStore::open(&p).unwrap();
         c.put("receiver:1", "a=1\n", "op", "ip", "push", 0).unwrap();
         assert!(matches!(

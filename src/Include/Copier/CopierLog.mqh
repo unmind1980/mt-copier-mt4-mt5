@@ -25,6 +25,15 @@
 #define CP_LOG_PREFIX "copier_"
 #define CP_LOG_SUFFIX ".log"
 
+//--- How many distinct messages the repeat-collapser tracks at once.
+//---
+//--- ONE slot was not enough. The old rule was "identical to the PREVIOUS
+//--- message within 1 s", so two conditions alternating (A,B,A,B,...) never
+//--- matched anything and every occurrence was written out - exactly the
+//--- unbounded-noise failure the collapser exists to prevent, reached by
+//--- alternating between two keys instead of repeating one.
+#define CP_LOG_MERGE_SLOTS 4
+
 class CopierLog
   {
 private:
@@ -34,11 +43,12 @@ private:
    int               m_minLevel;
    int               m_gen;      // current generation file index
 
-   //--- rate limiter: one slot for identical consecutive messages
-   string            m_lastMsg;
-   int               m_lastLevel;
-   long              m_lastMs;
-   int               m_repeats;
+   //--- rate limiter: CP_LOG_MERGE_SLOTS independent slots, round-robin
+   string            m_mMsg[CP_LOG_MERGE_SLOTS];
+   int               m_mLvl[CP_LOG_MERGE_SLOTS];
+   long              m_mMs[CP_LOG_MERGE_SLOTS];
+   int               m_mRep[CP_LOG_MERGE_SLOTS];
+   int               m_mNext;
 
    string            PathOf(const int gen)
      {
@@ -148,8 +158,16 @@ private:
 
 public:
                      CopierLog():m_handle(INVALID_HANDLE),m_base("default"),
-                     m_bytes(0),m_minLevel(CP_LOG_WARN),m_gen(0),
-                     m_lastMsg(""),m_lastLevel(-1),m_lastMs(0),m_repeats(0) {}
+                     m_bytes(0),m_minLevel(CP_LOG_WARN),m_gen(0),m_mNext(0)
+     {
+      for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
+        {
+         m_mMsg[i]="";
+         m_mLvl[i]=-1;
+         m_mMs[i]=0;
+         m_mRep[i]=0;
+        }
+     }
                     ~CopierLog() { if(m_handle!=INVALID_HANDLE) FileClose(m_handle); }
 
    void              Init(const string tag,const int minLevel=CP_LOG_WARN)
@@ -171,12 +189,15 @@ public:
    //--- flush any pending "xN" summary; call once per timer tick
    void              Tick()
      {
-      if(m_repeats>0 && CopierNowMs()-m_lastMs>5000)
+      long now=CopierNowMs();
+      for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
         {
-         Emit(m_lastLevel,m_lastMsg+" [x"+(string)(m_repeats+1)+"]");
-         m_repeats=0;
-         m_lastMsg="";
-         m_lastLevel=-1;
+         if(m_mRep[i]<=0) continue;
+         if(now-m_mMs[i]<=5000) continue;
+         Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
+         m_mRep[i]=0;
+         m_mMsg[i]="";
+         m_mLvl[i]=-1;
         }
      }
 
@@ -184,21 +205,30 @@ public:
      {
       if(level>m_minLevel) return;
       long now=CopierNowMs();
-      //--- identical message within 1s -> count it, don't emit
-      if(level==m_lastLevel && msg==m_lastMsg && now-m_lastMs<1000)
+      //--- identical message within 1s -> count it, don't emit. Checked across
+      //--- every slot, so A,B,A,B is collapsed too - not just A,A,A.
+      for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
         {
-         m_repeats++;
+         if(m_mLvl[i]!=level || m_mMsg[i]!=msg) continue;
+         if(now-m_mMs[i]>=1000) continue;
+         m_mRep[i]++;
+         m_mMs[i]=now;
          return;
         }
-      if(m_repeats>0)
-        {
-         Emit(m_lastLevel,m_lastMsg+" [x"+(string)(m_repeats+1)+"]");
-         m_repeats=0;
-        }
-      m_lastMsg=msg;
-      m_lastLevel=level;
-      m_lastMs=now;
       Emit(level,msg);
+      //--- remember it as a merge candidate. A slot that is still holding an
+      //--- unflushed repeat count is flushed first, or that count would be
+      //--- silently overwritten.
+      int i=m_mNext;
+      m_mNext=(m_mNext+1)%CP_LOG_MERGE_SLOTS;
+      if(m_mRep[i]>0)
+        {
+         Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
+         m_mRep[i]=0;
+        }
+      m_mMsg[i]=msg;
+      m_mLvl[i]=level;
+      m_mMs[i]=now;
      }
 
    void              Error(const string m) { Write(CP_LOG_ERR,m);   }
@@ -257,6 +287,14 @@ private:
 // So anything that can repeat indefinitely goes through here instead.
 //=====================================================================
 #define CP_ONCE_MAX 64
+//--- Direct-mapped lookup cache over the 64 key slots.
+//---
+//--- ShouldEmit() runs on the per-position path of the converge loop (several
+//--- keys per position, ten times a second) and used to walk all 64 slots with
+//--- a string compare each. A direct-mapped cache VERIFIED BY STRING COMPARE is
+//--- safe under eviction - a stale index simply fails the compare and falls
+//--- back to the scan - and turns the steady state into one compare.
+#define CP_ONCE_LOOKUP 256
 
 class CopierOnceLog
   {
@@ -265,6 +303,19 @@ private:
    long              m_last[CP_ONCE_MAX];
    int               m_n;
    long              m_repeatMs;
+   int               m_lookup[CP_ONCE_LOOKUP];   // slot + 1, verified by compare
+
+   uint              HashOf(const string key) const
+     {
+      uint h=2166136261;                        // FNV-1a
+      int  n=StringLen(key);
+      for(int i=0;i<n;i++)
+        {
+         h^=(uint)StringGetCharacter(key,i);
+         h*=16777619;
+        }
+      return h;
+     }
 
 public:
    //--- an "already warned" key is cleared only by the re-warn interval,
@@ -274,6 +325,7 @@ public:
    void              Clear()
      {
       for(int i=0;i<CP_ONCE_MAX;i++) { m_key[i]=""; m_last[i]=0; }
+      for(int i=0;i<CP_ONCE_LOOKUP;i++) m_lookup[i]=0;
       m_n=0;
      }
 
@@ -284,9 +336,19 @@ public:
    bool              ShouldEmit(const string key)
      {
       long now=CopierNowMs();
+      int  h=(int)(HashOf(key)&(CP_ONCE_LOOKUP-1));
+      int  c=m_lookup[h];
+      if(c>0 && c<=m_n && m_key[c-1]==key)
+        {
+         if(now-m_last[c-1]<m_repeatMs) return false;
+         m_last[c-1]=now;
+         return true;
+        }
+
       for(int i=0;i<m_n;i++)
         {
          if(m_key[i]!=key) continue;
+         m_lookup[h]=i+1;
          if(now-m_last[i]<m_repeatMs) return false;
          m_last[i]=now;
          return true;
@@ -296,6 +358,7 @@ public:
         {
          m_key[m_n]=key;
          m_last[m_n]=now;
+         m_lookup[h]=m_n+1;
          m_n++;
          return true;
         }
@@ -309,6 +372,7 @@ public:
         }
       m_key[oldest]=key;
       m_last[oldest]=now;
+      m_lookup[h]=oldest+1;
       return true;
      }
   };

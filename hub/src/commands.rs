@@ -90,6 +90,21 @@ pub const KIND_OP: &str = "op";
 /// heartbeat, so this is what separates "self-heal" from "flood".
 pub const REVIVE_COOLDOWN_SECS: u64 = 60;
 
+/// How long a TERMINAL command (acked / rejected / unknown) is kept.
+///
+/// The journal is append-only and the in-memory map was rebuilt from it in
+/// full at every start, so without a retention window a hub that has been up
+/// for a year holds every command it ever issued and re-parses all of them on
+/// boot. 30 days is longer than anyone reads `/commands` back, and PENDING
+/// commands are never dropped regardless of age.
+pub const COMMAND_KEEP_SECS: u64 = 30 * 24 * 3600;
+
+/// Compact the journal once it passes this size. Compaction rewrites the file
+/// with ONE line per surviving command, so the append-only history of
+/// transitions becomes a snapshot of current state - which is all `load()`
+/// reconstructs anyway (last one wins).
+pub const COMMAND_JOURNAL_COMPACT_BYTES: u64 = 8 * 1024 * 1024;
+
 /// The operational commands, and the ONLY ones the hub will issue.
 ///
 /// A closed set, checked at the door, because the hub cannot tell a typo from
@@ -175,25 +190,60 @@ pub struct CommandStore {
 
 impl CommandStore {
     pub fn open(path: &Path) -> std::io::Result<CommandStore> {
+        //--- Load BEFORE opening the append handle: the journal may be
+        //--- compacted below, and rewriting a file that is open for append
+        //--- would leave the handle writing into the old inode.
+        let (mut commands, seq, torn) = load(path);
+
+        //--- Retention. A command is never deleted while it is pending - those
+        //--- are the ones still owed an answer - but a terminal one (acked,
+        //--- rejected, unknown) older than COMMAND_KEEP_SECS is history that
+        //--- nothing reads. Without this the map only ever grows, and every
+        //--- restart re-parses the whole journal.
+        let now = unix_secs();
+        let mut inner = Inner {
+            file: None,
+            commands: HashMap::new(),
+            in_flight: HashSet::new(),
+            seq,
+            torn,
+        };
+        inner.commands = std::mem::take(&mut commands);
+        inner.prune_terminal(now, COMMAND_KEEP_SECS);
+
+        //--- Compact the journal itself once it has grown past the threshold.
+        //--- One line per SURVIVING command, so the file reflects the map the
+        //--- process is about to run with rather than every transition it ever
+        //--- recorded.
+        if let Ok(md) = std::fs::metadata(path) {
+            if md.len() > COMMAND_JOURNAL_COMPACT_BYTES {
+                match compact_journal(path, &inner.commands) {
+                    Ok(n) => println!(
+                        "[hub] command journal compacted: {} -> {} command(s), {} bytes",
+                        md.len(),
+                        n,
+                        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                    ),
+                    Err(e) => eprintln!("[hub] command journal compaction failed: {}", e),
+                }
+            }
+        }
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .read(true)
             .open(path)?;
-        let (commands, seq, torn) = load(path);
-        let in_flight = commands
+        inner.file = Some(file);
+        let in_flight = inner
+            .commands
             .iter()
             .filter(|(_, c)| c.state == STATE_PENDING)
             .map(|(k, _)| k.clone())
             .collect();
+        inner.in_flight = in_flight;
         Ok(CommandStore {
-            inner: Mutex::new(Inner {
-                file: Some(file),
-                commands,
-                in_flight,
-                seq,
-                torn,
-            }),
+            inner: Mutex::new(inner),
             path: path.to_path_buf(),
             enabled: true,
             salt: String::new(),
@@ -232,12 +282,19 @@ impl CommandStore {
     /// (total commands known, pending, torn lines)
     pub fn stats(&self) -> (usize, usize, u64) {
         let i = self.inner.lock_or_recover();
-        let pending = i
-            .commands
-            .values()
-            .filter(|c| c.state == STATE_PENDING)
-            .count();
-        (i.commands.len(), pending, i.torn)
+        //--- `in_flight` IS the pending set (it is populated from the journal at
+        //--- load and kept in step by issue/ack/due), so this is O(1) instead of
+        //--- walking every command ever issued.
+        (i.commands.len(), i.in_flight.len(), i.torn)
+    }
+
+    /// Forget terminal commands older than `max_age_secs`.
+    ///
+    /// Called from the hub's periodic sweep. The journal FILE is not rewritten
+    /// (that is `compact_journal`'s job at startup); this bounds what lives in
+    /// memory, which is what `stats()`, `/commands` and the alert scan walk.
+    pub fn prune(&self, now_secs: u64, max_age_secs: u64) -> usize {
+        self.inner.lock_or_recover().prune_terminal(now_secs, max_age_secs)
     }
 
     /// Register (or return) the config-push command for a revision.
@@ -462,9 +519,8 @@ impl CommandStore {
         for f in finished {
             inner.in_flight.remove(&f);
         }
-        for c in &changed {
-            inner.append(c);
-        }
+        //--- ONE fsync for the whole batch instead of one per command
+        inner.append_many(&changed);
         out
     }
 
@@ -504,34 +560,72 @@ impl CommandStore {
 
 impl Inner {
     fn append(&mut self, c: &Command) {
-        let line = json!({
-            "v": 1,
-            "id": c.id,
-            "node": c.node,
-            "kind": c.kind,
-            "rev": c.rev,
-            "op": c.op,
-            "seq": c.seq,
-            "args": c.args,
-            "state": c.state,
-            "ts": c.ts,
-            "actor": c.actor,
-            "ip": c.ip,
-            "attempts": c.attempts,
-            "ack_at": c.ack_at,
-            "err": c.err,
-        });
-        let mut s = serde_json::to_string(&line).unwrap_or_else(|_| "{}".to_string());
-        s.push('\n');
-        if let Some(f) = self.file.as_mut() {
-            // Same rule as the audit and the revisions: append, flush, never
-            // seek. "What did we tell that node to do" must survive the
-            // machine losing power.
-            if let Err(e) = f.write_all(s.as_bytes()).and_then(|_| f.sync_data()) {
-                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
-                return;
-            }
+        self.append_many(std::slice::from_ref(c));
+    }
+
+    /// Append one or more state transitions, then fsync ONCE.
+    ///
+    /// `sync_data()` per line was the problem: the retry ladder writes a line
+    /// for every attempt, and `due()` writes for every command that becomes due
+    /// in the same pass - so ten due commands meant ten serial fsyncs on the
+    /// hub's main thread, which is also the thread forwarding OPEN/CLOSE. The
+    /// durability contract is unchanged (everything written is flushed before
+    /// the call returns); only the number of flushes changed.
+    fn append_many(&mut self, cs: &[Command]) {
+        let f = match self.file.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+        let mut buf = String::new();
+        for c in cs {
+            let line = json!({
+                "v": 1,
+                "id": c.id,
+                "node": c.node,
+                "kind": c.kind,
+                "rev": c.rev,
+                "op": c.op,
+                "seq": c.seq,
+                "args": c.args,
+                "state": c.state,
+                "ts": c.ts,
+                "actor": c.actor,
+                "ip": c.ip,
+                "attempts": c.attempts,
+                "ack_at": c.ack_at,
+                "err": c.err,
+            });
+            buf.push_str(&serde_json::to_string(&line).unwrap_or_else(|_| "{}".to_string()));
+            buf.push('\n');
         }
+        if buf.is_empty() {
+            return;
+        }
+        // Same rule as the audit and the revisions: append, flush, never seek.
+        // "What did we tell that node to do" must survive the machine losing
+        // power - so the fsync is still there, just not once per line.
+        if let Err(e) = f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
+            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
+        }
+    }
+
+    /// Drop terminal commands older than `max_age_secs`, and forget the
+    /// sequence numbers of nodes that no longer have any command.
+    ///
+    /// The map is rebuilt from the journal at startup and never otherwise
+    /// shrinks, so a hub that runs for months ends up holding every command it
+    /// ever issued - and `stats()` walks all of them. PENDING commands are
+    /// never dropped: they are the ones still owed an answer.
+    fn prune_terminal(&mut self, now_secs: u64, max_age_secs: u64) -> usize {
+        let before = self.commands.len();
+        self.commands.retain(|_, c| {
+            if c.state == STATE_PENDING {
+                return true;
+            }
+            now_secs.saturating_sub(c.ts) <= max_age_secs
+        });
+        self.in_flight.retain(|id| self.commands.contains_key(id));
+        before - self.commands.len()
     }
 }
 
@@ -544,6 +638,46 @@ pub fn command_id_cfg(node: &str, rev: u64) -> String {
 /// what the sequence buys and what it does not.
 pub fn command_id_op(node: &str, op: &str, seq: u64) -> String {
     format!("{}-{}-{}", node.replace(':', "-"), op, seq)
+}
+
+/// Rewrite the journal as one line per live command.
+///
+/// Write-then-rename, so a crash mid-rewrite leaves the original intact. `load`
+/// keeps the LAST line for an id, so a snapshot file and a full history are
+/// equivalent inputs - only the size differs.
+fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io::Result<usize> {
+    let tmp = path.with_extension("jsonl.compact");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        let mut buf = String::new();
+        for c in commands.values() {
+            let line = json!({
+                "v": 1,
+                "id": c.id,
+                "node": c.node,
+                "kind": c.kind,
+                "rev": c.rev,
+                "op": c.op,
+                "seq": c.seq,
+                "args": c.args,
+                "state": c.state,
+                "ts": c.ts,
+                "actor": c.actor,
+                "ip": c.ip,
+                "attempts": c.attempts,
+                "ack_at": c.ack_at,
+                "err": c.err,
+            });
+            buf.push_str(&serde_json::to_string(&line).unwrap_or_else(|_| "{}".to_string()));
+            buf.push('\n');
+        }
+        f.write_all(buf.as_bytes())?;
+        f.sync_data()?;
+    }
+    //--- std::fs::rename replaces on Windows (MoveFileEx with REPLACE_EXISTING)
+    //--- and on POSIX, so the swap is atomic on both.
+    std::fs::rename(&tmp, path)?;
+    Ok(commands.len())
 }
 
 fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64) {
@@ -905,6 +1039,55 @@ mod tests {
         assert_eq!(list1.len(), 2);
         assert_eq!(list1[0].id, list2[0].id);
         assert_eq!(list1[1].id, list2[1].id);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Retention: a terminal command ages out, a PENDING one never does.
+    ///
+    /// The map used to be rebuilt from the journal at every start and never
+    /// shrunk, so a hub up for a year held every command it ever issued - and
+    /// `stats()` walked all of them.
+    #[test]
+    fn terminal_commands_age_out_but_pending_ones_never_do() {
+        let p = tmp("prune");
+        let s = CommandStore::open(&p).unwrap();
+        // One command that will be ACKed (terminal) and one left pending.
+        let done = s.issue_op("receiver:1", "pause", "", "op", "");
+        let _open = s.issue_op("receiver:1", "resume", "", "op", "");
+        assert!(s.ack(&done.id, true, 0, ""));
+
+        // Age everything by a year.
+        let far = unix_secs() + 365 * 24 * 3600;
+        let dropped = s.prune(far, COMMAND_KEEP_SECS);
+        assert_eq!(dropped, 1, "the acked command should have aged out");
+
+        let left = s.commands();
+        assert_eq!(left.len(), 1, "the pending command must survive");
+        assert_eq!(left[0].state, STATE_PENDING);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// A big journal is rewritten as one line per live command, and `load`
+    /// still reconstructs the same map from it.
+    #[test]
+    fn a_compacted_journal_reloads_to_the_same_state() {
+        let p = tmp("compact");
+        {
+            let s = CommandStore::open(&p).unwrap();
+            for i in 0..5 {
+                let c = s.issue_op("receiver:1", "pause", "", "op", "");
+                s.ack(&c.id, true, 0, "");
+                let _ = i;
+            }
+            let _ = s.issue_op("receiver:1", "resume", "", "op", "");
+        }
+        let before = std::fs::read_to_string(&p).unwrap();
+        assert!(before.lines().count() > 6, "expected one line per transition");
+
+        let s = CommandStore::open(&p).unwrap();
+        let (total, pending, _) = s.stats();
+        assert_eq!(total, 6);
+        assert_eq!(pending, 1);
         let _ = std::fs::remove_file(&p);
     }
 }

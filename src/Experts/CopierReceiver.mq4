@@ -372,6 +372,29 @@ double  g_stOvTp[CP_MAX_STOPS_OV];
 double  g_stOvOpn[CP_MAX_STOPS_OV];
 long    g_stLastMs[CP_MAX_STOPS_OV];
 int     g_stCount=0;
+//--- Bumped on every change to the override table. QueueModifyIfNeeded() caches
+//--- "this position's stop geometry was already computed and nothing that
+//--- feeds it has moved", and the override table is one of those inputs, so a
+//--- MODIFY event (or the snapshot catching up with one) has to invalidate it.
+long    g_stOvEpoch=1;
+
+//--- Last (ticket -> inputs) seen by QueueModifyIfNeeded, so the per-tick
+//--- recomputation can be skipped when nothing changed.
+//---
+//--- That function runs once per mirrored position per 100 ms tick and is the
+//--- most expensive thing in the converge pass: symbol info, the override
+//--- table scan, four stop-geometry conversions and two broker-price reads -
+//--- all to conclude "no change" on essentially every tick. A direct-mapped
+//--- cache keyed on the ticket, with every input compared exactly, keeps the
+//--- conclusion and skips the work.
+#define CP_STOPSIG_SLOTS 2048
+struct CopierStopSig
+  {
+   long              ticket;
+   long              epoch;
+   double            v[8];
+  };
+CopierStopSig g_stopSig[CP_STOPSIG_SLOTS];
 //--- A tripped risk switch is a STEADY STATE, not an event: the receiver is
 //--- deliberately doing nothing and will keep doing it. Once an hour is
 //--- plenty to notice that in a log; once a minute is 1440 lines a day.
@@ -460,6 +483,35 @@ bool    g_stateSaveOk=false;   // announced the identity store once per session
 //--- on every 30-second revalidation.
 bool    g_stateRestored=false;
 int     g_nSenders=0;
+
+//--- Direct-mapped magic -> sender index (slot+1, 0 = not cached, -1 = known
+//--- miss). Every account scan used to answer "which sender owns this order"
+//--- with a linear pass over all senders, for every order, ten times a second:
+//--- 100 positions x 100 senders is 10,000 compares a tick. Verified by
+//--- comparing g_magic[idx], so a stale or colliding entry falls back to the
+//--- scan instead of returning a wrong sender.
+#define CP_MAGIC_LOOKUP 256
+int     g_magicLookup[CP_MAGIC_LOOKUP];
+
+int MagicToSender(const long magic)
+  {
+   int h=(int)(magic&(CP_MAGIC_LOOKUP-1));
+   if(h<0 || h>=CP_MAGIC_LOOKUP) h=0;
+   int c=g_magicLookup[h];
+   if(c>0 && c<=g_nSenders && g_magic[c-1]==magic) return c-1;
+   if(c<0) return -1;                     // cached miss
+   for(int k=0;k<g_nSenders;k++)
+     {
+      if(g_magic[k]!=magic) continue;
+      g_magicLookup[h]=k+1;
+      return k;
+     }
+   g_magicLookup[h]=-1;
+   return -1;
+  }
+
+void MagicLookupClear() { ArrayInitialize(g_magicLookup,0); }
+
 
 struct CopierWaitItem
   {
@@ -758,6 +810,43 @@ struct CopierUidPeakLots
 CopierUidPeakLots g_uidPeakLots[CP_MAX_POSITIONS];
 int               g_uidPeakLotsCount=0;
 
+//--- Direct-mapped cache: uid -> slot+1, verified by string compare.
+//---
+//--- GetOrUpdateSenderPeakLots() is called once per record while applying a
+//--- snapshot, and it used to walk the whole peak table: at 2048 records that
+//--- is ~2 million string compares per snapshot, for a lookup whose answer is
+//--- almost always the same slot as the previous pass. A stale index cannot
+//--- give a wrong answer because the uid is compared before it is trusted.
+#define CP_PEAK_LOOKUP 4096
+int g_peakLookup[CP_PEAK_LOOKUP];
+
+uint PeakUidHash(const string uid)
+  {
+   uint h=2166136261;                           // FNV-1a
+   int  n=StringLen(uid);
+   for(int i=0;i<n;i++)
+     {
+      h^=(uint)StringGetCharacter(uid,i);
+      h*=16777619;
+     }
+   return h;
+  }
+
+int PeakFind(const string uid)
+  {
+   if(StringLen(uid)==0) return -1;
+   int h=(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1));
+   int c=g_peakLookup[h];
+   if(c>0 && c<=g_uidPeakLotsCount && g_uidPeakLots[c-1].uid==uid) return c-1;
+   for(int i=0;i<g_uidPeakLotsCount;i++)
+     {
+      if(g_uidPeakLots[i].uid!=uid) continue;
+      g_peakLookup[h]=i+1;
+      return i;
+     }
+   return -1;
+  }
+
 void PruneSenderPeakLots()
   {
    for(int i=g_uidPeakLotsCount-1;i>=0;i--)
@@ -784,17 +873,17 @@ void PruneSenderPeakLots()
          g_uidPeakLots[i]=g_uidPeakLots[--g_uidPeakLotsCount];
         }
      }
+   //--- the compaction moved rows, so every cached index is suspect
+   ArrayInitialize(g_peakLookup,0);
   }
 
 double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
   {
-   for(int i=0;i<g_uidPeakLotsCount;i++)
+   int i=PeakFind(uid);
+   if(i>=0)
      {
-      if(g_uidPeakLots[i].uid==uid)
-        {
-         if(curLots>g_uidPeakLots[i].peakLots) g_uidPeakLots[i].peakLots=curLots;
-         return g_uidPeakLots[i].peakLots;
-        }
+      if(curLots>g_uidPeakLots[i].peakLots) g_uidPeakLots[i].peakLots=curLots;
+      return g_uidPeakLots[i].peakLots;
      }
    if(g_uidPeakLotsCount>=CP_MAX_POSITIONS)
      {
@@ -805,6 +894,7 @@ double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
       int n=g_uidPeakLotsCount++;
       g_uidPeakLots[n].uid=uid;
       g_uidPeakLots[n].peakLots=curLots;
+      g_peakLookup[(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1))]=n+1;
       return curLots;
      }
    return curLots;
@@ -812,14 +902,19 @@ double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
 
 void ForgetSenderPeakLots(const string uid)
   {
-   for(int i=0;i<g_uidPeakLotsCount;i++)
-     {
-      if(g_uidPeakLots[i].uid==uid)
-        {
-         g_uidPeakLots[i]=g_uidPeakLots[--g_uidPeakLotsCount];
-         return;
-        }
-     }
+   int i=PeakFind(uid);
+   if(i<0) return;
+   int last=g_uidPeakLotsCount-1;
+   string moved=(i!=last)?g_uidPeakLots[last].uid:"";
+   g_uidPeakLots[i]=g_uidPeakLots[last];
+   g_uidPeakLots[last].uid="";
+   g_uidPeakLots[last].peakLots=0.0;
+   g_uidPeakLotsCount--;
+   //--- both the forgotten uid and the one that moved into its slot have a
+   //--- cached index that is now wrong
+   g_peakLookup[(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1))]=0;
+   if(StringLen(moved)>0)
+      g_peakLookup[(int)(PeakUidHash(moved)&(CP_PEAK_LOOKUP-1))]=0;
   }
 
 CopierSeenRing  g_mktClosed;
@@ -932,6 +1027,8 @@ bool LoadConfigFromInputs()
 
    //--- Start from an empty symbol map on every load - see MapClear.
    MapClear();
+   //--- the magic -> sender cache is derived from the config, so it goes with it
+   MagicLookupClear();
 
    //--- The routing id IS the port, exactly as on the sender. Both ends derive
    //--- it from the same number, so there is nothing to keep in step and no
@@ -1272,6 +1369,12 @@ string CurrentIniHash()
 
 string SerializeCurrentConfigToIni()
   {
+   //--- Chunked accumulation. This function appends ~126 lines per sender, and
+   //--- `out +=` copies the WHOLE string each time: at 100 senders the output
+   //--- is ~270 KB and the copying works out to about a gigabyte - on the
+   //--- thread that also has to answer snapshots and send orders. Flushing
+   //--- into a builder every ~4 KB makes it linear.
+   CopierStrBuilder sb;
    string out = "; copier.ini (active current settings)\n";
    out += "[common]\n";
    out += "deviationpoints=" + (string)DeviationPoints + "\n";
@@ -1318,6 +1421,8 @@ string SerializeCurrentConfigToIni()
    out += "syncheartbeatseconds=" + (string)SyncHeartbeatSeconds + "\n";
    out += "showpanel=" + (ShowPanel ? "1" : "0") + "\n";
    out += "showorphanedlist=" + (ShowOrphanedList ? "1" : "0") + "\n";
+   sb.Add(out);
+   out="";
 
    if(g_nSenders > 0)
      {
@@ -1369,6 +1474,9 @@ string SerializeCurrentConfigToIni()
          out += "maxtotallots=" + DoubleToString(g_senderCfg[i].maxTotalLots, 2) + "\n";
          out += "maxopenpositions=" + (string)g_senderCfg[i].maxOpenPositions + "\n";
          out += "staleseconds=" + (string)g_senderCfg[i].staleSeconds + "\n";
+         //--- one flush per sender: bounds `out` to a single sender's block
+         sb.Add(out);
+         out="";
         }
      }
    else if(!g_hubOn)
@@ -1414,9 +1522,12 @@ string SerializeCurrentConfigToIni()
       out += "maxtotallots=" + DoubleToString(g_senderCfg[0].maxTotalLots, 2) + "\n";
       out += "maxopenpositions=" + (string)g_senderCfg[0].maxOpenPositions + "\n";
       out += "staleseconds=" + (string)g_senderCfg[0].staleSeconds + "\n";
+      sb.Add(out);
+      out="";
      }
 
-   return out;
+   if(StringLen(out)>0) sb.Add(out);
+   return sb.Result();
   }
 
 void SendCurrentConfigReport()
@@ -1503,7 +1614,7 @@ bool LoadConfigForHub()
       //--- one message that makes the ceiling discoverable from the outside.
       g_log.Error("central mode: "+CP_INI_PATH+" declares up to [sender"
                   +(string)declaredMax+"], but this build supports "
-                  +CP_MAX_SENDERS+" sender(s). Sections sender0..sender"
+                  +(string)CP_MAX_SENDERS+" sender(s). Sections sender0..sender"
                   +(string)(CP_MAX_SENDERS-1)+" were loaded; sender"
                   +(string)CP_MAX_SENDERS+" onward were NOT. Raise"
                   +" CP_MAX_SENDERS, or split this receiver."
@@ -1526,7 +1637,18 @@ bool LoadConfigForHub()
    //--- direction. g_desired is indexed as si*CP_MAX_POSITIONS + i, so its
    //--- size IS the sender count - re-reading the ini without resizing it
    //--- is the crash the bootstrap path hits first.
-   ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
+   //---
+   //--- Resize only when the size actually changes: at 100 senders the array
+   //--- is 204,800 CopierPos (~30 MB), and ArrayResize reallocates and copies
+   //--- the whole thing. A reload that does not change the sender count - the
+   //--- common case, since most edits touch one sender's settings - would
+   //--- otherwise pay a 30 MB memcpy for nothing.
+   {
+    int want=g_nSenders*CP_MAX_POSITIONS;
+    if(ArraySize(g_desired)!=want) ArrayResize(g_desired,want);
+   }
+   //--- the magic -> sender cache is derived from the config, so it goes with it
+   MagicLookupClear();
    if(g_nSenders<=0)
      {
       g_log.Warn("central mode: "+CP_INI_PATH+" has no [senderN] sections, so"
@@ -1970,11 +2092,7 @@ void SaveReceiverMap()
 
    for(int i=0;i<g_acctAllPosCount;i++)
      {
-      int si=-1;
-      for(int k=0;k<g_nSenders;k++)
-        {
-         if(g_acctAllPos[i].magic==g_magic[k]) { si=k; break; }
-        }
+      int si=MagicToSender(g_acctAllPos[i].magic);
       if(si<0) continue;                        // not ours
 
       string uid=g_acctAllPos[i].uid;
@@ -1983,7 +2101,11 @@ void SaveReceiverMap()
 
       CopierPos p=g_acctAllPos[i];
       p.uid=uid;
-      g_saveScratch.Upsert(p);
+      //--- InsertEmpty, not Upsert: the account scan yields one row per
+      //--- position, so there is nothing to look up. Upsert() starts with a
+      //--- 2048-slot Find(uid), which made this rebuild O(rows x 2048) - the
+      //--- table is cleared first, so no row can already be present.
+      g_saveScratch.InsertEmpty(p);
      }
 
    g_recKnown.CopyFrom(g_saveScratch);
@@ -2985,9 +3107,20 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    rejected=false;
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(sym,si2)) { rejected=true; return 0.0; }
+   //--- minLots/maxLots here are bounds on the LOCAL volume, NOT the sender's.
+   //---
+   //--- They used to be fed minsenderlotsize/maxsenderlotsize, which is wrong
+   //--- on both counts: those two fields mean "skip a SIGNAL whose size is
+   //--- outside this range" (and ConvergeSender already applies them to
+   //--- d.lots), not "clamp the mirror to this size". Passing them here made
+   //---   * maxsenderlotsize silently SHRINK a mirror (multiplier 2.0 on a 0.4
+   //---     lot signal became 0.5 with no log line at all), and
+   //---   * minsenderlotsize REJECT the entry outright in fixed-lot mode
+   //---     (a 0.05 fixed size under a 0.1 filter never opened, reported as
+   //---     "lot sizing rejected" - which points at the wrong thing).
+   //--- The per-position cap is maxLotsPerPosition, applied below.
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],1.0,si2,
-                                 g_senderCfg[si].minsenderlotsize,
-                                 g_senderCfg[si].maxsenderlotsize,rejected);
+                                 0.0,0.0,rejected);
    if(rejected || lots<=0.0) return 0.0;
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
@@ -3110,6 +3243,25 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
   {
    if(!g_senderCfg[si].mirrorstops) return;
 
+   //--- Already evaluated with exactly these inputs (and the same override
+   //--- table) and the answer was "nothing to do". See CopierStopSig.
+   int sh=(int)(local.ticket&(CP_STOPSIG_SLOTS-1));
+   if(sh<0 || sh>=CP_STOPSIG_SLOTS) sh=0;
+   if(local.ticket!=0
+      && g_stopSig[sh].ticket==local.ticket
+      && g_stopSig[sh].epoch==g_stOvEpoch)
+     {
+      if(g_stopSig[sh].v[0]==desired.sl
+         && g_stopSig[sh].v[1]==desired.tp
+         && g_stopSig[sh].v[2]==desired.openPx
+         && g_stopSig[sh].v[3]==local.sl
+         && g_stopSig[sh].v[4]==local.tp
+         && g_stopSig[sh].v[5]==local.pprice
+         && g_stopSig[sh].v[6]==local.pstop
+         && g_stopSig[sh].v[7]==(double)local.pexpire)
+         return;
+     }
+
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(local.sym,si2)) return;
 
@@ -3130,7 +3282,10 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      {
       if(MathAbs(desired.sl-g_stOvSl[oi])<0.0000001
          && MathAbs(desired.tp-g_stOvTp[oi])<0.0000001)
+        {
          g_stHasOv[oi]=false;               // the snapshot caught up
+         g_stOvEpoch++;                     // invalidates the stop-geometry cache
+        }
       else
         {
          dSl=g_stOvSl[oi];
@@ -3203,6 +3358,25 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(desired.pprice>0.0 && MathAbs(local.pprice-desired.pprice)>si2.point*0.5) pendingDiff=true;
       if(desired.pstop>0.0 && MathAbs(local.pstop-desired.pstop)>si2.point*0.5) pendingDiff=true;
       if(desired.pexpire!=local.pexpire) pendingDiff=true;
+     }
+
+   //--- Remember the inputs we just evaluated, so the next tick can answer
+   //--- "nothing moved" without repeating any of the work above. Recorded on
+   //--- BOTH outcomes: when a modify is queued, the next pass sees different
+   //--- local stops (or the same signature, if the broker has not applied it
+   //--- yet - which is correct, the throttle below still applies).
+   if(local.ticket!=0)
+     {
+      g_stopSig[sh].ticket=local.ticket;
+      g_stopSig[sh].epoch=g_stOvEpoch;
+      g_stopSig[sh].v[0]=desired.sl;
+      g_stopSig[sh].v[1]=desired.tp;
+      g_stopSig[sh].v[2]=desired.openPx;
+      g_stopSig[sh].v[3]=local.sl;
+      g_stopSig[sh].v[4]=local.tp;
+      g_stopSig[sh].v[5]=local.pprice;
+      g_stopSig[sh].v[6]=local.pstop;
+      g_stopSig[sh].v[7]=(double)local.pexpire;
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -3573,11 +3747,7 @@ int ScanAndResolveAccountPositions()
          g_rawScratch[i].uid=uid;
          g_acctAllPos[i]=g_rawScratch[i];
 
-         int oursSi=-1;
-         for(int k=0;k<g_nSenders;k++)
-           {
-            if(g_rawScratch[i].magic==g_magic[k]) { oursSi=k; break; }
-           }
+         int oursSi=MagicToSender(g_rawScratch[i].magic);
          bool isOurs=(oursSi>=0);
          bool orphan=(!isOurs && StringLen(CopierUidFromComment(g_rawScratch[i].cmt))>0);
 
@@ -3653,16 +3823,12 @@ string EncodeReceiverPositions()
    int count=0;
    for(int i=0;i<g_acctAllPosCount;i++)
      {
-      bool ours=false;
-      for(int k=0;k<g_nSenders;k++)
-        {
-         if(g_acctAllPos[i].magic==g_magic[k]) { ours=true; break; }
-        }
+      bool ours=(MagicToSender(g_acctAllPos[i].magic)>=0);
       int isManaged=ours?1:0;
       string cmt=g_acctAllPos[i].cmt;
       //--- Ensure POS telemetry sent to Hub/WebUI reflects the real live comment
       //--- on the terminal, preventing stale sender ticket references (A7).
-      //--- Only executed once a minute for up to 128 positions.
+      //--- Only executed once a minute, for every position on the account.
       if(ours)
         {
          string liveCmt=CopierReadCommentByTicket(g_acctAllPos[i]);
@@ -3686,7 +3852,12 @@ string EncodeReceiverPositions()
           +(string)isManaged+CP_SEP_ITEM
           +CopierSanitizeComment(cmt);
       count++;
-      if(count>=128) break;
+      //--- CP_MAX_POSITIONS, not 128. 128 was a leftover from when the
+      //--- position table itself was small: the receiver happily mirrors up to
+      //--- 2048, and the dashboard then showed 128 rows next to a HELD= count
+      //--- of 300 with nothing saying the list was cut. The whole list is
+      //--- compressed on the wire (typically a few tens of KB), once a minute.
+      if(count>=CP_MAX_POSITIONS) break;
      }
    return CopierCompressField(out);
   }
@@ -3707,11 +3878,11 @@ string EncodeReceiverWaitList()
           +"queued"+CP_SEP_ITEM
           +"Queued in broker dispatch";
       count++;
-      if(count>=128) break;
+      if(count>=CP_MAX_POSITIONS) break;
      }
    for(int i=0;i<g_waitItemsCount;i++)
      {
-      if(count>=128) break;
+      if(count>=CP_MAX_POSITIONS) break;
       if(count>0) out+=CP_SEP_REC;
       out+=g_waitItems[i].uid+CP_SEP_ITEM
           +g_waitItems[i].sym+CP_SEP_ITEM
@@ -3738,12 +3909,7 @@ void RefreshRisk()
       //--- counted for EVERYTHING on the account, not just ours: a broker's
       //--- position cap does not care who opened the position
       if(g_acctAllPos[i].kind==CP_ORD_PENDING) nOrd++; else nPos++;
-      bool ours=false;
-      for(int k=0;k<g_nSenders;k++)
-        {
-         if(g_acctAllPos[i].magic==g_magic[k]) { ours=true; break; }
-        }
-      if(!ours)
+      if(MagicToSender(g_acctAllPos[i].magic)<0)
         {
          //--- Match the dashboard panel's orphan definition: only positions
          //--- carrying our copier UID comment count, never another EA's trades.
@@ -3826,11 +3992,7 @@ int CloseAllOurs(const string reason)
    int queued=0;
    for(int i=0;i<an;i++)
      {
-      int si=-1;
-      for(int k=0;k<g_nSenders;k++)
-        {
-         if(g_scanScratch[i].magic==g_magic[k]) { si=k; break; }
-        }
+      int si=MagicToSender(g_scanScratch[i].magic);
       if(si<0) continue;                      // not ours
       string uid=ResolveUid(g_scanScratch[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
@@ -4613,6 +4775,7 @@ void StopsForget(const string uid)
             g_stLastMs[i]=g_stLastMs[last];
            }
          g_stCount--;
+         g_stOvEpoch++;                 // the effective override set changed
          return;
         }
      }
@@ -4701,6 +4864,7 @@ void StopsPrune(const long now)
          g_stLastMs[i]=g_stLastMs[last];
         }
       g_stCount--;
+      g_stOvEpoch++;                   // the effective override set changed
      }
   }
 
@@ -4767,7 +4931,11 @@ void HandleCfg(const CopierEnv &e)
    CopierKvGet(e.payload,"ID",id);
    CopierKvGet(e.payload,"REV",revs);
    CopierKvGet(e.payload,"INI",iniEsc);
-   long rev=(long)StringToInteger(revs);
+   //--- 64-bit, like every other numeric parse on the wire: MQL4's
+   //--- StringToInteger is 32-bit and wraps past 2.1 billion, which would make
+   //--- this receiver report a revision that goes BACKWARDS and invite the hub
+   //--- to re-push forever.
+   long rev=CopierParseLong(revs);
 
    //--- No ID means there is nothing to acknowledge against, and the hub would
    //--- retry forever against a node that cannot answer. Reported, not ignored.
@@ -5142,6 +5310,7 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvSl[idx]=p.sl;
    g_stOvTp[idx]=p.tp;
    g_stOvOpn[idx]=p.openPx;
+   g_stOvEpoch++;                          // invalidates the stop-geometry cache
   }
 
 void HandleOpenEvent(const int si,const CopierEnv &e)

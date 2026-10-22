@@ -151,40 +151,65 @@ string CopierEncodeRec(const CopierPos &p)
 
 bool CopierDecodeRec(const string rec,CopierPos &p)
   {
-   string it[];
-   int n=StringSplit(rec,StringGetCharacter(CP_SEP_ITEM,0),it);
+   //--- ONE pass to find the field boundaries, then parse by RANGE.
+   //---
+   //--- This used to be StringSplit(rec, ',', it[]), which allocates a
+   //--- 15-element string array for EVERY record. At 2048 records that is
+   //--- ~30,000 throwaway strings per snapshot, on the thread that also has to
+   //--- answer the broker. Boundaries are cheap to find and the integer fields
+   //--- are parsed straight out of the record (CopierParseLongRange), so only
+   //--- the string and double fields need a substring.
+   int st[15]; ArrayInitialize(st,0);
+   int en[15]; ArrayInitialize(en,0);
+   int n=StringLen(rec);
+   int f=0;
+   int from=0;
+   for(int i=0;i<=n;i++)
+     {
+      if(i==n || StringGetCharacter(rec,i)==',')
+        {
+         if(f<15) { st[f]=from; en[f]=i; }
+         f++;
+         from=i+1;
+         if(f>=15 && i<n) break;
+        }
+     }
    //--- Ten fields is the original market record; a pending entry appends
    //--- five more. Accepting a MINIMUM rather than an exact count is what
    //--- lets one build read records written on either side of the change.
-   if(n<10) return false;
-   p.uid=it[0];
-   p.ticket=CopierParseLong(it[1]);
-   p.sym=it[2];
-   p.side=(int)StringToInteger(it[3]);
-   p.lots=StringToDouble(it[4]);
-   p.openPx=StringToDouble(it[5]);
-   p.sl=StringToDouble(it[6]);
-   p.tp=StringToDouble(it[7]);
-   p.magic=CopierParseLong(it[8]);
-   p.openTime=CopierParseLong(it[9]);
+   if(f<10) return false;
+
+   p.uid     =StringSubstr(rec,st[0],en[0]-st[0]);
+   p.ticket  =CopierParseLongRange(rec,st[1],en[1]);
+   p.sym     =StringSubstr(rec,st[2],en[2]-st[2]);
+   p.side    =(int)CopierParseLongRange(rec,st[3],en[3]);
+   p.lots    =StringToDouble(StringSubstr(rec,st[4],en[4]-st[4]));
+   p.openPx  =StringToDouble(StringSubstr(rec,st[5],en[5]-st[5]));
+   p.sl      =StringToDouble(StringSubstr(rec,st[6],en[6]-st[6]));
+   p.tp      =StringToDouble(StringSubstr(rec,st[7],en[7]-st[7]));
+   p.magic   =CopierParseLongRange(rec,st[8],en[8]);
+   p.openTime=CopierParseLongRange(rec,st[9],en[9]);
    //--- absent means a market entry, which is what every older record is
    p.kind=CP_ORD_MARKET;
    p.ptype=0;
    p.pprice=0.0;
    p.pstop=0.0;
    p.pexpire=0;
-   if(n>=15)
+   if(f>=15)
      {
-      p.kind=(int)StringToInteger(it[10]);
-      p.ptype=(int)StringToInteger(it[11]);
-      p.pprice=StringToDouble(it[12]);
-      p.pstop=StringToDouble(it[13]);
-      p.pexpire=CopierParseLong(it[14]);
+      p.kind   =(int)CopierParseLongRange(rec,st[10],en[10]);
+      p.ptype  =(int)CopierParseLongRange(rec,st[11],en[11]);
+      p.pprice =StringToDouble(StringSubstr(rec,st[12],en[12]-st[12]));
+      p.pstop  =StringToDouble(StringSubstr(rec,st[13],en[13]-st[13]));
+      p.pexpire=CopierParseLongRange(rec,st[14],en[14]);
      }
    p.cmt="";
    p.used=true;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
    if(StringLen(p.uid)!=CP_UID_LEN) return false;
+   //--- a record with no symbol cannot be mirrored, and carrying it into the
+   //--- desired set only makes converge ask the broker for "" forever
+   if(StringLen(p.sym)==0) return false;
    //--- an unknown kind or pending type is REFUSED rather than guessed at:
    //--- mirroring a stop-limit as a plain stop would silently change the
    //--- order the sender placed, which is worse than skipping it.
@@ -440,13 +465,15 @@ string CopierEncodeSnapshot(const CopierPos &pos[],const int count)
    string payload="N="+(string)count;
    if(count>0)
      {
-      string recs="";
+      //--- chunked, not `recs +=`: at 2048 records a plain accumulator is
+      //--- ~390 MB of copying for one snapshot
+      CopierStrBuilder sb;
       for(int i=0;i<count;i++)
         {
-         if(i>0) recs+=CP_SEP_REC;
-         recs+=CopierEncodeRec(pos[i]);
+         if(i>0) sb.Add(CP_SEP_REC);
+         sb.Add(CopierEncodeRec(pos[i]));
         }
-      payload+=CP_SEP_KV+"R="+CopierCompressField(recs);
+      payload+=CP_SEP_KV+"R="+CopierCompressField(sb.Result());
      }
    //--- Hash the payload as built SO FAR, then append. Hashing after
    //--- appending would make the value depend on itself.

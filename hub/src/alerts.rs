@@ -363,7 +363,15 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
             }
         } else if n.blocked == 0 && prev_blocked > 0 {
             s.alerts.last_risk_blocked.remove(&n.key);
-            s.alerts.rearm("risk.blocked", &n.key);
+            //--- NOT rearm(). The receiver zeroes its BLOCKED counter after
+            //--- every 60 s status report (`if(dueStatus) g_riskBlocked=0`), so
+            //--- "went back to 0" is ROUTINE, not a recovery. Rearming here
+            //--- wiped the 5-minute silence window once a minute, which turned
+            //--- a persistent block into an alert (and a Telegram/WeCom/webhook
+            //--- push) every 60-120 seconds for as long as it lasted.
+            //--- The window now expires on its own; a genuine recovery is
+            //--- rearmed by the `risk.tripped` branch above, which is driven by
+            //--- the RISK string rather than by a counter that gets reset.
         }
 
         //--- risk: a limit actually TRIPPED (the receiver flattened or is

@@ -270,12 +270,10 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
     let body_str = crate::envelope::decompress_field(body_raw);
     let body = body_str.as_bytes();
 
-    let mut order: Vec<String> = Vec::new();
     for rec in body.split(|b| *b == b'~') {
         if v.records >= MAX_RECORDS {
             break;
-        }
-        let sym = latin1(rec_field(rec, 2));
+        }        let sym = latin1(rec_field(rec, 2));
         if sym.is_empty() {
             continue; // a record without a symbol is not a position
         }
@@ -323,7 +321,6 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
             slot.1 += 1;
             slot.2 += lots;
         } else if v.symbols.len() < MAX_SYMBOLS {
-            order.push(sym.clone());
             v.symbols.push((sym, 1, lots));
         }
         // past MAX_SYMBOLS the record still counts toward records/lots - only

@@ -155,10 +155,10 @@ deploy_into() {
   fi
 }
 
-while IFS='|' read -r id plat label; do
+list_terminals | while IFS='|' read -r id plat label; do
   [[ -n "$id" ]] || continue
   deploy_into "$id" "$plat" "$label"
-done < <(list_terminals)
+done
 
 echo
 if [[ $LIST_ONLY -eq 1 ]]; then

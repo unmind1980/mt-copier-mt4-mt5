@@ -762,7 +762,7 @@ async fn dashboard() -> axum::response::Response {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<SharedState>,
-    axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::broadcast::Sender<()>>,
+    axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::broadcast::Sender<std::sync::Arc<String>>>,
 ) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, st, tx))
 }
@@ -770,7 +770,7 @@ async fn ws_handler(
 async fn handle_socket(
     mut socket: WebSocket,
     st: SharedState,
-    tx: tokio::sync::broadcast::Sender<()>,
+    tx: tokio::sync::broadcast::Sender<std::sync::Arc<String>>,
 ) {
     // Everything the page needs on arrival, so it can render before it has
     // made a single HTTP call of its own.
@@ -794,11 +794,15 @@ async fn handle_socket(
                     Some(Ok(_)) => {}
                 }
             }
-            // State changed somewhere else.
+            // State changed somewhere else. The payload is ALREADY the JSON
+            // text: the ZMQ thread serialises once per change and shares it
+            // through the Arc, so N dashboards cost one serialisation instead
+            // of N (that used to be N full passes over every node and every
+            // position, each taking the shared lock).
             changed = rx.recv() => {
                 match changed {
-                    Ok(()) => {
-                        if socket.send(Message::Text(snapshot_text(&st))).await.is_err() {
+                    Ok(s) => {
+                        if socket.send(Message::Text((*s).clone())).await.is_err() {
                             break;
                         }
                     }
@@ -820,7 +824,7 @@ async fn handle_socket(
 
 /// The wire format for a push. A shape the page can switch on, so a later
 /// incremental message is a new `t` rather than a change to this one.
-fn snapshot_text(st: &SharedState) -> String {
+pub(crate) fn snapshot_text(st: &SharedState) -> String {
     let body = {
         let s = st.lock_or_recover();
         let now = Instant::now();
@@ -1500,7 +1504,7 @@ async fn change_password(
 /// The router. Versioned under `/api/v1`, because the plan's §16 says a
 /// breaking change goes to v2 rather than editing v1 under a deployed
 /// dashboard.
-pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router {
+pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc<String>>) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .route("/healthz", get(healthz))
@@ -1517,6 +1521,13 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
         .route(
             "/api/v1/nodes/:id/config/rollback/:rev",
             axum::routing::post(rollback_node_config),
+        )
+        //--- One revision's BODY. The history list deliberately omits it (a
+        //--- list is not a document), so the dashboard fetches the body it
+        //--- actually wants to load instead of receiving every body at once.
+        .route(
+            "/api/v1/nodes/:id/config/revision/:rev",
+            get(node_config_revision),
         )
         .route("/api/v1/config", get(config_list))
         .route("/api/v1/commands", get(commands_list).post(commands_global))
@@ -1566,9 +1577,9 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<()>) -> Router
 pub fn spawn(
     addr: String,
     st: SharedState,
-) -> std::result::Result<tokio::sync::broadcast::Sender<()>, String> {
+) -> std::result::Result<tokio::sync::broadcast::Sender<std::sync::Arc<String>>, String> {
     // (the audit reaches this thread through `st`, which already holds it)
-    let (tx, _rx) = tokio::sync::broadcast::channel::<()>(64);
+    let (tx, _rx) = tokio::sync::broadcast::channel::<std::sync::Arc<String>>(64);
     let tx_out = tx.clone();
     std::thread::Builder::new()
         .name("api".to_string())
@@ -1640,6 +1651,38 @@ pub fn spawn(
 // `--writes`. See `config.rs` for why the gate exists rather than an assumption
 // that only trusted people can reach the port.
 // ---------------------------------------------------------------------------
+
+/// `GET /api/v1/nodes/{id}/config/revision/{rev}`
+///
+/// One revision's INI body. This exists because the history LIST no longer
+/// carries bodies: fifty revisions of a 100-sender config is ~13 MB, for a
+/// dialog that shows fifty rows and usually loads exactly one of them.
+///
+/// Read-only: no write gate, because reading a config cannot change anything.
+async fn node_config_revision(
+    State(st): State<SharedState>,
+    Path((id, rev)): Path<(String, u64)>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let id = normalise_node(&id);
+    let cfg = {
+        let s = st.lock_or_recover();
+        Arc::clone(&s.cfg)
+    };
+    match cfg.revision(&id, rev) {
+        Some(r) => Json(json!({
+            "node": id,
+            "rev": r.rev,
+            "ini": r.ini,
+        }))
+        .into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such revision", "node": id, "rev": rev })),
+        )
+            .into_response(),
+    }
+}
 
 /// `GET /api/v1/nodes/{id}/config`
 ///

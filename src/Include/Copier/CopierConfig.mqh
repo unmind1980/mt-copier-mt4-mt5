@@ -123,7 +123,6 @@ public:
          string line=Trim(FileReadString(h));
          if(StringLen(line)==0) continue;
          string first=StringSubstr(line,0,1);
-         if(first==";" || first=="#" || first=="[") {}
          if(first=="[" )                      // section header
            {
             int e=StringFind(line,"]");
@@ -371,36 +370,61 @@ int CopierHexVal(const int ch)
 //--- Mirror of escape_ini in hub/src/config.rs. Both directions live here so
 //--- CopierSelfTest can round-trip them in MQL - which is the only way to
 //--- know the two implementations agree.
+//---
+//--- Built through CopierStrBuilder, and with a 128-character "run" buffer, on
+//--- purpose: this is called on a ~270 KB config for a 100-sender deployment,
+//--- and one `out += ch` per character is O(n^2) - measured at tens of
+//--- gigabytes of copying per call. Flushing the run every 128 characters
+//--- bounds every append to 128 characters while keeping the escape sequences
+//--- in order.
+#define CP_ESC_RUN 128
+
 string CopierIniEscape(const string s)
   {
-   string out="";
+   CopierStrBuilder sb;
+   string run="";
    int n=StringLen(s);
    for(int i=0;i<n;i++)
      {
       int c=StringGetCharacter(s,i);
-      if(c=='%')      out+="%25";
-      else if(c=='|') out+="%7C";
-      else if(c==';') out+="%3B";
-      else if(c=='~') out+="%7E";
-      else if(c==',') out+="%2C";
-      else if(c=='=') out+="%3D";
-      else if(c=='\n') out+="%0A";
-      else if(c=='\r') out+="%0D";
-      else            out+=ShortToString((ushort)c);
+      string esc="";
+      if(c=='%')      esc="%25";
+      else if(c=='|') esc="%7C";
+      else if(c==';') esc="%3B";
+      else if(c=='~') esc="%7E";
+      else if(c==',') esc="%2C";
+      else if(c=='=') esc="%3D";
+      else if(c=='\n') esc="%0A";
+      else if(c=='\r') esc="%0D";
+
+      if(StringLen(esc)>0)
+        {
+         if(StringLen(run)>0) { sb.Add(run); run=""; }
+         sb.Add(esc);
+         continue;
+        }
+      run+=ShortToString((ushort)c);
+      if(StringLen(run)>=CP_ESC_RUN) { sb.Add(run); run=""; }
      }
-   return out;
+   if(StringLen(run)>0) sb.Add(run);
+   return sb.Result();
   }
 
 bool CopierIniUnescape(const string s,string &out)
   {
    out="";
+   //--- Same reason as the encoder: one append per character is O(n^2) on a
+   //--- 270 KB config. The run buffer keeps every append bounded.
+   CopierStrBuilder sb;
+   string run="";
    int n=StringLen(s);
    for(int i=0;i<n;i++)
      {
       int c=StringGetCharacter(s,i);
       if(c!='%')
         {
-         out+=ShortToString((ushort)c);
+         run+=ShortToString((ushort)c);
+         if(StringLen(run)>=CP_ESC_RUN) { sb.Add(run); run=""; }
          continue;
         }
       if(i+2>=n) return false;                 // a trailing '%' is malformed
@@ -414,9 +438,12 @@ bool CopierIniUnescape(const string s,string &out)
       if(code!='%' && code!='|' && code!=';' && code!='~' && code!=',' &&
          code!='=' && code!='\n' && code!='\r')
          return false;
-      out+=ShortToString((ushort)code);
+      if(StringLen(run)>0) { sb.Add(run); run=""; }
+      sb.Add(ShortToString((ushort)code));
       i+=2;
      }
+   if(StringLen(run)>0) sb.Add(run);
+   out=sb.Result();
    return true;
   }
 
@@ -502,15 +529,19 @@ bool CopierIniReadAll(const string path,string &out)
    if(!FileIsExist(path)) return false;
    int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE) return false;
+   //--- chunked: this reads a whole config, and `out += line` per line is
+   //--- O(n^2) on a 100-sender file
+   CopierStrBuilder sb;
    bool first=true;
    while(!FileIsEnding(h))
      {
       string line=FileReadString(h);
-      if(!first) out+="\n";
-      out+=line;
+      if(!first) sb.Add("\n");
+      sb.Add(line);
       first=false;
      }
    FileClose(h);
+   out=sb.Result();
    return true;
   }
 

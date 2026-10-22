@@ -738,6 +738,104 @@ double CopierKvGetDouble(const string payload,const string key,const double defl
 // that has simply been up a long time - a failure that looks like a network
 // problem and is not.
 //+------------------------------------------------------------------+
+//=====================================================================
+// Chunked string builder.
+//
+// WHY THIS EXISTS
+// ===============
+// MQL strings have no capacity doubling: `s += x` allocates a NEW string and
+// copies the WHOLE of `s` every time. A builder that appends 126 fixed lines
+// per sender is therefore O(total^2): a 100-sender config is ~270 KB, which
+// works out to roughly a gigabyte of memcpy per serialisation - on the EA's
+// main thread, which is also the thread that receives snapshots and sends
+// orders. The same shape appears in the INI escaper (one append PER CHARACTER,
+// ~36 GB of copying at 270 KB) and in the snapshot encoder (one append per
+// record).
+//
+// This collects into ~4 KB chunks and merges them pairwise, which is
+// O(n log n) copying with no exotic API: ArrayResize, `+`, and StringLen are
+// available and identical on every MetaTrader build this project compiles
+// under. StringJoin/StringSetLength are NOT used deliberately - they are the
+// kind of thing that compiles on one build and not the other, and this header
+// has to compile on both.
+//=====================================================================
+#define CP_SB_FLUSH 4096
+
+class CopierStrBuilder
+  {
+private:
+   string            m_buf;      // pending chunk, kept under ~CP_SB_FLUSH
+   string            m_parts[];  // flushed chunks
+   int               m_n;
+
+public:
+                     CopierStrBuilder() { m_buf=""; m_n=0; }
+
+   void              Reset()
+     {
+      m_buf="";
+      for(int i=0;i<m_n;i++) m_parts[i]="";
+      m_n=0;
+     }
+
+   int               Length() const { return m_n; }
+
+   void              Flush()
+     {
+      if(StringLen(m_buf)==0) return;
+      if(m_n>=ArraySize(m_parts)) ArrayResize(m_parts,m_n+1,64);
+      m_parts[m_n]=m_buf;
+      m_n++;
+      m_buf="";
+     }
+
+   void              Add(const string s)
+     {
+      m_buf+=s;
+      if(StringLen(m_buf)>=CP_SB_FLUSH) Flush();
+     }
+
+   //--- Join and consume. The builder is reusable afterwards.
+   string            Result()
+     {
+      Flush();
+      if(m_n==0) return "";
+      if(m_n==1)
+        {
+         string one=m_parts[0];
+         m_parts[0]="";
+         m_n=0;
+         return one;
+        }
+      //--- pairwise merge: each round halves the chunk count, so the total
+      //--- copied is O(n log n) rather than O(n^2)
+      int w=m_n;
+      while(w>1)
+        {
+         int r=0;
+         for(int i=0;i+1<w;i+=2)
+           {
+            m_parts[r]=m_parts[i]+m_parts[i+1];
+            m_parts[i]="";
+            m_parts[i+1]="";
+            r++;
+           }
+         if((w&1)!=0)
+           {
+            m_parts[r]=m_parts[w-1];
+            m_parts[w-1]="";
+            r++;
+           }
+         w=r;
+        }
+      string out=m_parts[0];
+      m_parts[0]="";
+      m_n=0;
+      m_buf="";
+      return out;
+     }
+  };
+
 long CopierParseLong(const string s)
   {
    long v=0;
@@ -746,6 +844,31 @@ long CopierParseLong(const string s)
    int i=0;
    if(n>0 && StringGetCharacter(s,0)=='-') { neg=true; i=1; }
    for(;i<n;i++)
+     {
+      int c=StringGetCharacter(s,i);
+      if(c<'0' || c>'9') break;
+      v=v*10+(long)(c-'0');
+     }
+   return neg?-v:v;
+  }
+
+//=====================================================================
+// Parse a signed integer that occupies s[start..end) WITHOUT building a
+// substring.
+//
+// The snapshot decoder calls this seven times per record (ticket, side, magic,
+// openTime, kind, ptype, pexpire). StringSubstr allocates a fresh string each
+// time, so at 2048 records that is ~14,000 throwaway allocations per snapshot
+// purely to feed a parser that only wants the digits.
+//=====================================================================
+long CopierParseLongRange(const string s,const int start,const int end)
+  {
+   if(start<0 || end<=start) return 0;
+   long v=0;
+   bool neg=false;
+   int i=start;
+   if(i<end && StringGetCharacter(s,i)=='-') { neg=true; i++; }
+   for(;i<end;i++)
      {
       int c=StringGetCharacter(s,i);
       if(c<'0' || c>'9') break;

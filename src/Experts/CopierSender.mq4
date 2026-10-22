@@ -632,8 +632,25 @@ int BuildCurrent()
         }
 
       //--- 3) genuinely new
+      //---
+      //--- REFUSE to mint an identity we cannot store. A new UID only becomes
+      //--- durable when the row reaches g_prev at the end of the tick; if the
+      //--- table is full that never happens, so next tick this same position
+      //--- looks new again, gets ANOTHER UID, and the receiver is told about a
+      //--- different "new" position every 100 ms. Skipping it here is the
+      //--- honest answer: the position is not tracked, and that is reported
+      //--- once rather than as a stream of phantom opens.
       if(StringLen(uid)==0)
         {
+         if(g_prev.IsFull())
+           {
+            if(g_once.ShouldEmit("prevfull"))
+               g_log.Error("position table is full ("+(string)CP_MAX_POSITIONS
+                          +" entries) - NEW positions are NOT being tracked or"
+                          +" broadcast. Close something, or raise"
+                          +" CP_MAX_POSITIONS. Reported at most once per 10 min.");
+            continue;
+           }
          uid=CopierNewUid();
          slot=-1;
         }
@@ -1499,7 +1516,17 @@ void OnTimer()
         }
       else
         {
-         g_prev.InsertEmpty(g_curScratch[i]);
+         //--- The return value matters. -1 means the row did not land, so the
+         //--- OPEN emitted above has no counterpart in g_prev: next tick this
+         //--- position reads as brand new again. BuildCurrent() refuses to
+         //--- allocate a UID when the table is full, so this should be
+         //--- unreachable - it is checked anyway because "silently dropped
+         //--- row" is exactly the failure mode that costs a trade.
+         if(g_prev.InsertEmpty(g_curScratch[i])<0 && g_once.ShouldEmit("prevfull"))
+            g_log.Error("could not store "+g_curScratch[i].uid+" in the position"
+                       +" table ("+(string)CP_MAX_POSITIONS+" full) - it will be"
+                       +" re-announced as a new position on the next scan."
+                       +" Reported at most once per 10 min.");
         }
      }
 

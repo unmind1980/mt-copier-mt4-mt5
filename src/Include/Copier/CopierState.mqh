@@ -269,14 +269,21 @@ public:
      }
 
    //--- Replace the whole table with another one's contents.
+   //---
+   //--- A straight copy, not Clear()+Upsert() per row. Upsert() looks the row
+   //--- up by UID first (a 2048-slot linear scan) and then scans again for a
+   //--- free slot, so rebuilding an N-row table that way is O(N^2): at 2048
+   //--- rows that is ~8 million comparisons, and it ran on the receiver's
+   //--- 10-second identity-map save. Slot validity is decided by SlotValid()
+   //--- (used AND an 8-char uid), so copying raw slots cannot introduce a
+   //--- phantom row that the old path would have filtered.
    void              CopyFrom(const CopierPosTable &src)
      {
       Clear();
-      for(int i=0;i<CP_MAX_POSITIONS;i++)
-        {
-         if(!src.m_p[i].used) continue;
-         Upsert(src.m_p[i]);
-        }
+      for(int i=0;i<CP_MAX_POSITIONS;i++) m_p[i]=src.m_p[i];
+      m_n=src.m_n;
+      m_hint=src.m_hint;
+      m_tkValid=false;
      }
 
    //--- insert or update by UID. Returns false when the table is full or
@@ -293,16 +300,23 @@ public:
          m_tkValid=false;
          return true;
         }
-      for(int k=0;k<CP_MAX_POSITIONS;k++)
+      //--- hand out slots from the hint, like InsertEmpty: starting at 0 every
+      //--- time made a 2048-row state restore walk the table 2048 times
+      int k=m_hint;
+      for(int j=0;j<CP_MAX_POSITIONS;j++)
         {
          if(!SlotValid(k))
            {
             m_p[k]=p;
             m_p[k].used=true;
             m_n++;
+            m_hint=k+1;
+            if(m_hint>=CP_MAX_POSITIONS) m_hint=0;
             m_tkValid=false;
             return true;
            }
+         k++;
+         if(k>=CP_MAX_POSITIONS) k=0;
         }
       return false;
      }
@@ -826,13 +840,25 @@ private:
       int tag=TagOf(h);
       int mask=CP_BACKOFF_SLOTS-1;
       int k=(int)(h & (uint)mask);
-      while(m_slot[k]!=0)
+      //--- BOUNDED probes. The index is only ever rebuilt from live keys, so a
+      //--- free bucket always exists and this never runs long - but an
+      //--- unbounded `while` here is the difference between "a stale index
+      //--- degrades lookups" and "the EA hangs forever", and this table has
+      //--- already been through one index/slot desync.
+      for(int probes=0;probes<CP_BACKOFF_SLOTS;probes++)
         {
+         if(m_slot[k]==0)
+           {
+            m_h[k]=tag;
+            m_slot[k]=i+1;
+            return;
+           }
          if(m_h[k]==tag && m_slot[k]==i+1) return;   // already indexed
          k=(k+1)&mask;
         }
-      m_h[k]=tag;
-      m_slot[k]=i+1;
+      //--- Table genuinely full (cannot happen: FreeSlot evicts first). Rebuild
+      //--- once and give up rather than spin.
+      EraseHash(i);
      }
 
    //--- Remove one key from the hash index, then REBUILD the whole index from

@@ -1186,12 +1186,13 @@ fn main() {
     //--- timer. A timer would mean a push per second per node for no new
     //--- information, and "the dashboard woke up again to tell me nothing" is
     //--- how a page gets closed and left closed.
-    let mut poke_tx: Option<tokio::sync::broadcast::Sender<()>> = None;
+    let mut poke_tx: Option<tokio::sync::broadcast::Sender<std::sync::Arc<String>>> = None;
     let started = Instant::now();
     let mut last_stats = Instant::now();
     let mut last_alerts = Instant::now();
     let mut last_who = Instant::now();
     let mut last_registry = Instant::now();
+    let mut last_cmd_prune = Instant::now();
     let mut who_nonce: u64 = 0;
     //--- Last counts printed, so the registry line only appears when something
     //--- actually changed. A line repeated every 5 s saying the same thing is
@@ -1226,14 +1227,23 @@ fn main() {
             Err(e) => eprintln!("[hub] cannot start the API: {}", e),
         }
     }
-    //--- Notify the dashboards. The `let _` is the whole error policy: a
-    //--- channel with no subscribers is the normal case for a hub nobody is
-    //--- watching, and it is not worth a line per message.
-    let poke = || {
-        if let Some(tx) = &poke_tx {
-            let _ = tx.send(());
-        }
-    };
+    //--- Notify the dashboards.
+    //---
+    //--- A FLAG, not a send. Poke used to serialise the whole snapshot inside
+    //--- every WebSocket task, i.e. once per connected dashboard per change -
+    //--- and STAT arrives once a second per mirrored sender, so ten open tabs
+    //--- meant ten full passes over every node and every position, every
+    //--- second, each one taking the shared lock. The flag defers the work to
+    //--- the bottom of the loop, where it happens ONCE and the resulting string
+    //--- is shared by Arc.
+    //---
+    //--- Coalescing is deliberate: a burst of ten state changes inside one
+    //--- 200 ms window is one push, because the push is "the current state",
+    //--- not "the change". A dashboard that misses an intermediate frame is
+    //--- looking at a newer truth, not a stale one.
+    let mut poke_pending = false;
+    let mut last_poke = Instant::now() - Duration::from_secs(1);
+    const POKE_MIN_MS: u64 = 200;
 
     //--- The restart marker. Without it a gap in the log is indistinguishable
     //--- from a gap in the record-keeping, and an audit whose silences cannot
@@ -1567,7 +1577,7 @@ fn main() {
                                         let n = s.reg.on_reg(&role, &acc, &ver, &name, up, now);
                                         n
                                     };
-                                    poke();
+                                    poke_pending = true;
                                     if is_new {
                                         println!(
                                             "[hub] +node {:<20} {:<16} ver {} up {}s",
@@ -1624,7 +1634,7 @@ fn main() {
                                         let mut s = shared.lock_or_recover();
                                         s.reg.on_hbt(&role, &acc, &ver, &nm, up, now)
                                     };
-                                    poke();
+                                    poke_pending = true;
                                     //--- A node introduced by its HEARTBEAT means its
                                     //--- REG never arrived - the EAs' socket is
                                     //--- IMMEDIATE, so a send made before the TCP
@@ -1919,7 +1929,7 @@ fn main() {
                             }
                             println!("[hub] {} reported current effective config (rev {})", key, rev);
                             last_cfg_pull.remove(&key);
-                            poke();
+                            poke_pending = true;
                         }
 
                         if ty == "STAT" {
@@ -2093,7 +2103,7 @@ fn main() {
                                         login, sid
                                     );
                                 }
-                                poke();
+                                poke_pending = true;
                             }
                         }
                     } else {
@@ -2182,7 +2192,7 @@ fn main() {
                                 let mut s = shared.lock_or_recover();
                                 s.pos.touch(&sid, pos_now);
                             }
-                            poke();
+                            poke_pending = true;
                         }
 
                         //--- events are rare and worth seeing by default; SNAP
@@ -2240,7 +2250,7 @@ fn main() {
                 }
                 //--- Wake the dashboards: an alert is exactly the state
                 //--- change the WebSocket exists for.
-                poke();
+                poke_pending = true;
             }
         }
 
@@ -2355,6 +2365,19 @@ fn main() {
                 //--- print twice.
                 s.pos.evict(now);
                 drop(s);
+
+                //--- Retention for the command journal, on its own slow clock.
+                //--- Every 10 minutes is often enough to keep the map bounded
+                //--- and rare enough that the walk costs nothing; doing it on
+                //--- the 2-second registry sweep would walk every command 30
+                //--- times a minute for no reason.
+                if last_cmd_prune.elapsed() >= Duration::from_secs(600) {
+                    last_cmd_prune = Instant::now();
+                    let dropped = cmds.prune(unix_secs(), crate::commands::COMMAND_KEEP_SECS);
+                    if dropped > 0 {
+                        println!("[hub] command journal: {} terminal command(s) aged out", dropped);
+                    }
+                }
 
                 for (key, live) in seed {
                     last_liveness.insert(key, live);
@@ -2479,6 +2502,20 @@ fn main() {
                     );
                 }
             }
+
+        //--- One serialisation per change window, shared by every dashboard.
+        //--- Placed at the very end of the iteration so it covers a poke raised
+        //--- anywhere above it, including the maintenance blocks.
+        if poke_pending && last_poke.elapsed() >= Duration::from_millis(POKE_MIN_MS) {
+            poke_pending = false;
+            last_poke = Instant::now();
+            if let Some(tx) = &poke_tx {
+                let body = std::sync::Arc::new(api::snapshot_text(&shared));
+                //--- A channel with no subscribers is the normal case for a hub
+                //--- nobody is watching; it is not worth a line.
+                let _ = tx.send(body);
+            }
+        }
 
         if args.duration > 0.0 && started.elapsed().as_secs_f64() >= args.duration {
             println!("[hub] duration reached, exiting");

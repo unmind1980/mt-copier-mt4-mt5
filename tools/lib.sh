@@ -116,8 +116,9 @@ target_terminals() {
   if [[ -f "$conf" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%%#*}"
-      # trim, but keep spaces that are part of a path
-      line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      # trim with pure bash, no subshells
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
       [[ -n "$line" ]] && want+=("$line")
     done < "$conf"
   fi
@@ -135,15 +136,15 @@ target_terminals() {
   #--- the least reliable of the four.
   local w dline
   local all_discovered; all_discovered="$(discover_terminals)"
-  while IFS= read -r w; do
+  for w in "${want[@]}"; do
     [[ -n "$w" ]] || continue
-    while IFS='|' read -r dline; do
+    while IFS= read -r dline; do
       id="${dline%%|*}"
       if [[ "$w" == "$id" ]]; then
         printf '%s\n' "$dline"
       fi
     done <<< "$all_discovered"
-  done < <(printf '%s\n' "${want[@]}")
+  done
 }
 
 #--- every MetaEditor that might be able to compile for this target, most

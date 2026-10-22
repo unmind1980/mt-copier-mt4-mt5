@@ -64,6 +64,10 @@ if [[ -z "$PY" ]]; then
 fi
 
 # --- 2. the suites -----------------------------------------------------
+#--- NOTE on what is NOT here: zmq_bidir_test.py, zmq_fanout_test.py and
+#--- zmq_conflate_size_test.py each need their own hub/sender process and a
+#--- free port, so they are run by hand against a live deployment rather than
+#--- in this sweep. zmq_topic_test.py IS here because it is self-contained.
 PY_TESTS="
 snapshot_receipt_test.py
 snapshot_repair_test.py
@@ -82,6 +86,7 @@ curve_keyfile_test.py
 hub_proto_test.py
 inputcheck.py
 zmq_topic_test.py
+dash_check.py
 "
 
 echo "== Python contract tests =="
@@ -90,7 +95,10 @@ rc=0
 for t in $PY_TESTS; do
   printf "   %-26s " "$t"
   if out="$("$PY" "$HERE/$t" 2>&1)"; then
-    echo "$out" | grep -E "pass=" || echo "ran (no summary line)"
+    #--- dash_check.py reports "dashboard OK: ..." rather than "pass=", and it
+    #--- is the only thing that catches a JS syntax error in dashboard.html -
+    #--- which blanks the whole page - so it must be in this sweep.
+    echo "$out" | grep -E "pass=|dashboard OK" || echo "ran (no summary line)"
   else
     echo "FAILED"
     echo "$out" | tail -12
