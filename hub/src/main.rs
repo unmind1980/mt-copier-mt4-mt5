@@ -2207,8 +2207,11 @@ fn main() {
 
         if args.stats_every > 0.0 && last_stats.elapsed().as_secs_f64() >= args.stats_every {
             last_stats = Instant::now();
-            st.print_and_reset();
-            let snap = { let s = shared.lock_or_recover(); s.clone_view() };
+            let (snap, node_count) = {
+                let s = shared.lock_or_recover();
+                (s.clone_view(), s.reg.nodes().len())
+            };
+            st.print_and_reset_with_nodes(node_count);
             print_positions(&snap);
         }
 
@@ -2495,12 +2498,15 @@ fn main() {
 
     println!();
     println!("[hub] final stats");
+    let (final_view, final_nodes) = {
+        let s = shared.lock_or_recover();
+        (s.clone_view(), s.reg.nodes().len())
+    };
     //--- The last window, then the whole run. Both, because they answer
     //--- different questions and a reader wants the second one here.
-    st.print_and_reset();
+    st.print_and_reset_with_nodes(final_nodes);
     st.print_totals();
     //--- last chance to see what the senders were carrying
-    let final_view = { let s = shared.lock_or_recover(); s.clone_view() };
     print_positions(&final_view);
 
     //--- The node table, in full. On a hub that is being shut down this is the

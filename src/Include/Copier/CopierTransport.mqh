@@ -274,6 +274,7 @@ public:
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
+      m_sub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve)
         {
          uchar pub[],sec[];
@@ -341,22 +342,21 @@ public:
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
+      m_sub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve)
         {
          //--- A client needs all three: the server's public key (so it can
          //--- encrypt TO the server and verify the server), and its own
          //--- keypair (so the server can verify IT). Failing any of the three
          //--- is fatal - see the fail-closed note in BindSender.
+         if(StringLen(hubPublicKey)==0) return false;
          uchar pub[],sec[],srv[];
          if(!CurveRaw(myPublicKey,pub)) return false;
          if(!CurveRaw(mySecretKey,sec)) return false;
          if(!m_sub.setCurvePublicKey(pub)) return false;
          if(!m_sub.setCurveSecretKey(sec)) return false;
-         if(StringLen(hubPublicKey)>0)
-           {
-            if(!CurveRaw(hubPublicKey,srv)) return false;
-            if(!m_sub.setCurveServerKey(srv)) return false;
-           }
+         if(!CurveRaw(hubPublicKey,srv)) return false;
+         if(!m_sub.setCurveServerKey(srv)) return false;
         }
       //--- deliberately NO \x01 here. See the note above.
       m_sub.connect(ep);
@@ -387,8 +387,8 @@ public:
    bool              SendUp(const string topic,const string payload)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
-      if(!m_sub.sendMore(topic))  { m_errno=CopierZmqErrno(); return false; }
-      if(!m_sub.send(payload))    { m_errno=CopierZmqErrno(); return false; }
+      if(!m_sub.sendMore(topic,true))  { m_errno=CopierZmqErrno(); return false; }
+      if(!m_sub.send(payload,true))    { m_errno=CopierZmqErrno(); return false; }
       return true;
      }
 

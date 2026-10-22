@@ -161,7 +161,13 @@ impl Stats {
     }
 
     /// Print the window and start a new one.
+    #[allow(dead_code)]
     pub fn print_and_reset(&mut self) {
+        self.print_and_reset_with_nodes(1);
+    }
+
+    /// Print the window with per-node REG rate tracking and start a new one.
+    pub fn print_and_reset_with_nodes(&mut self, nodes_count: usize) {
         let w = self.window_secs();
         println!("[hub] --- last {:.0}s ---", w);
         println!(
@@ -223,13 +229,14 @@ impl Stats {
         //--- REGs than the protocol can explain" without a single extra REG
         //--- needing to be logged.
         if let Some(regs) = self.control_by_type.get("REG") {
-            let per_node_per_sec = *regs as f64 / w;
+            let n = nodes_count.max(1) as f64;
+            let per_node_per_sec = (*regs as f64 / w) / n;
             //--- The sweep explains 1/60 = 0.017 per node per second. Anything
             //--- past a whole one per second per node is a node that has stopped
             //--- settling, not a node that is registering.
             if per_node_per_sec > REG_WARN_PER_SEC {
                 println!(
-                    "[hub]   WARNING REG is doing {:.1} msg/s. REG is a STARTUP \
+                    "[hub]   WARNING REG is doing {:.1} msg/s per node. REG is a STARTUP \
                      message - a settled node sends HBT2. A steady REG stream means \
                      a node is re-announcing instead of settling (check the WHO \
                      reply path in the EAs), and each one carries a NAME.",

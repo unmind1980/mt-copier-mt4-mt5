@@ -287,7 +287,20 @@ public:
       int sec=SecOfDay(now);
       int dow=DayOfWeek7(now);
 
-      //--- a day named in DayTradingTimes REPLACES the blanket list for that
+      //--- 1) Check if the previous day had a midnight-wrapping session (a > b)
+      //--- that extends into today's early morning (sec <= b).
+      int prevDow=(dow+6)%7;
+      if(m_daySet[prevDow])
+        {
+         int pn=m_dN[prevDow];
+         int pBase=prevDow*CP_TT_MAX;
+         for(int j=0;j<pn;j++)
+           {
+            if(m_dFrom[pBase+j]>m_dTo[pBase+j] && sec<=m_dTo[pBase+j]) return true;
+           }
+        }
+
+      //--- 2) a day named in DayTradingTimes REPLACES the blanket list for that
       //--- day rather than adding to it: "Mon=08:00-12:00" must not also
       //--- inherit the weekday 13:00-17:00 window.
       if(m_daySet[dow])

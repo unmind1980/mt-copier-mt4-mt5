@@ -93,6 +93,14 @@ int CopierLotModeFromText(const string raw,bool &recognised)
    return CP_SIZE_MULTIPLIER;
   }
 
+//--- Standard lowercase key for INI serialization and Web API config matching
+string CopierLotModeKey(const int mode)
+  {
+   if(mode==CP_SIZE_OFF)   return "off";
+   if(mode==CP_SIZE_FIXED) return "fixed";
+   return "multiplier";
+  }
+
 //--- The mode in words, for a log line. A numeric code tells an operator
 //--- nothing, and the upgrade note above is exactly the kind of thing that is
 //--- only checkable if the effective setting is printed.

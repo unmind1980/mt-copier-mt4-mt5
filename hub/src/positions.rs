@@ -54,7 +54,7 @@ pub struct PositionItem {
     pub ticket: u64,
     pub uid: String,
     pub symbol: String,
-    pub side: u8,
+    pub side: i8,
     pub lots: f64,
     pub open_px: f64,
     pub sl: f64,
@@ -276,7 +276,7 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         }
         let uid = latin1(rec_field(rec, 0));
         let ticket = parse_u64(rec_field(rec, 1));
-        let side = parse_u8(rec_field(rec, 3));
+        let side = parse_i8(rec_field(rec, 3));
         let lots = parse_f64(rec_field(rec, 4));
         let open_px = parse_f64(rec_field(rec, 5));
         let sl = parse_f64(rec_field(rec, 6));
@@ -384,8 +384,8 @@ fn parse_i64(b: &[u8]) -> i64 {
     std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 
-fn parse_u8(b: &[u8]) -> u8 {
-    parse_usize(b) as u8
+fn parse_i8(b: &[u8]) -> i8 {
+    std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 
 fn parse_f64(b: &[u8]) -> f64 {

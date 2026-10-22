@@ -221,6 +221,7 @@ public:
       for(int i=0;i<CP_MAX_SENDERS;i++)
         {
          if(StringLen(Get("sender"+(string)i,"id",""))>0) n=i+1;
+         else break;
         }
       return n;
      }

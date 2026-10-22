@@ -681,6 +681,7 @@ long             g_lastPingMs=0;
 //--- teaches people to dismiss the channel without reading it.
 bool             g_peerWasDown[CP_MAX_PEERS];
 long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
+string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slot
 //--- The account number each sender reported, so the panel can name it even
 //--- before the first heartbeat arrives.
 string           g_senderAcc[CP_MAX_SENDERS];
@@ -1075,7 +1076,11 @@ void ApplyCommonConfig(const CopierIni &ini)
    if(ini.Has("common","syncheartbeatseconds"))
       SyncHeartbeatSeconds = ini.GetInt("common","syncheartbeatseconds",SyncHeartbeatSeconds);
    if(ini.Has("common","showpanel"))
-      ShowPanel = ini.GetBool("common","showpanel",ShowPanel);
+     {
+      bool newShow = ini.GetBool("common","showpanel",ShowPanel);
+      if(ShowPanel && !newShow) g_panel.Destroy();
+      ShowPanel = newShow;
+     }
    if(ini.Has("common","showorphanedlist"))
       ShowOrphanedList = ini.GetBool("common","showorphanedlist",ShowOrphanedList);
 
@@ -1214,6 +1219,7 @@ string SerializeCurrentConfigToIni()
    out += "requirepositionfillwithinminutes=" + (string)RequirePositionFillWithinMinutes + "\n";
    out += "requirepositionfillwithinhours=" + (string)RequirePositionFillWithinHours + "\n";
    out += "fillwithinminutesbar=" + (string)FillWithinMinutesBar + "\n";
+   out += "pendingfillgraceseconds=" + DoubleToString(PendingFillGraceSeconds, 1) + "\n";
    out += "waitforseconds=" + (string)WaitForSeconds + "\n";
    out += "waitforminutes=" + (string)WaitForMinutes + "\n";
    out += "waitforhours=" + (string)WaitForHours + "\n";
@@ -1246,7 +1252,7 @@ string SerializeCurrentConfigToIni()
          out += "\n[sender" + (string)i + "]\n";
          out += "id=" + g_sid[i] + "\n";
          out += "magic=" + (string)g_magic[i] + "\n";
-         out += "lotmode=" + CopierLotModeText(g_lotMode[i]) + "\n";
+         out += "lotmode=" + CopierLotModeKey(g_lotMode[i]) + "\n";
          out += "lotparam=" + DoubleToString(g_lotParam[i], 4) + "\n";
          if(StringLen(g_suffix[i]) > 0)
             out += "suffix=" + g_suffix[i] + "\n";
@@ -1296,7 +1302,7 @@ string SerializeCurrentConfigToIni()
       out += "\n[sender0]\n";
       out += "id=" + (string)SenderPort + "\n";
       out += "magic=" + (string)Magic + "\n";
-      out += "lotmode=" + CopierLotModeText((int)SenderLotMode) + "\n";
+      out += "lotmode=" + CopierLotModeKey((int)SenderLotMode) + "\n";
       out += "lotparam=" + DoubleToString(SenderLotParam, 4) + "\n";
       if(StringLen(SenderSuffix) > 0)
          out += "suffix=" + SenderSuffix + "\n";
@@ -2321,6 +2327,19 @@ void ShiftQueue()
    if(g_qn<=0) g_qHead=0;              // empty: reset so the array is reusable
   }
 
+void ClearQueue()
+  {
+   for(int i=0;i<g_qn;i++)
+     {
+      int idx=g_qHead+i;
+      g_q[idx].uid="";
+      g_q[idx].sym="";
+      g_q[idx].key="";
+     }
+   g_qn=0;
+   g_qHead=0;
+  }
+
 double PipSize(const CopierSymInfo &si)
   {
    //--- the digits-based pip rule used to live here; it is now the single
@@ -2483,11 +2502,8 @@ void ExecuteQueue()
       //--- allows the entry through the normal path.
       if(a.kind==CP_ACT_OPEN)
         {
-         int    pCount=0;
-         double pLots=0.0;
-         PendingOpens(pCount,pLots);
          string why="";
-         if(!g_risk.AllowOpen(a.lots,g_ourCount,g_ourLots,pCount,pLots,why))
+         if(!g_risk.AllowOpen(a.lots,g_ourCount,g_ourLots,0,0.0,why))
            {
             g_riskBlocked++;
             if(g_once.ShouldEmit("drainrisk|"+a.uid))
@@ -2500,14 +2516,14 @@ void ExecuteQueue()
             skipped++;
             continue;
            }
-         int    sPendCount=0;
-         double sPendLots=0.0;
          if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
            {
-            PendingOpensForSender(a.senderIdx,sPendCount,sPendLots);
+            int sHeldCount=LocalForSender(a.senderIdx,g_acctAllPos,g_acctAllPosCount);
+            double sHeldLots=0.0;
+            for(int k=0;k<sHeldCount;k++) sHeldLots+=g_locScratch[k].lots;
             string sWhy="";
-            if(!g_senderRisk[a.senderIdx].AllowOpen(a.lots,g_ourCount,g_ourLots,
-                                                    sPendCount,sPendLots,sWhy))
+            if(!g_senderRisk[a.senderIdx].AllowOpen(a.lots,sHeldCount,sHeldLots,
+                                                    0,0.0,sWhy))
               {
                g_riskBlocked++;
                if(g_once.ShouldEmit("drainsrisk|"+g_sid[a.senderIdx]+"|"+a.uid))
@@ -2626,6 +2642,8 @@ void ExecuteQueue()
          //--- suffix the action's own key carries.
          if(a.kind==CP_ACT_OPEN)
            {
+            g_ourCount++;
+            g_ourLots+=a.lots;
             g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
                              +a.uid);
             //--- Consumed: the expected re-open has now landed. Clear it so a
@@ -2878,6 +2896,7 @@ void ExecuteQueue()
 //=====================================================================
 void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local)
   {
+   if(local.kind!=CP_ORD_MARKET) return;
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(local.sym,si2)) return;
 
@@ -3038,14 +3057,27 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
 
    //--- clear the broker's minimum distance BEFORE comparing, or a stop
    //--- that can only ever be clamped would look like a difference on
-   //--- every single tick and queue a modify forever
+   //--- every single tick and queue a modify forever.
+   //--- For pending orders, clamp against the order's trigger/limit price, NOT live market Bid/Ask!
    bool clamped=false;
-   wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clamped);
-   if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
-      g_log.Warn("stop for "+local.uid+" "+local.sym+" was inside this"
-                 +" broker's minimum distance and has been widened; the"
-                 +" mirror is now WIDER than the sender's stop");
-   wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clamped);
+   if(local.kind==CP_ORD_PENDING)
+     {
+      double anchorPx=(local.pstop>0.0)?local.pstop:((local.pprice>0.0)?local.pprice:local.openPx);
+      wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clamped);
+      if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
+         g_log.Warn("stop for pending order "+local.uid+" "+local.sym+" was inside this"
+                    +" broker's minimum distance and has been widened");
+      wantTp=CopierFitStopAt(wantTp,local.side,false,anchorPx,si2,clamped);
+     }
+   else
+     {
+      wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clamped);
+      if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
+         g_log.Warn("stop for "+local.uid+" "+local.sym+" was inside this"
+                    +" broker's minimum distance and has been widened; the"
+                    +" mirror is now WIDER than the sender's stop");
+      wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clamped);
+     }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2))
       return;
@@ -3137,7 +3169,7 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
    for(int i=0;i<ln;i++)
      {
       if(drop[i]!=0) continue;
-      if(g_ignore.Has(loc[i].uid)) continue;
+      if(g_ignore.Has(loc[i].uid) || (si>=0 && si<g_nSenders && g_senderIgnore[si].Has(loc[i].uid))) continue;
 
       int groupN=0;
       for(int k=i;k<ln;k++)
@@ -3901,8 +3933,8 @@ void ConvergeSender(const int si)
       if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
       if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
 
-      double osl=(d.kind==CP_ORD_PENDING)?d.sl:0.0;
-      double otp=(d.kind==CP_ORD_PENDING)?d.tp:0.0;
+      double osl=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.sl:0.0;
+      double otp=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.tp:0.0;
 
       if(g_senderCfg[si].inverttrades)
         {
@@ -4462,7 +4494,13 @@ int StopsOvIndex(const string uid,const bool create)
 //--- its two jobs.
 void StopsPrune(const long now)
   {
-   long keep=(long)StopsThrottleSeconds*1000;
+   int maxThrottle=StopsThrottleSeconds;
+   for(int s=0;s<g_nSenders;s++)
+     {
+      if(g_senderCfg[s].stopsThrottleSeconds>maxThrottle)
+         maxThrottle=g_senderCfg[s].stopsThrottleSeconds;
+     }
+   long keep=(long)maxThrottle*1000;
    for(int i=g_stCount-1;i>=0;i--)
      {
       if(g_stHasOv[i]) continue;
@@ -4658,6 +4696,7 @@ void HandleCfg(const CopierEnv &e)
      }
 
    int added=ResubscribeSenders(beforeSid,beforeN);
+   ClearQueue();
 
    //--- Warnings, counted the way §10 asks: a magic change orphans positions.
    int warnings=0;
@@ -4834,6 +4873,7 @@ void HandleCmd(const CopierEnv &e)
          return;
         }
       int added=ResubscribeSenders(beforeSid,beforeN);
+   ClearQueue();
       g_cmdId=id;
       g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
       SendCfgAck(g_cmdAck);
@@ -5282,6 +5322,16 @@ int OnInit()
    //--- One log per instance, or two receivers in one terminal write the same
    //--- file and overwrite each other's history.
    g_log.Init("receiver"+InstanceSuffix(),LogLevel);
+   if(CopierIsNettingAccount())
+     {
+      g_log.Error("CRITICAL: this terminal is running on a NETTING account."
+                  +" Netting accounts merge multiple positions per symbol and"
+                  +" overwrite order comments, breaking the one-UID-one-position"
+                  +" invariant and causing an infinite trade loop."
+                  +" The copier requires a HEDGING account.");
+      Alert("Copier RECEIVER: Cannot run on a NETTING account. Hedging account required.");
+      return INIT_FAILED;
+     }
    if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
    //--- g_backoff carries its own per-key deadline; there is no single TTL
@@ -5740,7 +5790,20 @@ void CheckPeers()
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
-      if(StringLen(nm)==0) continue;
+      if(StringLen(nm)==0)
+        {
+         g_lastTrackedName[i]="";
+         g_peerWasDown[i]=false;
+         g_peerAlerted[i]=0;
+         continue;
+        }
+
+      if(g_lastTrackedName[i]!=nm)
+        {
+         g_lastTrackedName[i]=nm;
+         g_peerWasDown[i]=false;
+         g_peerAlerted[i]=0;
+        }
 
       long silent=g_peers.SilentAt(i);
       //--- Same three-state predicate the sender uses, so the two EAs cannot
@@ -5910,10 +5973,12 @@ void UpdatePanel()
    g_panel.Row(r++,"Peers connected: "+IntegerToString(np)+((g_hubOn)?"  (incl. hub)":""),
                (np>0)?CP_PANEL_OK:CP_PANEL_BAD);
 
-   for(int i=0;i<peerShow && i<CP_MAX_PEERS;i++)
+   int shown=0;
+   for(int i=0;i<CP_MAX_PEERS && shown<peerShow;i++)
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
+      shown++;
       long silent=g_peers.SilentAt(i);
       int  st=g_peers.StateAt(i,CP_PEER_TIMEOUT_MS);
       bool down=(st==CP_PEER_DOWN);
@@ -5991,17 +6056,10 @@ void OnTimer()
                  +" PollMs here.");
    if(n>0)
      {
-      //--- pass 1: find the last snapshot, so pass 2 can skip the rest
+      //--- Conflate snapshots PER SENDER (e.sid) in arrival order:
+      //--- if a later SNAP in this batch belongs to the SAME sender, skip this one.
+      //--- Otherwise apply it, ensuring every distinct sender's latest snapshot is ingested.
       CopierEnv e;
-      int lastSnap=-1;
-      for(int i=0;i<n;i++)
-        {
-         if(CopierDecodeEnv(g_drainMsgs[i],e)!=CP_ERR_NONE) continue;
-         if(e.type==CP_T_SNAP) lastSnap=i;
-        }
-
-      //--- pass 2: in arrival order, so an event emitted before the surviving
-      //--- snapshot is still applied before it
       for(int i=0;i<n;i++)
         {
          if(CopierDecodeEnv(g_drainMsgs[i],e)!=CP_ERR_NONE)
@@ -6012,7 +6070,24 @@ void OnTimer()
            }
          if(e.type==CP_T_SNAP)
            {
-            if(i!=lastSnap) { g_snapSkipped++; continue; }
+            bool hasNewerForSender=false;
+            CopierEnv eLater;
+            for(int k=i+1;k<n;k++)
+              {
+               if(CopierDecodeEnv(g_drainMsgs[k],eLater)==CP_ERR_NONE)
+                 {
+                  if(eLater.type==CP_T_SNAP && eLater.sid==e.sid)
+                    {
+                     hasNewerForSender=true;
+                     break;
+                    }
+                 }
+              }
+            if(hasNewerForSender)
+              {
+               g_snapSkipped++;
+               continue;
+              }
             HandleMessage(g_drainMsgs[i],CP_STREAM_SNAP);
             continue;
            }
@@ -6192,7 +6267,8 @@ void OnTimer()
 
    //--- 5) converge every sender, then execute queued actions serially
    //--- reset the held-back tally: it is a per-sweep snapshot, not a running
-   //--- total, so an entry that starts moving must stop being counted   g_waitHeld=0;
+   //--- total, so an entry that starts moving must stop being counted
+   g_waitHeld=0;
    g_waitLots=0.0;
    g_mktHeld=0;
    g_mktHeldLots=0.0;

@@ -447,6 +447,63 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 十七次审计：多空方向反转彻底根治、快照即时刷新、非阻塞传输与跨平台 64 位大订单支持（2026-10-22 18:15；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A43** | **致命·显示** | `positions.rs` / `registry.rs` / `dashboard.html` | **多空方向（BUY/SELL）完全颠倒反转修复**：<br>1. 协议定义 `BUY = 1, SELL = -1`。Rust Hub 原本用无符号 `u8` 解析，将 `-1` 错误回退为 `0`；<br>2. Web 前端误将 `0` 判为 `BUY`、`1` 判为 `SELL`，导致控制台所有多单均反标为红色的 SELL，所有空单均反标为绿色的 BUY！<br>**修法**：Rust 端统一将 `side` 改为 `i8` 并实现 `parse_i8`；前端重构为 `Number(side) > 0` 判定为 BUY，彻底纠正颠倒显示。 |
+| **A44** | **致命·交易** | `src/Experts/CopierSender.mq4:1480` | **Sender 开平仓未刷新快照缓存导致快照修复回滚**：原本仅周期性生成快照，开平仓事件后 `g_snapPayload` 仍停留在旧状态，一旦新接收端接入（`H=""`）或心跳滞后触发重传，旧快照带着递增 `seq` 冲刷接收端导致刚平订单被重开。<br>**修法**：新增 `RefreshSnapshotCache(now)`，每当检测到开平仓、修改或状态突变（`g_stateDirty`）时在同一 tick 立即刷新缓存，重发快照永远 100% 对应真实持仓。 |
+| **A45** | **高危·配置** | `CopierSizing.mqh` / `CopierReceiver.mq4` / `dashboard.html` | **`lotmode=off` 序列化冲突与前端 `risk` 模式清理**：原本输出带括号的说明字符串，导致回推时被重置为 `multiplier`，且前端提供未实现的 `risk` 选项。<br>**修法**：新增 `CopierLotModeKey(mode)` 规范输出小写键名；前端移除未实现的 `risk` 选项，防止误选导致风险乘数异常。 |
+| **A46** | **高危·平台** | `CopierDefs.mqh` / `CopierCodec.mqh` / `CopierModel.mqh` | **MQL4 32 位整型溢出截断（64 位大订单号支持）**：`ticket/magic/openTime/seq/ts` 在 MQL4 下原直接调用 32 位 `StringToInteger`，超 21.4 亿的大订单号跨端跟单时截断成负数。<br>**修法**：核心编解码、信封与 Comment 反解全部统一替换为 64 位 `CopierParseLong`。 |
+| **A47** | **高危·传输** | `src/Include/Copier/CopierTransport.mqh` | **`SendUp()` 违背非阻塞契约与 `m_sub` 缺少 `SNDHWM`**：原本 `sendMore` / `send` 漏传 `nowait=true`（采用了阻塞式默认值），套接字满时会卡死 EA 线程；且未设 `setSendHighWaterMark`。<br>**修法**：补传非阻塞标志 `true`；补齐 `m_sub.setSendHighWaterMark(CP_SNDHWM)`；校验 `useCurve` 公钥为空时明确拒绝。 |
+| **A48** | **高危·状态** | `src/Experts/CopierReceiver.mq4` | **配置热重载动作队列残留与面板关闭残留**：推送新配置或 `reload` 时队列中可能存留旧 `senderIdx` 动作；关闭 `ShowPanel` 时未销毁图表对象。<br>**修法**：重载配置后增加 `ClearQueue()`；`ShowPanel` 变 false 时调用 `g_panel.Destroy()`。 |
+| **B44** | **中·时段** | `src/Include/Copier/CopierFilter.mqh` | **`DayTradingTimes` 跨午夜按星期归属优化**：周五跨午夜时段（如 `22:00-02:00`）在周六凌晨 01:00 会误查周六导致时段失效。<br>**修法**：增加前一天跨午夜延伸窗口检测，凌晨时段无缝延续。 |
+| **B45** | **中·统计** | `hub/src/stats.rs` & `hub/src/main.rs` | **Rust Hub `REG` 速率告警除以在线节点数**：原本未除以节点数导致多节点集中响应 WHO 时误报风暴。<br>**修法**：引入 `print_and_reset_with_nodes(node_count)`，速率真实除以节点数，消除误报。 |
+| **B46** | **优化·测试** | `CopierSelfTest.mq4` & `tools/snapshot_receipt_test.py` | **测试套件契约对齐**：构造合法 `side=1/-1` 枚举；补齐 64 位 `ticket` 容量还原断言。 |
+
+---
+
+### 十六次审计：13 项核心交易与系统 Bug 终结修复（2026-10-22 15:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A36** | **致命·交易** | `src/Experts/CopierReceiver.mq4:2484` | **`ExecuteQueue()` 出队重检风控双重计数与独立额度混淆**：<br>1. 出队时当前单已在队列，原本 `PendingOpens` 把当前单重复计算，导致 `MaxOpenPositions=1` 时永远无法开出首单，且 `MaxTotalLots` 手数被重复累加 2 次；<br>2. 传给各信号源独立风控 `g_senderRisk` 时误传全局账户持仓，导致额度被其他 sender 污染。<br>**修法**：出队头部订单重检时待入队 pending 传 0；独立风控计算该 sender 真实的 `sHeldCount/sHeldLots`；开仓成功后动态累加 `g_ourCount` 与 `g_ourLots`。 |
+| **A37** | **致命·资金** | `src/Include/Copier/CopierModel.mqh:224` | **`CopierRealizedToday()` 误将出入金计入当日交易盈亏**：原本未过滤成交类型，MT5 的 `DEAL_TYPE_BALANCE` 和 MT4 的 `OP_BALANCE`（出金提现）被直接作为巨额交易亏损累计入 `realisedToday`，导致提现出金直接误触 `DailyLossPct` 日亏熔断并强平全账户所有持仓！<br>**修法**：严格过滤只统计 `DEAL_TYPE_BUY/DEAL_TYPE_SELL` 和 MT4 `OP_BUY/OP_SELL`，并补齐 MT5 `DEAL_FEE`。 |
+| **A38** | **致命·点位** | `src/Experts/CopierReceiver.mq4:3043` | **`QueueModifyIfNeeded()` 挂单止盈止损被当前市价错误钳位**：修改已有挂单的止盈止损时，原本调用 `CopierFitStop` 使用实时市价 Bid/Ask 做最小停止位钳位，破坏了限价挂单的预设触发基准。<br>**修法**：挂单修改时以其触发价 `anchorPx` 调用 `CopierFitStopAt()`，仅市价单使用当前市价。 |
+| **A39** | **高危·失真** | `src/Experts/CopierReceiver.mq4:6195` | **`g_waitHeld=0;` 意外被写在注释行尾**：原本被注释吞掉导致从未重置，每秒 10 个 tick 持续 +10 暴涨至几万。<br>**修法**：独立成行，每个 sweep 正确清零复位。 |
+| **A40** | **高危·丢包** | `src/Experts/CopierReceiver.mq4:6025` | **多 Sender 快照合并 Conflation 单一全局覆盖导致丢包**：原本使用单一 `int lastSnap`，同 batch 中前面 Sender 的快照被误当作旧快照丢弃（`g_snapSkipped++`）。<br>**修法**：按 `e.sid` 独立跟踪各 Sender 在当前批次中的最新快照，杜绝丢包。 |
+| **A41** | **高危·容量** | `src/Include/Copier/CopierDefs.mqh:70` | **`CP_STATE_MAX_LINES`（256）与持仓容量（2048）脱节**：持仓超 256 笔时重启丢失持久化，Sender 重新分配新 UID 导致 Receiver 误判平仓重开。<br>**修法**：升级为 `CP_MAX_POSITIONS`（2048），完全对齐容量。 |
+| **A42** | **高危·显示** | `src/Experts/CopierSender.mq4:1248` | **Sender `UpdatePanel()` 稀疏表遍历使用 `Count()`**：稀疏表有空洞时，遍历 `0..Count()-1` 漏掉了高位槽位持仓。<br>**修法**：改为全表扫描 `for(int i=0;i<CP_MAX_POSITIONS;i++)`。 |
+| **B38** | **中·交易** | `src/Experts/CopierReceiver.mq4:2880` | **`QueueTrimIfNeeded()` 未校验 `local.kind == CP_ORD_MARKET`**：挂单手数变动时误发市价平仓 Deal 请求导致拒单。<br>**修法**：顶部增加 `if(local.kind!=CP_ORD_MARKET) return;`。 |
+| **B39** | **中·账户** | `src/Experts/CopierReceiver.mq4:5286` | **MT5 净额（Netting）账户防御缺失**：净额账户合并持仓会覆盖订单 Comment，陷入开/平死循环。<br>**修法**：在 `OnInit` 增加 `CopierIsNettingAccount()` 强校验并报错退出，强制使用 Hedging 账户。 |
+| **B40** | **中·显示** | `CopierSender.mq4` & `CopierReceiver.mq4` 面板 | **`UpdatePanel()` Peer 循环遇到空槽提前退出**：槽位释放后出现中间空洞时，循环过早退出导致后续在线节点未绘制。<br>**修法**：独立维护 `shown` 计数达到 `peerShow` 时退出。 |
+| **B41** | **中·配置** | `src/Experts/CopierReceiver.mq4:1216` | **`SerializeCurrentConfigToIni()` 遗漏 `pendingfillgraceseconds`**：`[common]` 漏写该字段导致配置哈希微小漂移。<br>**修法**：在 `[common]` 补齐序列化。 |
+| **B42** | **中·字段** | `src/Include/Copier/CopierState.mqh` | **`CopierPosTable` 维护遗漏 `pstop` 字段 & 挂单未遵循 `mirrorstops`**：<br>**修法**：`Clear()`, `CheckSlot()`, `UpdateNumericAt()` 补齐 `pstop` 维护；挂单开仓时增加 `&& g_senderCfg[si].mirrorstops` 检查。 |
+| **B43** | **中·防御** | `src/Experts/CopierReceiver.mq4` | **细碎状态防御加固**：`DedupLocal()` 补入 `g_senderIgnore[si]`；`StopsPrune()` 取各 sender 最大节流时间；Receiver `CheckPeers()` 补入槽位名字切换重置。 |
+
+---
+
+### 十五次审计：跳号检测修复、收据表老化驱逐、对端槽位重置与 DOM 稳态零写入（2026-10-22 14:35）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A34** | **高·逻辑自愈** | `src/Include/Copier/CopierConfig.mqh` `SenderCount()` | **已修复（彻底激活跳号 Gap 检测）**：原先 `SenderCount()` 扫描 `sender0..sender99` 时在找不到 `id` 的空槽未加 `break`，导致配置文件跳号（如只有 `sender0` 与 `sender2`）时 `n` 累加为 3，使调用方 `declaredMax + 1 > g_nSenders`（3 > 3）判断恒为假，跳号保护完全失效并强行加载不存在的空段。**修法**：在扫描循环中增加 `else break;`，遇到首个缺号段立即截断并返回，跳号检测 100% 灵敏报警。 |
+| **A35** | **中·长期运行** | `src/Experts/CopierSender.mq4` `SnapStaleIndex()` | **已修复（消除长期运行定长表饱和瘫痪）**：原先 `SnapStaleIndex` 仅使用 `g_snapStaleCount` 线性自增，一旦见过 100 个历史 peer，后续新 peer 永久返回 -1 彻底丧失定向快照自愈补发能力。**修法**：引入与 `CopierPeerTable` 对齐的老化驱逐机制，当表满 100 时自动复用最久未收到收据（`g_snapRcptMs` 最旧）的槽位，保证长期运行自愈能力永不饱和。 |
+| **B36** | **低·边界状态** | `src/Experts/CopierSender.mq4` `CheckPeers()` | **已修复（消除重用槽位状态污染）**：当 Peer 槽位被驱逐并复用给新节点时，外部 `g_peerWasDown[i]` 仍残留着旧节点的 `true` 状态，导致新节点刚连接时误报 `... is back`。**修法**：引入 `g_lastTrackedName[CP_MAX_PEERS]`，当槽位绑定的名字发生变化或置空时，自动重置 `g_peerWasDown[i] = false` 与 `g_peerAlerted[i] = 0`。 |
+| **B37** | **高·前端性能** | `hub/src/assets/dashboard.html` | **稳态 0 DOM 销毁与重建机制（Zero DOM Thrashing）**：<br>1. **拓扑 SVG 缓存**：`drawTopology` 增加 `s.lastTopoHtml` 缓存守卫，稳态下 100% 避免每秒清空重建整颗 SVG 节点树。<br>2. **主表单元格原位守卫**：`renderNodes` 中针对 `r.acc`、`r.ping`、`r.st`、`r.gate` 四个单元格引入内存 HTML 比对守卫（`r._accHtml`、`r._pingHtml`、`r._stHtml`、`r._gateHtml`），平稳运行时消除每秒数百个内部 DOM 节点的强制销毁重构。<br>3. **侧边栏字符串比对优化**：`renderCockpit` 改用纯 JS 变量缓存对比，彻底摆脱 DOM 读取逆向序列化开销。 |
+
+---
+
+### 十四次审计：Web UI 交互深度调优、消息中心方案2落地与 DOM 静态防抖（2026-10-22 13:40）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **B33** | **高·UI/交互** | `hub/src/assets/dashboard.html` | **Split Cockpit 侧边栏 Hover 防闪烁与原生点击恢复**：<br>1. **消除侧边栏 hover 闪烁**：原先 `renderCockpit` 每 1 秒轮询清空 `listHost.innerHTML` 重建整个列表，导致鼠标悬停瞬间丢失 `:hover` 样式并产生剧烈抖动。**修法**：重构为 In-place DOM 增量更新（`s.cockpitRows` 缓存），仅当节点增删时局部更新，平时仅刷新内部字段和状态徽章，`:hover` 完全平稳不闪烁。<br>2. **恢复侧边栏点击激活**：给 `cockpit_node_list` 补充事件委托与节点切换逻辑，点击任意节点项瞬间激活右侧面板。<br>3. **按钮样式统一**：将 `Visual Config` 按钮从中性蓝色还原为系统规范的中性灰白渐变按钮，不再视觉突兀。 |
+| **B34** | **高·视觉与布局** | `hub/src/assets/dashboard.html` | **Message Center 消息中心方案 2 重构与持久化**：<br>1. **方案 2 扁平清爽排版**：采用 Proposal 2 布局，卡片左侧增加 4px 状态状态条（绿色/黄色/红色），卡片背景自适应昼夜模式，文字左对齐，右侧紧凑对齐 `[✓]` 单条标记已读按钮。<br>2. **20 条滚动历史流**：消息中心维持最近 20 条滚动事件日志，新事件实时从顶部插入，超额旧事件平滑淘汰，刷新页面后从 `localStorage`（键 `mtc_event_history_v2`）自动恢复。<br>3. **Dismiss All 语义优化**：`Dismiss All` 不再清空删除事件列表，而是将所有 20 条事件“全部标记为已读”（移除未读高亮背景），保持历史上下文可回溯。 |
+| **B35** | **中·显示标准** | `hub/src/assets/dashboard.html` | **Ping RTT 健康度门限规范与 CSS 变量无级缩放**：<br>1. **Ping 阈值校准**：按照用户标准，将微胶囊三色门限对齐为 `< 150ms` 绿色（极佳）、`150ms ~ 450ms` 黄色（良好/跨洲）、`> 450ms` 红色（高延迟/异常），修复 94ms/110ms 误标为黄色的问题。<br>2. **CSS 变量动态等比例缩放**：彻底移除各卡片、按钮和表格中的固定像素字号，全部统一绑定 CSS 自定义属性 `--font-base` 搭配 `calc()`，滑动顶部滑块时全局等比例丝滑缩放，绝不产生挤压或错位。 |
+
+---
+
 ### 十三次审计：彻底消除遮挡弹窗，全量持仓与等待流水无缝常驻 Split Cockpit（2026-10-22 10:45）
 
 | # | 级别 | 位置 | 改进与重构实现 |

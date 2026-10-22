@@ -1567,7 +1567,7 @@ void TestSnapshotCapacity()
       p[i].uid="ABCD1234";                  // exactly CP_UID_LEN
       p[i].ticket=9223372036854775807;      // 19 digits - a long's ceiling
       p[i].sym="ABCDEFGHIJKLMNOPQRSTUVWX";  // exactly CP_SYM_MAXLEN
-      p[i].side=0;
+      p[i].side=CP_SIDE_BUY;
       p[i].lots=1000000.0;                  // widest DoubleToString(v,8)
       p[i].openPx=123456.12345678;          // 8 decimals, 6 integer digits
       p[i].sl=123456.12345678;
@@ -1612,6 +1612,8 @@ void TestSnapshotCapacity()
    CopierPos back[];
    int n=CopierDecodeSnapshot(e.payload,back,CP_MAX_POSITIONS);
    Ok("capacity: ...with every record intact",n==CP_MAX_POSITIONS);
+   Ok("capacity: ticket preserves full 64-bit value",back[0].ticket==9223372036854775807);
+   Ok("capacity: side decoded back accurately",back[0].side==CP_SIDE_BUY);
   }
 
 void TestProfitTarget()

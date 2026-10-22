@@ -2689,7 +2689,7 @@ function renderPosNodeDetail(){
           var badge = p.managed
             ? '<span class="pos-badge managed">OPENED · MANAGED</span>'
             : '<span class="pos-badge unmanaged">OPENED · UNMANAGED</span>';
-          var sideClass = (p.side === 0 || String(p.side) === "0" || String(p.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideClass = (Number(p.side) > 0 || String(p.side).toUpperCase() === "BUY") ? "buy" : "sell";
           var sideText = sideClass.toUpperCase();
           var priceStr = (p.open_px && Number(p.open_px) > 0) ? Number(p.open_px).toFixed(5) : "-";
           var slStr = (p.sl && Number(p.sl) > 0) ? Number(p.sl).toFixed(5) : "-";
@@ -2719,7 +2719,7 @@ function renderPosNodeDetail(){
           } else {
             stageBadge = '<span class="pos-badge queued">WAITING</span>';
           }
-          var sideClass = (w.side === 0 || String(w.side) === "0" || String(w.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideClass = (Number(w.side) > 0 || String(w.side).toUpperCase() === "BUY") ? "buy" : "sell";
           var sideText = sideClass.toUpperCase();
           var priceStr = (w.open_px && Number(w.open_px) > 0) ? Number(w.open_px).toFixed(5) : "-";
           var icon = (w.stage === "queued") ? "⚡ " : ((w.stage === "gate_delayed") ? "⏱️ " : "🔒 ");
@@ -2832,7 +2832,7 @@ function renderPosNodeDetail(){
       sndHtml += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
       if(sItems.length > 0){
         var sRows = sItems.map(function(item){
-          var sideClass = (item.side === 0 || String(item.side) === "0" || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
+          var sideClass = (Number(item.side) > 0 || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
           var sideText = sideClass.toUpperCase();
           var priceStr = (item.open_px && Number(item.open_px) > 0) ? Number(item.open_px).toFixed(5) : "-";
           var slStr = (item.sl && Number(item.sl) > 0) ? Number(item.sl).toFixed(5) : "-";
@@ -3135,8 +3135,9 @@ function renderCockpit(nodes, pos){
 
     var nm = n.name ? (" \u00b7 " + esc(n.name)) : "";
     var nameHtml = "<strong>#" + esc(n.acc || n.key) + "</strong>" + nm;
-    if(r.name.innerHTML !== nameHtml){
+    if(r._nameHtml !== nameHtml){
       r.name.innerHTML = nameHtml;
+      r._nameHtml = nameHtml;
     }
 
     var pingVal = (n.ping_ms !== undefined && n.ping_ms !== null) ? (n.ping_ms + " ms") : "-";
@@ -3439,26 +3440,39 @@ function renderNodes(nodes){
     if(r.dot){ r.dot.className = "dot " + n.liveness; }
     if(r.acc){
       var nm = n.name ? (" · " + esc(n.name)) : "";
-      r.acc.innerHTML = "<strong>#" + esc(n.acc || n.key) + "</strong>" + nm;
+      var accHtml = "<strong>#" + esc(n.acc || n.key) + "</strong>" + nm;
+      if(r._accHtml !== accHtml){
+        r.acc.innerHTML = accHtml;
+        r._accHtml = accHtml;
+      }
     }
     if(r.ver){ r.ver.textContent = n.ver ? ("v" + n.ver) : ""; }
     if(r.pz){ r.pz.style.display = n.paused ? "" : "none"; }
 
     // Latency Ping (Requirement 1: Font size matches surrounding text, clean mono color)
     if(r.ping){
+      var pingHtml = "";
       if(n.ping_ms !== undefined && n.ping_ms !== null){
         var p = Number(n.ping_ms);
         var pingColor = p < 150 ? "var(--ok)" : (p <= 450 ? "var(--warn)" : "var(--bad)");
-        r.ping.innerHTML = '<strong style="color:' + pingColor + ';font-family:var(--mono);font-size:var(--font-base)">' + p + ' ms</strong>';
+        pingHtml = '<strong style="color:' + pingColor + ';font-family:var(--mono);font-size:var(--font-base)">' + p + ' ms</strong>';
       } else {
-        r.ping.innerHTML = '<span style="color:var(--dim);font-family:var(--mono);font-size:var(--font-base)">-</span>';
+        pingHtml = '<span style="color:var(--dim);font-family:var(--mono);font-size:var(--font-base)">-</span>';
+      }
+      if(r._pingHtml !== pingHtml){
+        r.ping.innerHTML = pingHtml;
+        r._pingHtml = pingHtml;
       }
     }
 
     // Status
     if(r.st){
       var liveColor = n.liveness === "online" ? "var(--ok)" : (n.liveness === "stale" ? "var(--warn)" : "var(--bad)");
-      r.st.innerHTML = '<strong style="color:' + liveColor + '">' + n.liveness.toUpperCase() + '</strong>';
+      var stHtml = '<strong style="color:' + liveColor + '">' + n.liveness.toUpperCase() + '</strong>';
+      if(r._stHtml !== stHtml){
+        r.st.innerHTML = stHtml;
+        r._stHtml = stHtml;
+      }
     }
 
     // Positions (count)
@@ -3501,8 +3515,9 @@ function renderNodes(nodes){
 
     // Gating & Delays (Requirement 2: Pure text colors, zero heavy background blocks)
     if(r.gate){
+      var gateHtml = "";
       if(n.role === "sender"){
-        r.gate.innerHTML = '<span style="color:var(--accent)">Broadcasting (SNAP 15s)</span>';
+        gateHtml = '<span style="color:var(--accent)">Broadcasting (SNAP 15s)</span>';
       } else {
         var wt = n.waiting || { total: 0, lots: 0, queued: 0, delayed: 0, mkt_closed: 0 };
         var totalWait = (wt.total !== undefined) ? Number(wt.total) : 0;
@@ -3513,11 +3528,15 @@ function renderNodes(nodes){
           if(q > 0) wParts.push(q + " queued");
           if(m > 0) wParts.push(m + " mkt closed");
           var wText = totalWait + " waiting" + (wParts.length ? (" (" + wParts.join(", ") + ")") : "");
-          r.gate.innerHTML = '<span style="color:var(--warn);font-weight:600">⏳ ' + esc(wText) + '</span>';
+          gateHtml = '<span style="color:var(--warn);font-weight:600">⏳ ' + esc(wText) + '</span>';
         } else {
           var bNote = (n.blocked && n.risk && n.risk !== "ok") ? (' <span style="color:var(--bad)">🚫 ' + esc(n.risk) + '</span>') : '';
-          r.gate.innerHTML = '<span style="color:var(--ok);font-weight:600">✓ 0 waiting' + bNote + '</span>';
+          gateHtml = '<span style="color:var(--ok);font-weight:600">✓ 0 waiting' + bNote + '</span>';
         }
+      }
+      if(r._gateHtml !== gateHtml){
+        r.gate.innerHTML = gateHtml;
+        r._gateHtml = gateHtml;
       }
     }
 
@@ -3589,7 +3608,10 @@ function drawTopology(nodes){
   var receivers = nodes.filter(function(n){ return n.role === "receiver"; });
   $("tcount").textContent = senders.length + " sender(s) · " + receivers.length + " receiver(s)";
   if(!nodes.length){
-    $("topobody").innerHTML = '<div class="empty">nothing to draw yet</div>';
+    if(s.lastTopoHtml !== "empty"){
+      $("topobody").innerHTML = '<div class="empty">nothing to draw yet</div>';
+      s.lastTopoHtml = "empty";
+    }
     return;
   }
   // A hub in the middle, senders left, receivers right. Not a graph layout:
@@ -3632,7 +3654,11 @@ function drawTopology(nodes){
              esc(n.name || "receiver") + '</text>');
   });
   out.push('</svg>');
-  $("topobody").innerHTML = out.join("");
+  var newHtml = out.join("");
+  if(s.lastTopoHtml !== newHtml){
+    $("topobody").innerHTML = newHtml;
+    s.lastTopoHtml = newHtml;
+  }
   function box(x,y,cls,label){
     return '<rect class="' + cls + '" x="' + (x - BOX_HALF) + '" y="' + (y - 13) +
            '" width="' + BOX_W + '" height="26" rx="5"/><text x="' + x + '" y="' + (y + 4) +
@@ -5063,7 +5089,6 @@ function renderSenderCards(senders){
            '<select class="inp-lotmode">' +
            '<option value="multiplier"' + (lotmode === "multiplier" ? ' selected' : '') + '>multiplier</option>' +
            '<option value="fixed"' + (lotmode === "fixed" ? ' selected' : '') + '>fixed</option>' +
-           '<option value="risk"' + (lotmode === "risk" ? ' selected' : '') + '>risk</option>' +
            '<option value="off"' + (lotmode === "off" ? ' selected' : '') + '>off</option>' +
            '</select>' +
            '<span class="hint">Position sizing mode</span>' +

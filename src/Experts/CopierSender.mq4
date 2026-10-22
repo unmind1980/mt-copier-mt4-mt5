@@ -365,6 +365,7 @@ long             g_bootMs=0;            // for UP=, the node's own uptime
 //--- reading, and then they miss the one that mattered.
 bool             g_peerWasDown[CP_MAX_PEERS];
 long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
+string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slot
 #define CP_PEER_TIMEOUT_MS 15000       // silence beyond this = disconnected
 #define CP_PING_MS          10000      // probe cadence (10s)
 //--- After an alert for a peer, stay quiet about that peer for a while. One
@@ -943,7 +944,23 @@ void CheckPeers()
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
-      if(StringLen(nm)==0) continue;
+      if(StringLen(nm)==0)
+        {
+         g_lastTrackedName[i]="";
+         g_peerWasDown[i]=false;
+         g_peerAlerted[i]=0;
+         continue;
+        }
+
+      //--- A newly assigned or evicted slot occupant: reset edge-trigger state
+      //--- so a freshly connected node never inherits a stale "down" state and
+      //--- falsely logs that it is "back".
+      if(g_lastTrackedName[i]!=nm)
+        {
+         g_lastTrackedName[i]=nm;
+         g_peerWasDown[i]=false;
+         g_peerAlerted[i]=0;
+        }
 
       long silent=g_peers.SilentAt(i);
       //--- Three states, not two. A peer we have only just met is CONNECTING,
@@ -1153,24 +1170,37 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
   }
 
 //--- index of `who` in the stale-run arrays. Fixed capacity since the
-//--- zero-allocation pass, so the table can be FULL - and a full table must
-//--- return -1, never 0. Returning 0 aliased the 17th peer onto peer 0, so
-//--- one receiver's heartbeats rewrote another's receipt cadence and stale
-//--- run: the real peer 0 then either never triggered its repair, or
-//--- triggered one on somebody else's evidence.
+//--- zero-allocation pass. When full, evicts the longest-silent slot
+//--- (oldest g_snapRcptMs) so long-running deployments never permanently
+//--- saturate their targeted-repair capacity.
 int SnapStaleIndex(const string who)
   {
    for(int i=0;i<g_snapStaleCount;i++)
       if(g_snapStaleWho[i]==who) return i;
-   if(g_snapStaleCount>=CP_MAX_STALE_PEERS) return -1; // full
-   int n=g_snapStaleCount;
+
+   int n=0;
+   if(g_snapStaleCount<CP_MAX_STALE_PEERS)
+     {
+      n=g_snapStaleCount;
+      g_snapStaleCount++;
+     }
+   else
+     {
+      //--- Table full: reuse the slot whose receipt is oldest (longest silent).
+      int oldest=0;
+      for(int i=1;i<CP_MAX_STALE_PEERS;i++)
+        {
+         if(g_snapRcptMs[i]<g_snapRcptMs[oldest]) oldest=i;
+        }
+      n=oldest;
+     }
+
    g_snapStaleWho[n]=who;
    g_snapStaleN[n]=0;
    g_snapStaleMs[n]=0;
    g_snapRcptMs[n]=0;
    g_snapIntMs[n]=0;
    g_snapRepairMs[n]=0;
-   g_snapStaleCount++;
    return n;
   }
 
@@ -1215,7 +1245,7 @@ void UpdatePanel()
 
    int npos=0,nord=0;
    double lots=0.0;
-   for(int i=0;i<g_prev.Count();i++)
+   for(int i=0;i<CP_MAX_POSITIONS;i++)
      {
       CopierPos p;
       if(!g_prev.At(i,p)) continue;
@@ -1267,10 +1297,12 @@ void UpdatePanel()
                    +((g_hubOn)?"  (incl. hub)":""),
                (np>0)?CP_PANEL_OK:CP_PANEL_WARN);
 
-   for(int i=0;i<peerShow && i<CP_MAX_PEERS;i++)
+   int shown=0;
+   for(int i=0;i<CP_MAX_PEERS && shown<peerShow;i++)
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
+      shown++;
       long silent=g_peers.SilentAt(i);
       int  st=g_peers.StateAt(i,CP_PEER_TIMEOUT_MS);
       bool down=(st==CP_PEER_DOWN);
@@ -1307,6 +1339,17 @@ void UpdatePanel()
 
    g_panel.Row(r++," ",CP_PANEL_TEXT);
    g_panel.End();
+  }
+
+void RefreshSnapshotCache(const long now)
+  {
+   g_lastSnapMs=now;
+   CopierPos dense[];
+   int dn=g_prev.CopyTo(dense);
+   for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
+   string snap=CopierEncodeSnapshot(dense,dn);
+   g_snapHash=CopierSnapshotHash(snap);
+   g_snapPayload=snap;
   }
 
 void OnTimer()
@@ -1438,6 +1481,14 @@ void OnTimer()
         }
      }
 
+   //--- When positions changed (open/close/modify/drift), immediately refresh the cached
+   //--- snapshot payload and receipt hash so any targeted repair or bootstrap emitted before
+   //--- the next routine 15s broadcast always carries the true current state.
+   if(g_stateDirty)
+     {
+      RefreshSnapshotCache(now);
+     }
+
    //--- 6) snapshot
    bool dueSnap=(SnapshotSeconds>0 && now-g_lastSnapMs>=(long)SnapshotSeconds*1000);
    //--- If a pending order just filled into a market position, give the receiver
@@ -1460,22 +1511,8 @@ void OnTimer()
 
    if(dueSnap)
      {
-      g_lastSnapMs=now;
-      CopierPos dense[];
-      int dn=g_prev.CopyTo(dense);
-      for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
-      string snap=CopierEncodeSnapshot(dense,dn);
-      //--- Remember the receipt hash of the state we are now sending. This is
-      //--- the value a receiver echoes back once it has ingested this
-      //--- snapshot; anything else means it is behind. See
-      //--- doc/SNAPSHOT-DEMAND-PLAN.md.
-      g_snapHash=CopierSnapshotHash(snap);
-      //--- ...and keep the bytes themselves, so a repair re-sends exactly what
-      //--- a lagging receiver missed rather than a freshly built snapshot.
-      //--- Rebuilding would move g_snapHash and make every OTHER receiver look
-      //--- behind too - see the note on g_snapPayload.
-      g_snapPayload=snap;
-      Emit(CP_T_SNAP,snap,true);
+      RefreshSnapshotCache(now);
+      Emit(CP_T_SNAP,g_snapPayload,true);
      }
 
    //--- 7) heartbeat with account state (needed for equity-relative sizing)

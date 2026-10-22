@@ -85,8 +85,8 @@ int CopierDecodeEnv(const string msg,CopierEnv &e)
       if(k=="V")         e.v=(int)StringToInteger(v);
       else if(k=="SID")  e.sid=v;
       else if(k=="SSID") e.ssid=v;
-      else if(k=="SEQ")  e.seq=(long)StringToInteger(v);
-      else if(k=="TS")   e.ts=(long)StringToInteger(v);
+      else if(k=="SEQ")  e.seq=CopierParseLong(v);
+      else if(k=="TS")   e.ts=CopierParseLong(v);
       //--- 64-bit parse: a tick count passes 2^31 after ~25 days of uptime and
       //--- StringToInteger would wrap on MQL4, turning the delay arithmetic
       //--- into noise on a VPS that has simply been up a long time.
@@ -158,15 +158,15 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
    //--- lets one build read records written on either side of the change.
    if(n<10) return false;
    p.uid=it[0];
-   p.ticket=(long)StringToInteger(it[1]);
+   p.ticket=CopierParseLong(it[1]);
    p.sym=it[2];
    p.side=(int)StringToInteger(it[3]);
    p.lots=StringToDouble(it[4]);
    p.openPx=StringToDouble(it[5]);
    p.sl=StringToDouble(it[6]);
    p.tp=StringToDouble(it[7]);
-   p.magic=(long)StringToInteger(it[8]);
-   p.openTime=(long)StringToInteger(it[9]);
+   p.magic=CopierParseLong(it[8]);
+   p.openTime=CopierParseLong(it[9]);
    //--- absent means a market entry, which is what every older record is
    p.kind=CP_ORD_MARKET;
    p.ptype=0;
@@ -179,7 +179,7 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
       p.ptype=(int)StringToInteger(it[11]);
       p.pprice=StringToDouble(it[12]);
       p.pstop=StringToDouble(it[13]);
-      p.pexpire=(long)StringToInteger(it[14]);
+      p.pexpire=CopierParseLong(it[14]);
      }
    p.cmt="";
    p.used=true;

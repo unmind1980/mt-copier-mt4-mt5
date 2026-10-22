@@ -67,7 +67,7 @@
 #define CP_MAX_IGNORE      64     // "leave this one alone" list (the IgnoreUids input)
 #define CP_MAX_LOG_BYTES   1048576 // 1 MB per log file
 #define CP_LOG_GENERATIONS 3      // log.0 current, then .1 .2
-#define CP_STATE_MAX_LINES 256    // hard cap on state file
+#define CP_STATE_MAX_LINES CP_MAX_POSITIONS // hard cap on state file (matches position capacity)
 //--- Sized so the documented CP_MAX_POSITIONS capacity is actually
 //--- REACHABLE. 8192 was not: a market record is ~65 bytes and a pending
 //--- one ~90 (the pending fields are appended only for pending entries),
@@ -757,7 +757,7 @@ long CopierKvGetLong(const string payload,const string key,const long deflt)
   {
    string v;
    if(!CopierKvGet(payload,key,v)) return deflt;
-   return (long)StringToInteger(v);
+   return CopierParseLong(v);
   }
 
 int CopierKvGetInt(const string payload,const string key,const int deflt)
@@ -942,7 +942,7 @@ long CopierSenderTicketFromComment(const string comment)
       digits+=c;
      }
    if(StringLen(digits)==0) return 0;
-   return (long)StringToInteger(digits);
+   return CopierParseLong(digits);
   }
 
 //=====================================================================

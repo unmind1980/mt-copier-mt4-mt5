@@ -235,17 +235,22 @@ double CopierRealizedToday(const long dayStart)
      {
       ulong t=HistoryDealGetTicket(i);
       if(t==0) continue;
+      long dtype=HistoryDealGetInteger(t,DEAL_TYPE);
+      if(dtype!=DEAL_TYPE_BUY && dtype!=DEAL_TYPE_SELL) continue;
       //--- profit and swap are zero on an entry deal, but commission is
       //--- charged there, so every deal is summed rather than only exits
       sum+=HistoryDealGetDouble(t,DEAL_PROFIT)
           +HistoryDealGetDouble(t,DEAL_SWAP)
-          +HistoryDealGetDouble(t,DEAL_COMMISSION);
+          +HistoryDealGetDouble(t,DEAL_COMMISSION)
+          +HistoryDealGetDouble(t,DEAL_FEE);
      }
 #else
    int total=OrdersHistoryTotal();
    for(int i=0;i<total;i++)
      {
       if(!OrderSelect(i,SELECT_BY_POS,MODE_HISTORY)) continue;
+      int otype=OrderType();
+      if(otype!=OP_BUY && otype!=OP_SELL) continue;
       if((long)OrderCloseTime()<dayStart) continue;
       sum+=OrderProfit()+OrderSwap()+OrderCommission();
      }
@@ -674,7 +679,7 @@ long CopierMt4FromTicket(const string comment)
       digits+=c;
      }
    if(StringLen(digits)==0) return 0;
-   return (long)StringToInteger(digits);
+   return CopierParseLong(digits);
   }
 
 //=====================================================================

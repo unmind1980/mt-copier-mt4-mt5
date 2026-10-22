@@ -137,7 +137,7 @@ pub struct Node {
 pub struct ReceiverPositionItem {
     pub ticket: u64,
     pub symbol: String,
-    pub side: u8,
+    pub side: i8,
     pub lots: f64,
     pub open_px: f64,
     pub sl: f64,
@@ -152,7 +152,7 @@ pub struct ReceiverPositionItem {
 pub struct ReceiverWaitItem {
     pub uid: String,
     pub symbol: String,
-    pub side: u8,
+    pub side: i8,
     pub lots: f64,
     pub open_px: f64,
     pub stage: String,
@@ -180,7 +180,7 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
         // ticket,sym,side,lots,openPx,sl,tp,magic,managed,cmt
         let ticket: u64 = fields[0].parse().unwrap_or(0);
         let symbol = fields[1].to_string();
-        let side: u8 = fields[2].parse().unwrap_or(0);
+        let side: i8 = fields[2].parse().unwrap_or(0);
         let lots: f64 = fields[3].parse().unwrap_or(0.0);
         let open_px: f64 = fields[4].parse().unwrap_or(0.0);
         let sl: f64 = fields[5].parse().unwrap_or(0.0);
@@ -229,7 +229,7 @@ pub fn parse_receiver_waitlist(wait_str: &str) -> Vec<ReceiverWaitItem> {
         // uid,sym,side,lots,openPx,stage,reason
         let uid = fields[0].to_string();
         let symbol = fields[1].to_string();
-        let side: u8 = fields[2].parse().unwrap_or(0);
+        let side: i8 = fields[2].parse().unwrap_or(0);
         let lots: f64 = fields[3].parse().unwrap_or(0.0);
         let open_px: f64 = fields[4].parse().unwrap_or(0.0);
         let stage = fields[5].to_string();

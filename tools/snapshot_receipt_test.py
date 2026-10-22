@@ -120,8 +120,8 @@ def main():
 
     print()
     print("== the hash covers everything before it ==")
-    r1 = rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000)
-    r2 = rec("U0000002", 12346, "GBPUSD", 1, 0.2, 1.2, 1.19, 1.21, 5555, 1700000001)
+    r1 = rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000)
+    r2 = rec("U0000002", 12346, "GBPUSD", -1, 0.2, 1.2, 1.19, 1.21, 5555, 1700000001)
     p = encode_snapshot([r1, r2])
 
     check("payload ends with the H field", p.endswith("H=" + hash_hex(p.rsplit(";H=", 1)[0])))
@@ -136,16 +136,16 @@ def main():
     print()
     print("== every record field changes the hash ==")
     variants = {
-        "uid": rec("U0000009", 12345, "EURUSD", 0, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
-        "ticket": rec("U0000001", 99999, "EURUSD", 0, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
-        "symbol": rec("U0000001", 12345, "USDJPY", 0, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
-        "side": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
-        "lots": rec("U0000001", 12345, "EURUSD", 0, 0.2, 1.1, 1.09, 1.11, 5555, 1700000000),
-        "openPx": rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.2, 1.09, 1.11, 5555, 1700000000),
-        "sl": rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.1, 1.08, 1.11, 5555, 1700000000),
-        "tp": rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.1, 1.09, 1.12, 5555, 1700000000),
-        "magic": rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.1, 1.09, 1.11, 7777, 1700000000),
-        "openTime": rec("U0000001", 12345, "EURUSD", 0, 0.1, 1.1, 1.09, 1.11, 5555, 1700000999),
+        "uid": rec("U0000009", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
+        "ticket": rec("U0000001", 99999, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
+        "symbol": rec("U0000001", 12345, "USDJPY", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
+        "side": rec("U0000001", 12345, "EURUSD", -1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000000),
+        "lots": rec("U0000001", 12345, "EURUSD", 1, 0.2, 1.1, 1.09, 1.11, 5555, 1700000000),
+        "openPx": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.2, 1.09, 1.11, 5555, 1700000000),
+        "sl": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.08, 1.11, 5555, 1700000000),
+        "tp": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.12, 5555, 1700000000),
+        "magic": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 7777, 1700000000),
+        "openTime": rec("U0000001", 12345, "EURUSD", 1, 0.1, 1.1, 1.09, 1.11, 5555, 1700000999),
     }
     base = snapshot_hash(encode_snapshot([r1, r2]))
     for field, v in variants.items():
@@ -248,19 +248,19 @@ def main():
     print()
     print("== 500-byte adaptive compression ==")
     # 5 records (~300B) are below 500 bytes -> raw uncompressed with R=0:
-    recs5 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 6)]
+    recs5 = [rec(f"U{i:07d}", i, "EURUSD", 1, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 6)]
     small_p = encode_snapshot(recs5)
     check("5 records are under 500-byte threshold", len(CP_SEP_REC.join(recs5)) < 500)
     check("5 records use uncompressed prefix R=0:", ";R=0:" in small_p)
 
     # 10 records (~600B) exceed 500-byte threshold -> trigger Z85+zlib with R=1:
-    recs10 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 11)]
+    recs10 = [rec(f"U{i:07d}", i, "EURUSD", -1, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 11)]
     med_p = encode_snapshot(recs10)
     check("10 records exceed 500-byte threshold", len(CP_SEP_REC.join(recs10)) >= 500)
     check("10 records trigger compression prefix R=1:", ";R=1:" in med_p)
 
     # 300 records exceed threshold and compress to under 5KB
-    recs300 = [rec(f"U{i:07d}", i, "EURUSD", 0, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 301)]
+    recs300 = [rec(f"U{i:07d}", i, "EURUSD", 1 if i % 2 == 0 else -1, 0.01, 1.085, 0, 0, 0, 1780000000 + i) for i in range(1, 301)]
     big_p = encode_snapshot(recs300)
     check("300 raw records exceed 500-byte threshold", len(CP_SEP_REC.join(recs300)) >= 500)
     check("compressed snapshot is under 5KB (massive reduction)", len(big_p) < 5000)

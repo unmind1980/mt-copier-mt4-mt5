@@ -166,6 +166,11 @@ public:
          m_p[i].ticket=0;
          m_p[i].magic=0;
          m_p[i].openTime=0;
+         m_p[i].kind=0;
+         m_p[i].ptype=0;
+         m_p[i].pprice=0.0;
+         m_p[i].pstop=0.0;
+         m_p[i].pexpire=0;
         }
       m_n=0;
       m_hint=0;
@@ -233,6 +238,8 @@ public:
       kindDiff =(m_p[i].kind!=cur.kind || m_p[i].ticket!=cur.ticket);
       otherDiff=(MathAbs(m_p[i].openPx-cur.openPx)>0.0000001
                 || MathAbs(m_p[i].pprice-cur.pprice)>0.0000001
+                || MathAbs(m_p[i].pstop-cur.pstop)>0.0000001
+                || m_p[i].ptype!=cur.ptype
                 || m_p[i].pexpire!=cur.pexpire);
       prevLots  =m_p[i].lots;
       prevKind  =m_p[i].kind;
@@ -334,6 +341,7 @@ public:
       m_p[i].ptype   =cur.ptype;
       m_p[i].openPx  =cur.openPx;
       m_p[i].pprice  =cur.pprice;
+      m_p[i].pstop   =cur.pstop;
       m_p[i].pexpire =cur.pexpire;
       m_p[i].ticket  =cur.ticket;
       if(ticketChanged) m_tkValid=false;
