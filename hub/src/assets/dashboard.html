@@ -409,7 +409,7 @@
     white-space: nowrap !important;
   }
 
-  /* Message Center & Live Event Stream (Requirement 4) */
+  /* Message Center & Live Event Stream (Proposal C: Two-Line Professional Feed & Zero Jitter) */
   #alerts, .msg-center-body {
     display: flex !important;
     flex-direction: column;
@@ -420,54 +420,95 @@
     background: var(--panel);
   }
   .msg-item {
-    padding: 8px 12px;
+    padding: 9px 12px;
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 12.5px;
     border: 1px solid var(--line);
     background: var(--surface-header);
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    transition: all 0.15s ease;
+    flex-direction: column;
+    gap: 5px;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
   .msg-item:hover {
-    transform: translateX(2px);
-    border-color: var(--border-strong);
+    border-color: var(--accent);
+    background: var(--panel);
   }
   /* Unread / Active Highlighting */
-  .msg-item.unread.crit { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
-  .msg-item.unread.warn { background: var(--warn-bg); border-color: var(--warn-border); color: #92400e; }
-  .msg-item.unread.ok   { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
-  .msg-item.unread.info { background: var(--accent-bg); border-color: var(--border-strong); color: var(--accent); }
+  .msg-item.unread.crit { background: var(--bad-bg); border-color: var(--bad-border); }
+  .msg-item.unread.warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .msg-item.unread.ok   { background: var(--ok-bg); border-color: var(--ok-border); }
+  .msg-item.unread.info { background: var(--accent-bg); border-color: var(--border-strong); }
   /* Read / Dismissed State (Calm, low saturation, text preserved) */
   .msg-item.is-read {
     opacity: 0.72;
     background: var(--surface-header);
     border-color: var(--line);
-    color: var(--dim);
   }
   .msg-item.is-read:hover {
     opacity: 1;
-    color: var(--ink);
+    background: var(--panel);
   }
   .msg-item.is-read .msg-badge {
     background: var(--line);
     color: var(--dim);
     border: 1px solid var(--line);
   }
-  .msg-left { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+
+  /* Two-line row layout */
+  .msg-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .msg-top-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+  }
+  .msg-node-name {
+    font-weight: 700;
+    color: var(--ink);
+    font-size: 12.5px;
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .msg-top-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .msg-time {
+    font-size: 11px;
+    color: var(--dim);
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  .msg-row-content {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+    word-break: break-word;
+    white-space: normal;
+  }
   .msg-badge {
-    font-size: 10px; font-weight: 700; font-family: var(--mono); padding: 2px 6px; border-radius: 3px; text-transform: uppercase; flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--mono);
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    flex-shrink: 0;
   }
   .msg-badge.crit { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
   .msg-badge.warn { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
   .msg-badge.ok   { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
   .msg-badge.info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-  .msg-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .msg-desc strong { color: var(--ink); }
-  .msg-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  .msg-time { font-size: 11px; color: var(--dim); font-family: var(--mono); white-space: nowrap; }
 
   /* Node Banner: Two clean aligned lines, zero drop, zero offset */
   .node-banner {
@@ -1946,6 +1987,8 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           eventLog: [],
           readEventKeys: {},
           knownNodeKeys: {},
+          alertDomRows: null,
+          renderedAlertKeys: null,
           channels:[],
           userRole:"",
           dismissedAlerts:{},
@@ -3207,33 +3250,81 @@ function renderAlerts(alerts){
     saveStoredEvents();
   }
 
-  // Render the current 20 items
+  // 1. Calculate unread count & key signature
   var unreadCount = 0;
-  var items = s.eventLog.map(function(ev){
+  var currentSig = s.eventLog.map(function(ev){
     var isRead = !!s.readEventKeys[ev.id];
     if(!isRead) unreadCount++;
+    return ev.id + ":" + (isRead ? "R" : "U") + ":" + ev.sev;
+  }).join("|");
 
-    var diff = Math.max(0, nowSec - (ev.ts || nowSec));
-    var ago = "just now";
-    if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
-    else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
-    else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
-    var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
+  // 2. Proposal C Two-Line Rendering & In-place update (Zero DOM destruction on hover!)
+  if(currentSig !== s.renderedAlertKeys){
+    s.renderedAlertKeys = currentSig;
+    s.alertDomRows = {};
 
-    var cardCls = isRead ? "msg-item is-read" : ("msg-item unread " + ev.sev);
-    var badgeCls = "msg-badge " + ev.sev;
-    return '<div class="' + cardCls + '" data-evid="' + esc(ev.id) + '">' +
-           '<div class="msg-left">' +
-           '<span class="' + badgeCls + '">' + esc(ev.kind) + '</span>' +
-           '<span class="msg-desc"><strong>' + esc(ev.node) + '</strong>: ' + esc(ev.detail) + '</span>' +
-           '</div>' +
-           '<div class="msg-right">' +
-           '<span class="msg-time">' + ago + ' (' + esc(when) + ')</span>' +
-           (isRead ? '' : '<button type="button" class="ax" data-read-ev="' + esc(ev.id) + '" title="Mark this event as read">✓</button>') +
-           '</div></div>';
-  }).join("");
+    if(!s.eventLog.length){
+      bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>No recent system events logged yet.</span></div>';
+    } else {
+      var items = s.eventLog.map(function(ev){
+        var isRead = !!s.readEventKeys[ev.id];
+        var diff = Math.max(0, nowSec - (ev.ts || nowSec));
+        var ago = "just now";
+        if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
+        else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
+        else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
+        var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
 
-  bar.innerHTML = items;
+        var cardCls = isRead ? "msg-item is-read" : ("msg-item unread " + ev.sev);
+        var badgeCls = "msg-badge " + ev.sev;
+        var readBtnHtml = isRead ? '' : '<button type="button" class="ax" data-read-ev="' + esc(ev.id) + '" title="Mark as read">✓</button>';
+
+        return '<div class="' + cardCls + '" data-evid="' + esc(ev.id) + '">' +
+               '  <div class="msg-row-top">' +
+               '    <div class="msg-top-left">' +
+               '      <span class="' + badgeCls + '">' + esc(ev.kind) + '</span>' +
+               '      <span class="msg-node-name">' + esc(ev.node) + '</span>' +
+               '    </div>' +
+               '    <div class="msg-top-right">' +
+               '      <span class="msg-time">' + ago + ' (' + esc(when) + ')</span>' +
+               readBtnHtml +
+               '    </div>' +
+               '  </div>' +
+               '  <div class="msg-row-content" title="' + esc(ev.detail) + '">' +
+               esc(ev.detail) +
+               '  </div>' +
+               '</div>';
+      }).join("");
+
+      bar.innerHTML = items;
+
+      // Cache row elements for zero-flicker time updating
+      var domItems = bar.getElementsByClassName("msg-item");
+      for(var i = 0; i < domItems.length; i++){
+        var eid = domItems[i].getAttribute("data-evid");
+        if(!eid) continue;
+        s.alertDomRows[eid] = {
+          timeEl: domItems[i].querySelector(".msg-time")
+        };
+      }
+    }
+  } else {
+    // 3. Steady-state in-place time text updates (DOM elements survive, 0 flicker!)
+    s.eventLog.forEach(function(ev){
+      var row = s.alertDomRows ? s.alertDomRows[ev.id] : null;
+      if(!row || !row.timeEl) return;
+      var diff = Math.max(0, nowSec - (ev.ts || nowSec));
+      var ago = "just now";
+      if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
+      else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
+      else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
+      var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
+      var newTimeText = ago + " (" + when + ")";
+      if(row.timeEl.textContent !== newTimeText){
+        row.timeEl.textContent = newTimeText;
+      }
+    });
+  }
 
   // Update button label with unread indicator
   var dBtn = $("btn-dismiss-alerts");
