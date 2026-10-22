@@ -325,6 +325,72 @@
   }
 
   
+  
+  /* Dynamic Responsive Typography linked to --font-base */
+  table, table.hub-table, .hub-table th, .hub-table td,
+  .pos-table-wrap table, .pos-table-wrap table th, .pos-table-wrap table td,
+  .notiftbl table, .notiftbl table th, .notiftbl table td {
+    font-size: var(--font-base) !important;
+  }
+  .hub-table th, .pos-table-wrap table th, table th {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  .node-entry-top {
+    font-size: calc(var(--font-base) * 1.02) !important;
+  }
+  .node-entry-sub {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .btn-sm, .opbtn {
+    font-size: calc(var(--font-base) * 0.92) !important;
+    padding: calc(var(--font-base) * 0.38) calc(var(--font-base) * 0.88) !important;
+  }
+  .kpi-value {
+    font-size: calc(var(--font-base) * 1.45) !important;
+  }
+  .kpi-title {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+  .kpi-subtitle {
+    font-size: calc(var(--font-base) * 0.86) !important;
+  }
+  .pos-card-val {
+    font-size: calc(var(--font-base) * 1.35) !important;
+  }
+  .pos-card-label {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+  .pos-card-sub {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  .waiting-stage-count {
+    font-size: calc(var(--font-base) * 1.4) !important;
+  }
+  .waiting-stage-name, .pos-section-title {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .waiting-banner-title {
+    font-size: calc(var(--font-base) * 1.05) !important;
+  }
+  .waiting-banner-desc {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .msg-item {
+    font-size: calc(var(--font-base) * 0.9) !important;
+  }
+  .msg-time {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+  .tab-trigger {
+    font-size: calc(var(--font-base) * 0.95) !important;
+  }
+  .gops-title-label {
+    font-size: calc(var(--font-base) * 0.95) !important;
+  }
+  .poshead-embedded h2, .node-banner-title {
+    font-size: calc(var(--font-base) * 1.1) !important;
+  }
+
   /* Embedded Cockpit Detail Header & Footer */
   .cockpit-detail-container {
     display: flex;
@@ -1718,6 +1784,8 @@
 // ---------------------------------------------------------------- state
 var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           users:{ rows:[] },
+          cockpitKeys: null,
+          cockpitRows: null,
           channels:[],
           userRole:"",
           dismissedAlerts:{},
@@ -2140,13 +2208,13 @@ function selectPosNode(key){
     sel.value = key;
   }
   renderPosNodeDetail();
-  // Sync active highlight on sidebar list
-  var listHost = $("cockpit_node_list");
-  if(listHost){
-    var items = listHost.querySelectorAll(".node-entry");
-    items.forEach(function(it){
-      it.classList.toggle("active", it.getAttribute("data-ck") === key);
-    });
+  // Sync active highlight on sidebar list in-place
+  if(s.cockpitRows){
+    for(var k in s.cockpitRows){
+      if(s.cockpitRows[k] && s.cockpitRows[k].el){
+        s.cockpitRows[k].el.classList.toggle("active", k === key);
+      }
+    }
   }
 }
 
@@ -2783,6 +2851,10 @@ function applyScale(size){
 }
 
 // --- Split Cockpit Rendering (Tab 2) ---
+// --- Split Cockpit Rendering (Tab 2) ---
+// In-place DOM update mechanism (same as renderNodes).
+// Rebuilds listHost ONLY when the set of keys changes. In between, cells and
+// badges are updated in place so mouse hover NEVER flickers and clicks respond instantly.
 function renderCockpit(nodes, pos){
   var listHost = $("cockpit_node_list");
   var countEl = $("cockpit_node_count");
@@ -2791,6 +2863,8 @@ function renderCockpit(nodes, pos){
 
   if(!nodes.length){
     listHost.innerHTML = '<div class="empty">No nodes connected</div>';
+    s.cockpitKeys = null;
+    s.cockpitRows = null;
     return;
   }
 
@@ -2801,24 +2875,81 @@ function renderCockpit(nodes, pos){
     s.cockpitSelectedKey = activeKey;
   }
 
-  listHost.innerHTML = nodes.map(function(n){
-    var activeCls = n.key === activeKey ? " active" : "";
-    var roleCls = n.role === "sender" ? "role-pill sender" : "role-pill receiver";
+  var keys = nodes.map(function(n){ return n.key; }).join(String.fromCharCode(0));
+  if(keys !== s.cockpitKeys){
+    var items = nodes.map(function(n){
+      var activeCls = n.key === activeKey ? " active" : "";
+      return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
+             '<div class="node-entry-top">' +
+             '<div><span class="dot"></span><span class="ck-name"></span></div>' +
+             '<span class="ping-tag"></span>' +
+             '</div>' +
+             '<div class="node-entry-sub">' +
+             '<span class="role-pill"></span> <span class="ck-sub"></span>' +
+             '</div></div>';
+    }).join("");
+    listHost.innerHTML = items;
+    s.cockpitKeys = keys;
+    s.cockpitRows = {};
+    var domItems = listHost.getElementsByClassName("node-entry");
+    for(var i = 0; i < domItems.length; i++){
+      var k = domItems[i].getAttribute("data-ck");
+      if(!k) continue;
+      s.cockpitRows[k] = {
+        el:   domItems[i],
+        dot:  domItems[i].querySelector(".dot"),
+        name: domItems[i].querySelector(".ck-name"),
+        ping: domItems[i].querySelector(".ping-tag"),
+        role: domItems[i].querySelector(".role-pill"),
+        sub:  domItems[i].querySelector(".ck-sub")
+      };
+    }
+  }
+
+  // In-place updates for every node without destroying DOM elements
+  nodes.forEach(function(n){
+    var r = s.cockpitRows ? s.cockpitRows[n.key] : null;
+    if(!r) return;
+
+    var isActive = (n.key === activeKey);
+    if(isActive !== r.el.classList.contains("active")){
+      r.el.classList.toggle("active", isActive);
+    }
+
+    var dotCls = "dot " + (n.liveness || "offline");
+    if(r.dot.className !== dotCls){
+      r.dot.className = dotCls;
+    }
+
+    var nm = n.name ? (" \u00b7 " + esc(n.name)) : "";
+    var nameHtml = "<strong>#" + esc(n.acc || n.key) + "</strong>" + nm;
+    if(r.name.innerHTML !== nameHtml){
+      r.name.innerHTML = nameHtml;
+    }
+
+    var pingVal = (n.ping_ms !== undefined && n.ping_ms !== null) ? (n.ping_ms + " ms") : "-";
+    var pingCls = "ping-tag " + (n.ping_ms < 60 ? "ping-ok" : (n.ping_ms < 200 ? "ping-warn" : "ping-bad"));
+    if(r.ping.textContent !== pingVal){
+      r.ping.textContent = pingVal;
+      r.ping.className = pingCls;
+    }
+
+    var roleText = n.role.toUpperCase();
+    var roleCls = "role-pill " + n.role;
+    if(r.role.textContent !== roleText){
+      r.role.textContent = roleText;
+      r.role.className = roleCls;
+    }
+
     var posCount = (n.positions && n.positions.count !== undefined) ? n.positions.count : "-";
     var lotsStr = (n.positions && n.positions.lots !== undefined) ? n.positions.lots + " Lots" : "";
     var eqStr = n.equity ? ("$" + Number(n.equity).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})) : (n.balance ? ("$" + Number(n.balance).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})) : "-");
-    var pingStr = n.ping_ms ? (n.ping_ms + "ms") : "-";
-    var dotCls = "dot " + (n.liveness || "offline");
-    return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
-           '<div class="node-entry-top">' +
-           '<div><span class="' + dotCls + '"></span><strong>#' + esc(n.acc || n.key) + '</strong> ' + (n.name ? ('<span style="color:var(--dim)">· ' + esc(n.name) + '</span>') : '') + '</div>' +
-           '<span class="ping-tag ping-ok">' + esc(pingStr) + '</span>' +
-           '</div>' +
-           '<div class="node-entry-sub">' +
-           '<span class="' + roleCls + '">' + esc(n.role) + '</span> ' +
-           esc(n.ver ? ("v" + n.ver) : "") + ' · ' + posCount + ' pos (' + lotsStr + ') · ' + eqStr +
-           '</div></div>';
-  }).join("");
+    var verStr = n.ver ? ("v" + n.ver + " \u00b7 ") : "";
+    var subText = verStr + posCount + " pos (" + lotsStr + ") \u00b7 " + eqStr;
+    if(r.sub.textContent !== subText){
+      r.sub.textContent = subText;
+    }
+  });
 }
 
 function renderAlerts(alerts){
