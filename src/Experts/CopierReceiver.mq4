@@ -758,6 +758,34 @@ struct CopierUidPeakLots
 CopierUidPeakLots g_uidPeakLots[CP_MAX_POSITIONS];
 int               g_uidPeakLotsCount=0;
 
+void PruneSenderPeakLots()
+  {
+   for(int i=g_uidPeakLotsCount-1;i>=0;i--)
+     {
+      string uid=g_uidPeakLots[i].uid;
+      bool isAlive=false;
+      for(int s=0;s<g_nSenders && !isAlive;s++)
+        {
+         int base=s*CP_MAX_POSITIONS;
+         for(int d=0;d<g_desiredCount[s];d++)
+           {
+            if(g_desired[base+d].uid==uid) { isAlive=true; break; }
+           }
+        }
+      if(!isAlive)
+        {
+         for(int k=0;k<g_acctAllPosCount;k++)
+           {
+            if(g_acctAllPos[k].uid==uid) { isAlive=true; break; }
+           }
+        }
+      if(!isAlive)
+        {
+         g_uidPeakLots[i]=g_uidPeakLots[--g_uidPeakLotsCount];
+        }
+     }
+  }
+
 double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
   {
    for(int i=0;i<g_uidPeakLotsCount;i++)
@@ -767,6 +795,10 @@ double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
          if(curLots>g_uidPeakLots[i].peakLots) g_uidPeakLots[i].peakLots=curLots;
          return g_uidPeakLots[i].peakLots;
         }
+     }
+   if(g_uidPeakLotsCount>=CP_MAX_POSITIONS)
+     {
+      PruneSenderPeakLots();
      }
    if(g_uidPeakLotsCount<CP_MAX_POSITIONS)
      {
@@ -1448,6 +1480,7 @@ bool LoadConfigForHub()
       return true;                    // connected, zero senders - NOT a failure
      }
 
+   ResetRuntimeInputsFromInputs();
    ApplyCommonConfig(ini);
 
    //--- Start from an empty symbol map on every load - see MapClear. A CFG
@@ -2652,7 +2685,10 @@ void ExecuteQueue()
          //--- Without it a MODIFY would fall through to
          //--- CopierClosePosition() and CLOSE the position it was only
          //--- meant to re-stop - the most expensive possible misroute here.
-         ok=CopierModifyStops(a.ticket,a.sym,a.sl,a.tp,err);
+         if(a.ordKind==CP_ORD_PENDING)
+            ok=CopierModifyPendingOrder(a.ticket,a.sym,a.pprice,a.sl,a.tp,a.pstop,(datetime)a.pexpire,err);
+         else
+            ok=CopierModifyStops(a.ticket,a.sym,a.sl,a.tp,err);
         }
       else
         {
@@ -3161,7 +3197,15 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clamped);
      }
 
-   if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2))
+   bool pendingDiff=false;
+   if(local.kind==CP_ORD_PENDING && desired.kind==CP_ORD_PENDING)
+     {
+      if(desired.pprice>0.0 && MathAbs(local.pprice-desired.pprice)>si2.point*0.5) pendingDiff=true;
+      if(desired.pstop>0.0 && MathAbs(local.pstop-desired.pstop)>si2.point*0.5) pendingDiff=true;
+      if(desired.pexpire!=local.pexpire) pendingDiff=true;
+     }
+
+   if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
       return;
 
    //--- Say what was computed, once per UID.
@@ -3209,11 +3253,17 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- different level is a different action, not a duplicate. Without
    //--- this the seen-ring would suppress it for its whole TTL and the
    //--- mirror would keep the first stop it ever saw.
+   double actPPrice = (local.kind==CP_ORD_PENDING && desired.pprice>0.0) ? desired.pprice : local.pprice;
+   double actPStop  = (local.kind==CP_ORD_PENDING && desired.pstop>0.0) ? desired.pstop : local.pstop;
+   long   actPExp   = (local.kind==CP_ORD_PENDING) ? desired.pexpire : local.pexpire;
+
    PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
               0.0,local.ticket,0,
               ":"+CopierFmtDouble(wantSl,CP_DIGITS_PX)
-              +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX),
-              wantSl,wantTp);
+              +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX)
+              +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX),
+              wantSl,wantTp,
+              local.kind,local.ptype,actPPrice,actPStop,actPExp);
   }
 
 //=====================================================================
@@ -4383,6 +4433,7 @@ void ConvergeSender(const int si)
 
       PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket);
       ForgetSenderPeakLots(g_locScratch[i].uid);
+      StopsForget(g_locScratch[i].uid);
      }
   }
 
@@ -4545,6 +4596,28 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    g_ready[si]=true;
   }
 
+void StopsForget(const string uid)
+  {
+   for(int i=0;i<g_stCount;i++)
+     {
+      if(g_stUid[i]==uid)
+        {
+         int last=g_stCount-1;
+         if(i!=last)
+           {
+            g_stUid[i]=g_stUid[last];
+            g_stHasOv[i]=g_stHasOv[last];
+            g_stOvSl[i]=g_stOvSl[last];
+            g_stOvTp[i]=g_stOvTp[last];
+            g_stOvOpn[i]=g_stOvOpn[last];
+            g_stLastMs[i]=g_stLastMs[last];
+           }
+         g_stCount--;
+         return;
+        }
+     }
+  }
+
 //--- index of `uid` in the stop-override table, appending on demand.
 //--- The table is FIXED at CP_MAX_STOPS_OV (no ArrayResize), so a full table
 //--- is a real state and returns -1: every caller MUST check before indexing.
@@ -4552,7 +4625,12 @@ int StopsOvIndex(const string uid,const bool create)
   {
    for(int i=0;i<g_stCount;i++)
       if(g_stUid[i]==uid) return i;
-   if(!create || g_stCount>=CP_MAX_STOPS_OV) return -1;
+   if(!create) return -1;
+   if(g_stCount>=CP_MAX_STOPS_OV)
+     {
+      StopsPrune(CopierNowMs());
+     }
+   if(g_stCount>=CP_MAX_STOPS_OV) return -1;
    int n=g_stCount;
    g_stUid[n]=uid;
    g_stHasOv[n]=false;
@@ -4577,6 +4655,8 @@ int StopsOvIndex(const string uid,const bool create)
 //--- its two jobs.
 void StopsPrune(const long now)
   {
+   PruneSenderPeakLots();
+
    int maxThrottle=StopsThrottleSeconds;
    for(int s=0;s<g_nSenders;s++)
      {
@@ -4586,8 +4666,30 @@ void StopsPrune(const long now)
    long keep=(long)maxThrottle*1000;
    for(int i=g_stCount-1;i>=0;i--)
      {
-      if(g_stHasOv[i]) continue;
-      if(g_stLastMs[i]>=0 && now-g_stLastMs[i]<keep) continue;
+      bool isAlive=false;
+      if(g_stHasOv[i])
+        {
+         for(int s=0;s<g_nSenders && !isAlive;s++)
+           {
+            int base=s*CP_MAX_POSITIONS;
+            for(int d=0;d<g_desiredCount[s];d++)
+              {
+               if(g_desired[base+d].uid==g_stUid[i]) { isAlive=true; break; }
+              }
+           }
+         if(!isAlive)
+           {
+            for(int k=0;k<g_acctAllPosCount;k++)
+              {
+               if(g_acctAllPos[k].uid==g_stUid[i]) { isAlive=true; break; }
+              }
+           }
+         if(isAlive) continue;
+        }
+      else
+        {
+         if(g_stLastMs[i]>=0 && now-g_stLastMs[i]<keep) continue;
+        }
       int last=g_stCount-1;
       if(i!=last)
         {
@@ -5062,6 +5164,7 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
    string uid="";
    if(!CopierKvGet(e.payload,"UID",uid)) return;
    ForgetSenderPeakLots(uid);
+   StopsForget(uid);
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<g_desiredCount[si];i++)
      {

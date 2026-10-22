@@ -417,20 +417,15 @@ string CopierCfgHash(const string s)
   {
    uint a=2166136261;                 // FNV-1a offset basis
    uint b=0x9E3779B9;                 // lane 2: Knuth's golden-ratio constant
-   int n=StringLen(s);
-   if(n>0)
+   if(StringLen(s)>0)
      {
       uchar data[];
-      if(StringToCharArray(s,data,0,n,CP_UTF8)>0)
+      int got=StringToCharArray(s,data,0,-1,CP_UTF8);
+      if(got>0)
         {
-         int nb=ArraySize(data);
-         //--- StringToCharArray may append a terminator; the hash is over the
-         //--- BYTES OF THE TEXT, so a trailing 0 must not be mixed in. Both
-         //--- sides agree because the reference implementation hashes exactly
-         //--- n characters' worth of UTF-8.
+         int nb=(data[got-1]==0 ? got-1 : got); // exclude trailing null
          for(int i=0;i<nb;i++)
            {
-            if(data[i]==0 && i==nb-1) break;
             uint c=(uint)data[i];
             a=(a^c)*16777619;
             b=(b^c)*0x85EBCA6B;

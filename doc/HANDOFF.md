@@ -447,6 +447,24 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 二十一次审计：退避槽位映射补全、全量UTF-8配置哈希、挂单触发价同步与配置继承保护（2026-10-23 02:00；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **BUG-01** | **P0 致命** | `CopierState.mqh:789, 814, 829` | **`CopierBackoff` 补齐 `m_slot` 槽位映射**：在 `CopierBackoff` 中增加 `int m_slot[CP_BACKOFF_SLOTS]`，将哈希桶索引 `k` 与线性数据槽位 `i` 解耦对齐，彻底修复 `Find` 永远返回 `-1` 导致退避锁完全瘫痪的致命 Bug。 |
+| **BUG-02** | **优化** | `CopierDefs.mqh:584` | **`CopierReplaceAll` 升级为内置 `StringReplace`**：消除硬编码的 256 次循环上限，提升大字符串替换效率。 |
+| **BUG-03** | **P1 严重** | `CopierReceiver.mq4:1450` | **`LoadConfigForHub` 热重载前重置运行时变量**：在 `ApplyCommonConfig` 之前调用 `ResetRuntimeInputsFromInputs()`，彻底消除从 `[common]` 删除的配置项在内存中残留并反向污染 `CFGRPT` 的问题。 |
+| **BUG-04** | **P1 严重** | `CopierSender.mq4:1428` / `CopierReceiver.mq4:2652, 3145` | **挂单触发价与过期时间变动同步**：Sender 端在 `otherDiff`（触发价/过期变动）时标记 `g_stateDirty = true` 触发快照刷新；Receiver 端 `QueueModifyIfNeeded` 检查 `pprice`/`pstop`/`pexpire` 变动，并调用 `CopierModifyPendingOrder` 同步修改经纪商挂单。 |
+| **BUG-05** | **P1 严重** | `CopierCodec.mqh:424` | **`CopierCfgHash` 全量 UTF-8 字节哈希**：`StringToCharArray` 传入 `count = -1` 并去除末尾 `\0`，遍历全部字节，彻底修复包含中文或非 ASCII 注释时配置哈希与 Rust Hub 不一致导致每 60s 循环触发 `reqcfg` 的问题。 |
+| **BUG-06** | **P1 严重** | `CopierSender.mq4:427, 576` | **`BroadcastLots` 精度扩展与 `EmitClose` 手数缩放**：`BroadcastLots` 支持 8 位小数（`CP_DIGITS_LOTS`），防止微手数 (0.001) 归零；`EmitClose` 统一调用 `BroadcastLots(p.lots)`。 |
+| **BUG-07** | **P1 严重** | `CopierReceiver.mq4:760, 4625` | **`g_uidPeakLots` 垃圾回收机制**：增加 `PruneSenderPeakLots()`，在表满或定期修剪时自动回收不在 `g_desired` 与 `g_local` 中的已结束订单，永不耗尽 2048 槽位。 |
+| **BUG-08** | **P2 中危** | `CopierReceiver.mq4:4575, 4635` | **`g_stUid` 止损覆盖表闭环清理**：增加 `StopsForget()`，并在 `StopsPrune` 中对不在 `g_desired` 与本地持仓中的已平仓 override 进行彻底清理。 |
+| **BUG-09** | **P2 中危** | `dashboard.html:5176, 5267` | **Web 可视化配置保护 `[common]` 继承**：卡片 Checkbox 标记 `data-init` 与 `data-def`，未作显式修改的复选框不输出配置，彻底保护从 `[common]` 继承全局开关的机制。 |
+| **BUG-10** | **P2 中危** | `CopierModel.mqh:466, 642` | **MT5 挂单部分成交状态兼容**：`CopierReadPositions` 与 `CopierResolveCloseTicket` 同时匹配 `ORDER_STATE_PLACED` 与 `ORDER_STATE_PARTIAL`，消除部分成交挂单的状态盲区与撤单失败。 |
+| **TEST-01c** | **工具** | `tools/logcheck.py:145` | **日志跨世代同秒排序校正**：按 `.log.2` < `.log.1` < `.log` 排序日志文件，确保同秒内事件严格保持真实时间流顺序。 |
+
+---
+
 ### 二十次审计：固定手数全流程峰值追踪、最新单播快照哈希与审计临时文件清理（2026-10-23 00:20；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

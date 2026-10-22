@@ -424,7 +424,7 @@ bool MagicAllowed(const long magic)
 double BroadcastLots(const double actual)
   {
    if(FixedLotSize>0.0)      return FixedLotSize;
-   if(LotSizeMultiplier>0.0) return NormalizeDouble(actual*LotSizeMultiplier,2);
+   if(LotSizeMultiplier>0.0) return NormalizeDouble(actual*LotSizeMultiplier,CP_DIGITS_LOTS);
    return actual;
   }
 
@@ -573,7 +573,8 @@ void EmitOpen(const CopierPos &p)
 
 void EmitClose(const CopierPos &p)
   {
-   Emit(CP_T_CLOSE,CopierPayloadClose(p.uid,p.ticket,p.lots,0.0),false);
+   double bLots=BroadcastLots(p.lots);
+   Emit(CP_T_CLOSE,CopierPayloadClose(p.uid,p.ticket,bLots,0.0),false);
   }
 
 //=====================================================================
@@ -1425,6 +1426,7 @@ void OnTimer()
                              prevLots,prevKind,prevTicket,g_curScratch[i]))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
+            if(otherDiff) g_stateDirty=true;
 
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(stopsDiff)

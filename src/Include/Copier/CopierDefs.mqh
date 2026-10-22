@@ -581,12 +581,7 @@ string CopierReplaceAll(string s,const string from,const string to)
   {
    if(StringLen(from)==0) return s;
    if(from==to) return s;
-   for(int guard=0; guard<256; guard++)
-     {
-      int p=StringFind(s,from);
-      if(p<0) break;
-      s=StringSubstr(s,0,p)+to+StringSubstr(s,p+StringLen(from));
-     }
+   StringReplace(s,from,to);
    return s;
   }
 

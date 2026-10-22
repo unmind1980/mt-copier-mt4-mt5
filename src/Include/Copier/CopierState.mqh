@@ -785,7 +785,8 @@ private:
    //--- on every PushAction for every candidate action, so at 300 positions
    //--- and 10 Hz a linear scan of 256 keys is ~770,000 string compares a
    //--- second; this makes it a single probe with one compare on a hit.
-   int               m_h[CP_BACKOFF_SLOTS];   // 0 = free, else tag+1
+   int               m_h[CP_BACKOFF_SLOTS];   // tag
+   int               m_slot[CP_BACKOFF_SLOTS];// 0 = empty, else slot index + 1
 
    uint              HashOf(const string key) const
      {
@@ -811,9 +812,10 @@ private:
       int k=(int)(HashOf(key) & (uint)mask);
       for(int probes=0;probes<CP_BACKOFF_SLOTS;probes++)
         {
-         int got=m_h[k];
-         if(got==0) return -1;                  // empty: not present
-         if(got==tag && m_k[k]==key) return k;  // tag hit + key equal
+         int s=m_slot[k];
+         if(s==0) return -1;                  // empty: not present
+         int idx=s-1;
+         if(m_h[k]==tag && idx>=0 && idx<CP_BACKOFF_SLOTS && m_k[idx]==key) return idx;
          k=(k+1)&mask;                          // linear probe
         }
       return -1;
@@ -824,28 +826,21 @@ private:
       int tag=TagOf(h);
       int mask=CP_BACKOFF_SLOTS-1;
       int k=(int)(h & (uint)mask);
-      while(m_h[k]!=0)
+      while(m_slot[k]!=0)
         {
-         if(m_h[k]==tag && m_k[k]==m_k[i]) return;   // already indexed
+         if(m_h[k]==tag && m_slot[k]==i+1) return;   // already indexed
          k=(k+1)&mask;
         }
       m_h[k]=tag;
+      m_slot[k]=i+1;
      }
 
    //--- Remove one key from the hash index, then REBUILD the whole index from
    //--- the live keys.
-   //---
-   //--- The obvious single-slot erase (`m_h[k]=0` in place) is wrong for
-   //--- linear probing: a slot in the middle of a probe chain, once emptied,
-   //--- splits that chain and every key probed past it becomes unreachable.
-   //--- Backward-shift deletion is the textbook fix and is easy to get subtly
-   //--- wrong, so this takes the other safe option - erases are rare (a
-   //--- success that clears a ladder, or an eviction when all 256 slots are
-   //--- full), so paying one O(slots) rebuild is not measurable next to the
-   //--- lookup this whole index exists to speed up.
    void              EraseHash(const int i)
      {
       ArrayInitialize(m_h,0);
+      ArrayInitialize(m_slot,0);
       for(int k=0;k<CP_BACKOFF_SLOTS;k++)
          if(StringLen(m_k[k])>0) InsertHash(k,HashOf(m_k[k]));
      }
@@ -864,6 +859,7 @@ private:
         {
          if(m_u[i]>m_u[worst]) worst=i;
         }
+      m_k[worst]="";
       EraseHash(worst);
       return worst;
      }
@@ -878,6 +874,7 @@ public:
          m_t[i]=0;
          m_u[i]=0;
          m_h[i]=0;
+         m_slot[i]=0;
         }
      }
 
@@ -948,11 +945,11 @@ public:
      {
       int i=Find(key);
       if(i<0) return;
-      EraseHash(i);
       m_k[i]="";
       m_n[i]=0;
       m_t[i]=0;
       m_u[i]=0;
+      EraseHash(i);
      }
   };
 

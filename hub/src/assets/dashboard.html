@@ -5173,10 +5173,10 @@ function renderSenderCards(senders){
            '<div class="cfgfield"><label>Stops Throttle (Sec)</label><input type="number" step="1" class="inp-s-stopsthrottleseconds" placeholder="2" value="' + esc(s.stopsthrottleseconds !== undefined ? s.stopsthrottleseconds : '') + '"><span class="hint">Min sec between modifications</span></div>' +
            '</div>' +
            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, true) ? ' checked' : '') + '><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + '><label>Invert Trades (BUY &harr; SELL)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, false) ? ' checked' : '') + '><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, true) ? ' checked' : '') + '><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, true) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="1"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="0"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, false) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="0"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, true) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="1"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
            '</div></div>' +
 
            // Panel: Filters
@@ -5190,10 +5190,10 @@ function renderSenderCards(senders){
            '<div class="cfgfield" style="grid-column:1/-1"><label>Ignore Specific UIDs</label><input type="text" class="inp-s-ignoreuids" placeholder="e.g. a1b2c3d4,e5f6g7h8" value="' + esc(s.ignoreuids || '') + '"><span class="hint">Exempt these UIDs from convergence</span></div>' +
            '</div>' +
            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:6px">' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + '><label>Block Buy (NoBuy)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + '><label>Block Sell (NoSell)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + '><label>Ignore New Entry Signals (Close only)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + '><label>Ignore All Exit Signals (Open only)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + ' data-init="' + esc(s.nobuy !== undefined ? s.nobuy : '') + '" data-def="0"><label>Block Buy (NoBuy)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + ' data-init="' + esc(s.nosell !== undefined ? s.nosell : '') + '" data-def="0"><label>Block Sell (NoSell)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignorenewentrysignals !== undefined ? s.ignorenewentrysignals : '') + '" data-def="0"><label>Ignore New Entry Signals (Close only)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignoreallexitsignals !== undefined ? s.ignoreallexitsignals : '') + '" data-def="0"><label>Ignore All Exit Signals (Open only)</label></div>' +
            '</div></div>' +
 
            // Panel: Gates
@@ -5264,7 +5264,15 @@ function collectSendersFromCards(){
     function val(cls, defVal){
       var el = c.querySelector(cls);
       if(!el) return defVal !== undefined ? defVal : "";
-      if(el.type === "checkbox") return el.checked ? "1" : "0";
+      if(el.type === "checkbox"){
+        var initVal = el.getAttribute("data-init");
+        var defValAttr = el.getAttribute("data-def") || "0";
+        var isChecked = el.checked ? "1" : "0";
+        if(initVal === "" || initVal === null || initVal === undefined){
+          if(isChecked === defValAttr) return ""; // untouched default -> inherit from [common]
+        }
+        return isChecked;
+      }
       var v = el.value !== undefined ? el.value.trim() : "";
       return v !== "" ? v : (defVal !== undefined ? defVal : "");
     }

@@ -463,7 +463,8 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       ulong tk=OrderGetTicket(i);
       if(tk==0) continue;
       if(!OrderSelect(tk)) continue;
-      if((long)OrderGetInteger(ORDER_STATE)!=ORDER_STATE_PLACED) continue;
+      long ost=(long)OrderGetInteger(ORDER_STATE);
+      if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
       int pt=CopierPendFromPlatformType((long)OrderGetInteger(ORDER_TYPE));
       if(pt==0) continue;
       if(n>=maxOut) break;
@@ -638,7 +639,8 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
       if(tk==0) continue;
       if((long)tk!=identifier) continue;
       if(!OrderSelect(tk)) continue;
-      if((long)OrderGetInteger(ORDER_STATE)!=ORDER_STATE_PLACED) continue;
+      long ost=(long)OrderGetInteger(ORDER_STATE);
+      if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
       ticket=(long)tk;
       isPending=true;
       return true;
@@ -939,6 +941,62 @@ bool CopierModifyStops(const long identifier,const string sym,
       int e=GetLastError();
       //--- 1 = ERR_NO_RESULT, "no changes": the broker already holds these
       //--- stops, so the wanted state is reached despite the reported error
+      if(e==1) return true;
+      outErr=e;
+      return false;
+     }
+   return true;
+#endif
+  }
+
+//=====================================================================
+// Modify a pending order's price, stops, stoplimit, and expiration.
+//=====================================================================
+bool CopierModifyPendingOrder(const long identifier,const string sym,
+                              const double price,const double sl,const double tp,
+                              const double stoplimit,const datetime expire,int &outErr)
+  {
+   outErr=0;
+   long ticket=0;
+   bool pending=false;
+   if(!CopierResolveCloseTicket(identifier,ticket,pending))
+     {
+      outErr=0;
+      return true;
+     }
+
+#ifdef __MQL5__
+   MqlTradeRequest req;
+   MqlTradeResult  res;
+   ZeroMemory(req);
+   ZeroMemory(res);
+   req.action=TRADE_ACTION_MODIFY;
+   req.order =(ulong)ticket;
+   req.symbol=sym;
+   req.price =(price>0.0)?price:OrderGetDouble(ORDER_PRICE_OPEN);
+   req.sl    =sl;
+   req.tp    =tp;
+   if(stoplimit>0.0) req.stoplimit=stoplimit;
+   if(expire>0) req.expiration=expire;
+   if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
+   if(res.retcode==TRADE_RETCODE_DONE
+      || res.retcode==TRADE_RETCODE_PLACED
+      || res.retcode==TRADE_RETCODE_NO_CHANGES)
+      return true;
+   outErr=(int)res.retcode;
+   return false;
+#else
+   if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
+     {
+      outErr=0;
+      return true;
+     }
+   double openPx=(price>0.0)?price:OrderOpenPrice();
+   datetime exp=(expire>0)?expire:(datetime)OrderExpiration();
+   bool ok=OrderModify((int)ticket,openPx,sl,tp,exp,clrNONE);
+   if(!ok)
+     {
+      int e=GetLastError();
       if(e==1) return true;
       outErr=e;
       return false;

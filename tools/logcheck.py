@@ -140,10 +140,25 @@ def read_state(paths):
     return held, files
 
 
+def log_gen_order(path):
+    # Older generations (.log.2, .log.1) must be read BEFORE the active log (.log)
+    # so that within the same second, stable sort preserves true chronological order.
+    name = os.path.basename(path)
+    if ".log." in name:
+        try:
+            base, ext = name.rsplit(".log.", 1)
+            return (base + ".log", -int(ext))
+        except ValueError:
+            return (name, 0)
+    elif name.endswith(".log"):
+        return (name, 999999)
+    return (name, 0)
+
+
 def read_logs(paths):
     events = []
     per_file = OrderedDict()
-    for p in paths:
+    for p in sorted(paths, key=log_gen_order):
         try:
             with open(p, "r", encoding="utf-8", errors="replace") as fh:
                 raw = fh.read()
