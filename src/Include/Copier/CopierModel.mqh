@@ -893,11 +893,14 @@ bool CopierModifyStops(const long identifier,const string sym,
       ZeroMemory(res);
       req.action=TRADE_ACTION_MODIFY;
       req.order =(ulong)ticket;
+      req.symbol=sym;
       //--- the resolver left this order selected, so its trigger price is
       //--- readable and must be passed back unchanged
       req.price =OrderGetDouble(ORDER_PRICE_OPEN);
       req.sl    =sl;
       req.tp    =tp;
+      double stp=OrderGetDouble(ORDER_PRICE_STOPLIMIT);
+      if(stp>0.0) req.stoplimit=stp;
       datetime exp=(datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
       if(exp>0)
         {
@@ -1066,6 +1069,18 @@ bool CopierClosePartial(const long identifier,const double lots,
    MqlTick tick;
    if(!SymbolInfoTick(sym,tick)) { outErr=-2; return false; }
 
+   if(!PositionSelectByTicket((ulong)ticket))
+     {
+      outErr=0;
+      return true;
+     }
+   double have=PositionGetDouble(POSITION_VOLUME);
+   if(lots>=have-0.0000001)
+     {
+      outErr=-3;
+      return false;
+     }
+
    //--- Candidate fillings, best guess first. CTrade used to pick one for us
    //--- via SetTypeFillingBySymbol() and silently retry on rejection; doing
    //--- the request by hand means we own that fallback. Only an
@@ -1118,7 +1133,7 @@ bool CopierClosePartial(const long identifier,const double lots,
    double have=OrderLots();
    //--- closing the whole thing is a different operation with different
    //--- rounding; refuse rather than risk a full exit by accident
-   if(lots>=have-0.0000001) return false;
+   if(lots>=have-0.0000001) { outErr=-3; return false; }
 
    RefreshRates();
    int type=(int)OrderType();

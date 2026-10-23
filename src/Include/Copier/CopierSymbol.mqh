@@ -86,12 +86,41 @@ bool CopierInTradingSession(const string sym)
      {
       datetime f=0,t=0;
       if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dow,i,f,t)) break;
+      if(f==0 && t==0) continue;
       anySession=true;
-      long fs=(long)f,ts=(long)t;
-      if(secOfDay>=fs && secOfDay<=ts) { inside=true; break; }
+      long fs=(long)(f%86400);
+      long ts=(long)(t%86400);
+      if(ts==0 && t>f) ts=86400;
+      if(fs<=ts)
+        {
+         if(secOfDay>=fs && secOfDay<=ts) { inside=true; break; }
+        }
+      else
+        {
+         if(secOfDay>=fs || secOfDay<=ts) { inside=true; break; }
+        }
      }
 
-   bool result=inside || !anySession;
+   bool result=false;
+   if(anySession)
+     {
+      result=inside;
+     }
+   else
+     {
+      // Check if broker defines trading sessions on any other day of the week
+      bool brokerHasWeeklySessions=false;
+      for(int d=0;d<7;d++)
+        {
+         if(d==dow) continue;
+         datetime f=0,t=0;
+         if(SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)d,0,f,t))
+           {
+            if(f!=0 || t!=0) { brokerHasWeeklySessions=true; break; }
+           }
+        }
+      result=!brokerHasWeeklySessions;
+     }
 
    g_sessKey[g_sessHead]=sym;
    g_sessAt[g_sessHead]=now;

@@ -393,7 +393,7 @@ struct CopierStopSig
   {
    long              ticket;
    long              epoch;
-   double            v[8];
+   double            v[11];
   };
 CopierStopSig g_stopSig[CP_STOPSIG_SLOTS];
 //--- A tripped risk switch is a STEADY STATE, not an event: the receiver is
@@ -1526,52 +1526,6 @@ string SerializeCurrentConfigToIni()
          sb.Add(out);
          out="";
         }
-     }
-   else if(!g_hubOn)
-     {
-      out += "\n[sender0]\n";
-      out += "id=" + (string)SenderPort + "\n";
-      out += "magic=" + (string)Magic + "\n";
-      out += "lotmode=" + CopierLotModeKey((int)SenderLotMode) + "\n";
-      out += "lotparam=" + DoubleToString(SenderLotParam, 4) + "\n";
-      if(StringLen(SenderSuffix) > 0)
-         out += "suffix=" + SenderSuffix + "\n";
-      out += "deviationpoints=" + (string)g_senderCfg[0].deviationPoints + "\n";
-      out += "emergencyslpips=" + DoubleToString(g_senderCfg[0].emergencySLPips, 1) + "\n";
-      out += "emergencytppips=" + DoubleToString(g_senderCfg[0].emergencyTPPips, 1) + "\n";
-      out += "reopenclosedmirrors=" + (g_senderCfg[0].reopenclosedmirrors ? "1" : "0") + "\n";
-      out += "dedupduplicates=" + (g_senderCfg[0].dedupduplicates ? "1" : "0") + "\n";
-      out += "ignorenewentrysignals=" + (g_senderCfg[0].ignorenewentrysignals ? "1" : "0") + "\n";
-      out += "ignoreallexitsignals=" + (g_senderCfg[0].ignoreallexitsignals ? "1" : "0") + "\n";
-      out += "ignoreuids=" + g_senderCfg[0].ignoreuids + "\n";
-      out += "nobuy=" + (g_senderCfg[0].nobuy ? "1" : "0") + "\n";
-      out += "nosell=" + (g_senderCfg[0].nosell ? "1" : "0") + "\n";
-      out += "permittedsymbols=" + g_senderCfg[0].permittedsymbols + "\n";
-      out += "permittedmagic=" + g_senderCfg[0].permittedmagic + "\n";
-      out += "minsenderlotsize=" + DoubleToString(g_senderCfg[0].minsenderlotsize, 2) + "\n";
-      out += "maxsenderlotsize=" + DoubleToString(g_senderCfg[0].maxsenderlotsize, 2) + "\n";
-      out += "checkforexistingposition=" + (string)((int)g_senderCfg[0].checkforexistingposition) + "\n";
-      out += "requirepositionfillwithinseconds=" + (string)g_senderCfg[0].requirepositionfillwithinseconds + "\n";
-      out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[0].requirepositionfillwithinminutes + "\n";
-      out += "requirepositionfillwithinhours=" + (string)g_senderCfg[0].requirepositionfillwithinhours + "\n";
-      out += "fillwithinminutesbar=" + (string)g_senderCfg[0].fillwithinminutesbar + "\n";
-      out += "pendingfillgraceseconds=" + DoubleToString(g_senderCfg[0].pendingfillgraceseconds, 1) + "\n";
-      out += "waitforseconds=" + (string)g_senderCfg[0].waitforseconds + "\n";
-      out += "waitforminutes=" + (string)g_senderCfg[0].waitforminutes + "\n";
-      out += "waitforhours=" + (string)g_senderCfg[0].waitforhours + "\n";
-      out += "waitforprofitpips=" + DoubleToString(g_senderCfg[0].waitforprofitpips, 1) + "\n";
-      out += "waitforminutesbar=" + (string)g_senderCfg[0].waitforminutesbar + "\n";
-      out += "includetradingtimes=" + g_senderCfg[0].includetradingtimes + "\n";
-      out += "daytradingtimes=" + g_senderCfg[0].daytradingtimes + "\n";
-      out += "inverttrades=" + (g_senderCfg[0].inverttrades ? "1" : "0") + "\n";
-      out += "mirrorstops=" + (g_senderCfg[0].mirrorstops ? "1" : "0") + "\n";
-      out += "stopsthrottleseconds=" + (string)g_senderCfg[0].stopsThrottleSeconds + "\n";
-      out += "maxlotsperposition=" + DoubleToString(g_senderCfg[0].maxLotsPerPosition, 2) + "\n";
-      out += "maxtotallots=" + DoubleToString(g_senderCfg[0].maxTotalLots, 2) + "\n";
-      out += "maxopenpositions=" + (string)g_senderCfg[0].maxOpenPositions + "\n";
-      out += "staleseconds=" + (string)g_senderCfg[0].staleSeconds + "\n";
-      sb.Add(out);
-      out="";
      }
 
    if(StringLen(out)>0) sb.Add(out);
@@ -2878,8 +2832,22 @@ void ExecuteQueue()
 
          if(a.ordKind==CP_ORD_PENDING)
            {
-            //--- a working order, not a market entry. It keeps the sender's
-            //--- trigger price and stops verbatim; see CopierPlacePending.
+            //--- a working order, not a market entry.
+            double pendSl=a.sl;
+            double pendTp=a.tp;
+            double anchorPx=(a.pstop>0.0)?a.pstop:a.pprice;
+            double pipSize=CopierPipOf(si);
+            if(pendSl<=0.0 && emSL>0.0 && anchorPx>0.0)
+              {
+               double rawSl=(a.side==CP_SIDE_BUY)?(anchorPx-emSL*pipSize):(anchorPx+emSL*pipSize);
+               pendSl=NormalizeDouble(rawSl,si.digits);
+              }
+            if(pendTp<=0.0 && emTP>0.0 && anchorPx>0.0)
+              {
+               double rawTp=(a.side==CP_SIDE_BUY)?(anchorPx+emTP*pipSize):(anchorPx-emTP*pipSize);
+               pendTp=NormalizeDouble(rawTp,si.digits);
+              }
+
             CopierPos pp;
             pp.uid     =a.uid;
             pp.sym     =a.sym;
@@ -2887,8 +2855,8 @@ void ExecuteQueue()
             pp.side    =a.side;
             pp.lots    =a.lots;
             pp.openPx  =a.pprice;
-            pp.sl      =a.sl;
-            pp.tp      =a.tp;
+            pp.sl      =pendSl;
+            pp.tp      =pendTp;
             pp.ticket  =a.senderTicket;   // the SENDER's ticket, for the comment
             pp.magic   =g_magic[a.senderIdx];
             pp.openTime=0;
@@ -2978,6 +2946,30 @@ void ExecuteQueue()
             //--- subsequent manual close within the 5-minute TTL is not
             //--- mistakenly re-opened under ReopenClosedMirrors=false.
             g_reopenExpected.Forget(g_sid[a.senderIdx]+":"+a.uid);
+           }
+         else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
+           {
+            if(a.ordKind==CP_ORD_MARKET)
+              {
+               if(g_ourCount>0) g_ourCount--;
+               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+                 {
+                  sAddedCount[a.senderIdx]--;
+                  sAddedLots[a.senderIdx]-=a.lots;
+                 }
+              }
+           }
+         else if(a.kind==CP_ACT_TRIM)
+           {
+            if(a.ordKind==CP_ORD_MARKET)
+              {
+               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+                 {
+                  sAddedLots[a.senderIdx]-=a.lots;
+                 }
+              }
            }
          //--- An executed action just changed what the identity file holds:
          //--- OPEN created a mirror, TRIM moved MT4's remainder onto a new
@@ -3249,6 +3241,29 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    return lots;
   }
 
+double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const string sym)
+  {
+   CopierSymInfo si2;
+   if(!CopierGetSymbolInfo(sym,si2)) return desired.lots;
+   bool rejected=false;
+   double targetLots=0.0;
+   if(g_lotMode[si]==CP_SIZE_FIXED)
+     {
+      double baseLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
+      double origLots=GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
+      if(origLots>0.0 && desired.lots<origLots)
+         targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
+      else
+         targetLots=baseLots;
+     }
+   else
+     {
+      targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
+     }
+   if(rejected || targetLots<=0.0) return 0.0;
+   return targetLots;
+  }
+
 void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local)
   {
    if(local.kind!=CP_ORD_MARKET) return;
@@ -3257,28 +3272,9 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
 
    //--- Sizing conversion: desired.lots is the SENDER's raw volume. We must
    //--- convert it through this receiver's sizing rules (multiplier / fixed / off)
-   //--- to determine the local target volume. Comparing local.lots directly against
-   //--- desired.lots would falsely trim mirrors whenever the sizing multiplier > 1.0.
-   bool rejected=false;
-   double targetLots=0.0;
-   if(g_lotMode[si]==CP_SIZE_FIXED)
-     {
-      double baseLots=ComputeReceiverLots(si,local.sym,desired.lots,rejected);
-      double origLots=GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
-      if(origLots>0.0 && desired.lots<origLots)
-        {
-         targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
-        }
-      else
-        {
-         targetLots=baseLots;
-        }
-     }
-   else
-     {
-      targetLots=ComputeReceiverLots(si,local.sym,desired.lots,rejected);
-     }
-   if(rejected || targetLots<=0.0) return;
+   //--- to determine the local target volume.
+   double targetLots=ComputeTargetLotsForMirror(si,desired,local.sym);
+   if(targetLots<=0.0) return;
 
    double diff=local.lots-targetLots;
    if(diff<=0.0) return;                       // local is not larger than target
@@ -3361,8 +3357,6 @@ bool StopsDiffer(const double have,const double want,const CopierSymInfo &si)
 void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                          const CopierPos &local)
   {
-   if(!g_senderCfg[si].mirrorstops) return;
-
    //--- Already evaluated with exactly these inputs (and the same override
    //--- table) and the answer was "nothing to do". See CopierStopSig.
    int sh=(int)(local.ticket&(CP_STOPSIG_SLOTS-1));
@@ -3378,7 +3372,10 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          && g_stopSig[sh].v[4]==local.tp
          && g_stopSig[sh].v[5]==local.pprice
          && g_stopSig[sh].v[6]==local.pstop
-         && g_stopSig[sh].v[7]==(double)local.pexpire)
+         && g_stopSig[sh].v[7]==(double)local.pexpire
+         && g_stopSig[sh].v[8]==desired.pprice
+         && g_stopSig[sh].v[9]==desired.pstop
+         && g_stopSig[sh].v[10]==(double)desired.pexpire)
          return;
      }
 
@@ -3396,7 +3393,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- target from the snapshot on every pass, so an event applied directly
    //--- would be reverted on the very next one, and the mirror would oscillate
    //--- between the new stop and the old until SnapshotSeconds elapsed.
-   double dSl=desired.sl,dTp=desired.tp,dOpn=desired.openPx;
+   double dSl=(g_senderCfg[si].mirrorstops)?desired.sl:0.0;
+   double dTp=(g_senderCfg[si].mirrorstops)?desired.tp:0.0;
+   double dOpn=desired.openPx;
    int oi=StopsOvIndex(desired.uid,false);
    if(oi>=0 && g_stHasOv[oi])
      {
@@ -3408,8 +3407,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
         }
       else
         {
-         dSl=g_stOvSl[oi];
-         dTp=g_stOvTp[oi];
+         dSl=(g_senderCfg[si].mirrorstops)?g_stOvSl[oi]:0.0;
+         dTp=(g_senderCfg[si].mirrorstops)?g_stOvTp[oi]:0.0;
          dOpn=g_stOvOpn[oi];
         }
      }
@@ -3434,18 +3433,42 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                               local.openPx,local.side,false);
      }
 
+   double anchorPx=(local.kind==CP_ORD_PENDING)
+                   ? ((local.pstop>0.0)?local.pstop:((local.pprice>0.0)?local.pprice:local.openPx))
+                   : local.openPx;
+
    //--- the sender has no stop of its own, so the local backstop applies
    if(wantSl<=0.0 && g_senderCfg[si].emergencySLPips>0.0)
      {
       int e=0;
-      wantSl=CopierEmergencySl(local.sym,local.side,local.openPx,
-                               g_senderCfg[si].emergencySLPips,si2,e);
+      if(local.kind==CP_ORD_PENDING)
+        {
+         double pipSize=CopierPipOf(si2);
+         double rawSl=(local.side==CP_SIDE_BUY)?(anchorPx-g_senderCfg[si].emergencySLPips*pipSize)
+                                               :(anchorPx+g_senderCfg[si].emergencySLPips*pipSize);
+         wantSl=NormalizeDouble(rawSl,si2.digits);
+        }
+      else
+        {
+         wantSl=CopierEmergencySl(local.sym,local.side,anchorPx,
+                                  g_senderCfg[si].emergencySLPips,si2,e);
+        }
      }
    if(wantTp<=0.0 && g_senderCfg[si].emergencyTPPips>0.0)
      {
       int e=0;
-      wantTp=CopierEmergencyTp(local.sym,local.side,local.openPx,
-                               g_senderCfg[si].emergencyTPPips,si2,e);
+      if(local.kind==CP_ORD_PENDING)
+        {
+         double pipSize=CopierPipOf(si2);
+         double rawTp=(local.side==CP_SIDE_BUY)?(anchorPx+g_senderCfg[si].emergencyTPPips*pipSize)
+                                               :(anchorPx-g_senderCfg[si].emergencyTPPips*pipSize);
+         wantTp=NormalizeDouble(rawTp,si2.digits);
+        }
+      else
+        {
+         wantTp=CopierEmergencyTp(local.sym,local.side,anchorPx,
+                                  g_senderCfg[si].emergencyTPPips,si2,e);
+        }
      }
 
    //--- clear the broker's minimum distance BEFORE comparing, or a stop
@@ -3455,7 +3478,6 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    bool clamped=false;
    if(local.kind==CP_ORD_PENDING)
      {
-      double anchorPx=(local.pstop>0.0)?local.pstop:((local.pprice>0.0)?local.pprice:local.openPx);
       wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clamped);
       if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
          g_log.Warn("stop for pending order "+local.uid+" "+local.sym+" was inside this"
@@ -3497,6 +3519,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       g_stopSig[sh].v[5]=local.pprice;
       g_stopSig[sh].v[6]=local.pstop;
       g_stopSig[sh].v[7]=(double)local.pexpire;
+      g_stopSig[sh].v[8]=desired.pprice;
+      g_stopSig[sh].v[9]=desired.pstop;
+      g_stopSig[sh].v[10]=(double)desired.pexpire;
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -4265,7 +4290,8 @@ void ConvergeSender(const int si)
          bool hasQueued=ActionQueued(si,CP_ACT_CLOSE,d.uid) || ActionQueued(si,CP_ACT_TRIM,d.uid);
          if(!hasQueued)
            {
-            if(g_locScratch[li].lots<=d.lots+0.0001)
+            double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
+            if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+0.0001)
                g_seen.ForgetUidActions(g_sid[si],d.uid);
             else
                g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
@@ -4360,7 +4386,7 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      if(!g_senderPermittedMagic[si].Allows((string)d.magic))
+      if(!g_senderPermittedMagic[si].AllowsLong(d.magic))
         {
          if(g_once.ShouldEmit("gatemagic|"+g_sid[si]+"|"+(string)d.magic))
             g_log.Info("sender "+g_sid[si]+" reports magic "+(string)d.magic
@@ -6855,6 +6881,9 @@ void OnTimer()
       g_everOpened.PruneExpired();
       g_reopenExpected.PruneExpired();
       g_fillGraceRing.PruneExpired();
+      g_unsupported.PruneExpired();
+      g_mktClosed.PruneExpired();
+      g_fillDropped.PruneExpired();
      }
 
    //--- 5) converge every sender, then execute queued actions serially

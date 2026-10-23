@@ -97,7 +97,10 @@ use std::io::Read;
 /// Bytes as text for display. The wire is ASCII by construction, but a hostile
 /// peer is not, and a log line must never panic the hub.
 pub fn latin1(b: &[u8]) -> String {
-    b.iter().map(|c| *c as char).collect()
+    match std::str::from_utf8(b) {
+        Ok(s) => s.to_string(),
+        Err(_) => b.iter().map(|c| *c as char).collect(),
+    }
 }
 
 const MAX_DECOMPRESSED_LEN: u64 = 4 * 1024 * 1024; // 4 MiB protection against Zip bombs

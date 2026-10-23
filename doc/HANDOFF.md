@@ -371,6 +371,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十六次审计** | 2026-10-23 18:30 | 魔法过滤纯数字校验、状态文件满载边界自洽、挂单宽限死循环与配置事务提交 | 全栈健壮与性能 |
 | **二十七次审计** | 2026-10-23 20:20 | 跨 Tick 动作出队幂等锁防护、固定手数减仓等比广播与挂单改期 GTC 闭环 | 核心逻辑与全栈优化 |
 | **二十八次审计** | 2026-10-23 22:00 | Hub 注册洪水可用性防御、Upsert 槽位自洽、CFG 恢复解除限频与主题过滤去镜像 | 全栈可用性与严谨性 |
+| **二十九次审计** | 2026-10-23 23:20 | 减仓收敛手数换算修正、全周开休市判定、退避队列淘汰纠偏与跨平台模型加固 | 全栈核心与交易模型 |
 
 ---
 
@@ -844,6 +845,30 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **M14** | **Low 清洁** | `CopierModel.mqh:606` | **删除死代码重载 `CopierReadCommentByTicket(long)`**。 |
 | **H8** | **Low 安全** | `hub/src/notifications.rs:904` | **生产 Webhook 发送路径增加 URL 协议校验**：严格验证以 `http://` 或 `https://` 开头。 |
 | **TEST-01**| **Medium 测试** | `CopierSelfTest.mq4:568` | **新增状态文件 2049 行截断测试断言**：验证 2049 行存档保存时被安全钳位到 2048 行，且加载时与 `END:2048` 自洽。 |
+
+---
+
+### 二十九次审计：减仓收敛手数换算修正、全周开休市判定、退避队列淘汰纠偏与跨平台模型加固（2026-10-23 23:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **C-01** | **P0/P1 致命** | `CopierReceiver.mq4:3252, 4272` | **部分平仓收敛判定手数换算对齐**：提取 `ComputeTargetLotsForMirror`，在 `ConvergeSender` 中对比本地实际持仓 `local.lots` 与按倍率/固定手数规则换算后的 `targetLots`，彻底解决在非 1.0 倍率或固定手数下平仓幂等锁永久不释放或提前释放导致的二次过度减仓。 |
+| **C-02** | **P1 高危** | `CopierReceiver.mq4:395, 3365, 3405` | **`QueueModifyIfNeeded` 签名缓存扩展与解耦 `mirrorstops`**：将 `CopierStopSig` 扩展为 11 个槽位覆盖 `desired.pprice/pstop/pexpire`；在 `mirrorstops=false` 时仅将信号源止损止盈视为 0，继续允许本地紧急止损和挂单触发价/过期时间同步。 |
+| **C-03** | **P1 高危** | `CopierReceiver.mq4:2880, 3450` | **挂单紧急止损锚点修正与开仓预设**：挂单按 `anchorPx`（触发价/限价）而非当前市价计算紧急止损，防止被市价错误推离；在 `ExecuteQueue` 挂单开仓时直接预设紧急止损，避免二次改单。 |
+| **C-04** | **P1 高危** | `CopierReceiver.mq4:2980` | **`ExecuteQueue` 同 Tick 平仓扣减持仓与手数**：在 `CLOSE/DEDUP/TRIM` 成功时同步扣减 `g_ourCount`、`g_ourLots`、`sAddedCount`、`sAddedLots`，彻底解决同 Tick 先平后开被风控误拒与误报 `risk.blocked`。 |
+| **C-05** | **P1 高危** | `CopierSender.mq4:1140, 1433` | **`SnapshotSeconds=0` 下 `g_snapHash` 自愈与启动快照预构**：在按需同步模式下同步更新 `g_snapHash = g_latestSnapHash`，并在 `OnInit` 恢复后主动构建快照，解决 `SnapTrack` 恒早退导致按需修复完全失效。 |
+| **C-06** | **P1 高危** | `CopierSender.mq4:712` | **`CopierSender` 参数重载全局变量清理与恢复过滤**：在 `OnInit` 开头清理 `g_hubOn=false; g_prev.Clear();`，并在状态恢复时调用 `SymbolAllowed/MagicAllowed`，杜绝修改过滤规则误将旧持仓当作平仓广播。 |
+| **C-08** | **P2 中危** | `CopierReceiver.mq4:4435` | **`ConvergeSender` 魔术号过滤对齐 `AllowsLong`**：统一全库规范，杜绝每 Tick 字符串分配与非数字脏标记。 |
+| **C-09** | **P2 性能** | `CopierReceiver.mq4:6930` | **`OnTimer` 补全其余 3 个 `CopierSeenRing` 清理**：每 60s 定期清理 `g_unsupported/g_mktClosed/g_fillDropped`，保持 `m_used==0` 快速短路。 |
+| **C-10** | **P3 清洁** | `CopierReceiver.mq4:1530` | **删除不可达死分支 `else if(!g_hubOn)`**。 |
+| **H-01** | **P1 高危** | `CopierSymbol.mqh:80` | **`CopierInTradingSession` 全周时段比对与周末休市判定**：若当天无时段但其他工作日有定义，准确判定为周末休市 (`false`)；仅全周无任何时段才回退 `true`；并支持跨午夜时段。 |
+| **H-02** | **P1 高危** | `CopierState.mqh:993` | **`CopierBackoff::FreeSlot` 淘汰算法反相纠偏**：将 `>` 改为 `<`，优先淘汰已过期或最早到期槽位，绝不淘汰未来 24 小时的故障死单。 |
+| **H-03** | **P1 高危** | `CopierState.mqh:437` / `CopierSender.mq4:1420` | **`CopyToWithSlots` 双数组独立扩容与越界防护**：独立检查扩容 `out` 与 `slots`，循环内加 `cap` 守卫，`RebuildSnapshotPayload` 采用 `static` 避免频繁堆分配。 |
+| **H-04** | **P1 高危** | `CopierModel.mqh:895, 1070, 1125` | **跨平台交易模型边界加固**：`CopierClosePartial` MT5 增加 `lots >= have` 检查，MT4 返回 `outErr=-3`；`CopierModifyStops` MT5 挂单分支填齐 `symbol` 与 `stoplimit`。 |
+| **H-05** | **P2 中危** | `CopierFilter.mqh:167, 343` | **星期名 Trim 与显式关闭日跨午夜抑制**：`CopierDayIndex` 增加 `Trim`；前一日显式关闭时禁用全局跨午夜早晨放行。 |
+| **R-01** | **P2 中危** | `hub/src/envelope.rs:99` | **`envelope.rs` 优先 UTF-8 解码**：未压缩负载与键值头优先按 UTF-8 解析，杜绝中文终端名与注释在 `<500B` 变为乱码。 |
+| **T-01** | **P1 工具** | `tools/logcheck.py:43` | **`logcheck.py` 挂单正则支持扩展字段**：支持 `stoplimit/exp/sl/tp` 及负 `senderTkt`，消灭带止损挂单撤销时的孤儿平仓假阳性。 |
+| **TEST-01**| **Medium 测试** | `CopierSelfTest.mq4:2260, 2470` | **补充时段解析、跨午夜与满表退避驱逐断言**。 |
 
 ---
 

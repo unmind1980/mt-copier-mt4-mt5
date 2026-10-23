@@ -436,25 +436,21 @@ public:
 
    int               CopyToWithSlots(CopierPos &out[],int &slots[]) const
      {
-      int cap=ArraySize(out);
-      if(cap<m_n && ArrayIsDynamic(out))
-        {
-         ArrayResize(out,m_n);
-         ArrayResize(slots,m_n);
-        }
+      if(ArrayIsDynamic(out) && ArraySize(out)<m_n) ArrayResize(out,m_n);
+      if(ArrayIsDynamic(slots) && ArraySize(slots)<m_n) ArrayResize(slots,m_n);
+      int capOut=ArraySize(out);
+      int capSlots=ArraySize(slots);
       int n=0;
       for(int i=0;i<CP_MAX_POSITIONS && n<m_n;i++)
         {
          if(!SlotValid(i)) continue;
+         if(n>=capOut || n>=capSlots) break;
          out[n]=m_p[i];
          slots[n]=i;
          n++;
         }
-      if(ArrayIsDynamic(out) && n!=cap)
-        {
-         ArrayResize(out,n);
-         ArrayResize(slots,n);
-        }
+      if(ArrayIsDynamic(out) && ArraySize(out)!=n) ArrayResize(out,n);
+      if(ArrayIsDynamic(slots) && ArraySize(slots)!=n) ArrayResize(slots,n);
       return n;
      }
 
@@ -990,7 +986,7 @@ private:
       int worst=0;
       for(int i=1;i<CP_BACKOFF_SLOTS;i++)
         {
-         if(m_u[i]>m_u[worst]) worst=i;
+         if(m_u[i]<m_u[worst]) worst=i;
         }
       int k=FindHashSlot(m_k[worst]);
       m_k[worst]="";

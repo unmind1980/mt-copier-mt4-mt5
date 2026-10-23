@@ -166,7 +166,7 @@ long CopierParseHhMm(const string s)
 //--- 0=Sun .. 6=Sat, matching TimeDayOfWeek() in both MQL4 and MQL5
 int CopierDayIndex(const string name)
   {
-   string s=name;
+   string s=CopierTrim(name);
    //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
    StringToLower(s);
    if(s=="sun") return 0;
@@ -245,9 +245,9 @@ private:
      }
 
    bool              Hit(const long &fr[],const long &to[],const int n,
-                         const int sec) const
+                         const int sec,const bool allowMorningWrap=true) const
      {
-      return HitAt(fr,to,0,n,sec,true);
+      return HitAt(fr,to,0,n,sec,allowMorningWrap);
      }
 
 public:
@@ -340,7 +340,7 @@ public:
          int n=m_dN[dow];
          return HitAt(m_dFrom,m_dTo,dow*CP_TT_MAX,n,sec,false);
         }
-      return Hit(m_from,m_to,m_n,sec);
+      return Hit(m_from,m_to,m_n,sec,!m_daySet[prevDow]);
      }
   };
 

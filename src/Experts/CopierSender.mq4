@@ -714,6 +714,10 @@ int OnInit()
    if(g_magicFilter.StrayBangs()>0)
       g_log.Warn("IncludeMagicNumbers: '!' on individual item was stripped. A leading '!' excludes the whole list.");
 
+   g_hubOn=false;
+   g_prev.Clear();
+   ArrayInitialize(g_openLots,0.0);
+
    //--- restore UID<->ticket mapping so a restart does not re-announce
    //--- positions that are already open (which would double them up)
    string hdr="";
@@ -723,6 +727,7 @@ int OnInit()
      {
       for(int i=0;i<savedCount;i++)
         {
+         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
          int s=g_prev.Upsert(saved[i]);
          if(s>=0) g_openLots[s]=saved[i].lots;
         }
@@ -732,6 +737,7 @@ int OnInit()
      {
       for(int i=0;i<savedCount;i++)
         {
+         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
          int s=g_prev.Upsert(saved[i]);
          if(s>=0) g_openLots[s]=saved[i].lots;
         }
@@ -890,6 +896,7 @@ int OnInit()
       return INIT_FAILED;
      }
    g_panel.Init("cpsnd",10,20,430);
+   RebuildSnapshotPayload();
    g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
               +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
               +" (one socket, both streams) ssid="+g_ssid
@@ -1132,12 +1139,14 @@ void SnapTrack(const string who,const string reported)
      }
    g_snapRcptMs[idx]=now;
 
+   string activeHash=(StringLen(g_snapHash)>0)?g_snapHash:g_latestSnapHash;
+
    if(StringLen(reported)==0)
      {
       //--- A receiver that reports "" has no snapshot yet (newly attached node).
       //--- If we have a snapshot ready, bootstrap it immediately on first contact
       //--- without waiting for the SnapshotSeconds periodic broadcast clock.
-      if(StringLen(g_snapHash)==0 || StringLen(g_snapPayload)==0) return;
+      if(StringLen(activeHash)==0 || StringLen(g_snapPayload)==0) return;
       if(g_once.ShouldEmit("snaph|none|"+who))
          g_log.Info("receiver "+who+" reports NO snapshot receipt yet"
                     +" (bootstrapping snapshot on first contact)");
@@ -1145,7 +1154,7 @@ void SnapTrack(const string who,const string reported)
       return;
      }
 
-   if(StringLen(g_snapHash)==0) return;      // we have not sent one yet
+   if(StringLen(activeHash)==0) return;      // we have not sent one yet
 
    if(!IsRecentSnapHash(reported))
      {
@@ -1156,7 +1165,7 @@ void SnapTrack(const string who,const string reported)
       //--- per second forever. The count in the line says how long it has run.
       if(g_snapStaleN[idx]==1 || (g_snapStaleN[idx]%10)==0)
          g_log.Warn("receiver "+who+" is BEHIND: it reports H="+reported
-                    +" but the current snapshot is H="+g_snapHash
+                    +" but the current snapshot is H="+activeHash
                     +" (stale for "+IntegerToString(g_snapStaleN[idx])
                     +" heartbeat(s))");
       SnapRepairMaybe(who,idx,now,false);
@@ -1410,8 +1419,8 @@ void UpdatePanel()
 
 void RebuildSnapshotPayload()
   {
-   CopierPos dense[];
-   int slots[];
+   static CopierPos dense[];
+   static int slots[];
    int dn=g_prev.CopyToWithSlots(dense,slots);
    for(int i=0;i<dn;i++)
      {
@@ -1421,6 +1430,7 @@ void RebuildSnapshotPayload()
      }
    g_snapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_snapPayload);
+   if(StringLen(g_snapHash)==0 || SnapshotSeconds<=0) g_snapHash=g_latestSnapHash;
    NoteRecentSnapHash(g_latestSnapHash);
   }
 

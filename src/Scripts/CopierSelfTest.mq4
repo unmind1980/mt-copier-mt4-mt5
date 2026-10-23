@@ -2258,6 +2258,14 @@ void TestTradingTimes()
    Ok("hours: valid '00:00' parses to 0",CopierParseHhMm("00:00")==0);
    Ok("hours: valid '24:00' parses to 86400",CopierParseHhMm("24:00")==86400);
    Ok("hours: valid '23:59' parses to 86340",CopierParseHhMm("23:59")==86340);
+
+   //--- spaces around day name (H-05)
+   t.Set("08:00-17:00"," Mon = 08:00-17:00 ");
+   Ok("hours: day name with spaces is parsed cleanly",t.Allows(monMidnight+10*3600));
+
+   //--- closed day does NOT allow morning spillover from global wrapping range (H-05)
+   t.Set("22:00-02:00","Sun=");
+   Ok("hours: closed Sun= prevents 01:00 morning wrap on Monday",!t.Allows(monMidnight+1*3600));
   }
 
 void TestCopierList()
@@ -2467,6 +2475,13 @@ void TestBackoff()
      }
    Ok("backoff: keys stay reachable after interior erasures",reachable);
    Ok("backoff: an erased key is gone",!q.Blocked("key10"));
+
+   //--- Test long-ladder protection on full eviction (H-02)
+   CopierBackoff bf;
+   bf.Park("critical_24h",24*3600*1000); // 24 hours in the future
+   for(int i=0;i<CP_BACKOFF_SLOTS+10;i++)
+      bf.Note("temp_key_"+IntegerToString(i));
+   Ok("backoff: long future-parked key is protected against eviction",bf.Blocked("critical_24h"));
   }
 
 //+------------------------------------------------------------------+
