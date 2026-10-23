@@ -367,6 +367,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十二次审计** | 2026-10-23 10:15 | 手数语义纠偏、全栈 StrBuilder 与 WebSocket 广播合并 | 核心与性能 |
 | **二十三次审计** | 2026-10-23 10:45 | 停止几何指纹纪元失效、遥测 StrBuilder 与 Backoff O(1) 淘汰 | 核心优化 |
 | **二十四次审计** | 2026-10-23 11:40 | 全栈审查报告缺陷闭环（流重置、状态落盘、鉴权防注入） | 全栈安全 |
+| **二十五次审计** | 2026-10-23 13:40 | 跨节点主题前缀碰撞消除、空注释API退化根治、双向STAT与WebUI全面闭环 | 全栈安全与性能 |
 
 ---
 
@@ -736,6 +737,37 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **P3-B14** | **手数规范** | `CopierSizing.mqh:173` | **`CopierComputeLots` 手数上限裁剪后复验最小手数**：低于 `minLot` 显式置 `rejected = true` 并返回 0.0。 |
 | **P3-C1 & C5** | **健壮优化** | `CopierReceiver.mq4:2802` / `CopierModel.mqh:345` | **未知品种 seen 键一致性与挂单止损止盈 digits 规范化**：挂单放置时对 SL/TP 规范化至 `si.digits`。 |
 | **P3-C6 ~ C16** | **细节清洁** | `CopierSender.mq4` / `CopierPeers.mqh` / `CopierTransport.mqh` | **Magic 数字过滤、Save 失败保留 dirty、未探测 Peer 不分配 PongBack 槽位、Socket 早退资源回收**。 |
+
+---
+
+### 二十五次审计：全栈审计报告缺陷全面修复与性能加固（2026-10-23 13:40；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **BUG-MQL-01** | **High 致命** | `CopierReceiver.mq4:6515, 6545` / `CopierSender.mq4:1765` / `hub/src/main.rs:625, 650` | **Central 模式下 ZMQ 主题前缀碰撞彻底消除**：引入 `IsTopicForReceiver` 严格校验控制帧 (`@all` / `@<nid>` / `@<acc>`) 与数据帧 (`<nid>` / `<acc>` / `<sid>`)，彻底杜绝账户 `1000` 误收 `10001` 的 `closeall`/`CFG` 指令；Hub `send_cfg`/`send_cmd` 增加 `TO=<nid>` 载荷双重校验；Sender 下行帧增加主题与 `TO=` 过滤。 |
+| **BUG-MQL-02** | **High 性能** | `CopierReceiver.mq4:3790` | **快路径无注释订单经纪商 API 扫描消除**：删除快路径中 `StringLen(cmt)==0` 时的 `CopierReadCommentByTicket` 重复读取，慢路径与周期扫描已保证注释就绪，彻底消灭 MT5 下 10Hz 频率 $O(K \times N)$ 扫描导致的卡顿。 |
+| **BUG-MQL-03** | **High 状态** | `CopierSender.mq4:1720` | **Direct 模式下 Sender 接收 STAT 判别器修正**：完整 60s 监控报告判别器由 `StringLen(eq)>0` 修正为 `StringLen(risk)>0`，5s 摘要携带 `EQ`/`BL` 不再冲掉 Sender 图表面板上的 Receiver `risk` 状态，日志输出恢复规整。 |
+| **BUG-MQL-04** | **Medium 遥测** | `CopierReceiver.mq4:6940` / `hub/src/main.rs:1950` | **0-Sender Receiver 账户级 STAT 遥测与 reqpos 支持**：当 `g_nSenders == 0` 时，Receiver 仍向 Hub 发送 `SID=-` 的账户级 `STAT`（携带净值、余额、孤儿单及持仓明细），Hub 允许 `SID=-` 更新节点监控，彻底解决新挂载或清空 Sender 节点后的遥测黑洞。 |
+| **BUG-MQL-05** | **Medium 笔误** | `CopierReceiver.mq4:1297` | **`ApplyCommonConfig` 比较变量笔误修正**：将 `PollMs != oldLogLevel` 修正为 `PollMs != oldPollMs`，避免配置热重载时无条件杀死重建毫秒定时器。 |
+| **BUG-MQL-06** | **Medium 状态** | `CopierReceiver.mq4:1115, 1765` | **配置重载立即重置 `g_lastFullScanMs`**：在 `LoadConfigForHub` 与 `LoadConfigFromInputs` 成功时重置 `g_lastFullScanMs=0; g_posCacheCount=0;`，强制下个 Tick 慢路径全量重新判定持仓孤儿状态 (`isOrphan`)，消除长达 30 秒的面板滞后。 |
+| **BUG-MQL-07** | **Medium 防抖** | `CopierSender.mq4:285, 1130, 1400, 1550` | **挂单成交缓冲保护与快照哈希环消除误判 BEHIND**：在 `g_fillSnapshotDueMs > 0` 期间推迟 `RebuildSnapshotPayload()`，保护 500ms 缓冲；引入 `g_recentSnapHashes[4]` 历史哈希环，连续变动期间中间态哈希依然视作步调一致，消灭误报重发风暴。 |
+| **BUG-INC-01** | **Medium 底层** | `CopierState.mqh:892, 1005` | **`CopierBackoff` 开放寻址 Backward-shift 探测链完整性修复**：遇到异常槽位触发全量重建保证探测链不中断；`Note()` 仅对新分配槽位调用 `InsertHash()`，消除命中现有键时的重复探测开销。 |
+| **BUG-HUB-01** | **High 告警** | `hub/src/alerts.rs:142, 330` | **`node.clock.drift` 告警基准解耦防吞没**：在 `AlertEngine` 中独立维护 `last_drift_secs`，时钟跳变仅在被 `alerts::evaluate()` 评估后推进基准，彻底消灭 5s `HBT2` 心跳在评估周期前抹平差值导致的告警丢失。 |
+| **BUG-HUB-02** | **Medium 状态机**| `hub/src/commands.rs:505` / `hub/src/main.rs:2445` | **命令重试阶梯耗尽文案纠偏与防第 5 次多发**：耗尽分支计算阶梯实际总等待秒数 `RETRY_LADDER_SECS.iter().sum()`（82s），保持实际尝试次数（4次）；`main.rs` 在宣告 `STATE_UNKNOWN` 超时时直接记录审计退出，不再多发第 5 次指令帧。 |
+| **BUG-HUB-03** | **Medium 告警** | `hub/src/alerts.rs:355` | **`risk.blocked` 每分钟增量告警状态机优化**：将 `n.blocked > prev_blocked` 简化为 `n.blocked > 0`，由 `silence::RISK`（300s）保护限频，解决持续拦截等量或少量时的漏报缺陷。 |
+| **BUG-HUB-04** | **Medium 审计** | `hub/src/audit.rs:615` | **`Audit::read` 游标追尾语义支持**：区分 `since == 0`（头部截断取最新 N 条）与 `since > 0`（尾部截断取 `since` 往后连续 N 条），解决增量拉取客户端丢失中间日志的缺陷。 |
+| **BUG-WEB-01** | **High 前端** | `dashboard.html:3678` | **WebUI HTTP 轮询持仓字段匹配**：`refresh()` 读取 `res[1].senders || res[1].positions`，解决首次加载及 WebSocket 降级轮询时持仓表与统计被清空的问题。 |
+| **BUG-WEB-02** | **Medium 前端** | `dashboard.html:3952` | **节点列表表头 `Batch Pause` / `Batch Reload` 按钮事件绑定**：绑定二次确认弹窗并调用 `sendGlobal("pause")` 与 `sendGlobal("reload")`。 |
+| **BUG-WEB-03** | **Medium 前端** | `dashboard.html:2510, 3361, 3833` | **Sender 节点操作列路由修正**：Sender 节点不展示无用的 `Config` 按钮，改为 `Inspect Positions` 快捷跳转持仓视图。 |
+| **BUG-WEB-04** | **Low 前端** | `dashboard.html:5102, 5318, 5412` | **Visual Config Editor 扩展字段保留与防错位合并**：卡片绑定 `data-orig-id` 按 ID 匹配合并扩展字段；在所有解析入口赋满 `cfgState.parsed`。 |
+| **BUG-TEST-01** | **Medium 测试** | `tools/snapshot_receipt_test.py:220` | **契约测试同步 3 种 STAT 形态**：测试覆盖 1s 回执、5s 摘要与 60s 完整报告，校验 `RISK` 判别器。 |
+| **BUG-TEST-02** | **Medium 测试** | `tools/snapshot_repair_test.py:54, 185` | **仿真模型同步双哈希与近期哈希环**：仿真器支持 `latest_hash` 与 `valid_hashes`，新增中间态哈希防失步测试。 |
+| **OPT-MQL-01** | **Low 优化** | `CopierReceiver.mq4:6212` | **`CheckPeers` 改用 O(1) `ProbeSentAt(k, now)`**：消除按名字二次线性查找。 |
+| **OPT-MQL-02** | **Low 优化** | `CopierSender.mq4:82, 250, 410, 705` | **端口解析 64 位对齐与 Magic 过滤复用 `CopierList`**：统一全库底层规范并具备 `StrayBangs` 警告。 |
+| **OPT-INC-01** | **Medium 优化** | `CopierConfig.mqh:165` / `CopierReceiver.mq4:1738` | **`LoadConfigForHub` 采用 `SectionRange` 区间索引**：将 100 Sender 场景下的 74 万次字符串比较降至 7,400 次，提速 100 倍。 |
+| **OPT-HUB-01** | **Medium 优化** | `hub/src/main.rs:1995-2045` | **Hub `STAT` 锁合并与按需 WebSocket 推送**：每秒 `STAT` 由 3 次加锁合并为 1 次，直接基于哈希表 O(1) 判定有效性（消除全节点排序克隆），纯回执帧不再触发无意义的全量 WebSocket 广播。 |
+| **OPT-TEST-01** | **Low 测试** | `tools/hub_api_test.py:696` | **使用动态探测的 `free_port`**：消除端口硬编码冲突风险。 |
+
 ---
 
 ---

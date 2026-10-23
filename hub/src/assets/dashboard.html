@@ -2507,7 +2507,7 @@ function renderPosNodeDetail(){
       '</div>';
   } else {
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">⚙️ Config</button>' +
+      '<button type="button" class="btn-sm" onclick="openPositionsView(\'' + esc(n.key) + '\')">🔍 Inspect Positions</button>' +
       '</div>';
   }
 
@@ -3358,7 +3358,7 @@ function renderNodes(nodes){
         ? "<button class='btn-sm opbtn' data-op='config'>Visual Config</button> " +
           "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>" +
           "<span class='opmsg'></span>"
-        : "<button class='btn-sm opbtn' data-op='config'>Config</button>" +
+        : "<button class='btn-sm opbtn' data-op='inspect'>Inspect Positions</button>" +
           "<span class='opmsg'></span>";
       return "<tr data-k='" + esc(n.key) + "'>" +
              "<td class='role-cell'><span class='role-pill'></span></td>" +
@@ -3675,7 +3675,7 @@ function refresh(){
     api("/api/v1/positions").catch(function(){ return { positions: [] }; })
   ]).then(function(res){
     var t = res[0] || {};
-    var p = (res[1] && res[1].positions) ? res[1].positions : [];
+    var p = (res[1] && (res[1].senders || res[1].positions)) ? (res[1].senders || res[1].positions) : [];
     accept({
       nodes: (t.senders || []).concat(t.receivers || []),
       positions: p,
@@ -3830,7 +3830,7 @@ function onOpClick(ev){
   var tr = btn.closest ? btn.closest("tr") : (btn.parentNode ? btn.parentNode.parentNode : null);
   var k = tr ? tr.getAttribute("data-k") : "";
   var op = btn.getAttribute("data-op");
-  if(op === "positions"){
+  if(op === "positions" || op === "inspect"){
     openPositionsView(k);
     return;
   }
@@ -3950,6 +3950,34 @@ function startDashboard(){
   setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
   $("nodes").addEventListener("click", onOpClick);
   $("globalops").addEventListener("click", onGlobalClick);
+  var btnBatchP = $("btn-batch-pause");
+  if(btnBatchP){
+    btnBatchP.addEventListener("click", function(){
+      confirmDialog({
+        title: "Pause All Receivers",
+        desc: "Pause copying on ALL receivers?",
+        detail: "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+        danger: true,
+        confirmText: "Pause All Receivers"
+      }).then(function(ok){
+        if(ok) sendGlobal("pause");
+      });
+    });
+  }
+  var btnBatchR = $("btn-batch-reload");
+  if(btnBatchR){
+    btnBatchR.addEventListener("click", function(){
+      confirmDialog({
+        title: "Reload All Nodes",
+        desc: "Reload configuration on ALL connected nodes?",
+        detail: "All connected nodes will re-read their local configuration files without interrupting open positions.",
+        danger: false,
+        confirmText: "Reload All Nodes"
+      }).then(function(ok){
+        if(ok) sendGlobal("reload");
+      });
+    });
+  }
   $("btn-view-pos").addEventListener("click", function(){ openPositionsModal(); });
   $("kpi_card_pos").addEventListener("click", function(){ openPositionsModal(); });
   $("kpi_card_wait").addEventListener("click", function(){ openPositionsModal(); });
@@ -5071,7 +5099,7 @@ function renderSenderCards(senders){
       return (v === "1" || v === "true" || v === true);
     }
 
-    return '<div class="sendercard" data-idx="' + idx + '">' +
+    return '<div class="sendercard" data-idx="' + idx + '" data-orig-id="' + esc(s.id || "") + '">' +
            '<div class="sendercard-head">' +
            '<h3>[sender' + idx + ']' + (s.id ? ' &mdash; ' + esc(s.id) : '') + '</h3>' +
            '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">remove section</button>' +
@@ -5286,8 +5314,18 @@ function collectSendersFromCards(){
     sObj.daytradingtimes = val(".inp-s-daytradingtimes");
     sObj.staleseconds = val(".inp-s-staleseconds");
 
-    if(cfgState.parsed && cfgState.parsed.senders && cfgState.parsed.senders[idx]){
-      sObj = Object.assign({}, cfgState.parsed.senders[idx], sObj);
+    var origId = card.getAttribute("data-orig-id");
+    if(cfgState.parsed && cfgState.parsed.senders){
+      var match = null;
+      if(origId){
+        match = cfgState.parsed.senders.find(function(it){ return it.id && it.id === origId; });
+      }
+      if(!match && cfgState.parsed.senders[idx]){
+        match = cfgState.parsed.senders[idx];
+      }
+      if(match){
+        sObj = Object.assign({}, match, sObj);
+      }
     }
 
     senders.push(sObj);
@@ -5372,6 +5410,7 @@ function loadNodeConfig(nodeKey){
     var iniContent = (d.rev && d.rev.ini) ? d.rev.ini : (d.current_setting ? d.current_setting : getDefaultIni(nodeKey));
     $("cfgraw").value = iniContent;
     var parsed = parseIni(iniContent);
+    cfgState.parsed = parsed;
     populateCommonToForm(parsed.common);
     renderSenderCards(parsed.senders);
     if(!d.managed && d.current_setting){
@@ -5422,6 +5461,7 @@ $("cfgtab_vis").addEventListener("click", function(){
     $("cfgrawerr").textContent = "Cannot switch: " + parsed.errors.join("; ");
     return;
   }
+  cfgState.parsed = parsed;
   populateCommonToForm(parsed.common);
   renderSenderCards(parsed.senders);
   switchCfgTab("vis");
@@ -5516,6 +5556,7 @@ $("cfgloadcurrentbtn").addEventListener("click", function(){
     return;
   }
   var parsed = parseIni(curIni);
+  cfgState.parsed = parsed;
   populateCommonToForm(parsed.common);
   renderSenderCards(parsed.senders);
   $("cfgraw").value = curIni;

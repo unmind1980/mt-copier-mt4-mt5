@@ -79,7 +79,7 @@ int EffectivePort(bool &isAuto,string &errDesc)
         }
      }
 
-   long p = StringToInteger(pStr);
+   long p = CopierParseLong(pStr);
    if(p < 1024 || p > 49151)
      {
       errDesc = "EventsPort (" + (string)p + ") out of range. Suggested port range: 1024-49151.";
@@ -247,9 +247,7 @@ string           g_hubPeerName="hub";       // the name g_peers files the hub un
 //--- "CSV, leading ! means exclude" rule, so the two ends cannot drift into
 //--- disagreeing about what "!EURUSD" means.
 CopierList       g_symFilter;
-string           g_magicFilter[];
-bool             g_magicExclude=false;
-bool             g_magicFilterActive=false;
+CopierList       g_magicFilter;
 
 long             g_lastSnapMs=0;
 long             g_lastHbtMs=0;
@@ -283,6 +281,27 @@ int              g_stampGen=1;
 //--- means "this receiver is behind". See doc/SNAPSHOT-DEMAND-PLAN.md.
 string           g_snapHash="";
 string           g_latestSnapHash="";
+#define CP_RECENT_HASH_COUNT 4
+string           g_recentSnapHashes[CP_RECENT_HASH_COUNT];
+int              g_recentSnapHashHead=0;
+
+void NoteRecentSnapHash(const string h)
+  {
+   if(StringLen(h)==0) return;
+   for(int i=0;i<CP_RECENT_HASH_COUNT;i++)
+      if(g_recentSnapHashes[i]==h) return;
+   g_recentSnapHashes[g_recentSnapHashHead]=h;
+   g_recentSnapHashHead=(g_recentSnapHashHead+1)%CP_RECENT_HASH_COUNT;
+  }
+
+bool IsRecentSnapHash(const string h)
+  {
+   if(StringLen(h)==0) return false;
+   if(h==g_snapHash || h==g_latestSnapHash) return true;
+   for(int i=0;i<CP_RECENT_HASH_COUNT;i++)
+      if(g_recentSnapHashes[i]==h) return true;
+   return false;
+  }
 //--- The exact bytes of the last BROADCAST snapshot, kept so a repair can
 //--- re-send what the receiver actually missed.
 //---
@@ -381,45 +400,11 @@ bool             g_stateDirty=false;
 //=====================================================================
 string StatePath() { return "copier_sender_"+(string)CopierAccountLogin()+".st"; }
 
-void ParseFilter(const string csv,string &out[],bool &exclude,bool &active)
-  {
-   ArrayResize(out,0);
-   exclude=false;
-   active=false;
-   //--- CopierTrim, not StringTrimLeft/Right: those behave differently on
-   //--- MT4 and MT5, and on MT4 they left a leading/trailing space on every
-   //--- list item, so " EURUSD , GBPUSD " never matched a real symbol.
-   string s=CopierTrim(csv);
-   if(StringLen(s)==0) return;
-   if(StringSubstr(s,0,1)=="!") { exclude=true; s=CopierTrim(StringSubstr(s,1)); }
-   string parts[];
-   int n=StringSplit(s,',',parts);
-   int kept=0;
-   for(int i=0;i<n;i++)
-     {
-      string item=CopierTrim(parts[i]);
-      if(StringLen(item)==0) continue;
-      int sz=ArraySize(out);
-      ArrayResize(out,sz+1);
-      out[sz]=item;
-      kept++;
-     }
-   active=(kept>0);
-  }
-
 bool SymbolAllowed(const string sym) { return g_symFilter.Allows(sym); }
 
 bool MagicAllowed(const long magic)
   {
-   if(!g_magicFilterActive) return true;
-   bool found=false;
-   for(int i=0;i<ArraySize(g_magicFilter);i++)
-     {
-      string item=g_magicFilter[i];
-      if(!CopierIsDigits(item)) continue;
-      if(CopierParseLong(item)==magic) { found=true; break; }
-     }
-   return g_magicExclude ? !found : found;
+   return g_magicFilter.AllowsLong(magic);
   }
 
 //--- apply the optional broadcast-size override before sending
@@ -707,7 +692,9 @@ int OnInit()
    g_log.Init("sender_"+SenderId(),LogLevel);
 
    g_symFilter.Set(IncludeSymbols);
-   ParseFilter(IncludeMagicNumbers,g_magicFilter,g_magicExclude,g_magicFilterActive);
+   g_magicFilter.Set(IncludeMagicNumbers);
+   if(g_magicFilter.StrayBangs()>0)
+      g_log.Warn("IncludeMagicNumbers: '!' on individual item was stripped. A leading '!' excludes the whole list.");
 
    //--- restore UID<->ticket mapping so a restart does not re-announce
    //--- positions that are already open (which would double them up)
@@ -1134,7 +1121,7 @@ void SnapTrack(const string who,const string reported)
 
    if(StringLen(g_snapHash)==0) return;      // we have not sent one yet
 
-   if(reported!=g_snapHash && (StringLen(g_latestSnapHash)==0 || reported!=g_latestSnapHash))
+   if(!IsRecentSnapHash(reported))
      {
       if(g_snapStaleN[idx]==0) g_snapStaleMs[idx]=now;
       g_snapStaleN[idx]=g_snapStaleN[idx]+1;
@@ -1400,6 +1387,7 @@ void RebuildSnapshotPayload()
    for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
    g_snapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_snapPayload);
+   NoteRecentSnapHash(g_latestSnapHash);
   }
 
 void BroadcastSnapshot(const long now)
@@ -1407,6 +1395,7 @@ void BroadcastSnapshot(const long now)
    g_lastSnapMs=now;
    RebuildSnapshotPayload();
    g_snapHash=g_latestSnapHash;
+   NoteRecentSnapHash(g_snapHash);
    Emit(CP_T_SNAP,g_snapPayload,true);
   }
 
@@ -1558,7 +1547,7 @@ void OnTimer()
    //--- advancing g_lastSnapMs would starve routine broadcasts, and advancing g_snapHash
    //--- before broadcasting SNAP would cause all receivers' next heartbeats to falsely
    //--- look behind and trigger redundant repair storms.
-   if(g_stateDirty)
+   if(g_stateDirty && g_fillSnapshotDueMs==0)
      {
       RebuildSnapshotPayload();
      }
@@ -1727,10 +1716,10 @@ void OnTimer()
       //--- state, and writing its absent value over the last real one would
       //--- blank the panel's risk column between reports.
       //---
-      //--- EQ is the discriminator because the receiver appends the whole
-      //--- figure block together or not at all - a partial report does not
-      //--- exist, so the presence of one figure means all of them.
-      if(StringLen(login)>0 && StringLen(eq)>0)
+      //--- RISK is the discriminator for the 60s full monitoring report because
+      //--- the 5s position summary carries EQ/BL without RISK, while the full
+      //--- report appends NSEND/BLOCKED/RISK together.
+      if(StringLen(login)>0 && StringLen(risk)>0)
         {
          g_peers.SetNote(login,risk);
          //--- Keyed on the account and the risk state, NOT on the figures. A
@@ -1761,14 +1750,23 @@ void OnTimer()
       int hn=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
       for(int i=0;i<hn;i++)
         {
+         string t=g_drainTopics[i];
+         if(StringLen(t)>0)
+           {
+            string myNid=(string)g_nid;
+            string myAcc=(string)CopierAccountLogin();
+            if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
+           }
          CopierEnv he;
          if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
 
          if(he.type==CP_T_PONG)
            {
-            string hms="",hfrom="";
+            string hms="",hfrom="",hto="";
             CopierKvGet(he.payload,"MS",hms);
             CopierKvGet(he.payload,"FROM",hfrom);
+            CopierKvGet(he.payload,"TO",hto);
+            if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
             if(StringLen(hfrom)>0)
                g_peers.PongBack(hfrom,CopierParseLong(hms));
             continue;

@@ -610,11 +610,15 @@ impl Audit {
             }
         }
 
-        // Newest last, then keep the newest `limit`. Truncating from the front
-        // means a caller that asks for 200 always gets the most recent 200,
-        // which is the only useful end of a permanent log.
+        // If since == 0 (latest N records), truncate from the front so caller gets the newest `limit`.
+        // If since > 0 (forward pagination/continuation), truncate from the back so caller gets
+        // the next `limit` consecutive records after `since`.
         if out.len() > limit {
-            out.drain(0..out.len() - limit);
+            if since == 0 {
+                out.drain(0..out.len() - limit);
+            } else {
+                out.truncate(limit);
+            }
         }
         (out, stats)
     }

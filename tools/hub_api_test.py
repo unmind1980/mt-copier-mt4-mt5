@@ -693,7 +693,7 @@ def main():
 
     out2 = open(os.path.join(HERE, "_hub_api2.out"), "wb")
     hub2 = subprocess.Popen(
-        [HUB, "--port", "6182", "--http", "none", "--users", users_path,
+        [HUB, "--port", str(free_port), "--http", "none", "--users", users_path,
          "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
         stdout=out2, stderr=subprocess.STDOUT,

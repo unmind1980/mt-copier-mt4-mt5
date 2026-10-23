@@ -163,6 +163,22 @@ public:
       return false;
      }
 
+   int               SectionRange(const string section,int &outStart,int &outLen) const
+     {
+      for(int s=0;s<m_nSec;s++)
+        {
+         if(StringCompare(m_secName[s],section,false)==0)
+           {
+            outStart=m_secStart[s];
+            outLen=m_secLen[s];
+            return s;
+           }
+        }
+      outStart=0;
+      outLen=0;
+      return -1;
+     }
+
    bool              Has(const string section,const string key) const
      {
       for(int s=0;s<m_nSec;s++)

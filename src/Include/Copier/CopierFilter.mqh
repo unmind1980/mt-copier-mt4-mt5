@@ -102,6 +102,17 @@ public:
       return m_exclude ? !found : found;
      }
 
+   bool              AllowsLong(const long val) const
+     {
+      if(!m_active) return true;
+      bool found=false;
+      for(int i=0;i<ArraySize(m_item);i++)
+        {
+         if(CopierParseLong(m_item[i])==val) { found=true; break; }
+        }
+      return m_exclude ? !found : found;
+     }
+
    int               Count() const { return ArraySize(m_item); }
   };
 

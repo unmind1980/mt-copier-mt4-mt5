@@ -618,13 +618,14 @@ fn send_cfg(
     // `nid` the node subscribes to and the same value its ini calls `id=`.
     let nid = node.split(':').nth(1).unwrap_or(node);
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CFG|P=ID={};REV={};INI={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CFG|P=ID={};REV={};TO={};INI={}",
         HUB_SSID,
         state.seq,
         unix_secs(),
         unix_millis() % 2147483647,
         id,
         rev,
+        nid,
         config::escape_ini(ini)
     );
     sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], 0)
@@ -645,7 +646,7 @@ fn send_cmd(
 ) -> zmq::Result<()> {
     state.seq += 1;
     let nid = node.split(':').nth(1).unwrap_or(node);
-    let mut p = format!("ID={};OP={}", id, op);
+    let mut p = format!("ID={};OP={};TO={}", id, op, nid);
     if !args.is_empty() {
         p.push_str(&format!(";ARGS={}", args));
     }
@@ -1946,9 +1947,9 @@ fn main() {
                         }
 
                         if ty == "STAT" {
-                            let sid = envelope_kv(&payload, "SID");
-                            if !sid.is_empty() {
-                                let login = envelope_kv(&payload, "LOGIN");
+                            let login = envelope_kv(&payload, "LOGIN");
+                            if !login.is_empty() {
+                                let sid = envelope_kv(&payload, "SID");
                                 let h = envelope_kv(&payload, "H");
                                 //--- M6: the risk state rides the SAME STAT the
                                 //--- receipt does. BLOCKED counts entries the
@@ -1986,13 +1987,12 @@ fn main() {
                                     .map(|s| registry::parse_receiver_positions(&s));
                                 let wait_items = envelope_kv_opt(&payload, "WAITLIST")
                                     .map(|s| registry::parse_receiver_waitlist(&s));
-                                //--- One lock for both: note_stat and the
-                                //--- mirror edge are written by the same
-                                //--- frame, and acquiring the shared mutex
-                                //--- twice per STAT (1/s per receiver) is two
-                                //--- round trips through a contended lock for
-                                //--- one line of state.
-                                if !login.is_empty() {
+
+                                //--- One lock for all: note_stat, ping, and mirror edge
+                                let mut sender_valid = false;
+                                let mut receiver_valid = false;
+                                let mut stat_changed = false;
+                                {
                                     let mut s = shared.lock_or_recover();
                                     if !risk.is_empty() || held.is_some() || wait_total.is_some() || equity.is_some() {
                                         s.reg.note_stat(
@@ -2013,86 +2013,89 @@ fn main() {
                                             held_items,
                                             wait_items,
                                         );
+                                        stat_changed = true;
                                     }
                                     if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
                                         s.reg.note_ping("receiver", &login, ping_ms);
+                                        stat_changed = true;
+                                    }
+
+                                    if !sid.is_empty() && sid != "-" {
+                                        let warm = started.elapsed() < Duration::from_secs(60);
+                                        let skey = format!("sender:{}", sid);
+                                        let rkey = format!("receiver:{}", login);
+                                        let sid_is_sender = s.reg.get(&skey).is_some();
+                                        let login_is_receiver = s.reg.get(&rkey).is_some();
+                                        let any_sender_known = s.reg.count_by_role(registry::Role::Sender) > 0;
+                                        let any_receiver_known = s.reg.count_by_role(registry::Role::Receiver) > 0;
+                                        sender_valid = sid_is_sender || !any_sender_known || warm;
+                                        receiver_valid = login_is_receiver || !any_receiver_known || warm;
+
+                                        if sender_valid && receiver_valid {
+                                            if s.mirrors.entry(sid.clone()).or_default().insert(login.clone(), Instant::now()).is_none() {
+                                                stat_changed = true;
+                                            }
+                                        }
                                     }
                                 }
-                                let warm = started.elapsed() < Duration::from_secs(60);
-                                let (sid_is_sender, any_sender_known, login_is_receiver, any_receiver_known) = {
-                                    let s = shared.lock_or_recover();
-                                    let skey = format!("sender:{}", sid);
-                                    let rkey = format!("receiver:{}", login);
-                                    let nodes = s.reg.nodes();
-                                    (
-                                        nodes.iter().any(|n| n.key == skey),
-                                        nodes.iter().any(|n| n.key.starts_with("sender:")),
-                                        nodes.iter().any(|n| n.key == rkey),
-                                        nodes.iter().any(|n| n.key.starts_with("receiver:")),
-                                    )
-                                };
-                                let sender_valid = sid_is_sender || !any_sender_known || warm;
-                                let receiver_valid = login_is_receiver || !any_receiver_known || warm;
 
-                                if sender_valid && receiver_valid {
-                                    let mut s = shared.lock_or_recover();
-                                    s.mirrors
-                                        .entry(sid.clone())
-                                        .or_default()
-                                        .insert(login.clone(), Instant::now());
+                                if stat_changed {
+                                    poke_pending = true;
                                 }
+
                                 //--- THE RECEIPT IS RELAYED ONLY TO A REAL
                                 //--- SENDER AND FROM A VALID RECEIVER.
-                                if sender_valid && receiver_valid {
-                                    //--- Count what ARRIVED, before the
-                                    //--- de-duplication decides what to relay:
-                                    //--- the difference between the two is the
-                                    //--- saving, and reporting only the relays
-                                    //--- would look like lost heartbeats.
-                                    st.note_receipt_seen();
-                                    //--- Forget pairs that stopped reporting.
-                                    //--- A receiver that is renamed or moved
-                                    //--- leaves its old key behind forever
-                                    //--- otherwise, and this map has no other
-                                    //--- eviction path.
-                                    if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
-                                        last_rcpt_prune = Instant::now();
-                                        last_rcpt_relayed.retain(|_, (_, t)| {
-                                            t.elapsed() < Duration::from_secs(600)
-                                        });
-                                    }
-                                    let rcpt_key = (login.clone(), sid.clone());
-                                    let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
-                                        Some((prev_h, last_t)) => {
-                                            // Relay immediately if hash changed or empty (new node/change), or throttle to 3s in steady state
-                                            prev_h != &h || h.is_empty() || last_t.elapsed() >= Duration::from_secs(3)
+                                if !sid.is_empty() && sid != "-" {
+                                    if sender_valid && receiver_valid {
+                                        //--- Count what ARRIVED, before the
+                                        //--- de-duplication decides what to relay:
+                                        //--- the difference between the two is the
+                                        //--- saving, and reporting only the relays
+                                        //--- would look like lost heartbeats.
+                                        st.note_receipt_seen();
+                                        //--- Forget pairs that stopped reporting.
+                                        //--- A receiver that is renamed or moved
+                                        //--- leaves its old key behind forever
+                                        //--- otherwise, and this map has no other
+                                        //--- eviction path.
+                                        if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
+                                            last_rcpt_prune = Instant::now();
+                                            last_rcpt_relayed.retain(|_, (_, t)| {
+                                                t.elapsed() < Duration::from_secs(600)
+                                            });
                                         }
-                                        None => true, // First time seen
-                                    };
+                                        let rcpt_key = (login.clone(), sid.clone());
+                                        let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
+                                            Some((prev_h, last_t)) => {
+                                                // Relay immediately if hash changed or empty (new node/change), or throttle to 3s in steady state
+                                                prev_h != &h || h.is_empty() || last_t.elapsed() >= Duration::from_secs(3)
+                                            }
+                                            None => true, // First time seen
+                                        };
 
-                                    if should_relay {
-                                        if let Err(e) =
-                                            send_receipt(&sock, &sid, &login, &h, &mut state)
-                                        {
-                                            eprintln!("[hub] receipt relay failed: {}", e);
-                                        } else {
-                                            st.note_receipt();
-                                            last_rcpt_relayed.insert(rcpt_key, (h.clone(), Instant::now()));
+                                        if should_relay {
+                                            if let Err(e) =
+                                                send_receipt(&sock, &sid, &login, &h, &mut state)
+                                            {
+                                                eprintln!("[hub] receipt relay failed: {}", e);
+                                            } else {
+                                                st.note_receipt();
+                                                last_rcpt_relayed.insert(rcpt_key, (h.clone(), Instant::now()));
+                                            }
                                         }
+                                    } else if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
+                                        //--- Rate-limited: a misconfigured receiver
+                                        //--- emits one STAT a second, and a line a
+                                        //--- second buries everything else.
+                                        last_rcpt_drop = Instant::now();
+                                        println!(
+                                            "[hub] WARN  STAT from {} names SID={} which is not a \
+                                             registered sender - receipt NOT relayed \
+                                             (further reports suppressed for 60s)",
+                                            login, sid
+                                        );
                                     }
-                                } else if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
-                                    //--- Rate-limited: a misconfigured receiver
-                                    //--- emits one STAT a second, and a line a
-                                    //--- second buries everything else.
-                                    last_rcpt_drop = Instant::now();
-                                    println!(
-                                        "[hub] WARN  STAT from {} names SID={} which is not a \
-                                         registered sender - receipt NOT relayed \
-                                         (further reports suppressed for 60s)",
-                                        login, sid
-                                    );
                                 }
-                                poke_pending = true;
                             }
                         }
                     } else {
@@ -2439,6 +2442,26 @@ fn main() {
                 if !args.writes && !commands::is_read_only_op(&c.op) {
                     continue;
                 }
+                if c.state == commands::STATE_UNKNOWN {
+                    let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
+                    println!(
+                        "[hub] ALERT {} never acknowledged {} ({} {}) after {} attempt(s): {}",
+                        c.node, c.id, prefix, c.op, c.attempts, c.err
+                    );
+                    let action = format!("{}.timeout", prefix);
+                    audit.record(
+                        "",
+                        "",
+                        &action,
+                        &c.node,
+                        None,
+                        Some(serde_json::json!({
+                            "id": c.id, "kind": c.kind, "op": c.op, "attempts": c.attempts,
+                        })),
+                        "unknown",
+                    );
+                    continue;
+                }
                 match c.kind.as_str() {
                     commands::KIND_CONFIG => {
                         match cfg.current(&c.node) {
@@ -2472,25 +2495,6 @@ fn main() {
                         }
                     }
                     _ => {}
-                }
-                if c.state == commands::STATE_UNKNOWN {
-                    let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
-                    println!(
-                        "[hub] ALERT {} never acknowledged {} ({} {}) after {} attempt(s): {}",
-                        c.node, c.id, prefix, c.op, c.attempts, c.err
-                    );
-                    let action = format!("{}.timeout", prefix);
-                    audit.record(
-                        "",
-                        "",
-                        &action,
-                        &c.node,
-                        None,
-                        Some(serde_json::json!({
-                            "id": c.id, "kind": c.kind, "op": c.op, "attempts": c.attempts,
-                        })),
-                        "unknown",
-                    );
                 }
             }
         }

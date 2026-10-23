@@ -493,9 +493,9 @@ impl CommandStore {
                 continue;
             }
             let step = RETRY_LADDER_SECS.get(c.attempts as usize).copied();
-            c.attempts += 1;
             match step {
                 Some(secs) => {
+                    c.attempts += 1;
                     c.next_at = now + Duration::from_secs(secs);
                     out.push(c.clone());
                     changed.push(c.clone());
@@ -504,10 +504,11 @@ impl CommandStore {
                     // The ladder is exhausted. `unknown`, not `failed` - we do
                     // not know that it did not arrive, only that nobody said.
                     c.state = STATE_UNKNOWN.to_string();
+                    let total_secs: u64 = RETRY_LADDER_SECS.iter().sum();
                     c.err = format!(
                         "no ACK after {} attempts ({}s ladder exhausted)",
                         c.attempts,
-                        RETRY_LADDER_SECS.len()
+                        total_secs
                     );
                     let snapshot = c.clone();
                     out.push(snapshot.clone());

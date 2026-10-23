@@ -217,16 +217,17 @@ def main():
           (";H=7c315c76" in open(_protocol_md(), encoding="utf-8").read()))
 
     print()
-    print("== the TWO shapes of STAT must stay distinguishable ==")
-    # A receiver sends STAT in two shapes: a full monitoring report once a
-    # minute, and a RECEIPT ONLY every SyncHeartbeatSeconds. The sender tells
-    # them apart by the presence of the figure block, so this is a contract and
-    # not an implementation detail - breaking it prints
-    #     "receiver X status: equity= balance= held= position(s) ..."
-    # which reads like a broken receiver. Measured live, 2026-10-13.
+    print("== the THREE shapes of STAT must stay distinguishable ==")
+    # A receiver sends STAT in three shapes:
+    # 1. RECEIPT ONLY every SyncHeartbeatSeconds (1s): LOGIN, SID, H.
+    # 2. POSITION SUMMARY every 5s: carries HELD, LOTS, EQ, BL.
+    # 3. FULL MONITORING REPORT once a minute: appends NSEND, BLOCKED, RISK.
+    # The sender distinguishes the 60s monitoring report by RISK (not EQ, which
+    # arrives every 5s without risk figures).
     receipt_only = "LOGIN=9918271;SID=252033316;H=13b2bc5c"
-    full_report = (receipt_only
-                   + ";EQ=10042.11;BL=10000.00;HELD=2;LOTS=0.60"
+    pos_summary = (receipt_only
+                   + ";EQ=10042.11;BL=10000.00;HELD=2;LOTS=0.60")
+    full_report = (pos_summary
                    + ";NSEND=1;BLOCKED=0;RISK=ok")
 
     def kv(payload):
@@ -238,12 +239,14 @@ def main():
         return out
 
     check("a receipt-only STAT carries H", kv(receipt_only).get("H") == "13b2bc5c")
-    check("a receipt-only STAT carries NO figures", "EQ" not in kv(receipt_only))
-    check("a full report carries the figures", kv(full_report).get("EQ") == "10042.11")
+    check("a receipt-only STAT carries NO figures", "EQ" not in kv(receipt_only) and "RISK" not in kv(receipt_only))
+    check("a 5s pos summary carries EQ and BL", kv(pos_summary).get("EQ") == "10042.11" and kv(pos_summary).get("BL") == "10000.00")
+    check("a 5s pos summary carries NO RISK figure", "RISK" not in kv(pos_summary))
+    check("a full report carries the RISK figure", kv(full_report).get("RISK") == "ok")
     check("a full report still carries the receipt too",
           kv(full_report).get("H") == "13b2bc5c")
-    check("EQ is therefore a sound discriminator",
-          ("EQ" in kv(full_report)) and ("EQ" not in kv(receipt_only)))
+    check("RISK is therefore the sound discriminator for full report",
+          ("RISK" in kv(full_report)) and ("RISK" not in kv(pos_summary)) and ("RISK" not in kv(receipt_only)))
 
     print()
     print("== 500-byte adaptive compression ==")

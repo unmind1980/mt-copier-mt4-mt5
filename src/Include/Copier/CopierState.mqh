@@ -893,11 +893,11 @@ private:
      {
       int mask=CP_BACKOFF_SLOTS-1;
       int j=i;
-      for(int step=0;step<CP_BACKOFF_SLOTS;step++)
+      while(true)
         {
          m_slot[i]=0;
          m_h[i]=0;
-         bool moved=false;
+         int r=0;
          while(true)
            {
             j=(j+1)&mask;
@@ -906,24 +906,16 @@ private:
             int idx=s-1;
             if(idx<0 || idx>=CP_BACKOFF_SLOTS || StringLen(m_k[idx])==0)
               {
-               m_slot[j]=0;
-               m_h[j]=0;
-               continue;
+               EraseHash(i);                   // corrupt/stray bucket: rebuild cleanly
+               return;
               }
-            int r=(int)(HashOf(m_k[idx]) & (uint)mask);
-            if(IsBetweenCircular(r,i,j))
-              {
-               m_slot[i]=m_slot[j];
-               m_h[i]=m_h[j];
-               i=j;
-               moved=true;
-               break;
-              }
+            r=(int)(HashOf(m_k[idx]) & (uint)mask);
+            if(IsBetweenCircular(r,i,j)) break;
            }
-         if(!moved) break;
+         m_slot[i]=m_slot[j];
+         m_h[i]=m_h[j];
+         i=j;
         }
-      m_slot[i]=0;
-      m_h[i]=0;
      }
 
    //--- Remove one key from the hash index, then REBUILD the whole index from
@@ -990,6 +982,7 @@ public:
       long now=CopierNowMs();
       int i=Find(key);
       int n=1;
+      bool isNew=(i<0);
       if(i>=0)
         {
          //--- A failure arriving long after the previous one is a NEW
@@ -1008,7 +1001,7 @@ public:
       m_n[i]=n;
       m_t[i]=now;
       m_u[i]=now+CopierBackoffMs(n);
-      InsertHash(i,HashOf(key));
+      if(isNew) InsertHash(i,HashOf(key));
       return n;
      }
 

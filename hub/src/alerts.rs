@@ -140,6 +140,8 @@ pub struct AlertEngine {
     last_risk_tripped: HashMap<String, String>,
     /// Last alerted count of blocked entries per node.
     last_risk_blocked: HashMap<String, u32>,
+    /// Last evaluated clock drift per node.
+    last_drift_secs: HashMap<String, i64>,
 }
 
 impl Default for AlertEngine {
@@ -157,6 +159,7 @@ impl AlertEngine {
             offline_since: HashMap::new(),
             last_risk_tripped: HashMap::new(),
             last_risk_blocked: HashMap::new(),
+            last_drift_secs: HashMap::new(),
         }
     }
 
@@ -236,6 +239,7 @@ impl AlertEngine {
         self.offline_since.remove(node_key);
         self.last_risk_tripped.remove(node_key);
         self.last_risk_blocked.remove(node_key);
+        self.last_drift_secs.remove(node_key);
         self.fired.retain(|(_, k), _| k != node_key);
     }
 }
@@ -324,8 +328,9 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         //--- clock drift, as a JUMP against the previous offset. A stable
         //--- offset is a timezone fact (see the module docs); a change is
         //--- a broken clock.
-        if let (Some(cur), Some(prev)) = (n.drift_secs, n.drift_prev_secs) {
-            if drift_jumped(Some(prev), cur, DRIFT_ALERT_SECS) {
+        if let Some(cur) = n.drift_secs {
+            let prev = s.alerts.last_drift_secs.get(&n.key).copied();
+            if drift_jumped(prev, cur, DRIFT_ALERT_SECS) {
                 let a = Alert {
                     ts: now,
                     kind: "node.clock.drift",
@@ -334,7 +339,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                     detail: json!({
                         "drift_secs": cur,
                         "was_secs": prev,
-                        "changed_by_secs": (cur - prev).abs(),
+                        "changed_by_secs": prev.map(|p| (cur - p).abs()).unwrap_or(0),
                         "node_ts": n.node_ts,
                     }),
                 };
@@ -343,12 +348,12 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                     fired.push(a);
                 }
             }
+            s.alerts.last_drift_secs.insert(n.key.clone(), cur);
         }
 
         //--- risk: entries the receiver's risk gates are blocking right now.
-        //--- State-aware: alert only on incremental blocks, not repeatedly on unchanged counters.
-        let prev_blocked = s.alerts.last_risk_blocked.get(&n.key).copied().unwrap_or(0);
-        if n.blocked > prev_blocked {
+        //--- M6: BLOCKED is reported per minute by receiver. Alert when > 0, rate-limited by silence::RISK (300s).
+        if n.blocked > 0 {
             let a = Alert {
                 ts: now,
                 kind: "risk.blocked",
@@ -357,21 +362,9 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 detail: json!({ "blocked_entries": n.blocked }),
             };
             if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
-                s.alerts.last_risk_blocked.insert(n.key.clone(), n.blocked);
                 s.alerts.push(a.clone());
                 fired.push(a);
             }
-        } else if n.blocked == 0 && prev_blocked > 0 {
-            s.alerts.last_risk_blocked.remove(&n.key);
-            //--- NOT rearm(). The receiver zeroes its BLOCKED counter after
-            //--- every 60 s status report (`if(dueStatus) g_riskBlocked=0`), so
-            //--- "went back to 0" is ROUTINE, not a recovery. Rearming here
-            //--- wiped the 5-minute silence window once a minute, which turned
-            //--- a persistent block into an alert (and a Telegram/WeCom/webhook
-            //--- push) every 60-120 seconds for as long as it lasted.
-            //--- The window now expires on its own; a genuine recovery is
-            //--- rearmed by the `risk.tripped` branch above, which is driven by
-            //--- the RISK string rather than by a counter that gets reset.
         }
 
         //--- risk: a limit actually TRIPPED (the receiver flattened or is

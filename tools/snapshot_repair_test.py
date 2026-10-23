@@ -51,7 +51,7 @@ class Receiver:
         self.repair_ms = None
         self.repairs = []
 
-    def track(self, now, reported, sender_hash, payload_present=True):
+    def track(self, now, reported, sender_hash, payload_present=True, latest_hash=None, valid_hashes=None):
         """Mirror of SnapTrack(). Returns True when a repair fires."""
         # --- cadence, measured from the receipts themselves
         if self.rcpt_ms > 0:
@@ -70,7 +70,13 @@ class Receiver:
         if sender_hash == "":
             return False
 
-        if reported != sender_hash:
+        all_valid = {sender_hash}
+        if latest_hash:
+            all_valid.add(latest_hash)
+        if valid_hashes:
+            all_valid.update(valid_hashes)
+
+        if reported not in all_valid:
             if self.stale_n == 0:
                 self.stale_ms = now
             self.stale_n += 1
@@ -188,6 +194,22 @@ def main():
           not any(fired[1:10]), str(fired))
     check("it re-attempts only after SnapshotSeconds floor expires",
           fired[10] and r.repairs == [0, 10000], str(r.repairs))
+
+    print()
+    print("== 8. dual-hash and recent valid hashes prevent false BEHIND ==")
+    # When sender generates unbroadcast intermediate hashes (g_latestSnapHash) or
+    # maintains a recent valid hash ring, a receiver echoing an intermediate hash
+    # is considered IN STEP and does not trigger stale counter or false repair storms.
+    r = Receiver(snapshot_seconds=10)
+    # sender has broadcast H1, but locally rebuilt H2
+    r.track(0, "H1", sender_hash="H1", latest_hash="H2")
+    check("matching broadcast hash H1 is in step", r.stale_n == 0)
+    # receiver caught up to H2 via directed repair
+    r.track(1000, "H2", sender_hash="H1", latest_hash="H2")
+    check("matching unbroadcast latest hash H2 is also in step", r.stale_n == 0)
+    # sender modified again to H3, keeping H2 in recent valid hashes
+    r.track(2000, "H2", sender_hash="H1", latest_hash="H3", valid_hashes={"H2"})
+    check("matching recently valid hash H2 avoids false BEHIND", r.stale_n == 0)
 
     print()
     print("== result ==")

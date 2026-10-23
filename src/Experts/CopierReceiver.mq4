@@ -1112,6 +1112,9 @@ bool LoadConfigFromInputs()
    CopierIni emptyIni;
    InitSenderSettings(0, emptyIni, "sender0");
 
+   g_lastFullScanMs=0;
+   g_posCacheCount=0;
+
    g_log.Info("configured from EA inputs: one sender ("+g_sid[0]
               +"), magic "+(string)g_magic[0]+", endpoint "+g_epEvents[0]);
    return true;
@@ -1294,7 +1297,7 @@ void ApplyCommonConfig(const CopierIni &ini)
 
    if(LogLevel != oldLogLevel)
       g_log.Init("receiver"+InstanceSuffix(),LogLevel);
-   if(PollMs != oldLogLevel && PollMs > 0)
+   if(PollMs != oldPollMs && PollMs > 0)
      {
       EventKillTimer();
       int p=PollMs;
@@ -1735,12 +1738,15 @@ bool LoadConfigForHub()
                     +" codes 2 / 0 / 1.");
       g_lotParam[i]=ini.GetDouble(sec,"lotparam",1.0);
 
-      for(int k=0;k<ini.Count();k++)
+      int secStart=0,secLen=0;
+      if(ini.SectionRange(sec,secStart,secLen)>=0)
         {
-         if(ini.SecAt(k)!=sec) continue;
-         string key=ini.KeyAt(k);
-         if(StringFind(key,"symbol.")!=0) continue;
-         MapAdd(i,StringSubstr(key,StringLen("symbol.")),ini.ValAt(k));
+         for(int k=secStart;k<secStart+secLen;k++)
+           {
+            string key=ini.KeyAt(k);
+            if(StringFind(key,"symbol.")!=0) continue;
+            MapAdd(i,StringSubstr(key,StringLen("symbol.")),ini.ValAt(k));
+           }
         }
 
       //--- reset this sender's stream state. Globals SURVIVE a reinitialisation,
@@ -1762,6 +1768,10 @@ bool LoadConfigForHub()
 
       InitSenderSettings(i, ini, sec);
      }
+
+   //--- Force next tick to do full scan & recompute orphan status for updated configuration
+   g_lastFullScanMs=0;
+   g_posCacheCount=0;
 
    g_log.Info("central mode: "+IntegerToString(g_nSenders)+" sender(s) from "
               +CP_INI_PATH+" - subscribing to each sender's NID, plus control"
@@ -3779,15 +3789,6 @@ int ScanAndResolveAccountPositions()
            }
          g_rawScratch[i].uid=g_posCache[matchIdx].uid;
          g_rawScratch[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
-         if(StringLen(g_rawScratch[i].cmt)==0)
-           {
-            g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
-            //--- an in-place field update when the row did not move: copying
-            //--- the whole next-generation row back just to carry one string
-            //--- would also carry its (possibly stale) numerics with it
-            if(matchIdx==i) g_posCache[i].cmt=g_rawScratch[i].cmt;
-            else            g_posCacheNext[i].cmt=g_rawScratch[i].cmt;
-           }
          g_acctAllPos[i]=g_rawScratch[i];
         }
       else
@@ -5010,6 +5011,14 @@ void HandleCfg(const CopierEnv &e)
       return;
      }
 
+   string pto="";
+   CopierKvGet(e.payload,"TO",pto);
+   if(StringLen(pto)>0 && pto!=(string)g_nid && pto!=(string)CopierAccountLogin())
+     {
+      g_log.Warn("CFG "+id+" addressed to TO="+pto+" (not our NID "+(string)g_nid+"). Discarded.");
+      return;
+     }
+
    //--- THE GATE. Answering at all is deliberate: silence would leave the hub
    //--- walking its retry ladder for a refusal it could have been told about
    //--- immediately.
@@ -5174,6 +5183,14 @@ void HandleCmd(const CopierEnv &e)
      {
       g_log.Error("CMD with no ID - cannot acknowledge it, so the hub will"
                   +" retry. Ignoring.");
+      return;
+     }
+
+   string pto="";
+   CopierKvGet(e.payload,"TO",pto);
+   if(StringLen(pto)>0 && pto!=(string)g_nid && pto!=(string)CopierAccountLogin())
+     {
+      g_log.Warn("CMD "+id+" addressed to TO="+pto+" (not our NID "+(string)g_nid+"). Discarded.");
       return;
      }
 
@@ -6209,7 +6226,7 @@ void CheckPeers()
       for(int k=0;k<CP_MAX_PEERS;k++)
         {
          string pn=g_peers.NameAt(k);
-         if(StringLen(pn)>0) g_peers.ProbeSent(pn,now);
+         if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
      }
 
@@ -6460,6 +6477,22 @@ void UpdatePanel()
    g_panel.End();
   }
 
+bool IsTopicForReceiver(const string topic,const string envSid)
+  {
+   if(!g_hubOn) return true;
+   if(StringLen(topic)==0) return true;
+   string myNid=(string)g_nid;
+   string myAcc=(string)CopierAccountLogin();
+   if(StringSubstr(topic,0,1)=="@")
+     {
+      return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
+     }
+   if(topic==myNid || topic==myAcc) return true;
+   if(SenderIndexById(topic)>=0) return true;
+   if(StringLen(envSid)>0 && SenderIndexById(envSid)>=0) return true;
+   return false;
+  }
+
 void OnTimer()
   {
    //--- 1) drain the one socket: non-blocking, bounded per tick
@@ -6511,6 +6544,12 @@ void OnTimer()
       for(int i=0;i<n;i++)
         {
          s_errs[i]=CopierDecodeEnv(g_drainMsgs[i],s_envs[i]);
+         string esid=(s_errs[i]==CP_ERR_NONE ? s_envs[i].sid : "");
+         if(!IsTopicForReceiver(g_drainTopics[i],esid))
+           {
+            s_errs[i]=-999; // Discard: prefix collision from ZMQ SUB filter
+            continue;
+           }
          s_isLatestSnap[i]=false;
         }
 
@@ -6535,6 +6574,7 @@ void OnTimer()
 
       for(int i=0;i<n;i++)
         {
+         if(s_errs[i]==-999) continue;
          if(s_errs[i]!=CP_ERR_NONE)
            {
             HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
@@ -6926,6 +6966,46 @@ void OnTimer()
                +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
                +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
             putFigures=false;            // once per batch, not per sender
+           }
+         CopierSendStatus(CP_T_STAT,st);
+        }
+      if(g_nSenders==0 && g_hubOn && putPositionSummary)
+        {
+         string st="LOGIN="+(string)CopierAccountLogin()
+                   +CP_SEP_KV+"SID=-"
+                   +CP_SEP_KV+"H=";
+         int qOpen=0;
+         double qLots=0.0;
+         PendingOpens(qOpen,qLots);
+         int waitTotal=qOpen+g_waitHeld+g_mktHeld;
+         double waitLots=qLots+g_waitLots+g_mktHeldLots;
+
+         st+=CP_SEP_KV+"HELD="+(string)g_ourCount
+            +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
+            +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
+            +CP_SEP_KV+"WAIT="+(string)waitTotal
+            +CP_SEP_KV+"WLOTS="+DoubleToString(waitLots,2)
+            +CP_SEP_KV+"WQUEUED="+(string)qOpen
+            +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
+            +CP_SEP_KV+"WMKT="+(string)g_mktHeld
+            +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
+            +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
+
+         long rtt=g_peers.RttFor(g_hubPeerName);
+         if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
+
+         if(dueDetail)
+           {
+            string posEnc=EncodeReceiverPositions();
+            string waitEnc=EncodeReceiverWaitList();
+            st+=CP_SEP_KV+"POS="+posEnc
+               +CP_SEP_KV+"WAITLIST="+waitEnc;
+           }
+         if(putFigures)
+           {
+            st+=CP_SEP_KV+"NSEND=0"
+               +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
+               +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
            }
          CopierSendStatus(CP_T_STAT,st);
         }
