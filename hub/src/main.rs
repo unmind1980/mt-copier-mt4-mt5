@@ -616,7 +616,7 @@ fn send_cfg(
     state.seq += 1;
     // The node key is `ROLE:ACC`; the topic is the ACC alone, which is the same
     // `nid` the node subscribes to and the same value its ini calls `id=`.
-    let nid = node.split(':').nth(1).unwrap_or(node);
+    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
     let env = format!(
         "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CFG|P=ID={};REV={};TO={};INI={}",
         HUB_SSID,
@@ -645,7 +645,7 @@ fn send_cmd(
     args: &str,
 ) -> zmq::Result<()> {
     state.seq += 1;
-    let nid = node.split(':').nth(1).unwrap_or(node);
+    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
     let mut p = format!("ID={};OP={};TO={}", id, op, nid);
     if !args.is_empty() {
         p.push_str(&format!(";ARGS={}", args));
@@ -1986,14 +1986,17 @@ fn main() {
                                 //--- only included in the minute report.
                                 let held: Option<u32> =
                                     envelope_kv(&payload, "HELD").parse().ok();
+                                let parse_finite_f64 = |s: &str| -> Option<f64> {
+                                    s.parse::<f64>().ok().filter(|v| v.is_finite())
+                                };
                                 let held_lots: f64 =
-                                    envelope_kv(&payload, "LOTS").parse().unwrap_or(0.0);
+                                    parse_finite_f64(&envelope_kv(&payload, "LOTS")).unwrap_or(0.0);
                                 let orphaned: Option<u32> =
                                     envelope_kv(&payload, "ORPHAN").parse().ok();
                                 let wait_total: Option<u32> =
                                     envelope_kv(&payload, "WAIT").parse().ok();
                                 let wait_lots: f64 =
-                                    envelope_kv(&payload, "WLOTS").parse().unwrap_or(0.0);
+                                    parse_finite_f64(&envelope_kv(&payload, "WLOTS")).unwrap_or(0.0);
                                 let wait_queued: Option<u32> =
                                     envelope_kv(&payload, "WQUEUED").parse().ok();
                                 let wait_delayed: Option<u32> =
@@ -2001,9 +2004,9 @@ fn main() {
                                 let wait_mkt: Option<u32> =
                                     envelope_kv(&payload, "WMKT").parse().ok();
                                 let equity: Option<f64> =
-                                    envelope_kv(&payload, "EQ").parse().ok();
+                                    parse_finite_f64(&envelope_kv(&payload, "EQ"));
                                 let balance: Option<f64> =
-                                    envelope_kv(&payload, "BL").parse().ok();
+                                    parse_finite_f64(&envelope_kv(&payload, "BL"));
                                 let held_items = envelope_kv_opt(&payload, "POS")
                                     .map(|s| registry::parse_receiver_positions(&s));
                                 let wait_items = envelope_kv_opt(&payload, "WAITLIST")

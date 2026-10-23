@@ -373,6 +373,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十八次审计** | 2026-10-23 22:00 | Hub 注册洪水可用性防御、Upsert 槽位自洽、CFG 恢复解除限频与主题过滤去镜像 | 全栈可用性与严谨性 |
 | **二十九次审计** | 2026-10-23 23:20 | 减仓收敛手数换算修正、全周开休市判定、退避队列淘汰纠偏与跨平台模型加固 | 全栈核心与交易模型 |
 | **三十次审计** | 2026-10-24 00:25 | 随机数种子全自洽初始化、Remove O(1)计数、ReplaceAll注释与PayloadDRY重构 | 全栈安全与代码精炼 |
+| **三十一次审计** | 2026-10-24 01:30 | MODIFY节流缓存脱钩、缺N快照拦截拒空仓、CSPRNG安全真随机与测试夹具全修复 | 资金安全与全栈加固 |
 
 ---
 
@@ -882,6 +883,52 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **3.1** | **Medium 性能** | `CopierState.mqh:345` | **`CopierPosTable::Remove` 采用 O(1) 计数递减**：将全表线性扫描 2048 槽位的 `UsedCount()` 替换为与 `RemoveAt()` 一致的 `if(m_n > 0) m_n--;`，大幅消除批量关仓时的二次遍历开销。 |
 | **8.2** | **Low 清洁** | `hub/src/registry.rs:518` | **删除 `Registry::evict` 重复的 doc comment 标题行**。 |
 | **11.2** | **Low 维护** | `CopierCodec.mqh:685` | **`CopierPayloadReg` 与 `CopierPayloadHbt2` 提取公共构造器**：实现 DRY 原则，统一调用 `CopierBuildNodePayload`，消除两份完全相同代码未来可能引发的格式漂移风险。 |
+
+---
+
+### 三十一次审计：MODIFY节流缓存脱钩、缺N快照拦截拒空仓、CSPRNG安全真随机与测试夹具全修复（2026-10-24 01:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **1.1** | **High 资金安全** | `CopierReceiver.mq4:3510, 3585` | **MODIFY 节流签名解耦与缓存时机修正**：将 `g_stopSig` 签名缓存写入移至确认无需修改（`!StopsDiffer && !pendingDiff`）或成功入队出口，在节流命中返回时严禁记录签名，根治节流期内止损修改被永久吞掉的资金安全隐患。 |
+| **1.2 & 3.1** | **High 资金安全** | `CopierReceiver.mq4:4855` / `CopierCodec.mqh:498` | **快照缺失 N= 或解压失败拦截（彻底杜绝误全平）**：`CopierDecodeSnapshot` 在缺失 `N=`、解压失败、解码失败时显式返回 `-1`；接收端统一校验 `!declared || n < 0 || sentLong < 0 || n != expected` 触发损坏快照拦截防线，坚决不进入空仓平仓流程。 |
+| **1.3 & 1.8** | **Medium 状态与告警** | `CopierReceiver.mq4:5730, 6778` | **发送端重启重连重置会话快照与 Stop-Override**：在 `AcceptSeq` 发现 `ssid` 变更时清空该 sender 的 stop override 表并自增 `g_stOvEpoch`，同时复位 `g_lastSnapMs[si] = 0`，使新会话止损不被旧会话压制且无快照告警恢复灵敏度。 |
+| **1.4** | **Medium 风控安全** | `CopierReceiver.mq4:2796` | **出队持仓与手数扣减 0 下限防护**：在 `ExecuteQueue` 动态计算 `sHeldCount` 与 `sHeldLots` 时增加 `MathMax(0, ...)` 保护，杜绝极端下限穿透导致每 Sender 风控被绕过。 |
+| **1.5** | **Medium 越界防护** | `CopierReceiver.mq4:2643, 6280, 6310` | **动作队列生命周期清空与执行路径 senderIdx 越界守卫**：在 `OnInit`、`OnDeinit`、`LoadConfig`、`LoadConfigForHub` 成功时清空队列残余；在 `ExecuteQueue` 开头校验 `a.senderIdx` 有效性，越界直接丢弃并报警。 |
+| **1.6** | **Medium 强平完整性** | `CopierReceiver.mq4:4170` | **`CloseAllOurs` 严格检查 `PushAction` 返回值**：仅在入队成功时递增 `queued` 计数，失败时记录错误日志，杜绝风险强平静默漏平与日志虚假上报。 |
+| **1.7** | **Medium 性能** | `CopierReceiver.mq4:4307` | **`ConvergeSender` 动作队列扫描短路**：在 `g_qn > 0` 时才执行 $O(g\_qn)$ 的排队动作扫描，队列为空时瞬间跳过。 |
+| **1.10** | **Low 健壮** | `CopierReceiver.mq4:5549` | **`HandleOpenEvent` 满表限频告警**：满表丢弃事件时记录限流日志。 |
+| **1.12** | **Low 清洁** | `CopierReceiver.mq4:2620` | **`RotateQueue` 清空 head 槽位字符串**：防止被轮转出的槽位长期滞留死 action 字符串。 |
+| **1.13** | **Low 规范** | `CopierReceiver.mq4:4855` | **`sent` 快照长度解析采用 `CopierParseLong`**。 |
+| **2.1** | **High 测试崩溃** | `CopierSelfTest.mq4:1647` | **`TestSnapshotCapacity` 数组定容**：在解码前调用 `ArrayResize(back, CP_MAX_POSITIONS)`，根除运行时越界崩溃并恢复后续 17 个测试函数的执行。 |
+| **2.2 & 2.3** | **High 测试夹具** | `CopierSelfTest.mq4:173, 555, 573` | **修正自测测试夹具 UID 长度为标准 8 字符**：将 9 字符及 5-7 字符的非法夹具重构为 `"A"+StringFormat("%07d", i)`，使 300 仓快照往返与 2048 满载状态恢复获得 100% 真实有效测试覆盖。 |
+| **2.4** | **Medium 防御** | `CopierCodec.mqh:505` | **`CopierDecodeSnapshot` 数组容量自适应扩容与越界防护**：动态数组根据需要扩容，固定数组做最大边界截断。 |
+| **2.5** | **Medium 握手时效** | `CopierSender.mq4:1212` | **新接收端 bootstrap 豁免 15s 修复限速**：`isBootstrap` 时下限设为 1s，确保新接入节点在 1 秒内推送到位。 |
+| **2.6** | **Medium 平仓防抖** | `CopierSender.mq4:273, 1555` | **平仓检测 200ms 连续缺席防抖**：引入 `g_slotMissCount`，要求 slot 连续 2 个 tick 缺席才发送 `EmitClose`，消除终端单次枚举瞬时抖动引发的假平仓与假重开。 |
+| **2.8** | **Low 防抖** | `CopierSender.mq4:314` | **`IsRecentSnapHash` 环 TTL 覆盖 `SnapshotSeconds`**：将固定 5s 改为 `MathMax(15000, SnapshotSeconds*1000 + 5000)`，消除慢接收端被周期性误判 BEHIND。 |
+| **2.9 & 3.8** | **Low 优化** | `CopierCodec.mqh:344` | **压缩输出体积大于等于明文时自动回退 `0:` 明文**：杜绝不可压短负载网络报文膨胀。 |
+| **2.10** | **Low 规范** | `CopierCodec.mqh:357` | **`CopierDecompressField` 严格限定 pad 字符为 '0'..'3'**。 |
+| **3.2** | **Medium 内存** | `CopierTransport.mqh:95` | **`CP_SNDHWM` 优化为 64**：避免慢客户端打爆发送端内存。 |
+| **3.3** | **Medium 泄漏** | `CopierTransport.mqh:229, 282, 359` | **Socket 初始化前显式释放旧实例**：彻底消灭重复初始化时的 libzmq 句柄与内存泄漏。 |
+| **3.4** | **Medium 安全** | `CopierTransport.mqh:304` | **`ConnectReceiver` 循环前校验 CURVE ServerKey 一致性**。 |
+| **3.5** | **Medium 熵源** | `CopierDefs.mqh:920` | **`CopierNewUid` 增强熵源**：混合本地时间、服务器时间、开机毫秒、账号与递增计数器。 |
+| **3.6 & 3.7** | **Medium 配置** | `CopierConfig.mqh:126, 200` | **未闭合段头报错拒绝加载，重复配置项改为标准 last-wins 覆盖**。 |
+| **3.12** | **Low 容错** | `CopierCurveKey.mqh:245` | **`derivePublic` 返回空时作为系统错误保留文件，绝不误冲正规密钥**。 |
+| **3.13** | **Low 规范** | `CopierConfig.mqh:262` | **`SenderDeclaredMax` 统一大小写不敏感匹配**。 |
+| **4.1 & 4.2** | **Medium 状态** | `CopierState.mqh:1135, 1226` | **`Save` 检查写入返回值防损坏；`Load` 增加 `.tmp` 备份回退加载**。 |
+| **4.4 & 4.6** | **Low 性能** | `CopierLog.mqh:173, 265` | **增量维护日志字节消除每行 `FileSize` 系统调用；`Init` 释放旧句柄**。 |
+| **4.5** | **Low 规范** | `CopierSizing.mqh:161` | **`CP_SIZE_OFF` 原样穿透不乘 `symMultiplier`**。 |
+| **4.8** | **Low 驱逐** | `CopierPeers.mqh:118` | **驱逐键采用 `MathMax(seen, first)` 保护新探测 peer**。 |
+| **4.11** | **Low 模型** | `CopierModel.mqh:63` | **MT4 `CopierSymbolEnsure` 优先使用 `SymbolSelect`**。 |
+| **5.1** | **Medium 内存** | `hub/src/registry.rs:470` / `main.rs:2330` | **注册表容量驱逐与主循环侧表同步清理**：`ensure_capacity` 记录被淘汰 key，由主循环统一清理关联映射与告警锁存器，杜绝侧表内存泄漏。 |
+| **5.3** | **Medium 内存** | `hub/src/stats.rs:120` | **`by_topic`、`by_type` 增加 512 容量上限与 `*overflow*` 归并**。 |
+| **5.4** | **Medium 存活** | `hub/src/registry.rs:420` | **`note_stat` 同步更新 `last_seen`**：高频 STAT 流量全面参与节点存活与超时判定。 |
+| **5.8 & 5.9** | **Low 健壮** | `hub/src/main.rs:619, 1988` | **`split_once` 提取账号，浮点数采用 `parse_finite_f64` 过滤 NaN 与 inf**。 |
+| **6.1 & 6.2** | **High 安全** | `hub/src/users.rs:745` | **会话 Token 与初始密码升级为系统级 CSPRNG**：Windows 调用 `BCryptGenRandom`，Unix 读取 `/dev/urandom`。 |
+| **6.6 & 6.8** | **Medium 安全** | `hub/src/notifications.rs:755, 904` | **Webhook 拦截云元数据 SSRF；通知发送错误日志脱敏敏感 URL**。 |
+| **6.7** | **Medium 安全** | `hub/src/api.rs:2475` | **测试通知 URL 变更时禁止合并已存机密授权头**：杜绝利用测试接口外传密钥。 |
+| **6.9 & 6.10** | **Medium 容错** | `hub/src/audit.rs:542` / `config.rs:294` | **活动审计与配置历史采用 lossy 模式读取**：杜绝末尾字符撕裂导致全量历史空响应。 |
+| **6.11** | **Medium 安全** | `tools/reset_password.py:30` | **移除硬编码默认弱口令，缺省自动生成 12 字符高熵安全随机密码**。 |
 
 ---
 

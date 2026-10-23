@@ -2472,14 +2472,16 @@ async fn notifications_test(
             let s = st.lock_or_recover();
             let store = s.notif_store.lock_or_recover();
             if let Some(existing) = store.get(&ch.id) {
-                //--- The STORED type, not the incoming one: masking ran under
-                //--- the stored type, so restoring has to as well. See
-                //--- NotificationStore::upsert.
-                crate::notifications::merge_unmasked_config(
-                    &mut ch.config,
-                    &existing.config,
-                    &existing.channel_type,
-                );
+                // If url was modified in incoming test request, do not merge secret credentials from existing channel
+                let orig_url = existing.config.get("url").or_else(|| existing.config.get("webhook_url"));
+                let new_url = ch.config.get("url").or_else(|| ch.config.get("webhook_url"));
+                if orig_url == new_url || new_url.is_none() {
+                    crate::notifications::merge_unmasked_config(
+                        &mut ch.config,
+                        &existing.config,
+                        &existing.channel_type,
+                    );
+                }
             }
         }
         ch

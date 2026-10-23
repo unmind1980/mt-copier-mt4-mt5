@@ -113,9 +113,11 @@ private:
       //--- full: reuse the one that has been silent longest, whose row matters
       //--- least. Evicting the freshest would make a busy panel flicker.
       int oldest=0;
+      long oldestTime=MathMax(m_seen[0],m_first[0]);
       for(i=1;i<CP_MAX_PEERS;i++)
         {
-         if(m_seen[i]<m_seen[oldest]) oldest=i;
+         long curTime=MathMax(m_seen[i],m_first[i]);
+         if(curTime<oldestTime) { oldest=i; oldestTime=curTime; }
         }
       ResetSlot(oldest);
       m_name[oldest]=name;

@@ -341,7 +341,9 @@ string CopierCompressField(const string src)
    string z85Str="";
    if(!Z85::encode(z85Str,comp)) return "0:"+src;
 
-   return "1:"+(string)pad+":"+z85Str;
+   string compField="1:"+(string)pad+":"+z85Str;
+   if(StringLen(compField)>=len+2) return "0:"+src;
+   return compField;
   }
 
 string CopierDecompressField(const string field)
@@ -354,7 +356,8 @@ string CopierDecompressField(const string field)
      {
       string z85Str="";
       int pad=-1;
-      if(StringLen(field)>=4 && StringGetCharacter(field,3)==':')
+      int c2=(StringLen(field)>=4)?StringGetCharacter(field,2):0;
+      if(StringLen(field)>=4 && c2>='0' && c2<='3' && StringGetCharacter(field,3)==':')
         {
          pad=(int)StringToInteger(StringSubstr(field,2,1));
          z85Str=StringSubstr(field,4);
@@ -498,17 +501,26 @@ string CopierSnapshotHash(const string payload)
 int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
   {
    string n="";
-   if(!CopierKvGet(payload,"N",n)) return 0;
-   int count=(int)StringToInteger(n);
-   if(count<=0) return 0;                 // "N=0;R=" or "N=0"
+   if(!CopierKvGet(payload,"N",n)) return -1;
+   long countLong=CopierParseLong(n);
+   if(countLong<0) return -1;
+   if(countLong==0) return 0;                 // legitimately empty: "N=0;R=" or "N=0"
+   int count=(int)countLong;
+
+   int cap=ArraySize(out);
+   if(ArrayIsDynamic(out) && cap<count)
+     {
+      ArrayResize(out,count);
+      cap=count;
+     }
+   if(count>cap) count=cap;
    if(count>maxOut) count=maxOut;         // never trust the wire
 
    string recs="";
-   CopierKvGet(payload,"R",recs);
-   if(StringLen(recs)==0) return 0;
+   if(!CopierKvGet(payload,"R",recs) || StringLen(recs)==0) return -1;
 
    recs=CopierDecompressField(recs);
-   if(StringLen(recs)==0) return 0;
+   if(StringLen(recs)==0) return -1;
 
    string arr[];
    int got=StringSplit(recs,StringGetCharacter(CP_SEP_REC,0),arr);

@@ -92,7 +92,7 @@
 //--- newest one will still get through" guarantee once everything shares one
 //--- queue. The receiver drains at PollMs, so in practice this never fills;
 //--- it exists so a peer that goes away cannot grow the queue without bound.
-#define CP_SNDHWM 1000
+#define CP_SNDHWM 64
 #define CP_RCVHWM 1000
 
 #import "libzmq.dll"
@@ -226,6 +226,7 @@ public:
       //--- XPUB, not PUB. See the header: it publishes exactly like PUB and
       //--- additionally RECEIVES, which is what lets a receiver report back
       //--- over the same socket instead of needing one of its own.
+      if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
       m_pub=new Socket(m_ctx,ZMQ_XPUB);
       if(CheckPointer(m_pub)==POINTER_INVALID) return false;
       Hardening(m_pub);
@@ -278,6 +279,7 @@ public:
      {
       if(!InitContext()) return false;
 
+      if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);
@@ -291,6 +293,18 @@ public:
            {
             delete m_sub; m_sub=NULL;
             return false;
+           }
+         if(nEndpoints>1)
+           {
+            for(int k=1;k<nEndpoints;k++)
+              {
+               if(StringLen(endpoints[k])>0 && serverKeys[k]!=serverKeys[0])
+                 {
+                  Print("[copier] ERROR: Multiple senders with different CURVE server keys on one receiver socket is not supported by libzmq.");
+                  delete m_sub; m_sub=NULL;
+                  return false;
+                 }
+              }
            }
         }
       //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
@@ -356,6 +370,7 @@ public:
       string ep=CopierNormalizeEndpoint(endpoint);
       if(StringLen(ep)==0) return false;
 
+      if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);

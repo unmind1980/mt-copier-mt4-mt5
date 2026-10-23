@@ -1130,6 +1130,7 @@ bool LoadConfigFromInputs()
 
    g_log.Info("configured from EA inputs: one sender ("+g_sid[0]
               +"), magic "+(string)g_magic[0]+", endpoint "+g_epEvents[0]);
+   ClearQueue();
    return true;
   }
 
@@ -1776,6 +1777,7 @@ bool LoadConfigForHub()
    g_log.Info("central mode: "+IntegerToString(g_nSenders)+" sender(s) from "
               +CP_INI_PATH+" - subscribing to each sender's NID, plus control"
               +" for this account (NID "+(string)g_nid+")");
+   ClearQueue();
    return true;
   }
 
@@ -2619,6 +2621,9 @@ void RotateQueue()
    //--- head to tail in ONE assignment: the live region [H, H+Q-1] becomes
    //--- [H+1, H+Q], which is the same Q entries with the head last.
    g_q[g_qHead+g_qn]=g_q[g_qHead];
+   g_q[g_qHead].uid="";
+   g_q[g_qHead].sym="";
+   g_q[g_qHead].key="";
    g_qHead++;
   }
 
@@ -2643,6 +2648,14 @@ void ExecuteQueue()
       CopierAction a=g_q[g_qHead];
       int err=0;
       bool ok=false;
+
+      if(a.senderIdx<0 || a.senderIdx>=g_nSenders)
+        {
+         g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
+         ShiftQueue();
+         skipped++;
+         continue;
+        }
 
       //--- THE QUEUE DRAIN IS NOT THE CONVERGE LOOP, and it does not pass
       //--- through converge's gates. An action queued BEFORE the market shut
@@ -2793,8 +2806,8 @@ void ExecuteQueue()
               for(int k=0;k<sHeldBase[si];k++) sHeldBaseLots[si]+=g_locScratch[k].lots;
               sHeldBaseKnown[si]=true;
              }
-           int sHeldCount=sHeldBase[si]+sAddedCount[si];
-           double sHeldLots=sHeldBaseLots[si]+sAddedLots[si];
+           int sHeldCount=MathMax(0,sHeldBase[si]+sAddedCount[si]);
+           double sHeldLots=MathMax(0.0,sHeldBaseLots[si]+sAddedLots[si]);
            string sWhy="";
            if(!g_senderRisk[si].AllowOpen(a.lots,sHeldCount,sHeldLots,
                                            0,0.0,sWhy))
@@ -3502,30 +3515,27 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(desired.pexpire!=local.pexpire) pendingDiff=true;
      }
 
-   //--- Remember the inputs we just evaluated, so the next tick can answer
-   //--- "nothing moved" without repeating any of the work above. Recorded on
-   //--- BOTH outcomes: when a modify is queued, the next pass sees different
-   //--- local stops (or the same signature, if the broker has not applied it
-   //--- yet - which is correct, the throttle below still applies).
-   if(local.ticket!=0)
-     {
-      g_stopSig[sh].ticket=local.ticket;
-      g_stopSig[sh].epoch=g_stOvEpoch;
-      g_stopSig[sh].v[0]=desired.sl;
-      g_stopSig[sh].v[1]=desired.tp;
-      g_stopSig[sh].v[2]=desired.openPx;
-      g_stopSig[sh].v[3]=local.sl;
-      g_stopSig[sh].v[4]=local.tp;
-      g_stopSig[sh].v[5]=local.pprice;
-      g_stopSig[sh].v[6]=local.pstop;
-      g_stopSig[sh].v[7]=(double)local.pexpire;
-      g_stopSig[sh].v[8]=desired.pprice;
-      g_stopSig[sh].v[9]=desired.pstop;
-      g_stopSig[sh].v[10]=(double)desired.pexpire;
-     }
-
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
+     {
+      //--- Nothing to change: record signature so next tick can skip immediately
+      if(local.ticket!=0)
+        {
+         g_stopSig[sh].ticket=local.ticket;
+         g_stopSig[sh].epoch=g_stOvEpoch;
+         g_stopSig[sh].v[0]=desired.sl;
+         g_stopSig[sh].v[1]=desired.tp;
+         g_stopSig[sh].v[2]=desired.openPx;
+         g_stopSig[sh].v[3]=local.sl;
+         g_stopSig[sh].v[4]=local.tp;
+         g_stopSig[sh].v[5]=local.pprice;
+         g_stopSig[sh].v[6]=local.pstop;
+         g_stopSig[sh].v[7]=(double)local.pexpire;
+         g_stopSig[sh].v[8]=desired.pprice;
+         g_stopSig[sh].v[9]=desired.pstop;
+         g_stopSig[sh].v[10]=(double)desired.pexpire;
+        }
       return;
+     }
 
    //--- Say what was computed, once per UID.
    if(g_once.ShouldEmit("stopcalc|"+local.uid))
@@ -3583,6 +3593,24 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
               +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX),
               wantSl,wantTp,
               local.kind,local.ptype,actPPrice,actPStop,actPExp);
+
+   //--- Action queued: now record signature to throttle until broker applies or inputs change
+   if(local.ticket!=0)
+     {
+      g_stopSig[sh].ticket=local.ticket;
+      g_stopSig[sh].epoch=g_stOvEpoch;
+      g_stopSig[sh].v[0]=desired.sl;
+      g_stopSig[sh].v[1]=desired.tp;
+      g_stopSig[sh].v[2]=desired.openPx;
+      g_stopSig[sh].v[3]=local.sl;
+      g_stopSig[sh].v[4]=local.tp;
+      g_stopSig[sh].v[5]=local.pprice;
+      g_stopSig[sh].v[6]=local.pstop;
+      g_stopSig[sh].v[7]=(double)local.pexpire;
+      g_stopSig[sh].v[8]=desired.pprice;
+      g_stopSig[sh].v[9]=desired.pstop;
+      g_stopSig[sh].v[10]=(double)desired.pexpire;
+     }
   }
 
 //=====================================================================
@@ -4152,9 +4180,11 @@ int CloseAllOurs(const string reason)
       string uid=ResolveUid(g_scanScratch[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
-      PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
-                 g_scanScratch[i].ticket);
-      queued++;
+      if(PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
+                 g_scanScratch[i].ticket))
+         queued++;
+      else
+         g_log.Error("CloseAll: failed to queue close action for ticket "+(string)g_scanScratch[i].ticket+" uid "+uid);
      }
    if(StringLen(reason)>0)
       g_log.Error(reason+" - queueing closes for "+(string)queued
@@ -4287,7 +4317,7 @@ void ConvergeSender(const int si)
          //--- and for TRIM only when volume has actually converged to the desired level.
          //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
          //--- causes duplicate execution on the next tick.
-         bool hasQueued=ActionQueued(si,CP_ACT_CLOSE,d.uid) || ActionQueued(si,CP_ACT_TRIM,d.uid);
+         bool hasQueued=(g_qn>0) && (ActionQueued(si,CP_ACT_CLOSE,d.uid) || ActionQueued(si,CP_ACT_TRIM,d.uid));
          if(!hasQueued)
            {
             double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
@@ -4837,9 +4867,10 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    int n=CopierDecodeSnapshot(e.payload,g_scratch,CP_MAX_POSITIONS);
 
    string cnt="";
-   int sent=0;
+   long sentLong=-1;
    bool declared=CopierKvGet(e.payload,"N",cnt);
-   if(declared) sent=(int)StringToInteger(cnt);
+   if(declared) sentLong=CopierParseLong(cnt);
+   int sent=(int)sentLong;
 
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
    //---
@@ -4863,7 +4894,7 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //--- Returning here also leaves g_snapHash untouched, so the sender sees a
    //--- stale receipt and repairs the snapshot on its next pass.
    int expected=(sent>CP_MAX_POSITIONS)?CP_MAX_POSITIONS:sent;
-   if(declared && n!=expected)
+   if(!declared || n<0 || sentLong<0 || n!=expected)
      {
       //--- Rate-limited, and counted.
       //---
@@ -5528,7 +5559,13 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
      {
       if(g_desired[base+i].uid==p.uid) { g_desired[base+i]=p; return; }
      }
-   if(g_desiredCount[si]>=CP_MAX_POSITIONS) return;
+   if(g_desiredCount[si]>=CP_MAX_POSITIONS)
+     {
+      if(g_once.ShouldEmit("desiredfull|"+(string)si))
+         g_log.Error("desired positions table is full ("+(string)CP_MAX_POSITIONS
+                    +"); open event dropped for "+p.uid);
+      return;
+     }
    g_desired[base+g_desiredCount[si]]=p;
    g_desiredCount[si]++;
   }
@@ -5718,6 +5755,13 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
       g_lastSeq[si][CP_STREAM_SNAP]=-1;
       g_ready[si]=false;
       g_desiredCount[si]=0;
+      g_lastSnapMs[si]=0;
+      int base=si*CP_MAX_POSITIONS;
+      for(int d=0;d<CP_MAX_POSITIONS;d++)
+        {
+         if(StringLen(g_desired[base+d].uid)>0) StopsForget(g_desired[base+d].uid);
+        }
+      g_stOvEpoch++;
       g_log.Info("sender "+g_sid[si]+" new session "+e.ssid+" -> resync");
      }
    //--- per-stream watermark: a snapshot must never invalidate an event
@@ -6262,12 +6306,14 @@ int OnInit()
    ReportUnreadableOwnOrders();
    ReportOrphanedMirrors();
 
+   ClearQueue();
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   ClearQueue();
 
    //--- remove the panel objects: a removed EA must not leave an unreadable
    //--- rectangle on the chart, and a re-attach would draw a second one

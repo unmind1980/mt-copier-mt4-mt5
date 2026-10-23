@@ -291,7 +291,8 @@ impl ConfigStore {
 
     /// The body of one specific revision, read from the file.
     fn revision_body(&self, node: &str, rev: u64) -> Option<String> {
-        let text = std::fs::read_to_string(&self.path).ok()?;
+        let bytes = std::fs::read(&self.path).ok()?;
+        let text = String::from_utf8_lossy(&bytes);
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -315,10 +316,11 @@ impl ConfigStore {
     /// (`GET .../config/revision/{rev}`), which reads the file once for one
     /// row instead of once for all of them.
     pub fn history(&self, node: &str, limit: usize) -> Vec<Value> {
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(t) => t,
+        let bytes = match std::fs::read(&self.path) {
+            Ok(b) => b,
             Err(_) => return Vec::new(),
         };
+        let text = String::from_utf8_lossy(&bytes);
         let mut out: Vec<Value> = Vec::new();
         for line in text.lines() {
             if line.trim().is_empty() {

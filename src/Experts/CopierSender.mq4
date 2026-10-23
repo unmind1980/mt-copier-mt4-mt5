@@ -272,6 +272,7 @@ int              g_prevSlotScratch[CP_MAX_POSITIONS];
 //--- It would take ~2.1 billion ticks - decades at 10 Hz - to wrap.
 int              g_slotStamp[CP_MAX_POSITIONS];   // index: slot in g_prev
 int              g_rowStamp[CP_MAX_POSITIONS];    // index: row in this tick
+int              g_slotMissCount[CP_MAX_POSITIONS];// consecutive ticks slot was missing from scan
 double           g_openLots[CP_MAX_POSITIONS];    // initial lots at position opening
 int              g_stampGen=1;
 
@@ -309,9 +310,10 @@ bool IsRecentSnapHash(const string h)
    if(StringLen(h)==0) return false;
    if(h==g_snapHash || h==g_latestSnapHash) return true;
    long now=CopierNowMs();
+   long ttlMs=MathMax(15000,(long)SnapshotSeconds*1000+5000);
    for(int i=0;i<CP_RECENT_HASH_COUNT;i++)
      {
-      if(g_recentSnapHashes[i]==h && (now-g_recentSnapHashTime[i]<=5000)) return true;
+      if(g_recentSnapHashes[i]==h && (now-g_recentSnapHashTime[i]<=ttlMs)) return true;
      }
    return false;
   }
@@ -717,6 +719,7 @@ int OnInit()
    g_hubOn=false;
    g_prev.Clear();
    ArrayInitialize(g_openLots,0.0);
+   ArrayInitialize(g_slotMissCount,0);
 
    //--- restore UID<->ticket mapping so a restart does not re-announce
    //--- positions that are already open (which would double them up)
@@ -1208,8 +1211,11 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    //--- Q5: at most one repair per receiver per SnapshotSeconds. When
    //--- SnapshotSeconds is 0 the periodic broadcast is off, so repairs are the
    //--- only way state moves - the floor keeps that from becoming a flood.
+   //--- In bootstrap mode, we enforce only a 1s floor so newly attached peers
+   //--- get their snapshot within 1s even if a prior repair was recently emitted.
    long floorSec=(SnapshotSeconds>0)? SnapshotSeconds : 1;
-   if(g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
+   if(!isBootstrap && g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
+   if(isBootstrap && g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<1000) return;
 
    if(StringLen(g_snapPayload)==0) return;       // nothing sent yet
 
@@ -1486,6 +1492,7 @@ void OnTimer()
       else
         {
          g_slotStamp[slot]=g_stampGen;
+         g_slotMissCount[slot]=0;
          bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false;
          double prevLots=0.0;
          int prevKind=0;
@@ -1550,9 +1557,16 @@ void OnTimer()
    //--- 3) emit closes for anything that vanished (slot valid but not stamped this tick, 0 string lookups)
    for(int k=0;k<CP_MAX_POSITIONS;k++)
      {
-      if(g_slotStamp[k]==g_stampGen) continue;
+      if(g_slotStamp[k]==g_stampGen)
+        {
+         g_slotMissCount[k]=0;
+         continue;
+        }
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
+      g_slotMissCount[k]++;
+      if(g_slotMissCount[k]<2) continue; // debounce: require 2 consecutive missed scans (~200ms) to eliminate broker/terminal enumeration jitter
+      g_slotMissCount[k]=0;
       EmitClose(q);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
       g_stateDirty=true;

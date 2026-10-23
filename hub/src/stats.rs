@@ -23,6 +23,7 @@ const LOOP_WARN_PER_SEC: f64 = 200.0;
 /// appears, such a node's extra REGs would otherwise be entirely silent. See
 /// the warning in `print_and_reset` for the measurement that motivated this.
 const REG_WARN_PER_SEC: f64 = 1.0;
+const MAX_STATS_KEYS: usize = 512;
 
 pub struct Stats {
     pub forwarded: u64,
@@ -123,13 +124,17 @@ impl Stats {
         self.total_forwarded += 1;
         if let Some(c) = self.by_topic.get_mut(topic) {
             *c += 1;
-        } else {
+        } else if self.by_topic.len() < MAX_STATS_KEYS {
             self.by_topic.insert(topic.to_string(), 1);
+        } else {
+            *self.by_topic.entry("*overflow*".to_string()).or_insert(0) += 1;
         }
         if let Some(c) = self.by_type.get_mut(ty) {
             *c += 1;
-        } else {
+        } else if self.by_type.len() < MAX_STATS_KEYS {
             self.by_type.insert(ty.to_string(), 1);
+        } else {
+            *self.by_type.entry("*overflow*".to_string()).or_insert(0) += 1;
         }
     }
 
@@ -138,8 +143,10 @@ impl Stats {
         self.total_control += 1;
         if let Some(c) = self.control_by_type.get_mut(ty) {
             *c += 1;
-        } else {
+        } else if self.control_by_type.len() < MAX_STATS_KEYS {
             self.control_by_type.insert(ty.to_string(), 1);
+        } else {
+            *self.control_by_type.entry("*overflow*".to_string()).or_insert(0) += 1;
         }
     }
 

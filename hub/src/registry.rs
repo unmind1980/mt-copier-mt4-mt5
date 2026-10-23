@@ -281,6 +281,7 @@ pub struct Registry {
     /// shrinking - a table that only ever grows is a leak, and one that shrinks
     /// invisibly is a mystery.
     pub evicted: u64,
+    capacity_evicted: Vec<String>,
 }
 
 /// How long an OFFLINE node is kept before being forgotten entirely.
@@ -416,6 +417,7 @@ impl Registry {
         wait_items: Option<Vec<ReceiverWaitItem>>,
     ) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.last_seen = Instant::now();
             if !risk.is_empty() {
                 e.blocked = blocked;
                 e.risk = risk.to_string();
@@ -473,6 +475,7 @@ impl Registry {
                 if let Some(oldest_key) = self.nodes.iter().min_by_key(|(_, n)| n.last_seen).map(|(k, _)| k.clone()) {
                     self.nodes.remove(&oldest_key);
                     self.evicted += 1;
+                    self.capacity_evicted.push(oldest_key);
                 }
             }
         }
@@ -522,7 +525,7 @@ impl Registry {
     /// one registry event that cannot be recovered by asking the node, so the
     /// audit log needs to say WHICH one rather than that it happened.
     pub fn evict(&mut self, now: Instant) -> Vec<String> {
-        let mut gone: Vec<String> = Vec::new();
+        let mut gone: Vec<String> = std::mem::take(&mut self.capacity_evicted);
         self.nodes.retain(|k, n| {
             let keep = now.saturating_duration_since(n.last_seen) < EVICT_AFTER;
             if !keep {

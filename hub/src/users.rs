@@ -741,12 +741,44 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
-/// A random session token. NOT from `/dev/urandom` (no crate available):
-/// three `RandomState` hashes of a nanosecond counter plus the counter
-/// itself, folded together. This is session-scope entropy behind a
-/// firewall-bound port and it rotates on every login - the passwords
-/// carry the real entropy. Honest, and documented rather than faked.
+#[cfg(windows)]
+fn os_random_bytes(dest: &mut [u8]) -> bool {
+    #[link(name = "bcrypt")]
+    extern "system" {
+        fn BCryptGenRandom(
+            h_algorithm: *mut std::ffi::c_void,
+            pb_buffer: *mut u8,
+            cb_buffer: u32,
+            dw_flags: u32,
+        ) -> i32;
+    }
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
+    unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            dest.as_mut_ptr(),
+            dest.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        ) == 0
+    }
+}
+
+#[cfg(not(windows))]
+fn os_random_bytes(dest: &mut [u8]) -> bool {
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        f.read_exact(dest).is_ok()
+    } else {
+        false
+    }
+}
+
+/// A random session token generated using OS CSPRNG (BCryptGenRandom on Windows, /dev/urandom on Unix).
 pub fn random_token() -> String {
+    let mut out = [0u8; 32];
+    if os_random_bytes(&mut out) {
+        return hex(&out);
+    }
     let rs = [RandomState::new(), RandomState::new(), RandomState::new()];
     let nanos = || {
         SystemTime::now()
@@ -754,7 +786,6 @@ pub fn random_token() -> String {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0)
     };
-    let mut out = [0u8; 32];
     for i in 0..4u64 {
         let seed = nanos() ^ i.wrapping_mul(0x9e3779b97f4a7c15);
         let mut h1 = rs[0].build_hasher();
@@ -769,9 +800,17 @@ pub fn random_token() -> String {
     hex(&out)
 }
 
-/// A one-time bootstrap password: 12 chars from a URL-safe alphabet.
+/// A one-time bootstrap password: 12 chars from a URL-safe alphabet via CSPRNG.
 pub fn random_password() -> String {
     const ALPHA: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    let mut rand_bytes = [0u8; 12];
+    if os_random_bytes(&mut rand_bytes) {
+        let mut out = String::new();
+        for &b in &rand_bytes {
+            out.push(ALPHA[(b as usize) % ALPHA.len()] as char);
+        }
+        return out;
+    }
     let mut h = RandomState::new().build_hasher();
     h.write_u64(
         SystemTime::now()

@@ -27,7 +27,7 @@ def hash_password(password, salt, rounds=4096):
 def main():
     parser = argparse.ArgumentParser(description="Reset or set user password for copier-hub")
     parser.add_argument("--user", default="admin", help="Username to reset (default: admin)")
-    parser.add_argument("--password", default="admin123456", help="New password (default: admin123456)")
+    parser.add_argument("--password", default=None, help="New password (if omitted, a secure random password is generated)")
     parser.add_argument("--role", default="admin", choices=["admin", "operator", "viewer"], help="Role (default: admin)")
     args = parser.parse_args()
 
@@ -40,8 +40,15 @@ def main():
             print(f"[WARN] Failed to read {USERS_FILE}: {e}, initializing fresh user list.")
             users = []
 
+    pw = args.password
+    if not pw:
+        pw = secrets.token_urlsafe(12)
+        print(f"[RESET] Generated random password for '{args.user}': {pw}")
+    else:
+        print(f"[RESET] Updating password for '{args.user}'...")
+
     salt = secrets.token_hex(8)
-    pw_hash = hash_password(args.password, salt)
+    pw_hash = hash_password(pw, salt)
 
     found = False
     for u in users:

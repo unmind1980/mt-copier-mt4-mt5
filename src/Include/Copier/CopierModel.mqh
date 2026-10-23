@@ -62,6 +62,7 @@ bool CopierSymbolEnsure(const string sym)
 #ifdef __MQL5__
    return SymbolSelect(sym,true);
 #else
+   if(SymbolSelect(sym,true)) return true;
    return MarketInfo(sym,MODE_ASK)>0.0;
 #endif
   }

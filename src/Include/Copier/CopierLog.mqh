@@ -172,6 +172,7 @@ public:
 
    void              Init(const string tag,const int minLevel=CP_LOG_WARN)
      {
+      if(m_handle!=INVALID_HANDLE) { FileClose(m_handle); m_handle=INVALID_HANDLE; }
       m_base=tag;
       m_minLevel=minLevel;
       //--- continue in the generation we were last writing to, appending.
@@ -264,8 +265,12 @@ private:
 
       FileWrite(m_handle,line);
       FileFlush(m_handle);
-      m_bytes=(long)FileSize(m_handle);
-      if(m_bytes>CP_MAX_LOG_BYTES) Rotate();
+      m_bytes += StringLen(line) + 2;
+      if(m_bytes>CP_MAX_LOG_BYTES)
+        {
+         m_bytes=(long)FileSize(m_handle);
+         if(m_bytes>CP_MAX_LOG_BYTES) Rotate();
+        }
      }
   };
 

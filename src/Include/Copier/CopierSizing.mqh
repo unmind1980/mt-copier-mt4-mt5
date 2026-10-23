@@ -158,7 +158,7 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
    rejected=false;
    double raw=0.0;
    if(mode==CP_SIZE_FIXED)               raw=param*symMultiplier;
-   else if(mode==CP_SIZE_OFF)            raw=senderLots*symMultiplier;
+   else if(mode==CP_SIZE_OFF)            raw=senderLots;
    else                                  raw=senderLots*param*symMultiplier;
    if(raw<=0.0) { rejected=true; return 0.0; }
 

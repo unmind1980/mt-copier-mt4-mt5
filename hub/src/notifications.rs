@@ -756,7 +756,13 @@ async fn send_telegram(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Telegram request failed: {}", e))?;
+        .map_err(|e| {
+            if let Some(status) = e.status() {
+                format!("Telegram request failed: HTTP {}", status)
+            } else {
+                "Telegram request failed: connection error".to_string()
+            }
+        })?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -815,7 +821,13 @@ async fn send_wecom(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("WeCom request failed: {}", e))?;
+        .map_err(|e| {
+            if let Some(status) = e.status() {
+                format!("WeCom request failed: HTTP {}", status)
+            } else {
+                "WeCom request failed: connection error".to_string()
+            }
+        })?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -879,7 +891,13 @@ async fn send_dingtalk(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("DingTalk request failed: {}", e))?;
+        .map_err(|e| {
+            if let Some(status) = e.status() {
+                format!("DingTalk request failed: HTTP {}", status)
+            } else {
+                "DingTalk request failed: connection error".to_string()
+            }
+        })?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
@@ -903,6 +921,11 @@ async fn send_webhook(
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("Webhook URL must begin with http:// or https://".to_string());
+    }
+
+    let host = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("").split(':').next().unwrap_or("");
+    if host == "169.254.169.254" || host.eq_ignore_ascii_case("metadata.google.internal") || host == "fd00:ec2::254" {
+        return Err("Webhook URL points to prohibited cloud metadata service".to_string());
     }
 
     let method_str = channel
@@ -940,7 +963,13 @@ async fn send_webhook(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Webhook request failed: {}", e))?;
+        .map_err(|e| {
+            if let Some(status) = e.status() {
+                format!("Webhook request failed: HTTP {}", status)
+            } else {
+                "Webhook request failed: connection error".to_string()
+            }
+        })?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();

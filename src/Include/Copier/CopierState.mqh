@@ -1132,19 +1132,25 @@ public:
       int h=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI);
       if(h==INVALID_HANDLE) return false;   // the OLD file is untouched
 
-      FileWrite(h,CP_STATE_TAG_HDR+header);
+      bool writeOk=true;
+      if(FileWrite(h,CP_STATE_TAG_HDR+header)<=0) writeOk=false;
       int written=0;
       int n=count;
       if(n>CP_STATE_MAX_LINES) n=CP_STATE_MAX_LINES;
-      for(int i=0;i<n;i++)
+      for(int i=0;i<n && writeOk;i++)
         {
          if(StringLen(pos[i].uid)!=CP_UID_LEN) continue;
-         FileWrite(h,CP_STATE_TAG_POS+CopierEncodeRec(pos[i]));
+         if(FileWrite(h,CP_STATE_TAG_POS+CopierEncodeRec(pos[i]))<=0) { writeOk=false; break; }
          written++;
         }
-      FileWrite(h,CP_STATE_TAG_END+(string)written);
+      if(writeOk && FileWrite(h,CP_STATE_TAG_END+(string)written)<=0) writeOk=false;
       FileFlush(h);
       FileClose(h);
+      if(!writeOk)
+        {
+         FileDelete(tmp);
+         return false;
+        }
 
       //--- Swap the successor over the old file. No FileCopy (not portable)
       //--- and no FileMove (not available): read the successor back and
@@ -1223,7 +1229,14 @@ public:
       FileClose(h);
       //--- truncated / torn file: caller must fall back to rebuilding
       //--- from order comments rather than trusting this
-      if(expected<0 || expected!=got) return false;
+      if(expected<0 || expected!=got)
+        {
+         if(StringFind(path,".tmp")<0)
+           {
+            return Load(path+".tmp",header,pos,count);
+           }
+         return false;
+        }
       count=got;
       return true;
      }

@@ -920,15 +920,21 @@ string CopierFmtDouble(const double v,const int digits)
 string CopierNewUid()
   {
    static bool s_seeded=false;
+   static uint s_counter=0;
+   s_counter++;
    if(!s_seeded)
      {
-      MathSrand((int)(CopierNowMs()%2147483647)+(int)CopierAccountLogin());
+      uint seed=(uint)(CopierNowMs()&0x7FFFFFFF)
+                ^ (uint)CopierAccountLogin()
+                ^ (uint)TimeLocal()
+                ^ (uint)TimeCurrent();
+      MathSrand((int)seed);
       s_seeded=true;
      }
    string s="";
    for(int i=0;i<CP_UID_LEN;i++)
      {
-      int idx=MathRand()%32;
+      int idx=(MathRand()+(int)s_counter)%32;
       s+=StringSubstr(CP_UID_ALPHA,idx,1);
      }
    return s;

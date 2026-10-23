@@ -539,10 +539,11 @@ impl Audit {
         }
 
         // 1. Read active file
-        let mut text = String::new();
+        let mut raw_bytes = Vec::new();
         if let Ok(mut f) = File::open(&self.path) {
-            let _ = f.read_to_string(&mut text);
+            let _ = f.read_to_end(&mut raw_bytes);
         }
+        let text = String::from_utf8_lossy(&raw_bytes);
 
         // A torn last line is skipped, not fatal - and counted, because it is
         // a crash mid-append and that is worth knowing. A bad line in the

@@ -127,6 +127,12 @@ public:
            {
             int e=StringFind(line,"]");
             if(e>1) section=Trim(StringSubstr(line,1,e-1));
+            else
+              {
+               Print("CopierIni: ERROR - malformed section header '",line,"' in ",path);
+               FileClose(h);
+               return false;
+              }
             continue;
            }
          if(first==";" || first=="#") continue;   // comment
@@ -197,7 +203,7 @@ public:
         {
          if(StringCompare(m_secName[s],section,false)!=0) continue;
          int e=m_secStart[s]+m_secLen[s];
-         for(int i=m_secStart[s];i<e;i++)
+         for(int i=e-1;i>=m_secStart[s];i--)
             if(StringCompare(m_key[i],key,false)==0) return m_val[i];
         }
       return deflt;
@@ -257,6 +263,7 @@ public:
       for(int s=0;s<m_nSec;s++)
         {
          string nm=m_secName[s];
+         StringToLower(nm);
          int n=StringLen(nm);
          if(n<7) continue;                       // "sender" + >= 1 digit
          if(StringFind(nm,"sender")!=0) continue;

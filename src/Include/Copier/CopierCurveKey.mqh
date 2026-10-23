@@ -242,7 +242,13 @@ private:
       //--- whose public side the operator has already copied to the far
       //--- end - i.e. a link that never comes up, with a key file that
       //--- looks perfectly fine.
-      if(Z85::derivePublic(sec)!=pub) return CP_KEY_FAILED;
+      string derived=Z85::derivePublic(sec);
+      if(StringLen(derived)==0)
+        {
+         // DLL derive failed (not necessarily corrupt file) - keep existing file and fail safely
+         return CP_KEY_FAILED;
+        }
+      if(derived!=pub) return CP_KEY_FAILED;
 
       return CP_KEY_READ;
      }

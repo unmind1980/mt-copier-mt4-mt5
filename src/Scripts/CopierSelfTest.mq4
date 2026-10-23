@@ -170,7 +170,7 @@ void TestSnapshot()
    ArrayResize(smallArr,3);
    for(int i=0;i<3;i++)
      {
-      smallArr[i]=MakePos("U"+IntegerToString(10000000+i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
+      smallArr[i]=MakePos("A"+StringFormat("%07d",i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
      }
    string smallPayload=CopierEncodeSnapshot(smallArr,3);
    Ok("snapshot: small payload (<500B) uses uncompressed prefix R=0:",StringFind(smallPayload,";R=0:")>0);
@@ -179,7 +179,7 @@ void TestSnapshot()
    ArrayResize(bigArr,300);
    for(int i=0;i<300;i++)
      {
-      bigArr[i]=MakePos("U"+IntegerToString(10000000+i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
+      bigArr[i]=MakePos("A"+StringFormat("%07d",i),i+1,"EURUSD",CP_SIDE_BUY,0.01,1.085,0,0,0,1780000000+i);
      }
    string bigPayload=CopierEncodeSnapshot(bigArr,300);
    Ok("snapshot: big payload (>=500B) uses compression prefix R=1:",StringFind(bigPayload,";R=1:")>0);
@@ -552,7 +552,7 @@ void TestStateFile()
    ArrayResize(fullArr,CP_STATE_MAX_LINES);
    for(int k=0;k<CP_STATE_MAX_LINES;k++)
      {
-      fullArr[k]=MakePos("FULL"+IntegerToString(k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
+      fullArr[k]=MakePos("F"+StringFormat("%07d",k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
      }
    bool fullSaved=CopierStateFile::Save(path,"FULL_2048",fullArr,CP_STATE_MAX_LINES);
    Ok("state: 2048 positions full save",fullSaved);
@@ -570,7 +570,7 @@ void TestStateFile()
    ArrayResize(overArr,CP_STATE_MAX_LINES+1);
    for(int k=0;k<CP_STATE_MAX_LINES+1;k++)
      {
-      overArr[k]=MakePos("OVER"+IntegerToString(k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
+      overArr[k]=MakePos("O"+StringFormat("%07d",k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
      }
    bool overSaved=CopierStateFile::Save(path,"OVER_2049",overArr,CP_STATE_MAX_LINES+1);
    Ok("state: 2049 positions save clamps to 2048",overSaved);
@@ -709,7 +709,7 @@ void TestConfig()
    FileWrite(h,"id=c");
    FileClose(h);
 
-   CopierIni gap;
+   static CopierIni gap;
    Ok("config: load gap fixture",gap.Load(path));
    OkInt("config: a gap truncates the count to one",gap.SenderCount(),1);
    OkInt("config: ...but the declared max still sees sender2",gap.SenderDeclaredMax(),2);
@@ -728,7 +728,7 @@ void TestConfig()
    FileWrite(h,"maxlotsperposition=1.0");
    FileClose(h);
 
-   CopierIni odd;
+   static CopierIni odd;
    Ok("config: load odd-name fixture",odd.Load(path));
    OkInt("config: a non-numeric sender section is not a sender",odd.SenderDeclaredMax(),0);
    OkInt("config: ...and it does not extend the count",odd.SenderCount(),1);
@@ -745,7 +745,7 @@ void TestConfig()
          FileWrite(h,"k=v");
         }
       FileClose(h);
-      CopierIni secOver;
+      static CopierIni secOver;
       Ok("config: sections exceeding CP_INI_SECTIONS is rejected", !secOver.Load(path));
       FileDelete(path);
      }
@@ -1645,6 +1645,7 @@ void TestSnapshotCapacity()
       CopierDecodeEnv(wire,e)==CP_ERR_NONE);
 
    CopierPos back[];
+   ArrayResize(back,CP_MAX_POSITIONS);
    int n=CopierDecodeSnapshot(e.payload,back,CP_MAX_POSITIONS);
    Ok("capacity: ...with every record intact",n==CP_MAX_POSITIONS);
    Ok("capacity: ticket preserves full 64-bit value",back[0].ticket==9223372036854775807);
