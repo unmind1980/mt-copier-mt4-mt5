@@ -2504,6 +2504,18 @@ async fn notifications_test(
             .into_response();
     };
 
+    if target_channel.channel_type == "webhook" {
+        if let Some(url) = target_channel.config.get("url").and_then(|u| u.as_str()) {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "ok": false, "error": "webhook URL must begin with http:// or https://" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()

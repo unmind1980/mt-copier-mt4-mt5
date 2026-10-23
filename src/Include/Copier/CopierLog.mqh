@@ -370,6 +370,9 @@ public:
         {
          if(m_last[i]<m_last[oldest]) oldest=i;
         }
+      int oldH=(int)(HashOf(m_key[oldest])&(CP_ONCE_LOOKUP-1));
+      if(m_lookup[oldH]==oldest+1) m_lookup[oldH]=0;
+
       m_key[oldest]=key;
       m_last[oldest]=now;
       m_lookup[h]=oldest+1;

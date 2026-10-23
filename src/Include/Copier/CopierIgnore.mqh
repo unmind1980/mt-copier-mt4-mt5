@@ -157,7 +157,7 @@ public:
 
    bool              Has(const string uid) const
      {
-      if(StringLen(uid)==0) return false;
+      if(m_n==0 || StringLen(uid)!=CP_UID_LEN) return false;
       for(int i=0;i<m_n;i++)
         {
          if(m_uid[i]==uid) return true;

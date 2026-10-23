@@ -4257,7 +4257,18 @@ void ConvergeSender(const int si)
       int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
         {
-         g_seen.ForgetUidActions(g_sid[si],d.uid);
+         //--- Clear seen keys only when there is NO in-flight close/trim queued,
+         //--- and for TRIM only when volume has actually converged to the desired level.
+         //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
+         //--- causes duplicate execution on the next tick.
+         bool hasQueued=ActionQueued(si,CP_ACT_CLOSE,d.uid) || ActionQueued(si,CP_ACT_TRIM,d.uid);
+         if(!hasQueued)
+           {
+            if(g_locScratch[li].lots<=d.lots+0.0001)
+               g_seen.ForgetUidActions(g_sid[si],d.uid);
+            else
+               g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
+           }
 
          //--- NOTE: no g_everOpened.Add() here any more.
          //---

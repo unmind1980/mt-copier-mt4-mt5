@@ -369,6 +369,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十四次审计** | 2026-10-23 11:40 | 全栈审查报告缺陷闭环（流重置、状态落盘、鉴权防注入） | 全栈安全 |
 | **二十五次审计** | 2026-10-23 13:40 | 跨节点主题前缀碰撞消除、空注释API退化根治、双向STAT与WebUI全面闭环 | 全栈安全与性能 |
 | **二十六次审计** | 2026-10-23 18:30 | 魔法过滤纯数字校验、状态文件满载边界自洽、挂单宽限死循环与配置事务提交 | 全栈健壮与性能 |
+| **二十七次审计** | 2026-10-23 20:20 | 跨 Tick 动作出队幂等锁防护、固定手数减仓等比广播与挂单改期 GTC 闭环 | 核心逻辑与全栈优化 |
 
 ---
 
@@ -798,6 +799,28 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **H4** | **Low 清洁** | `hub/src/alerts.rs:141, 161, 241` | **清理死字段 `last_risk_blocked`**：保持 Rust Hub 告警引擎数据结构整洁。 |
 | **TEST-01** | **Medium 测试** | `CopierSelfTest.mq4:550, 2318, 2345` | **补充 MQL 级自测试用例**：新增 `IsTopicForReceiver` 主题严格过滤测试、`AllowsLong` 脏输入防手动单 0 误匹配测试、`CopierStateFile` 2048 满载边界保存与读取测试。 |
 | **TEST-02** | **Medium 测试** | `hub/src/audit.rs:1065` | **补充 Rust Hub 游标分页与溢出单元测试**：新增 `read_pagination_since_and_saturation` 单元测试，覆盖 `since > 0` 正向读取与 `u64::MAX` 边界安全。 |
+
+---
+
+### 二十七次审计：跨 Tick 动作出队幂等锁防护、固定手数减仓等比广播与挂单改期 GTC 闭环（2026-10-23 20:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **L-01** | **High 逻辑** | `CopierReceiver.mq4:4260` | **`ExecuteQueue` 分批出队跨 Tick 期间 `g_seen` 幂等锁保护**：在 `ConvergeSender` 中增加在途动作判断 `ActionQueued(si, CP_ACT_CLOSE, d.uid) || ActionQueued(si, CP_ACT_TRIM, d.uid)`；对减仓仅当本地持仓手数已实际收敛至目标手数（`g_locScratch[li].lots <= d.lots + 0.0001`）时才清理 TRIM 记录，彻底杜绝经纪商异步回报期间二次减仓甚至全平的风险。 |
+| **L-02** | **High 逻辑** | `CopierSender.mq4:275, 423, 565, 715, 1415, 1545` | **`FixedLotSize > 0` 模式下部分平仓按比例传导广播**：在 Sender 跟踪每个持仓的开仓初始手数 `g_openLots[]`，当发生部分平仓（`actual < initLots`）时按留存比例 `NormalizeDouble(FixedLotSize * (actual / initLots), 2)` 缩放广播手数，解决接收端无法感知发送端减仓的缺陷。 |
+| **L-03** | **Medium 逻辑** | `CopierModel.mqh:785` | **MT4 ECN 建仓成功时保持 `outErr = 0` 规范契约**：补设止损失败时打印警报日志，但保持 `outErr = 0`，遵守开仓成功契约并交给后续 Tick converge 自动重试补设止损。 |
+| **L-04** | **Medium 逻辑** | `CopierModel.mqh:990, 1010` | **`CopierModifyPendingOrder` 清除挂单有效期改为 GTC 支持**：当 `expire == 0` 时，MT5 显式设置 `req.type_time = ORDER_TIME_GTC;`，MT4 设置 `exp = 0;`，彻底解决挂单无法清除过期时间改回永久有效（GTC）的缺陷。 |
+| **L-05** | **Medium 逻辑** | `CopierSender.mq4:1215, 1235` | **Hub 模式下 `SnapRepairMaybe` 定向补发快照刷新时间戳**：在发出快照后调用 `NoteRecentSnapHash(g_latestSnapHash)` 刷新 5000ms 衰减时钟，防止接收端回执掉出 5s 窗口误判失步。 |
+| **L-06** | **Low 边界** | `CopierFilter.mqh:150` | **`CopierParseHhMm` 严格校验纯数字与分段**：校验 `n == 2` 且小时与分钟必须均为非空纯数字，彻底杜绝非法时段字符串（如 `"00:00-abc:def"`）解析为 `00:00` 误触发全天放行。 |
+| **L-08** | **Low 边界** | `hub/src/api.rs:2508` | **`notifications_test` 增加 Webhook URL 协议前缀检查**：预先校验 URL 必须以 `http://` 或 `https://` 开头。 |
+| **L-09** | **Low 脚本** | `tools/logcheck.py:34` | **`logcheck.py` 补充顶部 `import os`**：彻底解决调用 `log_gen_order` 时抛出 `NameError: name 'os' is not defined` 导致脚本崩溃的致命缺陷。 |
+| **O-01** | **Medium 性能** | `CopierCodec.mqh:335` | **`CopierCompressField` 尾部 Padding 对齐合并为单次扩容**：将原逐字节追加循环替换为单次 `ArrayResize(comp, compLen + pad)`。 |
+| **O-02** | **Medium 性能** | `CopierSender.mq4:1580` | **消除同一 Tick 内双重快照编码与压缩**：在 `OnTimer` 中计算 `dueSnap`，若本 Tick 即将执行 `BroadcastSnapshot`，跳过前序状态脏触发的重复重算。 |
+| **O-04** | **Low 性能** | `CopierState.mqh:440` | **`CopierPosTable::PruneTo` 采用静态哈希表短路**：将 2048 满载场景下的 419 万次线性扫描降为 2048 次 $O(1)$ 哈希探查，彻底消灭大表性能热点。 |
+| **O-05** | **Low 性能** | `CopierIgnore.mqh:158` | **`CopierIgnore::Has()` 快速短路**：首行检查 `m_n == 0 || StringLen(uid) != CP_UID_LEN` 立即返回，常规无忽略名单时零开销。 |
+| **O-06** | **Low 性能** | `CopierModel.mqh:160` | **MT5 `CopierM1BarsSince` 批量单次拉取 K 线时间**：采用单次 `CopyTime` 批量获取，消除跨内核多次调用。 |
+| **O-07** | **Low 清洁** | `CopierLog.mqh:370` | **`CopierOnceLog` 淘汰旧槽位时同步清理旧哈希缓存**：保持直接映射查找表干净一致。 |
+| **TEST-01** | **Medium 测试** | `CopierSelfTest.mq4:2235` | **补充 `CopierParseHhMm` 脏数据与非法输入断言**：覆盖纯数字校验、多冒号输入拒绝与合法边界值验证。 |
 
 ---
 

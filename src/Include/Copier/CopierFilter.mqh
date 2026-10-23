@@ -151,9 +151,13 @@ long CopierParseHhMm(const string s)
   {
    string p[];
    int n=StringSplit(CopierTrim(s),':',p);
-   if(n<2) return -1;
-   int h=(int)StringToInteger(CopierTrim(p[0]));
-   int m=(int)StringToInteger(CopierTrim(p[1]));
+   if(n!=2) return -1;
+   string hStr=CopierTrim(p[0]);
+   string mStr=CopierTrim(p[1]);
+   if(StringLen(hStr)==0 || StringLen(mStr)==0) return -1;
+   if(!CopierIsDigits(hStr) || !CopierIsDigits(mStr)) return -1;
+   int h=(int)StringToInteger(hStr);
+   int m=(int)StringToInteger(mStr);
    if(h==24 && m==0) return 86400;
    if(h<0 || h>23 || m<0 || m>59) return -1;
    return (long)h*3600+(long)m*60;

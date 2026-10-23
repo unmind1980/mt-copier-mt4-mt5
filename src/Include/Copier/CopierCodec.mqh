@@ -332,11 +332,10 @@ string CopierCompressField(const string src)
 
    // Z85 requires binary input size to be a multiple of 4
    int pad=(4-(compLen%4))%4;
-   for(int p=0;p<pad;p++)
+   if(pad>0)
      {
-      int sz=ArraySize(comp);
-      ArrayResize(comp,sz+1);
-      comp[sz]=0;
+      ArrayResize(comp,compLen+pad);
+      for(int p=0;p<pad;p++) comp[compLen+p]=0;
      }
 
    string z85Str="";

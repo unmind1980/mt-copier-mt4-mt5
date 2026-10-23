@@ -272,6 +272,7 @@ int              g_prevSlotScratch[CP_MAX_POSITIONS];
 //--- It would take ~2.1 billion ticks - decades at 10 Hz - to wrap.
 int              g_slotStamp[CP_MAX_POSITIONS];   // index: slot in g_prev
 int              g_rowStamp[CP_MAX_POSITIONS];    // index: row in this tick
+double           g_openLots[CP_MAX_POSITIONS];    // initial lots at position opening
 int              g_stampGen=1;
 
 //--- SNAPSHOT RECEIPT (slice A: observe; slice B: repair).
@@ -420,9 +421,18 @@ bool MagicAllowed(const long magic)
   }
 
 //--- apply the optional broadcast-size override before sending
-double BroadcastLots(const double actual)
+double BroadcastLots(const double actual,const double initLots=0.0)
   {
-   if(FixedLotSize>0.0)      return FixedLotSize;
+   if(FixedLotSize>0.0)
+     {
+      //--- Scale partial closes proportionally so receiver trims mirror sender
+      if(initLots>0.0 && actual<initLots)
+        {
+         double scaled=NormalizeDouble(FixedLotSize*(actual/initLots),CP_DIGITS_LOTS);
+         return (scaled>0.0)?scaled:0.01;
+        }
+      return FixedLotSize;
+     }
    if(LotSizeMultiplier>0.0) return NormalizeDouble(actual*LotSizeMultiplier,CP_DIGITS_LOTS);
    return actual;
   }
@@ -566,13 +576,15 @@ void EmitToNode(const long nid,const string type,const string payload)
 void EmitOpen(const CopierPos &p)
   {
    CopierPos q=p;
-   q.lots=BroadcastLots(p.lots);
+   q.lots=BroadcastLots(p.lots,p.lots);
    Emit(CP_T_OPEN,CopierPayloadOpen(q),false);
   }
 
 void EmitClose(const CopierPos &p)
   {
-   double bLots=BroadcastLots(p.lots);
+   int slot=g_prev.Find(p.uid);
+   double initLots=(slot>=0)?g_openLots[slot]:p.lots;
+   double bLots=BroadcastLots(p.lots,initLots);
    Emit(CP_T_CLOSE,CopierPayloadClose(p.uid,p.ticket,bLots,0.0),false);
   }
 
@@ -709,12 +721,20 @@ int OnInit()
    int savedCount=0;
    if(CopierStateFile::Load(StatePath(),hdr,saved,savedCount))
      {
-      for(int i=0;i<savedCount;i++) g_prev.Upsert(saved[i]);
+      for(int i=0;i<savedCount;i++)
+        {
+         int s=g_prev.Upsert(saved[i]);
+         if(s>=0) g_openLots[s]=saved[i].lots;
+        }
       g_log.Info("restored "+(string)savedCount+" position(s) from state ("+StatePath()+")");
      }
    else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount))
      {
-      for(int i=0;i<savedCount;i++) g_prev.Upsert(saved[i]);
+      for(int i=0;i<savedCount;i++)
+        {
+         int s=g_prev.Upsert(saved[i]);
+         if(s>=0) g_openLots[s]=saved[i].lots;
+        }
       g_log.Info("restored "+(string)savedCount+" position(s) from legacy state (copier_sender_"+SenderId()+".st)");
      }
    else
@@ -1193,6 +1213,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
      {
       long rnid=CopierNid(CopierParseLong(who));
       EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
+      NoteRecentSnapHash(g_latestSnapHash);
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot to new receiver "+who+" (NID "
                     +IntegerToString(rnid)+") on first contact");
@@ -1210,6 +1231,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- one receiver in every deployment this is used for.
       Emit(CP_T_SNAP,g_snapPayload,true);
       g_snapHash=g_latestSnapHash;
+      NoteRecentSnapHash(g_snapHash);
       g_lastSnapMs=now;
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot for new receiver "+who+" (direct channel)");
@@ -1390,7 +1412,12 @@ void RebuildSnapshotPayload()
   {
    CopierPos dense[];
    int dn=g_prev.CopyTo(dense);
-   for(int i=0;i<dn;i++) dense[i].lots=BroadcastLots(dense[i].lots);
+   for(int i=0;i<dn;i++)
+     {
+      int slot=g_prev.Find(dense[i].uid);
+      double initLots=(slot>=0)?g_openLots[slot]:dense[i].lots;
+      dense[i].lots=BroadcastLots(dense[i].lots,initLots);
+     }
    g_snapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_snapPayload);
    NoteRecentSnapHash(g_latestSnapHash);
@@ -1519,6 +1546,7 @@ void OnTimer()
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
       g_stateDirty=true;
       g_prev.RemoveAt(k);
+      g_openLots[k]=0.0;
      }
 
    //--- 5) roll the window forward in-place: update modified slots, insert new
@@ -1538,24 +1566,19 @@ void OnTimer()
          //--- allocate a UID when the table is full, so this should be
          //--- unreachable - it is checked anyway because "silently dropped
          //--- row" is exactly the failure mode that costs a trade.
-         if(g_prev.InsertEmpty(g_curScratch[i])<0 && g_once.ShouldEmit("prevfull"))
+         int newSlot=g_prev.InsertEmpty(g_curScratch[i]);
+         if(newSlot>=0)
+           {
+            g_openLots[newSlot]=g_curScratch[i].lots;
+           }
+         else if(g_once.ShouldEmit("prevfull"))
+           {
             g_log.Error("could not store "+g_curScratch[i].uid+" in the position"
                        +" table ("+(string)CP_MAX_POSITIONS+" full) - it will be"
                        +" re-announced as a new position on the next scan."
                        +" Reported at most once per 10 min.");
+           }
         }
-     }
-
-   //--- When positions changed (open/close/modify/drift), immediately refresh the cached
-   //--- snapshot payload so any targeted repair or bootstrap emitted before
-   //--- the next routine 15s broadcast always carries the true current state.
-   //--- NOTE: We deliberately do NOT advance g_lastSnapMs nor change g_snapHash here:
-   //--- advancing g_lastSnapMs would starve routine broadcasts, and advancing g_snapHash
-   //--- before broadcasting SNAP would cause all receivers' next heartbeats to falsely
-   //--- look behind and trigger redundant repair storms.
-   if(g_stateDirty && g_fillSnapshotDueMs==0)
-     {
-      RebuildSnapshotPayload();
      }
 
    //--- 6) snapshot
@@ -1576,6 +1599,15 @@ void OnTimer()
         {
          dueSnap=false; // defer routine snapshot until 500ms buffer completes
         }
+     }
+
+   //--- When positions changed (open/close/modify/drift), immediately refresh the cached
+   //--- snapshot payload so any targeted repair or bootstrap emitted before
+   //--- the next routine 15s broadcast always carries the true current state.
+   //--- Avoid rebuilding twice in the same tick if BroadcastSnapshot is about to run.
+   if(g_stateDirty && g_fillSnapshotDueMs==0 && !dueSnap)
+     {
+      RebuildSnapshotPayload();
      }
 
    if(dueSnap)

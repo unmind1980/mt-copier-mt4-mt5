@@ -162,9 +162,16 @@ int CopierM1BarsSince(const string sym,const datetime from,const int cap)
    if(from<=0 || cap<=0) return 0;
 
    datetime times[];
+#ifdef __MQL5__
+   ArraySetAsSeries(times,true);
+   int got=CopyTime(sym,PERIOD_M1,0,cap,times);
+   if(got<=0) return 0;
+   return CopierCountBarsAfter(times,got,from,cap);
+#else
    ArrayResize(times,cap);
    for(int i=0;i<cap;i++) times[i]=CopierM1BarTime(sym,i);
    return CopierCountBarsAfter(times,cap,from,cap);
+#endif
   }
 
 bool CopierGetPrice(const string sym,const int side,double &px)
@@ -785,7 +792,6 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                   if(!CopierModifyStops((long)ticket,sym,sl,tp,mErr))
                     {
                      Print("[copier] WARN: ECN open succeeded (ticket ",ticket,") but immediate stops modify failed: err=",mErr);
-                     outErr=mErr;
                     }
                  }
                return true;
@@ -993,6 +999,10 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       req.type_time =ORDER_TIME_SPECIFIED;
       req.expiration=expire;
      }
+   else
+     {
+      req.type_time =ORDER_TIME_GTC;
+     }
    if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
    if(res.retcode==TRADE_RETCODE_DONE
       || res.retcode==TRADE_RETCODE_PLACED
@@ -1008,7 +1018,7 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       return true;
      }
    double openPx=(price>0.0)?price:OrderOpenPrice();
-   datetime exp=(expire>0)?expire:(datetime)OrderExpiration();
+   datetime exp=expire;
    bool ok=OrderModify((int)ticket,openPx,sl,tp,exp,clrNONE);
    if(!ok)
      {

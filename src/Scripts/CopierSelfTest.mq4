@@ -2233,6 +2233,14 @@ void TestTradingTimes()
    //--- a day NOT named falls back to the blanket list
    Ok("hours: an unnamed day uses the blanket list",
       t.Allows((datetime)(86400*3)+10*3600));    // Wednesday
+
+   //--- dirty input validation (L-06)
+   Ok("hours: dirty non-digit input 'abc:def' is rejected",CopierParseHhMm("abc:def")<0);
+   Ok("hours: multi-colon input '00:00:00' is rejected",CopierParseHhMm("00:00:00")<0);
+   Ok("hours: single colon without numbers ':00' is rejected",CopierParseHhMm(":00")<0);
+   Ok("hours: valid '00:00' parses to 0",CopierParseHhMm("00:00")==0);
+   Ok("hours: valid '24:00' parses to 86400",CopierParseHhMm("24:00")==86400);
+   Ok("hours: valid '23:59' parses to 86340",CopierParseHhMm("23:59")==86340);
   }
 
 void TestCopierList()

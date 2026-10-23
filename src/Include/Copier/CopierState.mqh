@@ -438,14 +438,38 @@ public:
    int               PruneTo(const CopierPos &desired[],const int desiredCount)
      {
       int removed=0;
+      static uint desHash[CP_UIDIDX_SLOTS];
+      static string desUid[CP_UIDIDX_SLOTS];
+      ArrayInitialize(desHash,0);
+      for(int z=0;z<CP_UIDIDX_SLOTS;z++) desUid[z]="";
+
+      int mask=CP_UIDIDX_SLOTS-1;
+      for(int k=0;k<desiredCount;k++)
+        {
+         if(StringLen(desired[k].uid)!=CP_UID_LEN) continue;
+         uint hf=2166136261;
+         for(int c=0;c<CP_UID_LEN;c++) { hf^=(uint)StringGetCharacter(desired[k].uid,c); hf*=16777619; }
+         int s=(int)(hf&mask);
+         for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+           {
+            int b=(s+p)&mask;
+            if(desHash[b]==0) { desHash[b]=hf; desUid[b]=desired[k].uid; break; }
+            if(desHash[b]==hf && desUid[b]==desired[k].uid) break;
+           }
+        }
+
       for(int i=0;i<CP_MAX_POSITIONS;i++)
         {
          if(!SlotValid(i)) continue;
+         uint hf=2166136261;
+         for(int c=0;c<CP_UID_LEN;c++) { hf^=(uint)StringGetCharacter(m_p[i].uid,c); hf*=16777619; }
+         int s=(int)(hf&mask);
          bool keep=false;
-         for(int k=0;k<desiredCount;k++)
+         for(int p=0;p<CP_UIDIDX_SLOTS;p++)
            {
-            if(StringLen(desired[k].uid)!=CP_UID_LEN) continue;
-            if(desired[k].uid==m_p[i].uid) {keep=true; break;}
+            int b=(s+p)&mask;
+            if(desHash[b]==0) break;
+            if(desHash[b]==hf && desUid[b]==m_p[i].uid) { keep=true; break; }
            }
          if(!keep)
            {
