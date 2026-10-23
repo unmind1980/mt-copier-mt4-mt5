@@ -334,12 +334,45 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-## 7. 审计发现与修复记录（2026-10-20）
+## 7. 审计发现与修复记录（2026-10-20 ~ 2026-10-23）
 
-> 全量代码审计发现的逻辑问题与性能热点，**已全部修复并验证**（4 终端 0 errors / 128 Rust 测试 / 各 Python 合约套件全绿）。
+> 全量代码审计发现的逻辑问题与性能热点，**已全部修复并验证**（4 终端 0 errors / 133 Rust 测试 / 各 Python 合约套件全绿）。
 > 编号 A = 逻辑/正确性，B = 性能。量级按 300 笔持仓、10Hz 估算。
 
-### A. 逻辑与正确性（全部已修）
+### 历次审计导航索引（共 24 次闭环落地，按时间顺序排列）
+
+| 批次 | 实施时间 | 核心审计主题 | 涉及模块 |
+| :--- | :--- | :--- | :--- |
+| **一次审计** | 2026-10-20 00:45 | 基准逻辑缺陷排查与 O(N²) 性能热点消除 | MQL / Hub |
+| **二次审计** | 2026-10-20 20:30 | TicketHash 索引、快照重试拒绝门与原位数值检查 | MQL 核心 |
+| **三次审计** | 2026-10-20 21:10 | reopenExpected 清理、ECN 130 降级与券商订单硬限 | MQL / Model |
+| **四次审计** | 2026-10-21 02:05 | 状态文件单向累加、心跳时间戳与浮点去尾零 | MQL / Codec |
+| **五次审计** | 2026-10-21 08:20 | 500B 自适应压缩、秒级握手与挂单平滑过渡 | MQL / Protocol |
+| **六次审计** | 2026-10-21 15:15 | 全栈定长静态化与彻底消灭 ArrayResize 堆开销 | 全栈 MQL |
+| **七次审计** | 2026-10-21 16:50 | 静态表越界守卫、head 偏移队列与按需拷回 | MQL 核心 |
+| **八次审计** | 2026-10-21 17:40 | SeenRing 紧凑索引与 Backoff 开放寻址优化 | MQL 核心 |
+| **九次审计** | 2026-10-21 18:40 | 拓扑容量统一扩至 100 信号源与段区间索引 | MQL / Hub |
+| **十次审计** | 2026-10-21 20:30 | 64 位内容哈希比对 (IH=) 与按需 reqcfg 拉取 | MQL / Rust |
+| **十一次审计** | 2026-10-21 21:15 | CP_INI_SECTIONS 超限拦截与指数退避自愈 | MQL / Hub |
+| **十二次审计** | 2026-10-22 00:50 | Web UI 现代化改版（白天白底双模 + 无级缩放 + 消息中心） | Web 前端 |
+| **十三次审计** | 2026-10-22 10:45 | 消除全屏遮挡弹窗，全量持仓常驻 Split Cockpit | Web 前端 |
+| **十四次审计** | 2026-10-22 13:40 | 消息中心方案 2、DOM 原位防抖与 Visual Config 中性化 | Web 前端 |
+| **十五次审计** | 2026-10-22 14:35 | 配置跳号截断修复、收据表淘汰驱逐与稳态零 DOM 重绘 | MQL / Web |
+| **十六次审计** | 2026-10-22 15:20 | 风控出队双重计数、出金误触日亏清仓与挂单市价钳位 | MQL / Model |
+| **十七次审计** | 2026-10-22 18:15 | 多空方向反转彻底纠偏、快照即时刷新与 64 位大单号 | 全栈协议 |
+| **十八次审计** | 2026-10-22 20:15 | 单 Sender 风控累加、STAT 重复字段清理与防 Zip-Bomb | 全栈加固 |
+| **十九次审计** | 2026-10-22 22:30 | 跨端 PKZIP 兼容、多帧排空死循环修复与 49 天时钟防回绕 | 传输与核心 |
+| **二十次审计** | 2026-10-23 00:20 | 固定手数全流程峰值追踪与最新快照哈希双重认可 | MQL / Sender |
+| **二十一次审计** | 2026-10-23 02:00 | 退避槽位映射纠偏、UTF-8 字符哈希与挂单改价同步 | 核心底层 |
+| **二十二次审计** | 2026-10-23 10:15 | 手数语义纠偏、全栈 StrBuilder 与 WebSocket 广播合并 | 核心与性能 |
+| **二十三次审计** | 2026-10-23 10:45 | 停止几何指纹纪元失效、遥测 StrBuilder 与 Backoff O(1) 淘汰 | 核心优化 |
+| **二十四次审计** | 2026-10-23 11:40 | 全栈审查报告缺陷闭环（流重置、状态落盘、鉴权防注入） | 全栈安全 |
+
+---
+
+### 一次审计：基准代码审查与性能热点消除（2026-10-20 00:45）
+
+#### A. 逻辑与正确性（全部已修）
 
 | # | 严重度 | 位置 | 问题与修复 |
 | :--- | :--- | :--- | :--- |
@@ -349,7 +382,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A4** | 低-中 | `ConvergeSender` | 每个已匹配 UID 每 tick 都 `g_everOpened.Add()`，300 单时约 1.4 秒转完 4096 槽，`ReopenClosedMirrors=false` 的判据会被挤掉。**已修**：去掉每 tick 写入；改为 ① 开仓成功时写（原有路径）、② OnInit 从状态文件回填、③ 慢路径 `Has()` 后补写。 |
 | **A5** | 低 | `hub/src/stats.rs` | `receipts` 只统计中继次数，3s 去重后读数比实际收据低约 66%。**已修**：新增 `receipts_seen`，输出 `receipts N of M received`，差额即去重节省量。 |
 
-### B. 性能热点（全部已修）
+#### B. 性能热点（全部已修）
 
 | # | 量级（修复前） | 位置 | 处理 |
 | :--- | :--- | :--- | :--- |
@@ -363,7 +396,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **B8** | — | `hub/src/main.rs` | `last_rcpt_relayed` 无上限。**已修**：每 60 秒清理 10 分钟未更新的配对。 |
 | **B9** | — | `hub/src/main.rs` | 两段式 `send` 失败会留下半个 multipart 帧。**已修**：第二帧失败判定为致命，置 `EXIT` 并明确报错，不再继续往撕裂的帧里写。 |
 
-### 修复后的量级对照（300 单 / 10Hz）
+#### 修复后的量级对照（300 单 / 10Hz）
 
 | 指标 | 修复前 | 修复后 |
 | :--- | :--- | :--- |
@@ -447,104 +480,133 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
-### 二十四次审计：全栈审计报告缺陷全面修复与安全加固（2026-10-23 11:40；全部闭环落地）
+### 九次审计：拓扑容量统一到 100，且“超限不再静默”（2026-10-21 18:40；A30/A31/B27/B28 全部闭环落地）
 
-| # | 级别 | 位置 | 改进与重构实现 |
+| # | 级别 | 位置 | 问题与修复实现 |
 | :--- | :--- | :--- | :--- |
-| **P1-1** | **P1 致命** | `CopierReceiver.mq4:1028` | **Direct 模式配置重载重置发送端流状态**：在 `LoadConfigFromInputs()` 中重置 sender 0 的 `g_lastSeq`、`g_ssidSeen`、`g_lastMsgMs`、`g_lastSnapMs`、`g_ready`、`g_desiredCount` 等全部流状态，彻底消灭切换 `SenderPort`/`InpMagic` 时全局变量残留旧 sender 持仓导致误下整车订单的严重隐患。 |
-| **P1-2 & P2-6** | **P1 致命** | `CopierState.mqh:1120-1145` | **状态文件写回校验与 Load 严格上界**：`CopierStateFile::Save` 在读回拷贝循环中严格校验 `FileWrite` 返回值，写入失败立即中止并保留 `.tmp` 备份；`Load` 循环改用 `got < CP_STATE_MAX_LINES` 严格防止越界；Sender/Receiver 恢复循环对 `Upsert` 失败记 Warn。 |
-| **P1-3** | **P1 致命** | `CopierModel.mqh:591, 603, 650, 838, 929, 989, 1089` | **MT4 订单标识符防越界与负数截断防御**：所有 MT4 分支的 `OrderSelect/OrderClose/OrderModify/OrderDelete` 严格校验 `ticket <= 0 || ticket > 2147483647` 时报错退出，杜绝跨平台 MT5 64 位大单号在 MT4 窄化溢出误操作其他订单。 |
-| **P1-4** | **P1 致命** | `hub/src/main.rs:1484` | **畸形 REG 审计写入 10s 频控防 DoS 挂死**：对空 ACC 的 REG/HBT2 报文引入 `wire_audit_throttle` 10 秒冷却门限，彻底杜绝数据面垃圾帧每秒触发上千次同步磁盘 fsync 挂死 ZMQ 交易转发线程。 |
-| **P2-1 & P2-2** | **P2 高危** | `CopierCodec.mqh:185, 555, 620` | **快照与事件解码器补齐 UID/价格/手数/符号严格校验**：`CopierPayloadOpenParse` 与 `CopierPayloadModifyParse` 补齐 `CP_UID_LEN` 与 `CopierUidValid`；`CopierDecodeRec` 严格校验 `lots > 0`、非负价格与符号净化，消灭畸形数据穿透。 |
-| **P2-3** | **P2 高危** | `CopierModel.mqh:785` | **MT4 ECN 模式止损修改失败感知与记录**：市价单在 ECN 130 错误剥离止损成交后，若补发 `CopierModifyStops` 失败，打印详细告警并回传 `outErr = mErr`，杜绝无止损裸奔被当作完全成功。 |
-| **P2-4** | **P2 高危** | `CopierSender.mq4:630` / `CopierReceiver.mq4:1835` | **MT4 多跳 'from #' 部分平仓历史溯源链**：当直接父单已移入历史（`MODE_HISTORY`）时，沿 `from #` 链向前追溯最多 5 跳，彻底消灭短周期连续部分平仓换发新 UID 导致的关仓重开损耗。 |
-| **P2-5** | **P2 高危** | `CopierSender.mq4:870` / `CopierReceiver.mq4:1300, 6064` | **`PollMs` 范围钳制与定时器初始化失败断言**：将 `PollMs` 钳制在 `[10, 5000]` 毫秒安全区间，并在 `EventSetMillisecondTimer` 失败时记 Error 并返回 `INIT_FAILED`，杜绝静默挂起。 |
-| **P2-7** | **P2 高危** | `CopierConfig.mqh:582` | **原子写步骤 3 失败自动回写内存备份**：写配置失败时自动写回此前保存在内存中的旧配置并复验，严格履行配置文件任何时刻均可启动的原子承诺。 |
-| **P2-8** | **P2 高危** | `CopierReceiver.mq4:327, 4070, 4662` | **冻钟恢复窗口时钟偏移无效保护**：引入 `g_senderClockOffsetValid`，仅在服务器时钟真实推进时测量的偏移方为有效，消灭停盘周末巨额负偏移在周一开盘瞬间导致订单被判定超时遗弃的漏洞。 |
-| **P2-9** | **P2 高危** | `CopierReceiver.mq4:4332` | **`lot sizing rejected` 引入 `g_once` 10 分钟限频**：消灭低于最小手数等持续性拒绝时每秒输出 10 行日志的刷屏问题。 |
-| **P2-10** | **P2 高危** | `CopierReceiver.mq4:4651, 4764` | **快照时间戳移至校验通过后更新**：快照仅在成功通过声明条数与解压验证后才记录 `g_lastSnapMs`，恢复\"有事件无有效快照\"的严重告警探测。 |
-| **P2-12 & P2-13** | **P2 高危** | `hub/src/main.rs:1920, 2020` | **Hub 拓扑与配置上报鉴权防注入**：`CFGRPT` 必须校验节点已注册；`mirrors` 边记录必须校验 `sid_is_sender` 与 `login_is_receiver`，杜绝伪造帧膨胀全局哈希表。 |
-| **P2-14 & P2-15** | **P2 高危** | `hub/src/api.rs:1348, 1475` | **改密锁外哈希与密码重置销毁旧 Session**：管理员修改密码/禁用用户时销毁其现有 Session；用户自主改密将 4096 轮 SHA-256 移至锁外，彻底消除锁阻塞。 |
-| **P2-16** | **P2 高危** | `hub/src/main.rs:2057` | **收据转发校验接收端有效性**：收据转发校验 `LOGIN` 属于已知 receiver，杜绝伪造收据欺骗发送端抑制修复。 |
-| **P3-A5** | **性能优化** | `CopierReceiver.mq4:5580, 6545` | **消息转发零二次解码与快照零二次解压**：解耦 `RouteMessage`，排水循环预解码出的 `s_envs[i]` 直传路由，消灭每条快照二次解压缩。 |
-| **P3-A6** | **性能优化** | `CopierReceiver.mq4:4165, 4615` | **收敛循环外提 `PendingOpens` 计数**：在遍历 desired 循环前单次统计排队单，开仓入队时增量维护，将复杂度由 O(N×Q) 降为 O(Q+N)。 |
-| **P3-A9 & A10** | **性能优化** | `CopierState.mqh:118, 120` / `CopierSender.mq4:1305` | **持仓表 Summary 轻量统计与 Count/IsFull O(1)**：增量读 `m_n`；面板刷新通过 `Summary` 批量累加，消灭每 1.5s 拷贝 2048 结构体与字符串克隆。 |
-| **P3-A11** | **性能优化** | `hub/src/main.rs:1196, 2445` | **命令重试队列 500ms 节拍扫描**：将主循环每帧加锁扫描 `cmds.due_gated` 改为 500ms 节拍器，大幅降低锁争用。 |
-| **P3-B7** | **安全规范** | `hub/src/notifications.rs:795` | **WeCom 告警通知 Markdown 内容全面 HTML 转义**：防止节点名/告警内容含特殊符号破坏排版。 |
-| **P3-B11** | **代码清洁** | `hub/src/commands.rs:625` | **`prune_terminal` 同步清理无残留命令节点的序列号**：完全对齐函数注释承诺。 |
-| **P3-B12** | **安全防御** | `CopierTransport.mqh:234` | **`BindSender` 在开启 CURVE 但密钥为空时 fail-closed 拒服**：严格杜绝静默降级为明文传输。 |
-| **P3-B13** | **交易防御** | `CopierRisk.mqh:48, 65, 185` | **风控检查防 `NaN` 穿透**：引入 `MathIsValidNumber` 校验，杜绝浮点异常导致风控静默失效。 |
-| **P3-B14** | **手数规范** | `CopierSizing.mqh:173` | **`CopierComputeLots` 手数上限裁剪后复验最小手数**：低于 `minLot` 显式置 `rejected = true` 并返回 0.0。 |
-| **P3-C1 & C5** | **健壮优化** | `CopierReceiver.mq4:2802` / `CopierModel.mqh:345` | **未知品种 seen 键一致性与挂单止损止盈 digits 规范化**：挂单放置时对 SL/TP 规范化至 `si.digits`。 |
-| **P3-C6 ~ C16** | **细节清洁** | `CopierSender.mq4` / `CopierPeers.mqh` / `CopierTransport.mqh` | **Magic 数字过滤、Save 失败保留 dirty、未探测 Peer 不分配 PongBack 槽位、Socket 早退资源回收**。 |
+| **A30** | 中 | `CopierDefs.mqh` / `CopierPeers.mqh` / `CopierSender.mq4` | **已修复**：三个拓扑上限各不一致——hub mode 的 `CP_MAX_SENDERS` 是 16（且 `SenderCount()` 只扫 `sender0..sender15`，超出的段**从未被读到**，无任何日志）；direct mode 的 `CP_MAX_PEERS` 也是 16，满时**静默淘汰**最久沉默的 receiver（RTT、掉线告警、面板行一起消失）；快照修复的 `CP_MAX_STALE_PEERS` 又是 64。同一个部署两种模式能力不同，对外无法解释。**修法**：三者统一为 **100**，与终端图表上限（MT5 `maxcharts`，默认约 100）对齐——direct mode 的 100 一直由终端给，hub mode 现在给同一个数，代价是“1 个图表 vs 每 sender 1 个图表”而不是“16 个” |
+| **A31** | 中 | `CopierReceiver.mq4` `LoadCentralConfig` | **已修复**：sender 超限与编号跳号都是**静默**的（`SenderCount()` 遇到第一个缺号即停，超限段根本不进扫描）。**修法**：`CopierIni` 新增 `SenderDeclaredMax()` 返回文件声明的最高 `senderN`（含跳号），调用方把它与 `SenderCount()` 对比并分别打 ERROR——超限时说清“加载了 sender0..sender99、sender100 起未加载”，跳号时说清“编号必须从 sender0 连续”。这是让上限**可被发现**的唯一途径 |
+| **B27** | 中·性能 | `CopierConfig.mqh` `CopierIni` | **已修复（100 sender 的前置条件）**：所有 `Get()` 都是 O(m_n) 全表扫描，而一次配置加载要读 ~50–74 键/sender——100 sender 就是 ~5,000–7,400 次 Get × 同量级行数 ≈ **数千万次字符串比较**（`hub_config_test.py` 实测满配为 5,003 行 / 100,964 字节），且每次 hub 推送 CFG 都会重跑，EA 会卡住数秒。**修法**：新增段区间索引 `m_secName/m_secStart/m_secLen/m_nSec`（`BuildSections()`），查找只扫描所属段的 ~74 行；重复段（同名 `[sender3]` 出现两次）仍各自可达。顺带把 `CP_INI_MAX` 2048 → 12288、`CP_INI_MAX_BYTES` 与 hub 的 `MAX_INI_BYTES` 同步提到 512 KB（三者必须同值，否则 hub 接受、receiver 拒绝；测试从两侧源码读值并断言相等） |
+| **B28** | 低 | `CopierPanel.mqh` + 两个 EA 的面板 | **已修复**：100 个 peer 时面板 100 行，`Begin()` 直接截到 24 行，**超出的行无声消失**。**修法**：新增 `CP_PANEL_PEER_SHOW = 8`，只详细打印前 8 个，其余归并为一行 "... and N more peer(s) - the hub dashboard lists every one"；sender 面板同样处理。顺带给 `CopierPeerTable` 补 `SeenAt(i)` / `ProbeSentAt(i)` 下标写入，消除 PING 广播里 100×100 的二次扫描 |
+
+**配套回归**：`hub_config_test.py` 新增第 9 节——从源码读出 hub 与 MQL 两侧的字节上限并断言**相等**，生成一份"满配 100 sender"的 ini 断言它装得进行数/字节上限，并真的 PUT 给 hub 确认返回 202。`CopierSelfTest.mq4` 的 `TestConfig()` 补入段索引三态（第二段可查、跨段不可见、非数字段名不算 sender）与跳号/声明数断言。
 
 ---
 
-### 二十三次审计：停止几何缓存失效闭环、持仓等待序列化 StrBuilder 优化与开放寻址 O(1) 淘汰（2026-10-23 10:45；全部闭环落地）
+### 十次审计：配置上报由“全量硬推”改为“内容哈希比对 + 按需 reqcfg 拉取”（2026-10-21 20:30；方案 B 闭环落地）
 
-| # | 级别 | 位置 | 改进与重构实现 |
+| # | 级别 | 位置 | 问题与修复实现 |
 | :--- | :--- | :--- | :--- |
-| **F-01** | **P1 高危** | `CopierReceiver.mq4:1279, 1332` | **`ApplyCommonConfig` 与 `InitSenderSettings` 补齐 `g_stOvEpoch++`**：热重载配置时递增停止几何缓存纪元，彻底消灭修改 `inverttrades`、`emergencySLPips` 或券商 `stopsLevel` 变动后已存在持仓的止损止盈被旧缓存短路不重算的漏洞。 |
-| **F-02** | **P2 中危** | `CopierReceiver.mq4:3819, 3865` | **`EncodeReceiverPositions` 与 `EncodeReceiverWaitList` 引入 `CopierStrBuilder`**：消除 2048 真实容量下每分钟大字符串 `+=` 拼接产生的 146MB memcpy 开销，主线程耗时降至微秒级。 |
-| **F-03** | **P3 优化** | `CopierState.mqh:820, 856, 888, 1024` | **`CopierBackoff` 开放寻址 Backward-shift O(1) 原地消除**：实现 `FindHashSlot` 与 `EraseHashSlot`，消除 `Clear` 与 `FreeSlot` 时的全量哈希表 O(N) 循环重建，实测 50,000 次随机操作断言 100% 通过。 |
-| **F-04** | **P3 优化** | `CopierReceiver.mq4:1109` | **`ResetRuntimeInputsFromInputs` 升级为 64 位 `CopierParseLong`**：消除全库最后一处针对 EA 输入 `InpMagic` 的 32 位 `StringToInteger` 解析。 |
-| **F-05** | **代码清理** | `dashboard.html:1408, 2964` / `CopierDefs.mqh:781` | **清理无用死代码**：删除从不被调用的 `renderRecPositions()` 与 DOM `#recposbody` 孤儿节点；将 `CopierStrBuilder::Length()` 重命名为无歧义的 `ChunkCount()`。 |
+| **A32** | **极高·网络/流量** | `CopierReceiver.mq4` + `hub/src/main.rs` | **已修复（消除持续带宽浪费）**：原先每个 Receiver 在稳态下每 60 秒响应 Hub 的 WHO 广播时，都会在 `REG` 中无条件携带整份转义配置（`INI=...`）。在 100 Senders 满配下单次高达 110 KB，100 个节点每分钟产生 ~11 MB 纯冗余传输（~1.5 Mbps 持续跑满）。**修法（方案 B）**：<br>1. **内容哈希化**：在 `CopierCodec.mqh` 与 `hub/src/config.rs` 中同步实现双通道 64-bit FNV-1a 哈希算法（`CopierCfgHash` / `cfg_hash`），生成 16 字符 hex 摘要。<br>2. **REG 瘦身**：Receiver 发送的 `REG` 中不再携带体积庞大的 `INI=`，而是携带极轻量的 `IH=<16位哈希>`（仅 32 字节）。稳态传输量直接降低 99.9%（110 KB → 0）。<br>3. **Hub 比对与拉取（reqcfg）**：Hub 接收到 `IH` 后与内存中保存的上次有效哈希对比。若哈希一致，判定为配置未变，零网络传输；若哈希不一致或 Hub 刚重启没有记录，Hub 经命令引擎自动下发只读命令 `reqcfg`（带 60s 频控防风暴）；Receiver 收到后通过现有的 `CFGRPT` 消息通道异步回传完整 INI。<br>4. **双向兼容**：若遇到未升级的旧版本 Receiver 发送完整 `INI=`，Hub 自动解义并同步计算 hash 存储，完全向后兼容。<br>5. **测试覆盖**：`hub_config_test.py` 第 11 节全链路验证“未见过的 IH 触发 reqcfg 拉取”、“回传后 GET /config 获得真值”、“哈希匹配时零命令/零传输”；`CopierSelfTest.mq4` 增加双语 FNV-1a 哈希向量断言。 |
 
 ---
 
-### 二十二次审计：手数语义纠偏、全栈字符串与快照 O(1) 优化、命令日志压缩与广播合并（2026-10-23 10:15；全部闭环落地）
+### 十一次审计：CP_INI_SECTIONS 超限拒绝、reqcfg 自适应退避与 Web 实时拉取（2026-10-21 21:15；闭环落地）
 
-| # | 级别 | 位置 | 改进与重构实现 |
+| # | 级别 | 位置 | 问题与修复实现 |
 | :--- | :--- | :--- | :--- |
-| **A1** | **P0 严重** | `CopierReceiver.mq4:2988` | **`ComputeReceiverLots` 纠偏发送端手数过滤器误用**：恢复最小/最大过滤参数为 `0.0, 0.0`，消除发送端手数门限误作本地最终目标上下限导致的静默截断（无日志）与固定手数模式下直接被拒拒绝开仓的严重缺陷。 |
-| **A2** | **P1 高危** | `CopierReceiver.mq4:3689, 3710, 3714` | **Web 持仓明细与等待列表对齐 2048 真实容量**：移除 128 条硬编码限制，对齐 `CP_MAX_POSITIONS`（2048），消除大账户持仓数量与明细表行数脱节的静默截断现象。 |
-| **A3** | **P1 高危** | `CopierReceiver.mq4:758` | **`g_uidPeakLots` 4096 桶直接映射 FNV 哈希索引**：为快照建仓峰值查找引入 `g_peakLookup`，消灭 2048 仓位下每秒 200 万次字符串比较的 O(N²) 性能黑洞。 |
-| **A4 & A5** | **P1 高危** | `CopierSender.mq4:634, 1500` | **Sender 表满拒绝分配 UID 与 `InsertEmpty` 返回值防御**：表满时限频报警并跳过分配 UID，彻底消灭极端表满情况下每个 tick 生成新 UID 重复轰炸 `EmitOpen` 的死循环。 |
-| **A6** | **P2 中危** | `hub/src/alerts.rs:364` | **`risk.blocked` 移除清零引发的误 `rearm`**：接收端每分钟汇报归零不再重置告警静默窗口，严格遵守 300 秒告警抑制，彻底平息持续风控拦截时的通知轰炸。 |
-| **A7** | **P2 中危** | `CopierReceiver.mq4:4770` | **`HandleCfg` 升级为 64 位 `CopierParseLong`**：消除全库最后一处 32 位 `StringToInteger` 对 `REV` 的解析，防止超 21.4 亿溢出导致反向重发。 |
-| **A8** | **性能优化** | `CopierLog.mqh:35, 188, 290` | **日志 4 槽位轮询合并与 `CopierOnceLog` 256 桶直接映射缓存**：消除交替日志轰炸失效问题，并将单仓位多 key 限频查询降至 1 次比较。 |
-| **A9 & A10** | **代码健壮** | `CopierConfig.mqh:126` / `CopierState.mqh:829` | **清理无用条件判断与 `InsertHash` 探测上限保底**：消灭空分支并为开放寻址探测增加 `probes < 256` 上限，杜绝潜在死循环。 |
-| **A11** | **代码清理** | `hub/src/positions.rs:273, 326` | **删除 `positions.rs` 中未读取的 `order` 向量**：消除每记录无意义克隆与内存增长。 |
-| **B1** | **P1 高危** | `CopierDefs.mqh:125` / `CopierReceiver.mq4:1275` / `CopierConfig.mqh:375, 413, 499` / `CopierCodec.mqh:438` | **全栈引入 `CopierStrBuilder` 分块树状拼接**：彻底消除 MQL 字符串 `+=` 在 100 源配置序列化（126 处 `out +=`）、转义（逐字符 `out +=`）、文件读取与快照构建中高达数十 GB 的内存拷贝开销，主线程耗时从秒级骤降至毫秒级。 |
-| **B2** | **性能优化** | `CopierCodec.mqh:152` | **快照单记录解码零 `StringSplit` 单趟范围解析**：引入 `CopierParseLongRange`，2048 仓快照解码省去约 3.3 万次临时字符串堆分配。 |
-| **B3** | **性能优化** | `hub/src/main.rs:1232, 2480` / `hub/src/api.rs:781, 1569` | **Hub WebSocket 广播合并与单次序列化 `Arc<String>` 分发**：引入 200ms `POKE_MIN_MS` 节拍合并，无论连接多少个 Dashboard 标签页，全量快照单次序列化共享，消除锁争用与 CPU 膨胀。 |
-| **B4** | **性能优化** | `hub/src/config.rs:309` / `hub/src/api.rs:1655` / `dashboard.html:5689` | **配置历史列表瘦身与单 revision 按需拉取**：历史列表移除全量 INI 载荷（仅保留 `ini_bytes`），新增 `/api/v1/nodes/:id/config/revision/:rev` 按需拉取，消除 13MB JSON 阻塞。 |
-| **B5 & B6** | **性能优化** | `hub/src/commands.rs:412, 506` / `hub/src/main.rs:2365` | **命令日志批量单次 fsync、30 天自动老化与 8MB 紧凑归档**：消除重试命令在主循环逐条 fsync 的磁盘阻塞，并自动压缩历史命令。 |
-| **B7** | **性能优化** | `CopierState.mqh:272, 285` / `CopierReceiver.mq4:2084` | **`CopyFrom` 线性内存拷贝与 `SaveReceiverMap` 零查找插入**：消灭每 10 秒 120 万次字符串查找。 |
-| **B8** | **性能优化** | `CopierReceiver.mq4:400, 3240` | **`QueueModifyIfNeeded` 止损几何输入指纹签名短路**：缓存 8 项数值指纹，在 99.9% 稳态 tick 瞬时返回，消灭每秒 3000 次无意义几何计算。 |
-| **B9** | **性能优化** | `CopierReceiver.mq4:515, 3658, 3734, 3820, 3903` | **`MagicToSender` 256 桶直接映射缓存**：全栈消灭每 tick 100 仓 × 100 信号源的双重循环比较。 |
-| **B10** | **性能优化** | `CopierReceiver.mq4:1529` | **`g_desired` 数组按需增量扩展**：仅在 sender 总数变化时才触发 30MB 数组重新分配。 |
-| **C1** | **测试健全** | `tools/tests.sh:84, 93` | **`tests.sh` 官方纳入 `dash_check.py` 自动化检测**：彻底杜绝前端 JS 语法错误上线导致的控制台白屏。 |
-| **工具修复** | **工具优化** | `tools/lib.sh:117` / `tools/deploy.sh:158` | **部署脚本全面纯 Bash 参数扩展替换子进程**：消除 `sed` 循环与进程替换管道悬挂，部署脚本 0.1 秒秒级就绪。 |
+| **A33** | 中·健壮性 | `src/Include/Copier/CopierConfig.mqh` `BuildSections()` | **已修复**：`BuildSections()` 原先在 `m_nSec >= CP_INI_SECTIONS` 时静默跳过后续 section block 的索引，导致超出上限的段无法被 `Get()` 检索到（退化为不存在）。**修法**：`BuildSections()` 返回 `bool`，若发生溢出在 `Load()` 结束前输出严重错误 `Print("CopierIni: ERROR - ", path, " exceeded CP_INI_SECTIONS...")` 并拒绝加载返回 `false`，彻底消灭静默截断。`CopierSelfTest.mq4` 增加超限拒绝测试。 |
+| **B29** | 低-中·体验 | `hub/src/main.rs` `last_cfg_pull` | **已修复**：Hub 对未见过或发生哈希漂移的 Receiver 进行 `reqcfg` 拉取时，固定 60s 频控可能导致初次启动偶发丢包时等待过长。**修法**：升级为双阶自适应频控（初次重试允许 5s，后续退避至 60s），并在收到 `CFGRPT` 成功入库时立即复位该节点的频控状态，使冷启动与重连自愈体验更迅速。 |
+| **B30** | 低·用户体验 | `hub/src/assets/dashboard.html` | **已优化**：配置编辑模态框新增 `[🔄 Query Live INI]` 快捷按钮，点击直接下发 `reqcfg` 命令，触发终端即刻异步上报真值配置并在 1.5s 后自动刷新前端视图；`dash_check.py` 验证 167 个 ID 引用全部自洽。 |
 
 ---
 
-### 二十一次审计：退避槽位映射补全、全量UTF-8配置哈希、挂单触发价同步与配置继承保护（2026-10-23 02:00；全部闭环落地）
+### 十二次审计：Web UI 现代化视觉改版（高对比白天白底双模 + 无级字号缩放 + 双 Tab 驾驶舱 + 消息中心；2026-10-22 00:50）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **BUG-01** | **P0 致命** | `CopierState.mqh:789, 814, 829` | **`CopierBackoff` 补齐 `m_slot` 槽位映射**：在 `CopierBackoff` 中增加 `int m_slot[CP_BACKOFF_SLOTS]`，将哈希桶索引 `k` 与线性数据槽位 `i` 解耦对齐，彻底修复 `Find` 永远返回 `-1` 导致退避锁完全瘫痪的致命 Bug。 |
-| **BUG-02** | **优化** | `CopierDefs.mqh:584` | **`CopierReplaceAll` 升级为内置 `StringReplace`**：消除硬编码的 256 次循环上限，提升大字符串替换效率。 |
-| **BUG-03** | **P1 严重** | `CopierReceiver.mq4:1450` | **`LoadConfigForHub` 热重载前重置运行时变量**：在 `ApplyCommonConfig` 之前调用 `ResetRuntimeInputsFromInputs()`，彻底消除从 `[common]` 删除的配置项在内存中残留并反向污染 `CFGRPT` 的问题。 |
-| **BUG-04** | **P1 严重** | `CopierSender.mq4:1428` / `CopierReceiver.mq4:2652, 3145` | **挂单触发价与过期时间变动同步**：Sender 端在 `otherDiff`（触发价/过期变动）时标记 `g_stateDirty = true` 触发快照刷新；Receiver 端 `QueueModifyIfNeeded` 检查 `pprice`/`pstop`/`pexpire` 变动，并调用 `CopierModifyPendingOrder` 同步修改经纪商挂单。 |
-| **BUG-05** | **P1 严重** | `CopierCodec.mqh:424` | **`CopierCfgHash` 全量 UTF-8 字节哈希**：`StringToCharArray` 传入 `count = -1` 并去除末尾 `\0`，遍历全部字节，彻底修复包含中文或非 ASCII 注释时配置哈希与 Rust Hub 不一致导致每 60s 循环触发 `reqcfg` 的问题。 |
-| **BUG-06** | **P1 严重** | `CopierSender.mq4:427, 576` | **`BroadcastLots` 精度扩展与 `EmitClose` 手数缩放**：`BroadcastLots` 支持 8 位小数（`CP_DIGITS_LOTS`），防止微手数 (0.001) 归零；`EmitClose` 统一调用 `BroadcastLots(p.lots)`。 |
-| **BUG-07** | **P1 严重** | `CopierReceiver.mq4:760, 4625` | **`g_uidPeakLots` 垃圾回收机制**：增加 `PruneSenderPeakLots()`，在表满或定期修剪时自动回收不在 `g_desired` 与 `g_local` 中的已结束订单，永不耗尽 2048 槽位。 |
-| **BUG-08** | **P2 中危** | `CopierReceiver.mq4:4575, 4635` | **`g_stUid` 止损覆盖表闭环清理**：增加 `StopsForget()`，并在 `StopsPrune` 中对不在 `g_desired` 与本地持仓中的已平仓 override 进行彻底清理。 |
-| **BUG-09** | **P2 中危** | `dashboard.html:5176, 5267` | **Web 可视化配置保护 `[common]` 继承**：卡片 Checkbox 标记 `data-init` 与 `data-def`，未作显式修改的复选框不输出配置，彻底保护从 `[common]` 继承全局开关的机制。 |
-| **BUG-10** | **P2 中危** | `CopierModel.mqh:466, 642` | **MT5 挂单部分成交状态兼容**：`CopierReadPositions` 与 `CopierResolveCloseTicket` 同时匹配 `ORDER_STATE_PLACED` 与 `ORDER_STATE_PARTIAL`，消除部分成交挂单的状态盲区与撤单失败。 |
-| **TEST-01c** | **工具** | `tools/logcheck.py:145` | **日志跨世代同秒排序校正**：按 `.log.2` < `.log.1` < `.log` 排序日志文件，确保同秒内事件严格保持真实时间流顺序。 |
+| **B31** | **极高·视觉/用户体验** | `hub/src/assets/dashboard.html` | **已全面改版上线（全功能无损升级，全英文界面）**：<br>1. **现代金融高可读双模（Day/Night）**：默认采用高对比纯净白天白底（`#f8fafc` 底色，`#ffffff` 卡片底），字体清晰深邃；点击右上角 `[🌙 Night Mode / ☀️ Day Mode]` 瞬间平滑切换至深色暗黑护眼模式，首选项自动保存至 `localStorage`。<br>2. **无级字号缩放滑块（11px~18px）**：导航栏内置实时字号调节器（默认 `13.5px`），所有卡片、宽表与分体面板均采用相对单位与水平保护包裹，字号任意放大**绝对不产生折断挤压变形**。<br>3. **双 Tab 核心架构（主仪表盘 + 分体式驾驶舱）**：<br>&nbsp;&nbsp;• **Tab 1: Main Dashboard**：包含 4 大核心 KPI 指标卡、全局操作工具栏、全量节点监控表（含用户选定的 `[Batch Pause]` `[Batch Reload]` 以及行内 `[Config]`、高亮亮蓝底 `[Visual Config]` 与 `[Pause / Resume]`）、拓扑网络与通知渠道、用户权限管理。<br>&nbsp;&nbsp;• **Tab 2: Split Cockpit**：左侧 380px 宽栏提供大字号节点列表，右侧展开该节点专属的大字号净值卡片、同步持仓手数、配置哈希状态、独立的实时跟单流水明细，以及直接的操作指令组。<br>4. **拓扑与消息中心并列排版（填满留白）**：拓扑图改为左右对称双栏，右侧新增 **Message Center & Live Event Stream** 卡片，精确展示最近事件流与“xx 分钟前”（如 `2m ago (23:28)`）时间戳，彻底消除原版右侧的大片空白。<br>5. **静态安全自洽校验**：`tools/dash_check.py` 静态检查通过：180 个 DOM ID 引用全部自洽存在、0 重复 ID、89 个函数无重名、括号完全闭合；Release 二进制已重新编译内嵌。 |
 
 ---
 
-### 二十次审计：固定手数全流程峰值追踪、最新单播快照哈希与审计临时文件清理（2026-10-23 00:20；全部闭环落地）
+### 十三次审计：彻底消除遮挡弹窗，全量持仓与等待流水无缝常驻 Split Cockpit（2026-10-22 10:45）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **NEW-01** | **P1 高危** | `CopierReceiver.mq4:781, 2974, 4384, 4536, 5048, 5060` | **固定手数全流程峰值追踪与容量回收**：① 在 `HandleOpenEvent` 与 `HandleSnapshot` 开仓建仓时记录 `GetOrUpdateSenderPeakLots`，杜绝首个快照前减仓被漏掉；② 在 `HandleCloseEvent` 与 `ConvergeSender` 平仓入队处调用 `ForgetSenderPeakLots`，使 500 个槽位循环复用永不耗尽；③ `QueueTrimIfNeeded` 的 `CP_SIZE_FIXED` 统一使用 `ComputeReceiverLots` 的基数进行缩放，受 `maxLotsPerPosition` 约束。 |
-| **NEW-02** | **P2 中危** | `CopierSender.mq4:285, 1091, 1172, 1360` | **最新单播/修复快照哈希双重认可**：引入 `g_latestSnapHash`，在 `RebuildSnapshotPayload` 中记录最新 payload 哈希；`SnapTrack` 同时认可 `g_snapHash`（上次全网广播版本）与 `g_latestSnapHash`（最新单播/修复版本），消灭新 Receiver 握手或修复后回执被误判为 `BEHIND` 的问题；并在 Direct 广播后同步更新 `g_snapHash`。 |
-| **NEW-03** | **P2 中危** | `CopierReceiver.mq4:2953` | **`ComputeReceiverLots` 补齐信号源最小/最大手数过滤**：传入 `g_senderCfg[si].minsenderlotsize` 与 `maxsenderlotsize`，使过滤边界在所有开仓与减仓对账路径完整生效。 |
-| **NEW-04** | **P3 低危** | `hub/src/audit.rs:649` | **审计日志残留临时文件过滤与清理**：`leftover_rotations` 自动检测并删除中途崩溃残留的 `.gz.tmp.` 临时文件，并对有效未压缩日志排序后安全恢复归档。 |
+| **B32** | **极高·工作流与用户体验** | `hub/src/assets/dashboard.html` | **彻底消除遮挡弹窗，点击节点行直达分体驾驶舱**：<br>1. **移除全屏覆盖的 posmodal 遮罩弹窗**：原先点击主表节点行或 Positions 会弹出一个遮挡整个页面的大弹窗。现已彻底移除该弹出机制。<br>2. **主表行点击直达 Split Cockpit**：用户在 Terminals & Nodes 表格点击任意一行的任意位置（或点击 Positions / Waiting 单元格），系统平滑切换到 **Split Cockpit（分体驾驶舱）**，左侧自动选中高亮该节点项（`.node-entry.active`），右侧面板立刻对齐呈现该节点的全部明细。<br>3. **全套流水与逐单大表常驻右侧面板**：将原弹窗中的全套核心功能（节点状态横幅、Managed/Orphan/Gross 3大持仓卡片、3阶段等待管道状态、5级订单过滤器、逐单订单明细表，以及 Sender 上的 Open Positions Summary 与 Symbol 曝光表）完整移入 `#cockpit_detail_view`，成为 Split Cockpit 常驻的原生主工作台。<br>4. **快捷控制与实时联动**：在右侧横幅增加了该节点的直接操作按钮（`Visual Config`、`Query Live INI`、`Pause/Resume`、`Close All` 等），左侧切换节点或每秒收到新遥测数据时，右侧订单流水实时无缝联动刷新。 |
+
+---
+
+### 十四次审计：Web UI 交互深度调优、消息中心方案2落地与 DOM 静态防抖（2026-10-22 13:40）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **B33** | **高·UI/交互** | `hub/src/assets/dashboard.html` | **Split Cockpit 侧边栏 Hover 防闪烁与原生点击恢复**：<br>1. **消除侧边栏 hover 闪烁**：原先 `renderCockpit` 每 1 秒轮询清空 `listHost.innerHTML` 重建整个列表，导致鼠标悬停瞬间丢失 `:hover` 样式并产生剧烈抖动。**修法**：重构为 In-place DOM 增量更新（`s.cockpitRows` 缓存），仅当节点增删时局部更新，平时仅刷新内部字段和状态徽章，`:hover` 完全平稳不闪烁。<br>2. **恢复侧边栏点击激活**：给 `cockpit_node_list` 补充事件委托与节点切换逻辑，点击任意节点项瞬间激活右侧面板。<br>3. **按钮样式统一**：将 `Visual Config` 按钮从中性蓝色还原为系统规范的中性灰白渐变按钮，不再视觉突兀。 |
+| **B34** | **高·视觉与布局** | `hub/src/assets/dashboard.html` | **Message Center 消息中心方案 2 重构与持久化**：<br>1. **方案 2 扁平清爽排版**：采用 Proposal 2 布局，卡片左侧增加 4px 状态状态条（绿色/黄色/红色），卡片背景自适应昼夜模式，文字左对齐，右侧紧凑对齐 `[✓]` 单条标记已读按钮。<br>2. **20 条滚动历史流**：消息中心维持最近 20 条滚动事件日志，新事件实时从顶部插入，超额旧事件平滑淘汰，刷新页面后从 `localStorage`（键 `mtc_event_history_v2`）自动恢复。<br>3. **Dismiss All 语义优化**：`Dismiss All` 不再清空删除事件列表，而是将所有 20 条事件“全部标记为已读”（移除未读高亮背景），保持历史上下文可回溯。 |
+| **B35** | **中·显示标准** | `hub/src/assets/dashboard.html` | **Ping RTT 健康度门限规范与 CSS 变量无级缩放**：<br>1. **Ping 阈值校准**：按照用户标准，将微胶囊三色门限对齐为 `< 150ms` 绿色（极佳）、`150ms ~ 450ms` 黄色（良好/跨洲）、`> 450ms` 红色（高延迟/异常），修复 94ms/110ms 误标为黄色的问题。<br>2. **CSS 变量动态等比例缩放**：彻底移除各卡片、按钮和表格中的固定像素字号，全部统一绑定 CSS 自定义属性 `--font-base` 搭配 `calc()`，滑动顶部滑块时全局等比例丝滑缩放，绝不产生挤压或错位。 |
+
+---
+
+### 十五次审计：跳号检测修复、收据表老化驱逐、对端槽位重置与 DOM 稳态零写入（2026-10-22 14:35）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A34** | **高·逻辑自愈** | `src/Include/Copier/CopierConfig.mqh` `SenderCount()` | **已修复（彻底激活跳号 Gap 检测）**：原先 `SenderCount()` 扫描 `sender0..sender99` 时在找不到 `id` 的空槽未加 `break`，导致配置文件跳号（如只有 `sender0` 与 `sender2`）时 `n` 累加为 3，使调用方 `declaredMax + 1 > g_nSenders`（3 > 3）判断恒为假，跳号保护完全失效并强行加载不存在的空段。**修法**：在扫描循环中增加 `else break;`，遇到首个缺号段立即截断并返回，跳号检测 100% 灵敏报警。 |
+| **A35** | **中·长期运行** | `src/Experts/CopierSender.mq4` `SnapStaleIndex()` | **已修复（消除长期运行定长表饱和瘫痪）**：原先 `SnapStaleIndex` 仅使用 `g_snapStaleCount` 线性自增，一旦见过 100 个历史 peer，后续新 peer 永久返回 -1 彻底丧失定向快照自愈补发能力。**修法**：引入与 `CopierPeerTable` 对齐的老化驱逐机制，当表满 100 时自动复用最久未收到收据（`g_snapRcptMs` 最旧）的槽位，保证长期运行自愈能力永不饱和。 |
+| **B36** | **低·边界状态** | `src/Experts/CopierSender.mq4` `CheckPeers()` | **已修复（消除重用槽位状态污染）**：当 Peer 槽位被驱逐并复用给新节点时，外部 `g_peerWasDown[i]` 仍残留着旧节点的 `true` 状态，导致新节点刚连接时误报 `... is back`。**修法**：引入 `g_lastTrackedName[CP_MAX_PEERS]`，当槽位绑定的名字发生变化或置空时，自动重置 `g_peerWasDown[i] = false` 与 `g_peerAlerted[i] = 0`。 |
+| **B37** | **高·前端性能** | `hub/src/assets/dashboard.html` | **稳态 0 DOM 销毁与重建机制（Zero DOM Thrashing）**：<br>1. **拓扑 SVG 缓存**：`drawTopology` 增加 `s.lastTopoHtml` 缓存守卫，稳态下 100% 避免每秒清空重建整颗 SVG 节点树。<br>2. **主表单元格原位守卫**：`renderNodes` 中针对 `r.acc`、`r.ping`、`r.st`、`r.gate` 四个单元格引入内存 HTML 比对守卫（`r._accHtml`、`r._pingHtml`、`r._stHtml`、`r._gateHtml`），平稳运行时消除每秒数百个内部 DOM 节点的强制销毁重构。<br>3. **侧边栏字符串比对优化**：`renderCockpit` 改用纯 JS 变量缓存对比，彻底摆脱 DOM 读取逆向序列化开销。 |
+
+---
+
+### 十六次审计：13 项核心交易与系统 Bug 终结修复（2026-10-22 15:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A36** | **致命·交易** | `src/Experts/CopierReceiver.mq4:2484` | **`ExecuteQueue()` 出队重检风控双重计数与独立额度混淆**：<br>1. 出队时当前单已在队列，原本 `PendingOpens` 把当前单重复计算，导致 `MaxOpenPositions=1` 时永远无法开出首单，且 `MaxTotalLots` 手数被重复累加 2 次；<br>2. 传给各信号源独立风控 `g_senderRisk` 时误传全局账户持仓，导致额度被其他 sender 污染。<br>**修法**：出队头部订单重检时待入队 pending 传 0；独立风控计算该 sender 真实的 `sHeldCount/sHeldLots`；开仓成功后动态累加 `g_ourCount` 与 `g_ourLots`。 |
+| **A37** | **致命·资金** | `src/Include/Copier/CopierModel.mqh:224` | **`CopierRealizedToday()` 误将出入金计入当日交易盈亏**：原本未过滤成交类型，MT5 的 `DEAL_TYPE_BALANCE` 和 MT4 的 `OP_BALANCE`（出金提现）被直接作为巨额交易亏损累计入 `realisedToday`，导致提现出金直接误触 `DailyLossPct` 日亏熔断并强平全账户所有持仓！<br>**修法**：严格过滤只统计 `DEAL_TYPE_BUY/DEAL_TYPE_SELL` 和 MT4 `OP_BUY/OP_SELL`，并补齐 MT5 `DEAL_FEE`。 |
+| **A38** | **致命·点位** | `src/Experts/CopierReceiver.mq4:3043` | **`QueueModifyIfNeeded()` 挂单止盈止损被当前市价错误钳位**：修改已有挂单的止盈止损时，原本调用 `CopierFitStop` 使用实时市价 Bid/Ask 做最小停止位钳位，破坏了限价挂单的预设触发基准。<br>**修法**：挂单修改时以其触发价 `anchorPx` 调用 `CopierFitStopAt()`，仅市价单使用当前市价。 |
+| **A39** | **高危·失真** | `src/Experts/CopierReceiver.mq4:6195` | **`g_waitHeld=0;` 意外被写在注释行尾**：原本被注释吞掉导致从未重置，每秒 10 个 tick 持续 +10 暴涨至几万。<br>**修法**：独立成行，每个 sweep 正确清零复位。 |
+| **A40** | **高危·丢包** | `src/Experts/CopierReceiver.mq4:6025` | **多 Sender 快照合并 Conflation 单一全局覆盖导致丢包**：原本使用单一 `int lastSnap`，同 batch 中前面 Sender 的快照被误当作旧快照丢弃（`g_snapSkipped++`）。<br>**修法**：按 `e.sid` 独立跟踪各 Sender 在当前批次中的最新快照，杜绝丢包。 |
+| **A41** | **高危·容量** | `src/Include/Copier/CopierDefs.mqh:70` | **`CP_STATE_MAX_LINES`（256）与持仓容量（2048）脱节**：持仓超 256 笔时重启丢失持久化，Sender 重新分配新 UID 导致 Receiver 误判平仓重开。<br>**修法**：升级为 `CP_MAX_POSITIONS`（2048），完全对齐容量。 |
+| **A42** | **高危·显示** | `src/Experts/CopierSender.mq4:1248` | **Sender `UpdatePanel()` 稀疏表遍历使用 `Count()`**：稀疏表有空洞时，遍历 `0..Count()-1` 漏掉了高位槽位持仓。<br>**修法**：改为全表扫描 `for(int i=0;i<CP_MAX_POSITIONS;i++)`。 |
+| **B38** | **中·交易** | `src/Experts/CopierReceiver.mq4:2880` | **`QueueTrimIfNeeded()` 未校验 `local.kind == CP_ORD_MARKET`**：挂单手数变动时误发市价平仓 Deal 请求导致拒单。<br>**修法**：顶部增加 `if(local.kind!=CP_ORD_MARKET) return;`。 |
+| **B39** | **中·账户** | `src/Experts/CopierReceiver.mq4:5286` | **MT5 净额（Netting）账户防御缺失**：净额账户合并持仓会覆盖订单 Comment，陷入开/平死循环。<br>**修法**：在 `OnInit` 增加 `CopierIsNettingAccount()` 强校验并报错退出，强制使用 Hedging 账户。 |
+| **B40** | **中·显示** | `CopierSender.mq4` & `CopierReceiver.mq4` 面板 | **`UpdatePanel()` Peer 循环遇到空槽提前退出**：槽位释放后出现中间空洞时，循环过早退出导致后续在线节点未绘制。<br>**修法**：独立维护 `shown` 计数达到 `peerShow` 时退出。 |
+| **B41** | **中·配置** | `src/Experts/CopierReceiver.mq4:1216` | **`SerializeCurrentConfigToIni()` 遗漏 `pendingfillgraceseconds`**：`[common]` 漏写该字段导致配置哈希微小漂移。<br>**修法**：在 `[common]` 补齐序列化。 |
+| **B42** | **中·字段** | `src/Include/Copier/CopierState.mqh` | **`CopierPosTable` 维护遗漏 `pstop` 字段 & 挂单未遵循 `mirrorstops`**：<br>**修法**：`Clear()`, `CheckSlot()`, `UpdateNumericAt()` 补齐 `pstop` 维护；挂单开仓时增加 `&& g_senderCfg[si].mirrorstops` 检查。 |
+| **B43** | **中·防御** | `src/Experts/CopierReceiver.mq4` | **细碎状态防御加固**：`DedupLocal()` 补入 `g_senderIgnore[si]`；`StopsPrune()` 取各 sender 最大节流时间；Receiver `CheckPeers()` 补入槽位名字切换重置。 |
+
+---
+
+### 十七次审计：多空方向反转彻底根治、快照即时刷新、非阻塞传输与跨平台 64 位大订单支持（2026-10-22 18:15；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A43** | **致命·显示** | `positions.rs` / `registry.rs` / `dashboard.html` | **多空方向（BUY/SELL）完全颠倒反转修复**：<br>1. 协议定义 `BUY = 1, SELL = -1`。Rust Hub 原本用无符号 `u8` 解析，将 `-1` 错误回退为 `0`；<br>2. Web 前端误将 `0` 判为 `BUY`、`1` 判为 `SELL`，导致控制台所有多单均反标为红色的 SELL，所有空单均反标为绿色的 BUY！<br>**修法**：Rust 端统一将 `side` 改为 `i8` 并实现 `parse_i8`；前端重构为 `Number(side) > 0` 判定为 BUY，彻底纠正颠倒显示。 |
+| **A44** | **致命·交易** | `src/Experts/CopierSender.mq4:1480` | **Sender 开平仓未刷新快照缓存导致快照修复回滚**：原本仅周期性生成快照，开平仓事件后 `g_snapPayload` 仍停留在旧状态，一旦新接收端接入（`H=""`）或心跳滞后触发重传，旧快照带着递增 `seq` 冲刷接收端导致刚平订单被重开。<br>**修法**：新增 `RefreshSnapshotCache(now)`，每当检测到开平仓、修改或状态突变（`g_stateDirty`）时在同一 tick 立即刷新缓存，重发快照永远 100% 对应真实持仓。 |
+| **A45** | **高危·配置** | `CopierSizing.mqh` / `CopierReceiver.mq4` / `dashboard.html` | **`lotmode=off` 序列化冲突与前端 `risk` 模式清理**：原本输出带括号的说明字符串，导致回推时被重置为 `multiplier`，且前端提供未实现的 `risk` 选项。<br>**修法**：新增 `CopierLotModeKey(mode)` 规范输出小写键名；前端移除未实现的 `risk` 选项，防止误选导致风险乘数异常。 |
+| **A46** | **高危·平台** | `CopierDefs.mqh` / `CopierCodec.mqh` / `CopierModel.mqh` | **MQL4 32 位整型溢出截断（64 位大订单号支持）**：`ticket/magic/openTime/seq/ts` 在 MQL4 下原直接调用 32 位 `StringToInteger`，超 21.4 亿的大订单号跨端跟单时截断成负数。<br>**修法**：核心编解码、信封与 Comment 反解全部统一替换为 64 位 `CopierParseLong`。 |
+| **A47** | **高危·传输** | `src/Include/Copier/CopierTransport.mqh` | **`SendUp()` 违背非阻塞契约与 `m_sub` 缺少 `SNDHWM`**：原本 `sendMore` / `send` 漏传 `nowait=true`（采用了阻塞式默认值），套接字满时会卡死 EA 线程；且未设 `setSendHighWaterMark`。<br>**修法**：补传非阻塞标志 `true`；补齐 `m_sub.setSendHighWaterMark(CP_SNDHWM)`；校验 `useCurve` 公钥为空时明确拒绝。 |
+| **A48** | **高危·状态** | `src/Experts/CopierReceiver.mq4` | **配置热重载动作队列残留与面板关闭残留**：推送新配置或 `reload` 时队列中可能存留旧 `senderIdx` 动作；关闭 `ShowPanel` 时未销毁图表对象。<br>**修法**：重载配置后增加 `ClearQueue()`；`ShowPanel` 变 false 时调用 `g_panel.Destroy()`。 |
+| **B44** | **中·时段** | `src/Include/Copier/CopierFilter.mqh` | **`DayTradingTimes` 跨午夜按星期归属优化**：周五跨午夜时段（如 `22:00-02:00`）在周六凌晨 01:00 会误查周六导致时段失效。<br>**修法**：增加前一天跨午夜延伸窗口检测，凌晨时段无缝延续。 |
+| **B45** | **中·统计** | `hub/src/stats.rs` & `hub/src/main.rs` | **Rust Hub `REG` 速率告警除以在线节点数**：原本未除以节点数导致多节点集中响应 WHO 时误报风暴。<br>**修法**：引入 `print_and_reset_with_nodes(node_count)`，速率真实除以节点数，消除误报。 |
+| **B46** | **优化·测试** | `CopierSelfTest.mq4` & `tools/snapshot_receipt_test.py` | **测试套件契约对齐**：构造合法 `side=1/-1` 枚举；补齐 64 位 `ticket` 容量还原断言。 |
+
+---
+
+### 十八次审计：全栈 19 项缺陷终结修复与系统加固（2026-10-22 20:15；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **A49** | **高·风控** | `src/Experts/CopierReceiver.mq4:2520` | **`ExecuteQueue` 单 Sender 风控同 Tick 累加**：修复同一 Tick 内连续开出多单时，`sHeldCount`/`sHeldLots` 未累加本 Tick 成交单导致单发送端上限可被突破的问题，引入 `sAddedCount`/`sAddedLots` 同步守卫。 |
+| **A50** | **中·协议** | `src/Experts/CopierReceiver.mq4:6475` | **消除 `STAT` 报文重复 `EQ=/BL=` 字段**：`putPositionSummary` 已包含权益与余额，移除 `putFigures` 中的重复拼接，净化通信负载。 |
+| **A51** | **中·缓存** | `src/Experts/CopierReceiver.mq4:3270` | **`CopierCachedOrder` 补齐 `pstop` 字段**：快速缓存结构体与 Prediction 1/2 比对补齐 `pstop` 字段，确保 StopLimit 订单仅修改限价时正确更新。 |
+| **A52** | **中·平台** | `src/Include/Copier/CopierConfig.mqh:293, 588` | **`CopierConfig.mqh` 剩余 64 位解析修复**：`CopierResolveMagic` 与 `CopierReadIniRevision` 替换为 64 位 `CopierParseLong`，杜绝 32 位溢出。 |
+| **A53** | **中·编码** | `src/Include/Copier/CopierCodec.mqh:284` | **`CopierCompressField` UTF-8 多字节处理**：使用 `count=-1` 完整转换并在检测到末尾 `\0` 时安全截断，杜绝多字节截断和解压脏字节。 |
+| **A54** | **高·安全** | `hub/src/envelope.rs:104` | **`decompress_field` 4MB 解压上限与非 UTF-8 容错**：增加 `.take(4MB)` 彻底免疫 Zip Bomb 攻击，读取为字节流并使用 `from_utf8().unwrap_or_else(latin1)`，杜绝 ANSI 编码注释解压失败。 |
+| **A55** | **高·数据** | `hub/src/positions.rs:53, 273` | **`positions.rs` 补齐挂单 15 字段解析与市价回退**：补齐 `kind/ptype/pprice/pstop/pexpire` 解析，当挂单 `open_px==0.0` 时有效回退至触发价 `pprice`。 |
+| **A56** | **中·告警** | `hub/src/alerts.rs:340` | **`AlertEngine` 风控告警风暴消除**：记录 `last_risk_tripped` 与 `last_risk_blocked`，仅在状态变化或拦截数递增时告警，恢复 `"ok"` 或 0 时自动 `rearm`，消除 5 分钟循环轰炸。 |
+| **A57** | **中·稳定** | `commands.rs` / `config.rs` / `api.rs` | **锁机制统一与 `logout` 锁内 I/O 剥离**：替换残留的 4 处 `.lock().unwrap()` 为 `lock_or_recover()`，登出审计在锁外执行。 |
+| **A58** | **中·性能** | `hub/src/commands.rs:395` | **`CommandStore` 引入 `in_flight` 活跃索引**：每秒 `due()` 轮询仅遍历活跃待发指令，从 $O(N_{\text{全量历史}})$ 降为 $O(1)$；新增 `recent_unknown` 供告警调用。 |
+| **A59** | **中·I/O** | `hub/src/config.rs:324` | **`ConfigStore::history()` 保留 `ini` 文本**：移除不必要的 `remove("ini")`，使历史版本能够直接加载查看。 |
+| **A60** | **低·存储** | `hub/src/notifications.rs:356` | **`NotificationStore::save()` 补齐 `sync_all()`**：重命名临时文件前硬件强制落盘，防止断电 0 字节。 |
+| **B47** | **高·前端** | `hub/src/assets/dashboard.html:5468` | **修复 `#cfgpullcurrentbtn` `postJson` 缺失报错**：改用原生 `fetch` 与 `authHeaders` 重构，彻底修复点击按钮抛出 `ReferenceError` 导致按钮卡死的致命 Bug。 |
+| **B48** | **高·前端** | `hub/src/assets/dashboard.html:5648` | **修复 `#cfgloadhist` 历史 INI 加载失败**：与后端保留的 `rec.ini` 对齐，选择历史版本即可一键恢复并填入编辑器。 |
+| **B49** | **高·前端** | `hub/src/assets/dashboard.html` | **补齐 `pendingfillgraceseconds` 并防御未知键抹除**：表单、卡片和序列化补全该参数，保存时自动合并未知参数。 |
+| **B50** | **中·前端** | `hub/src/assets/dashboard.html:3688` | **HTTP 轮询降级模式拉取真实持仓**：`refresh()` 补齐对 `/api/v1/positions` 的请求，消灭 WebSocket 断开时持仓被清空的 Bug。 |
+| **B51** | **中·前端** | `hub/src/assets/dashboard.html:2291` | **顶部 KPI 卡片持仓隔离统计**：大字号仅展示 Sender 主账户持仓，副标题清晰呈现各跟单端总镜像仓位与手数，消除翻倍失真。 |
+| **B52** | **中·工具** | `tools/logcheck.py:42` | **`logcheck.py` 支持挂单与部分平仓正则**：识别 `place-pending`、`partial-close` 与 `remove-duplicate`，消灭误报孤儿平仓。 |
+| **B53** | **低·测试** | `tools/hub_config_test.py:655` | **测试注释哈希与章节编号校对**：纠正参考哈希注释与章节顺延编号。 |
 
 ---
 
@@ -576,134 +638,104 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-### 十八次审计：全栈 19 项缺陷终结修复与系统加固（2026-10-22 20:15；全部闭环落地）
+### 二十次审计：固定手数全流程峰值追踪、最新单播快照哈希与审计临时文件清理（2026-10-23 00:20；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **A49** | **高·风控** | `src/Experts/CopierReceiver.mq4:2520` | **`ExecuteQueue` 单 Sender 风控同 Tick 累加**：修复同一 Tick 内连续开出多单时，`sHeldCount`/`sHeldLots` 未累加本 Tick 成交单导致单发送端上限可被突破的问题，引入 `sAddedCount`/`sAddedLots` 同步守卫。 |
-| **A50** | **中·协议** | `src/Experts/CopierReceiver.mq4:6475` | **消除 `STAT` 报文重复 `EQ=/BL=` 字段**：`putPositionSummary` 已包含权益与余额，移除 `putFigures` 中的重复拼接，净化通信负载。 |
-| **A51** | **中·缓存** | `src/Experts/CopierReceiver.mq4:3270` | **`CopierCachedOrder` 补齐 `pstop` 字段**：快速缓存结构体与 Prediction 1/2 比对补齐 `pstop` 字段，确保 StopLimit 订单仅修改限价时正确更新。 |
-| **A52** | **中·平台** | `src/Include/Copier/CopierConfig.mqh:293, 588` | **`CopierConfig.mqh` 剩余 64 位解析修复**：`CopierResolveMagic` 与 `CopierReadIniRevision` 替换为 64 位 `CopierParseLong`，杜绝 32 位溢出。 |
-| **A53** | **中·编码** | `src/Include/Copier/CopierCodec.mqh:284` | **`CopierCompressField` UTF-8 多字节处理**：使用 `count=-1` 完整转换并在检测到末尾 `\0` 时安全截断，杜绝多字节截断和解压脏字节。 |
-| **A54** | **高·安全** | `hub/src/envelope.rs:104` | **`decompress_field` 4MB 解压上限与非 UTF-8 容错**：增加 `.take(4MB)` 彻底免疫 Zip Bomb 攻击，读取为字节流并使用 `from_utf8().unwrap_or_else(latin1)`，杜绝 ANSI 编码注释解压失败。 |
-| **A55** | **高·数据** | `hub/src/positions.rs:53, 273` | **`positions.rs` 补齐挂单 15 字段解析与市价回退**：补齐 `kind/ptype/pprice/pstop/pexpire` 解析，当挂单 `open_px==0.0` 时有效回退至触发价 `pprice`。 |
-| **A56** | **中·告警** | `hub/src/alerts.rs:340` | **`AlertEngine` 风控告警风暴消除**：记录 `last_risk_tripped` 与 `last_risk_blocked`，仅在状态变化或拦截数递增时告警，恢复 `"ok"` 或 0 时自动 `rearm`，消除 5 分钟循环轰炸。 |
-| **A57** | **中·稳定** | `commands.rs` / `config.rs` / `api.rs` | **锁机制统一与 `logout` 锁内 I/O 剥离**：替换残留的 4 处 `.lock().unwrap()` 为 `lock_or_recover()`，登出审计在锁外执行。 |
-| **A58** | **中·性能** | `hub/src/commands.rs:395` | **`CommandStore` 引入 `in_flight` 活跃索引**：每秒 `due()` 轮询仅遍历活跃待发指令，从 $O(N_{\text{全量历史}})$ 降为 $O(1)$；新增 `recent_unknown` 供告警调用。 |
-| **A59** | **中·I/O** | `hub/src/config.rs:324` | **`ConfigStore::history()` 保留 `ini` 文本**：移除不必要的 `remove("ini")`，使历史版本能够直接加载查看。 |
-| **A60** | **低·存储** | `hub/src/notifications.rs:356` | **`NotificationStore::save()` 补齐 `sync_all()`**：重命名临时文件前硬件强制落盘，防止断电 0 字节。 |
-| **B47** | **高·前端** | `hub/src/assets/dashboard.html:5468` | **修复 `#cfgpullcurrentbtn` `postJson` 缺失报错**：改用原生 `fetch` 与 `authHeaders` 重构，彻底修复点击按钮抛出 `ReferenceError` 导致按钮卡死的致命 Bug。 |
-| **B48** | **高·前端** | `hub/src/assets/dashboard.html:5648` | **修复 `#cfgloadhist` 历史 INI 加载失败**：与后端保留的 `rec.ini` 对齐，选择历史版本即可一键恢复并填入编辑器。 |
-| **B49** | **高·前端** | `hub/src/assets/dashboard.html` | **补齐 `pendingfillgraceseconds` 并防御未知键抹除**：表单、卡片和序列化补全该参数，保存时自动合并未知参数。 |
-| **B50** | **中·前端** | `hub/src/assets/dashboard.html:3688` | **HTTP 轮询降级模式拉取真实持仓**：`refresh()` 补齐对 `/api/v1/positions` 的请求，消灭 WebSocket 断开时持仓被清空的 Bug。 |
-| **B51** | **中·前端** | `hub/src/assets/dashboard.html:2291` | **顶部 KPI 卡片持仓隔离统计**：大字号仅展示 Sender 主账户持仓，副标题清晰呈现各跟单端总镜像仓位与手数，消除翻倍失真。 |
-| **B52** | **中·工具** | `tools/logcheck.py:42` | **`logcheck.py` 支持挂单与部分平仓正则**：识别 `place-pending`、`partial-close` 与 `remove-duplicate`，消灭误报孤儿平仓。 |
-| **B53** | **低·测试** | `tools/hub_config_test.py:655` | **测试注释哈希与章节编号校对**：纠正参考哈希注释与章节顺延编号。 |
+| **NEW-01** | **P1 高危** | `CopierReceiver.mq4:781, 2974, 4384, 4536, 5048, 5060` | **固定手数全流程峰值追踪与容量回收**：① 在 `HandleOpenEvent` 与 `HandleSnapshot` 开仓建仓时记录 `GetOrUpdateSenderPeakLots`，杜绝首个快照前减仓被漏掉；② 在 `HandleCloseEvent` 与 `ConvergeSender` 平仓入队处调用 `ForgetSenderPeakLots`，使 500 个槽位循环复用永不耗尽；③ `QueueTrimIfNeeded` 的 `CP_SIZE_FIXED` 统一使用 `ComputeReceiverLots` 的基数进行缩放，受 `maxLotsPerPosition` 约束。 |
+| **NEW-02** | **P2 中危** | `CopierSender.mq4:285, 1091, 1172, 1360` | **最新单播/修复快照哈希双重认可**：引入 `g_latestSnapHash`，在 `RebuildSnapshotPayload` 中记录最新 payload 哈希；`SnapTrack` 同时认可 `g_snapHash`（上次全网广播版本）与 `g_latestSnapHash`（最新单播/修复版本），消灭新 Receiver 握手或修复后回执被误判为 `BEHIND` 的问题；并在 Direct 广播后同步更新 `g_snapHash`。 |
+| **NEW-03** | **P2 中危** | `CopierReceiver.mq4:2953` | **`ComputeReceiverLots` 补齐信号源最小/最大手数过滤**：传入 `g_senderCfg[si].minsenderlotsize` 与 `maxsenderlotsize`，使过滤边界在所有开仓与减仓对账路径完整生效。 |
+| **NEW-04** | **P3 低危** | `hub/src/audit.rs:649` | **审计日志残留临时文件过滤与清理**：`leftover_rotations` 自动检测并删除中途崩溃残留的 `.gz.tmp.` 临时文件，并对有效未压缩日志排序后安全恢复归档。 |
 
 ---
 
-### 十七次审计：多空方向反转彻底根治、快照即时刷新、非阻塞传输与跨平台 64 位大订单支持（2026-10-22 18:15；全部闭环落地）
+### 二十一次审计：退避槽位映射补全、全量UTF-8配置哈希、挂单触发价同步与配置继承保护（2026-10-23 02:00；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **A43** | **致命·显示** | `positions.rs` / `registry.rs` / `dashboard.html` | **多空方向（BUY/SELL）完全颠倒反转修复**：<br>1. 协议定义 `BUY = 1, SELL = -1`。Rust Hub 原本用无符号 `u8` 解析，将 `-1` 错误回退为 `0`；<br>2. Web 前端误将 `0` 判为 `BUY`、`1` 判为 `SELL`，导致控制台所有多单均反标为红色的 SELL，所有空单均反标为绿色的 BUY！<br>**修法**：Rust 端统一将 `side` 改为 `i8` 并实现 `parse_i8`；前端重构为 `Number(side) > 0` 判定为 BUY，彻底纠正颠倒显示。 |
-| **A44** | **致命·交易** | `src/Experts/CopierSender.mq4:1480` | **Sender 开平仓未刷新快照缓存导致快照修复回滚**：原本仅周期性生成快照，开平仓事件后 `g_snapPayload` 仍停留在旧状态，一旦新接收端接入（`H=""`）或心跳滞后触发重传，旧快照带着递增 `seq` 冲刷接收端导致刚平订单被重开。<br>**修法**：新增 `RefreshSnapshotCache(now)`，每当检测到开平仓、修改或状态突变（`g_stateDirty`）时在同一 tick 立即刷新缓存，重发快照永远 100% 对应真实持仓。 |
-| **A45** | **高危·配置** | `CopierSizing.mqh` / `CopierReceiver.mq4` / `dashboard.html` | **`lotmode=off` 序列化冲突与前端 `risk` 模式清理**：原本输出带括号的说明字符串，导致回推时被重置为 `multiplier`，且前端提供未实现的 `risk` 选项。<br>**修法**：新增 `CopierLotModeKey(mode)` 规范输出小写键名；前端移除未实现的 `risk` 选项，防止误选导致风险乘数异常。 |
-| **A46** | **高危·平台** | `CopierDefs.mqh` / `CopierCodec.mqh` / `CopierModel.mqh` | **MQL4 32 位整型溢出截断（64 位大订单号支持）**：`ticket/magic/openTime/seq/ts` 在 MQL4 下原直接调用 32 位 `StringToInteger`，超 21.4 亿的大订单号跨端跟单时截断成负数。<br>**修法**：核心编解码、信封与 Comment 反解全部统一替换为 64 位 `CopierParseLong`。 |
-| **A47** | **高危·传输** | `src/Include/Copier/CopierTransport.mqh` | **`SendUp()` 违背非阻塞契约与 `m_sub` 缺少 `SNDHWM`**：原本 `sendMore` / `send` 漏传 `nowait=true`（采用了阻塞式默认值），套接字满时会卡死 EA 线程；且未设 `setSendHighWaterMark`。<br>**修法**：补传非阻塞标志 `true`；补齐 `m_sub.setSendHighWaterMark(CP_SNDHWM)`；校验 `useCurve` 公钥为空时明确拒绝。 |
-| **A48** | **高危·状态** | `src/Experts/CopierReceiver.mq4` | **配置热重载动作队列残留与面板关闭残留**：推送新配置或 `reload` 时队列中可能存留旧 `senderIdx` 动作；关闭 `ShowPanel` 时未销毁图表对象。<br>**修法**：重载配置后增加 `ClearQueue()`；`ShowPanel` 变 false 时调用 `g_panel.Destroy()`。 |
-| **B44** | **中·时段** | `src/Include/Copier/CopierFilter.mqh` | **`DayTradingTimes` 跨午夜按星期归属优化**：周五跨午夜时段（如 `22:00-02:00`）在周六凌晨 01:00 会误查周六导致时段失效。<br>**修法**：增加前一天跨午夜延伸窗口检测，凌晨时段无缝延续。 |
-| **B45** | **中·统计** | `hub/src/stats.rs` & `hub/src/main.rs` | **Rust Hub `REG` 速率告警除以在线节点数**：原本未除以节点数导致多节点集中响应 WHO 时误报风暴。<br>**修法**：引入 `print_and_reset_with_nodes(node_count)`，速率真实除以节点数，消除误报。 |
-| **B46** | **优化·测试** | `CopierSelfTest.mq4` & `tools/snapshot_receipt_test.py` | **测试套件契约对齐**：构造合法 `side=1/-1` 枚举；补齐 64 位 `ticket` 容量还原断言。 |
+| **BUG-01** | **P0 致命** | `CopierState.mqh:789, 814, 829` | **`CopierBackoff` 补齐 `m_slot` 槽位映射**：在 `CopierBackoff` 中增加 `int m_slot[CP_BACKOFF_SLOTS]`，将哈希桶索引 `k` 与线性数据槽位 `i` 解耦对齐，彻底修复 `Find` 永远返回 `-1` 导致退避锁完全瘫痪的致命 Bug。 |
+| **BUG-02** | **优化** | `CopierDefs.mqh:584` | **`CopierReplaceAll` 升级为内置 `StringReplace`**：消除硬编码的 256 次循环上限，提升大字符串替换效率。 |
+| **BUG-03** | **P1 严重** | `CopierReceiver.mq4:1450` | **`LoadConfigForHub` 热重载前重置运行时变量**：在 `ApplyCommonConfig` 之前调用 `ResetRuntimeInputsFromInputs()`，彻底消除从 `[common]` 删除的配置项在内存中残留并反向污染 `CFGRPT` 的问题。 |
+| **BUG-04** | **P1 严重** | `CopierSender.mq4:1428` / `CopierReceiver.mq4:2652, 3145` | **挂单触发价与过期时间变动同步**：Sender 端在 `otherDiff`（触发价/过期变动）时标记 `g_stateDirty = true` 触发快照刷新；Receiver 端 `QueueModifyIfNeeded` 检查 `pprice`/`pstop`/`pexpire` 变动，并调用 `CopierModifyPendingOrder` 同步修改经纪商挂单。 |
+| **BUG-05** | **P1 严重** | `CopierCodec.mqh:424` | **`CopierCfgHash` 全量 UTF-8 字节哈希**：`StringToCharArray` 传入 `count = -1` 并去除末尾 `\0`，遍历全部字节，彻底修复包含中文或非 ASCII 注释时配置哈希与 Rust Hub 不一致导致每 60s 循环触发 `reqcfg` 的问题。 |
+| **BUG-06** | **P1 严重** | `CopierSender.mq4:427, 576` | **`BroadcastLots` 精度扩展与 `EmitClose` 手数缩放**：`BroadcastLots` 支持 8 位小数（`CP_DIGITS_LOTS`），防止微手数 (0.001) 归零；`EmitClose` 统一调用 `BroadcastLots(p.lots)`。 |
+| **BUG-07** | **P1 严重** | `CopierReceiver.mq4:760, 4625` | **`g_uidPeakLots` 垃圾回收机制**：增加 `PruneSenderPeakLots()`，在表满或定期修剪时自动回收不在 `g_desired` 与 `g_local` 中的已结束订单，永不耗尽 2048 槽位。 |
+| **BUG-08** | **P2 中危** | `CopierReceiver.mq4:4575, 4635` | **`g_stUid` 止损覆盖表闭环清理**：增加 `StopsForget()`，并在 `StopsPrune` 中对不在 `g_desired` 与本地持仓中的已平仓 override 进行彻底清理。 |
+| **BUG-09** | **P2 中危** | `dashboard.html:5176, 5267` | **Web 可视化配置保护 `[common]` 继承**：卡片 Checkbox 标记 `data-init` 与 `data-def`，未作显式修改的复选框不输出配置，彻底保护从 `[common]` 继承全局开关的机制。 |
+| **BUG-10** | **P2 中危** | `CopierModel.mqh:466, 642` | **MT5 挂单部分成交状态兼容**：`CopierReadPositions` 与 `CopierResolveCloseTicket` 同时匹配 `ORDER_STATE_PLACED` 与 `ORDER_STATE_PARTIAL`，消除部分成交挂单的状态盲区与撤单失败。 |
+| **TEST-01c** | **工具** | `tools/logcheck.py:145` | **日志跨世代同秒排序校正**：按 `.log.2` < `.log.1` < `.log` 排序日志文件，确保同秒内事件严格保持真实时间流顺序。 |
 
 ---
 
-### 十六次审计：13 项核心交易与系统 Bug 终结修复（2026-10-22 15:20；全部闭环落地）
+### 二十二次审计：手数语义纠偏、全栈字符串与快照 O(1) 优化、命令日志压缩与广播合并（2026-10-23 10:15；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **A36** | **致命·交易** | `src/Experts/CopierReceiver.mq4:2484` | **`ExecuteQueue()` 出队重检风控双重计数与独立额度混淆**：<br>1. 出队时当前单已在队列，原本 `PendingOpens` 把当前单重复计算，导致 `MaxOpenPositions=1` 时永远无法开出首单，且 `MaxTotalLots` 手数被重复累加 2 次；<br>2. 传给各信号源独立风控 `g_senderRisk` 时误传全局账户持仓，导致额度被其他 sender 污染。<br>**修法**：出队头部订单重检时待入队 pending 传 0；独立风控计算该 sender 真实的 `sHeldCount/sHeldLots`；开仓成功后动态累加 `g_ourCount` 与 `g_ourLots`。 |
-| **A37** | **致命·资金** | `src/Include/Copier/CopierModel.mqh:224` | **`CopierRealizedToday()` 误将出入金计入当日交易盈亏**：原本未过滤成交类型，MT5 的 `DEAL_TYPE_BALANCE` 和 MT4 的 `OP_BALANCE`（出金提现）被直接作为巨额交易亏损累计入 `realisedToday`，导致提现出金直接误触 `DailyLossPct` 日亏熔断并强平全账户所有持仓！<br>**修法**：严格过滤只统计 `DEAL_TYPE_BUY/DEAL_TYPE_SELL` 和 MT4 `OP_BUY/OP_SELL`，并补齐 MT5 `DEAL_FEE`。 |
-| **A38** | **致命·点位** | `src/Experts/CopierReceiver.mq4:3043` | **`QueueModifyIfNeeded()` 挂单止盈止损被当前市价错误钳位**：修改已有挂单的止盈止损时，原本调用 `CopierFitStop` 使用实时市价 Bid/Ask 做最小停止位钳位，破坏了限价挂单的预设触发基准。<br>**修法**：挂单修改时以其触发价 `anchorPx` 调用 `CopierFitStopAt()`，仅市价单使用当前市价。 |
-| **A39** | **高危·失真** | `src/Experts/CopierReceiver.mq4:6195` | **`g_waitHeld=0;` 意外被写在注释行尾**：原本被注释吞掉导致从未重置，每秒 10 个 tick 持续 +10 暴涨至几万。<br>**修法**：独立成行，每个 sweep 正确清零复位。 |
-| **A40** | **高危·丢包** | `src/Experts/CopierReceiver.mq4:6025` | **多 Sender 快照合并 Conflation 单一全局覆盖导致丢包**：原本使用单一 `int lastSnap`，同 batch 中前面 Sender 的快照被误当作旧快照丢弃（`g_snapSkipped++`）。<br>**修法**：按 `e.sid` 独立跟踪各 Sender 在当前批次中的最新快照，杜绝丢包。 |
-| **A41** | **高危·容量** | `src/Include/Copier/CopierDefs.mqh:70` | **`CP_STATE_MAX_LINES`（256）与持仓容量（2048）脱节**：持仓超 256 笔时重启丢失持久化，Sender 重新分配新 UID 导致 Receiver 误判平仓重开。<br>**修法**：升级为 `CP_MAX_POSITIONS`（2048），完全对齐容量。 |
-| **A42** | **高危·显示** | `src/Experts/CopierSender.mq4:1248` | **Sender `UpdatePanel()` 稀疏表遍历使用 `Count()`**：稀疏表有空洞时，遍历 `0..Count()-1` 漏掉了高位槽位持仓。<br>**修法**：改为全表扫描 `for(int i=0;i<CP_MAX_POSITIONS;i++)`。 |
-| **B38** | **中·交易** | `src/Experts/CopierReceiver.mq4:2880` | **`QueueTrimIfNeeded()` 未校验 `local.kind == CP_ORD_MARKET`**：挂单手数变动时误发市价平仓 Deal 请求导致拒单。<br>**修法**：顶部增加 `if(local.kind!=CP_ORD_MARKET) return;`。 |
-| **B39** | **中·账户** | `src/Experts/CopierReceiver.mq4:5286` | **MT5 净额（Netting）账户防御缺失**：净额账户合并持仓会覆盖订单 Comment，陷入开/平死循环。<br>**修法**：在 `OnInit` 增加 `CopierIsNettingAccount()` 强校验并报错退出，强制使用 Hedging 账户。 |
-| **B40** | **中·显示** | `CopierSender.mq4` & `CopierReceiver.mq4` 面板 | **`UpdatePanel()` Peer 循环遇到空槽提前退出**：槽位释放后出现中间空洞时，循环过早退出导致后续在线节点未绘制。<br>**修法**：独立维护 `shown` 计数达到 `peerShow` 时退出。 |
-| **B41** | **中·配置** | `src/Experts/CopierReceiver.mq4:1216` | **`SerializeCurrentConfigToIni()` 遗漏 `pendingfillgraceseconds`**：`[common]` 漏写该字段导致配置哈希微小漂移。<br>**修法**：在 `[common]` 补齐序列化。 |
-| **B42** | **中·字段** | `src/Include/Copier/CopierState.mqh` | **`CopierPosTable` 维护遗漏 `pstop` 字段 & 挂单未遵循 `mirrorstops`**：<br>**修法**：`Clear()`, `CheckSlot()`, `UpdateNumericAt()` 补齐 `pstop` 维护；挂单开仓时增加 `&& g_senderCfg[si].mirrorstops` 检查。 |
-| **B43** | **中·防御** | `src/Experts/CopierReceiver.mq4` | **细碎状态防御加固**：`DedupLocal()` 补入 `g_senderIgnore[si]`；`StopsPrune()` 取各 sender 最大节流时间；Receiver `CheckPeers()` 补入槽位名字切换重置。 |
+| **A1** | **P0 严重** | `CopierReceiver.mq4:2988` | **`ComputeReceiverLots` 纠偏发送端手数过滤器误用**：恢复最小/最大过滤参数为 `0.0, 0.0`，消除发送端手数门限误作本地最终目标上下限导致的静默截断（无日志）与固定手数模式下直接被拒拒绝开仓的严重缺陷。 |
+| **A2** | **P1 高危** | `CopierReceiver.mq4:3689, 3710, 3714` | **Web 持仓明细与等待列表对齐 2048 真实容量**：移除 128 条硬编码限制，对齐 `CP_MAX_POSITIONS`（2048），消除大账户持仓数量与明细表行数脱节的静默截断现象。 |
+| **A3** | **P1 高危** | `CopierReceiver.mq4:758` | **`g_uidPeakLots` 4096 桶直接映射 FNV 哈希索引**：为快照建仓峰值查找引入 `g_peakLookup`，消灭 2048 仓位下每秒 200 万次字符串比较的 O(N²) 性能黑洞。 |
+| **A4 & A5** | **P1 高危** | `CopierSender.mq4:634, 1500` | **Sender 表满拒绝分配 UID 与 `InsertEmpty` 返回值防御**：表满时限频报警并跳过分配 UID，彻底消灭极端表满情况下每个 tick 生成新 UID 重复轰炸 `EmitOpen` 的死循环。 |
+| **A6** | **P2 中危** | `hub/src/alerts.rs:364` | **`risk.blocked` 移除清零引发的误 `rearm`**：接收端每分钟汇报归零不再重置告警静默窗口，严格遵守 300 秒告警抑制，彻底平息持续风控拦截时的通知轰炸。 |
+| **A7** | **P2 中危** | `CopierReceiver.mq4:4770` | **`HandleCfg` 升级为 64 位 `CopierParseLong`**：消除全库最后一处 32 位 `StringToInteger` 对 `REV` 的解析，防止超 21.4 亿溢出导致反向重发。 |
+| **A8** | **性能优化** | `CopierLog.mqh:35, 188, 290` | **日志 4 槽位轮询合并与 `CopierOnceLog` 256 桶直接映射缓存**：消除交替日志轰炸失效问题，并将单仓位多 key 限频查询降至 1 次比较。 |
+| **A9 & A10** | **代码健壮** | `CopierConfig.mqh:126` / `CopierState.mqh:829` | **清理无用条件判断与 `InsertHash` 探测上限保底**：消灭空分支并为开放寻址探测增加 `probes < 256` 上限，杜绝潜在死循环。 |
+| **A11** | **代码清理** | `hub/src/positions.rs:273, 326` | **删除 `positions.rs` 中未读取的 `order` 向量**：消除每记录无意义克隆与内存增长。 |
+| **B1** | **P1 高危** | `CopierDefs.mqh:125` / `CopierReceiver.mq4:1275` / `CopierConfig.mqh:375, 413, 499` / `CopierCodec.mqh:438` | **全栈引入 `CopierStrBuilder` 分块树状拼接**：彻底消除 MQL 字符串 `+=` 在 100 源配置序列化（126 处 `out +=`）、转义（逐字符 `out +=`）、文件读取与快照构建中高达数十 GB 的内存拷贝开销，主线程耗时从秒级骤降至毫秒级。 |
+| **B2** | **性能优化** | `CopierCodec.mqh:152` | **快照单记录解码零 `StringSplit` 单趟范围解析**：引入 `CopierParseLongRange`，2048 仓快照解码省去约 3.3 万次临时字符串堆分配。 |
+| **B3** | **性能优化** | `hub/src/main.rs:1232, 2480` / `hub/src/api.rs:781, 1569` | **Hub WebSocket 广播合并与单次序列化 `Arc<String>` 分发**：引入 200ms `POKE_MIN_MS` 节拍合并，无论连接多少个 Dashboard 标签页，全量快照单次序列化共享，消除锁争用与 CPU 膨胀。 |
+| **B4** | **性能优化** | `hub/src/config.rs:309` / `hub/src/api.rs:1655` / `dashboard.html:5689` | **配置历史列表瘦身与单 revision 按需拉取**：历史列表移除全量 INI 载荷（仅保留 `ini_bytes`），新增 `/api/v1/nodes/:id/config/revision/:rev` 按需拉取，消除 13MB JSON 阻塞。 |
+| **B5 & B6** | **性能优化** | `hub/src/commands.rs:412, 506` / `hub/src/main.rs:2365` | **命令日志批量单次 fsync、30 天自动老化与 8MB 紧凑归档**：消除重试命令在主循环逐条 fsync 的磁盘阻塞，并自动压缩历史命令。 |
+| **B7** | **性能优化** | `CopierState.mqh:272, 285` / `CopierReceiver.mq4:2084` | **`CopyFrom` 线性内存拷贝与 `SaveReceiverMap` 零查找插入**：消灭每 10 秒 120 万次字符串查找。 |
+| **B8** | **性能优化** | `CopierReceiver.mq4:400, 3240` | **`QueueModifyIfNeeded` 止损几何输入指纹签名短路**：缓存 8 项数值指纹，在 99.9% 稳态 tick 瞬时返回，消灭每秒 3000 次无意义几何计算。 |
+| **B9** | **性能优化** | `CopierReceiver.mq4:515, 3658, 3734, 3820, 3903` | **`MagicToSender` 256 桶直接映射缓存**：全栈消灭每 tick 100 仓 × 100 信号源的双重循环比较。 |
+| **B10** | **性能优化** | `CopierReceiver.mq4:1529` | **`g_desired` 数组按需增量扩展**：仅在 sender 总数变化时才触发 30MB 数组重新分配。 |
+| **C1** | **测试健全** | `tools/tests.sh:84, 93` | **`tests.sh` 官方纳入 `dash_check.py` 自动化检测**：彻底杜绝前端 JS 语法错误上线导致的控制台白屏。 |
+| **工具修复** | **工具优化** | `tools/lib.sh:117` / `tools/deploy.sh:158` | **部署脚本全面纯 Bash 参数扩展替换子进程**：消除 `sed` 循环与进程替换管道悬挂，部署脚本 0.1 秒秒级就绪。 |
 
 ---
 
-### 十五次审计：跳号检测修复、收据表老化驱逐、对端槽位重置与 DOM 稳态零写入（2026-10-22 14:35）
+### 二十三次审计：停止几何缓存失效闭环、持仓等待序列化 StrBuilder 优化与开放寻址 O(1) 淘汰（2026-10-23 10:45；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **A34** | **高·逻辑自愈** | `src/Include/Copier/CopierConfig.mqh` `SenderCount()` | **已修复（彻底激活跳号 Gap 检测）**：原先 `SenderCount()` 扫描 `sender0..sender99` 时在找不到 `id` 的空槽未加 `break`，导致配置文件跳号（如只有 `sender0` 与 `sender2`）时 `n` 累加为 3，使调用方 `declaredMax + 1 > g_nSenders`（3 > 3）判断恒为假，跳号保护完全失效并强行加载不存在的空段。**修法**：在扫描循环中增加 `else break;`，遇到首个缺号段立即截断并返回，跳号检测 100% 灵敏报警。 |
-| **A35** | **中·长期运行** | `src/Experts/CopierSender.mq4` `SnapStaleIndex()` | **已修复（消除长期运行定长表饱和瘫痪）**：原先 `SnapStaleIndex` 仅使用 `g_snapStaleCount` 线性自增，一旦见过 100 个历史 peer，后续新 peer 永久返回 -1 彻底丧失定向快照自愈补发能力。**修法**：引入与 `CopierPeerTable` 对齐的老化驱逐机制，当表满 100 时自动复用最久未收到收据（`g_snapRcptMs` 最旧）的槽位，保证长期运行自愈能力永不饱和。 |
-| **B36** | **低·边界状态** | `src/Experts/CopierSender.mq4` `CheckPeers()` | **已修复（消除重用槽位状态污染）**：当 Peer 槽位被驱逐并复用给新节点时，外部 `g_peerWasDown[i]` 仍残留着旧节点的 `true` 状态，导致新节点刚连接时误报 `... is back`。**修法**：引入 `g_lastTrackedName[CP_MAX_PEERS]`，当槽位绑定的名字发生变化或置空时，自动重置 `g_peerWasDown[i] = false` 与 `g_peerAlerted[i] = 0`。 |
-| **B37** | **高·前端性能** | `hub/src/assets/dashboard.html` | **稳态 0 DOM 销毁与重建机制（Zero DOM Thrashing）**：<br>1. **拓扑 SVG 缓存**：`drawTopology` 增加 `s.lastTopoHtml` 缓存守卫，稳态下 100% 避免每秒清空重建整颗 SVG 节点树。<br>2. **主表单元格原位守卫**：`renderNodes` 中针对 `r.acc`、`r.ping`、`r.st`、`r.gate` 四个单元格引入内存 HTML 比对守卫（`r._accHtml`、`r._pingHtml`、`r._stHtml`、`r._gateHtml`），平稳运行时消除每秒数百个内部 DOM 节点的强制销毁重构。<br>3. **侧边栏字符串比对优化**：`renderCockpit` 改用纯 JS 变量缓存对比，彻底摆脱 DOM 读取逆向序列化开销。 |
+| **F-01** | **P1 高危** | `CopierReceiver.mq4:1279, 1332` | **`ApplyCommonConfig` 与 `InitSenderSettings` 补齐 `g_stOvEpoch++`**：热重载配置时递增停止几何缓存纪元，彻底消灭修改 `inverttrades`、`emergencySLPips` 或券商 `stopsLevel` 变动后已存在持仓的止损止盈被旧缓存短路不重算的漏洞。 |
+| **F-02** | **P2 中危** | `CopierReceiver.mq4:3819, 3865` | **`EncodeReceiverPositions` 与 `EncodeReceiverWaitList` 引入 `CopierStrBuilder`**：消除 2048 真实容量下每分钟大字符串 `+=` 拼接产生的 146MB memcpy 开销，主线程耗时降至微秒级。 |
+| **F-03** | **P3 优化** | `CopierState.mqh:820, 856, 888, 1024` | **`CopierBackoff` 开放寻址 Backward-shift O(1) 原地消除**：实现 `FindHashSlot` 与 `EraseHashSlot`，消除 `Clear` 与 `FreeSlot` 时的全量哈希表 O(N) 循环重建，实测 50,000 次随机操作断言 100% 通过。 |
+| **F-04** | **P3 优化** | `CopierReceiver.mq4:1109` | **`ResetRuntimeInputsFromInputs` 升级为 64 位 `CopierParseLong`**：消除全库最后一处针对 EA 输入 `InpMagic` 的 32 位 `StringToInteger` 解析。 |
+| **F-05** | **代码清理** | `dashboard.html:1408, 2964` / `CopierDefs.mqh:781` | **清理无用死代码**：删除从不被调用的 `renderRecPositions()` 与 DOM `#recposbody` 孤儿节点；将 `CopierStrBuilder::Length()` 重命名为无歧义的 `ChunkCount()`。 |
 
 ---
 
-### 十四次审计：Web UI 交互深度调优、消息中心方案2落地与 DOM 静态防抖（2026-10-22 13:40）
+### 二十四次审计：全栈审计报告缺陷全面修复与安全加固（2026-10-23 11:40；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **B33** | **高·UI/交互** | `hub/src/assets/dashboard.html` | **Split Cockpit 侧边栏 Hover 防闪烁与原生点击恢复**：<br>1. **消除侧边栏 hover 闪烁**：原先 `renderCockpit` 每 1 秒轮询清空 `listHost.innerHTML` 重建整个列表，导致鼠标悬停瞬间丢失 `:hover` 样式并产生剧烈抖动。**修法**：重构为 In-place DOM 增量更新（`s.cockpitRows` 缓存），仅当节点增删时局部更新，平时仅刷新内部字段和状态徽章，`:hover` 完全平稳不闪烁。<br>2. **恢复侧边栏点击激活**：给 `cockpit_node_list` 补充事件委托与节点切换逻辑，点击任意节点项瞬间激活右侧面板。<br>3. **按钮样式统一**：将 `Visual Config` 按钮从中性蓝色还原为系统规范的中性灰白渐变按钮，不再视觉突兀。 |
-| **B34** | **高·视觉与布局** | `hub/src/assets/dashboard.html` | **Message Center 消息中心方案 2 重构与持久化**：<br>1. **方案 2 扁平清爽排版**：采用 Proposal 2 布局，卡片左侧增加 4px 状态状态条（绿色/黄色/红色），卡片背景自适应昼夜模式，文字左对齐，右侧紧凑对齐 `[✓]` 单条标记已读按钮。<br>2. **20 条滚动历史流**：消息中心维持最近 20 条滚动事件日志，新事件实时从顶部插入，超额旧事件平滑淘汰，刷新页面后从 `localStorage`（键 `mtc_event_history_v2`）自动恢复。<br>3. **Dismiss All 语义优化**：`Dismiss All` 不再清空删除事件列表，而是将所有 20 条事件“全部标记为已读”（移除未读高亮背景），保持历史上下文可回溯。 |
-| **B35** | **中·显示标准** | `hub/src/assets/dashboard.html` | **Ping RTT 健康度门限规范与 CSS 变量无级缩放**：<br>1. **Ping 阈值校准**：按照用户标准，将微胶囊三色门限对齐为 `< 150ms` 绿色（极佳）、`150ms ~ 450ms` 黄色（良好/跨洲）、`> 450ms` 红色（高延迟/异常），修复 94ms/110ms 误标为黄色的问题。<br>2. **CSS 变量动态等比例缩放**：彻底移除各卡片、按钮和表格中的固定像素字号，全部统一绑定 CSS 自定义属性 `--font-base` 搭配 `calc()`，滑动顶部滑块时全局等比例丝滑缩放，绝不产生挤压或错位。 |
-
----
-
-### 十三次审计：彻底消除遮挡弹窗，全量持仓与等待流水无缝常驻 Split Cockpit（2026-10-22 10:45）
-
-| # | 级别 | 位置 | 改进与重构实现 |
-| :--- | :--- | :--- | :--- |
-| **B32** | **极高·工作流与用户体验** | `hub/src/assets/dashboard.html` | **彻底消除遮挡弹窗，点击节点行直达分体驾驶舱**：<br>1. **移除全屏覆盖的 posmodal 遮罩弹窗**：原先点击主表节点行或 Positions 会弹出一个遮挡整个页面的大弹窗。现已彻底移除该弹出机制。<br>2. **主表行点击直达 Split Cockpit**：用户在 Terminals & Nodes 表格点击任意一行的任意位置（或点击 Positions / Waiting 单元格），系统平滑切换到 **Split Cockpit（分体驾驶舱）**，左侧自动选中高亮该节点项（`.node-entry.active`），右侧面板立刻对齐呈现该节点的全部明细。<br>3. **全套流水与逐单大表常驻右侧面板**：将原弹窗中的全套核心功能（节点状态横幅、Managed/Orphan/Gross 3大持仓卡片、3阶段等待管道状态、5级订单过滤器、逐单订单明细表，以及 Sender 上的 Open Positions Summary 与 Symbol 曝光表）完整移入 `#cockpit_detail_view`，成为 Split Cockpit 常驻的原生主工作台。<br>4. **快捷控制与实时联动**：在右侧横幅增加了该节点的直接操作按钮（`Visual Config`、`Query Live INI`、`Pause/Resume`、`Close All` 等），左侧切换节点或每秒收到新遥测数据时，右侧订单流水实时无缝联动刷新。 |
-
----
-
-### 十二次审计：Web UI 现代化视觉改版（高对比白天白底双模 + 无级字号缩放 + 双 Tab 驾驶舱 + 消息中心；2026-10-22 00:50）
-
-| # | 级别 | 位置 | 改进与重构实现 |
-| :--- | :--- | :--- | :--- |
-| **B31** | **极高·视觉/用户体验** | `hub/src/assets/dashboard.html` | **已全面改版上线（全功能无损升级，全英文界面）**：<br>1. **现代金融高可读双模（Day/Night）**：默认采用高对比纯净白天白底（`#f8fafc` 底色，`#ffffff` 卡片底），字体清晰深邃；点击右上角 `[🌙 Night Mode / ☀️ Day Mode]` 瞬间平滑切换至深色暗黑护眼模式，首选项自动保存至 `localStorage`。<br>2. **无级字号缩放滑块（11px~18px）**：导航栏内置实时字号调节器（默认 `13.5px`），所有卡片、宽表与分体面板均采用相对单位与水平保护包裹，字号任意放大**绝对不产生折断挤压变形**。<br>3. **双 Tab 核心架构（主仪表盘 + 分体式驾驶舱）**：<br>&nbsp;&nbsp;• **Tab 1: Main Dashboard**：包含 4 大核心 KPI 指标卡、全局操作工具栏、全量节点监控表（含用户选定的 `[Batch Pause]` `[Batch Reload]` 以及行内 `[Config]`、高亮亮蓝底 `[Visual Config]` 与 `[Pause / Resume]`）、拓扑网络与通知渠道、用户权限管理。<br>&nbsp;&nbsp;• **Tab 2: Split Cockpit**：左侧 380px 宽栏提供大字号节点列表，右侧展开该节点专属的大字号净值卡片、同步持仓手数、配置哈希状态、独立的实时跟单流水明细，以及直接的操作指令组。<br>4. **拓扑与消息中心并列排版（填满留白）**：拓扑图改为左右对称双栏，右侧新增 **Message Center & Live Event Stream** 卡片，精确展示最近事件流与“xx 分钟前”（如 `2m ago (23:28)`）时间戳，彻底消除原版右侧的大片空白。<br>5. **静态安全自洽校验**：`tools/dash_check.py` 静态检查通过：180 个 DOM ID 引用全部自洽存在、0 重复 ID、89 个函数无重名、括号完全闭合；Release 二进制已重新编译内嵌。 |
-
----
-
-### 十一次审计：CP_INI_SECTIONS 超限拒绝、reqcfg 自适应退避与 Web 实时拉取（2026-10-21 21:15；闭环落地）
-
-| # | 级别 | 位置 | 问题与修复实现 |
-| :--- | :--- | :--- | :--- |
-| **A33** | 中·健壮性 | `src/Include/Copier/CopierConfig.mqh` `BuildSections()` | **已修复**：`BuildSections()` 原先在 `m_nSec >= CP_INI_SECTIONS` 时静默跳过后续 section block 的索引，导致超出上限的段无法被 `Get()` 检索到（退化为不存在）。**修法**：`BuildSections()` 返回 `bool`，若发生溢出在 `Load()` 结束前输出严重错误 `Print("CopierIni: ERROR - ", path, " exceeded CP_INI_SECTIONS...")` 并拒绝加载返回 `false`，彻底消灭静默截断。`CopierSelfTest.mq4` 增加超限拒绝测试。 |
-| **B29** | 低-中·体验 | `hub/src/main.rs` `last_cfg_pull` | **已修复**：Hub 对未见过或发生哈希漂移的 Receiver 进行 `reqcfg` 拉取时，固定 60s 频控可能导致初次启动偶发丢包时等待过长。**修法**：升级为双阶自适应频控（初次重试允许 5s，后续退避至 60s），并在收到 `CFGRPT` 成功入库时立即复位该节点的频控状态，使冷启动与重连自愈体验更迅速。 |
-| **B30** | 低·用户体验 | `hub/src/assets/dashboard.html` | **已优化**：配置编辑模态框新增 `[🔄 Query Live INI]` 快捷按钮，点击直接下发 `reqcfg` 命令，触发终端即刻异步上报真值配置并在 1.5s 后自动刷新前端视图；`dash_check.py` 验证 167 个 ID 引用全部自洽。 |
-
----
-
-### 十次审计：配置上报由“全量硬推”改为“内容哈希比对 + 按需 reqcfg 拉取”（2026-10-21 20:30；方案 B 闭环落地）
-
-| # | 级别 | 位置 | 问题与修复实现 |
-| :--- | :--- | :--- | :--- |
-| **A32** | **极高·网络/流量** | `CopierReceiver.mq4` + `hub/src/main.rs` | **已修复（消除持续带宽浪费）**：原先每个 Receiver 在稳态下每 60 秒响应 Hub 的 WHO 广播时，都会在 `REG` 中无条件携带整份转义配置（`INI=...`）。在 100 Senders 满配下单次高达 110 KB，100 个节点每分钟产生 ~11 MB 纯冗余传输（~1.5 Mbps 持续跑满）。**修法（方案 B）**：<br>1. **内容哈希化**：在 `CopierCodec.mqh` 与 `hub/src/config.rs` 中同步实现双通道 64-bit FNV-1a 哈希算法（`CopierCfgHash` / `cfg_hash`），生成 16 字符 hex 摘要。<br>2. **REG 瘦身**：Receiver 发送的 `REG` 中不再携带体积庞大的 `INI=`，而是携带极轻量的 `IH=<16位哈希>`（仅 32 字节）。稳态传输量直接降低 99.9%（110 KB → 0）。<br>3. **Hub 比对与拉取（reqcfg）**：Hub 接收到 `IH` 后与内存中保存的上次有效哈希对比。若哈希一致，判定为配置未变，零网络传输；若哈希不一致或 Hub 刚重启没有记录，Hub 经命令引擎自动下发只读命令 `reqcfg`（带 60s 频控防风暴）；Receiver 收到后通过现有的 `CFGRPT` 消息通道异步回传完整 INI。<br>4. **双向兼容**：若遇到未升级的旧版本 Receiver 发送完整 `INI=`，Hub 自动解义并同步计算 hash 存储，完全向后兼容。<br>5. **测试覆盖**：`hub_config_test.py` 第 11 节全链路验证“未见过的 IH 触发 reqcfg 拉取”、“回传后 GET /config 获得真值”、“哈希匹配时零命令/零传输”；`CopierSelfTest.mq4` 增加双语 FNV-1a 哈希向量断言。 |
-
----
-
-### 九次审计：拓扑容量统一到 100，且“超限不再静默”（2026-10-21 18:40；A30/A31/B27/B28 全部闭环落地）
-
-| # | 级别 | 位置 | 问题与修复实现 |
-| :--- | :--- | :--- | :--- |
-| **A30** | 中 | `CopierDefs.mqh` / `CopierPeers.mqh` / `CopierSender.mq4` | **已修复**：三个拓扑上限各不一致——hub mode 的 `CP_MAX_SENDERS` 是 16（且 `SenderCount()` 只扫 `sender0..sender15`，超出的段**从未被读到**，无任何日志）；direct mode 的 `CP_MAX_PEERS` 也是 16，满时**静默淘汰**最久沉默的 receiver（RTT、掉线告警、面板行一起消失）；快照修复的 `CP_MAX_STALE_PEERS` 又是 64。同一个部署两种模式能力不同，对外无法解释。**修法**：三者统一为 **100**，与终端图表上限（MT5 `maxcharts`，默认约 100）对齐——direct mode 的 100 一直由终端给，hub mode 现在给同一个数，代价是“1 个图表 vs 每 sender 1 个图表”而不是“16 个” |
-| **A31** | 中 | `CopierReceiver.mq4` `LoadCentralConfig` | **已修复**：sender 超限与编号跳号都是**静默**的（`SenderCount()` 遇到第一个缺号即停，超限段根本不进扫描）。**修法**：`CopierIni` 新增 `SenderDeclaredMax()` 返回文件声明的最高 `senderN`（含跳号），调用方把它与 `SenderCount()` 对比并分别打 ERROR——超限时说清“加载了 sender0..sender99、sender100 起未加载”，跳号时说清“编号必须从 sender0 连续”。这是让上限**可被发现**的唯一途径 |
-| **B27** | 中·性能 | `CopierConfig.mqh` `CopierIni` | **已修复（100 sender 的前置条件）**：所有 `Get()` 都是 O(m_n) 全表扫描，而一次配置加载要读 ~50–74 键/sender——100 sender 就是 ~5,000–7,400 次 Get × 同量级行数 ≈ **数千万次字符串比较**（`hub_config_test.py` 实测满配为 5,003 行 / 100,964 字节），且每次 hub 推送 CFG 都会重跑，EA 会卡住数秒。**修法**：新增段区间索引 `m_secName/m_secStart/m_secLen/m_nSec`（`BuildSections()`），查找只扫描所属段的 ~74 行；重复段（同名 `[sender3]` 出现两次）仍各自可达。顺带把 `CP_INI_MAX` 2048 → 12288、`CP_INI_MAX_BYTES` 与 hub 的 `MAX_INI_BYTES` 同步提到 512 KB（三者必须同值，否则 hub 接受、receiver 拒绝；测试从两侧源码读值并断言相等） |
-| **B28** | 低 | `CopierPanel.mqh` + 两个 EA 的面板 | **已修复**：100 个 peer 时面板 100 行，`Begin()` 直接截到 24 行，**超出的行无声消失**。**修法**：新增 `CP_PANEL_PEER_SHOW = 8`，只详细打印前 8 个，其余归并为一行 "... and N more peer(s) - the hub dashboard lists every one"；sender 面板同样处理。顺带给 `CopierPeerTable` 补 `SeenAt(i)` / `ProbeSentAt(i)` 下标写入，消除 PING 广播里 100×100 的二次扫描 |
-
-**配套回归**：`hub_config_test.py` 新增第 9 节——从源码读出 hub 与 MQL 两侧的字节上限并断言**相等**，生成一份"满配 100 sender"的 ini 断言它装得进行数/字节上限，并真的 PUT 给 hub 确认返回 202。`CopierSelfTest.mq4` 的 `TestConfig()` 补入段索引三态（第二段可查、跨段不可见、非数字段名不算 sender）与跳号/声明数断言。
-
+| **P1-1** | **P1 致命** | `CopierReceiver.mq4:1028` | **Direct 模式配置重载重置发送端流状态**：在 `LoadConfigFromInputs()` 中重置 sender 0 的 `g_lastSeq`、`g_ssidSeen`、`g_lastMsgMs`、`g_lastSnapMs`、`g_ready`、`g_desiredCount` 等全部流状态，彻底消灭切换 `SenderPort`/`InpMagic` 时全局变量残留旧 sender 持仓导致误下整车订单的严重隐患。 |
+| **P1-2 & P2-6** | **P1 致命** | `CopierState.mqh:1120-1145` | **状态文件写回校验与 Load 严格上界**：`CopierStateFile::Save` 在读回拷贝循环中严格校验 `FileWrite` 返回值，写入失败立即中止并保留 `.tmp` 备份；`Load` 循环改用 `got < CP_STATE_MAX_LINES` 严格防止越界；Sender/Receiver 恢复循环对 `Upsert` 失败记 Warn。 |
+| **P1-3** | **P1 致命** | `CopierModel.mqh:591, 603, 650, 838, 929, 989, 1089` | **MT4 订单标识符防越界与负数截断防御**：所有 MT4 分支的 `OrderSelect/OrderClose/OrderModify/OrderDelete` 严格校验 `ticket <= 0 || ticket > 2147483647` 时报错退出，杜绝跨平台 MT5 64 位大单号在 MT4 窄化溢出误操作其他订单。 |
+| **P1-4** | **P1 致命** | `hub/src/main.rs:1484` | **畸形 REG 审计写入 10s 频控防 DoS 挂死**：对空 ACC 的 REG/HBT2 报文引入 `wire_audit_throttle` 10 秒冷却门限，彻底杜绝数据面垃圾帧每秒触发上千次同步磁盘 fsync 挂死 ZMQ 交易转发线程。 |
+| **P2-1 & P2-2** | **P2 高危** | `CopierCodec.mqh:185, 555, 620` | **快照与事件解码器补齐 UID/价格/手数/符号严格校验**：`CopierPayloadOpenParse` 与 `CopierPayloadModifyParse` 补齐 `CP_UID_LEN` 与 `CopierUidValid`；`CopierDecodeRec` 严格校验 `lots > 0`、非负价格与符号净化，消灭畸形数据穿透。 |
+| **P2-3** | **P2 高危** | `CopierModel.mqh:785` | **MT4 ECN 模式止损修改失败感知与记录**：市价单在 ECN 130 错误剥离止损成交后，若补发 `CopierModifyStops` 失败，打印详细告警并回传 `outErr = mErr`，杜绝无止损裸奔被当作完全成功。 |
+| **P2-4** | **P2 高危** | `CopierSender.mq4:630` / `CopierReceiver.mq4:1835` | **MT4 多跳 'from #' 部分平仓历史溯源链**：当直接父单已移入历史（`MODE_HISTORY`）时，沿 `from #` 链向前追溯最多 5 跳，彻底消灭短周期连续部分平仓换发新 UID 导致的关仓重开损耗。 |
+| **P2-5** | **P2 高危** | `CopierSender.mq4:870` / `CopierReceiver.mq4:1300, 6064` | **`PollMs` 范围钳制与定时器初始化失败断言**：将 `PollMs` 钳制在 `[10, 5000]` 毫秒安全区间，并在 `EventSetMillisecondTimer` 失败时记 Error 并返回 `INIT_FAILED`，杜绝静默挂起。 |
+| **P2-7** | **P2 高危** | `CopierConfig.mqh:582` | **原子写步骤 3 失败自动回写内存备份**：写配置失败时自动写回此前保存在内存中的旧配置并复验，严格履行配置文件任何时刻均可启动的原子承诺。 |
+| **P2-8** | **P2 高危** | `CopierReceiver.mq4:327, 4070, 4662` | **冻钟恢复窗口时钟偏移无效保护**：引入 `g_senderClockOffsetValid`，仅在服务器时钟真实推进时测量的偏移方为有效，消灭停盘周末巨额负偏移在周一开盘瞬间导致订单被判定超时遗弃的漏洞。 |
+| **P2-9** | **P2 高危** | `CopierReceiver.mq4:4332` | **`lot sizing rejected` 引入 `g_once` 10 分钟限频**：消灭低于最小手数等持续性拒绝时每秒输出 10 行日志的刷屏问题。 |
+| **P2-10** | **P2 高危** | `CopierReceiver.mq4:4651, 4764` | **快照时间戳移至校验通过后更新**：快照仅在成功通过声明条数与解压验证后才记录 `g_lastSnapMs`，恢复\"有事件无有效快照\"的严重告警探测。 |
+| **P2-12 & P2-13** | **P2 高危** | `hub/src/main.rs:1920, 2020` | **Hub 拓扑与配置上报鉴权防注入**：`CFGRPT` 必须校验节点已注册；`mirrors` 边记录必须校验 `sid_is_sender` 与 `login_is_receiver`，杜绝伪造帧膨胀全局哈希表。 |
+| **P2-14 & P2-15** | **P2 高危** | `hub/src/api.rs:1348, 1475` | **改密锁外哈希与密码重置销毁旧 Session**：管理员修改密码/禁用用户时销毁其现有 Session；用户自主改密将 4096 轮 SHA-256 移至锁外，彻底消除锁阻塞。 |
+| **P2-16** | **P2 高危** | `hub/src/main.rs:2057` | **收据转发校验接收端有效性**：收据转发校验 `LOGIN` 属于已知 receiver，杜绝伪造收据欺骗发送端抑制修复。 |
+| **P3-A5** | **性能优化** | `CopierReceiver.mq4:5580, 6545` | **消息转发零二次解码与快照零二次解压**：解耦 `RouteMessage`，排水循环预解码出的 `s_envs[i]` 直传路由，消灭每条快照二次解压缩。 |
+| **P3-A6** | **性能优化** | `CopierReceiver.mq4:4165, 4615` | **收敛循环外提 `PendingOpens` 计数**：在遍历 desired 循环前单次统计排队单，开仓入队时增量维护，将复杂度由 O(N×Q) 降为 O(Q+N)。 |
+| **P3-A9 & A10** | **性能优化** | `CopierState.mqh:118, 120` / `CopierSender.mq4:1305` | **持仓表 Summary 轻量统计与 Count/IsFull O(1)**：增量读 `m_n`；面板刷新通过 `Summary` 批量累加，消灭每 1.5s 拷贝 2048 结构体与字符串克隆。 |
+| **P3-A11** | **性能优化** | `hub/src/main.rs:1196, 2445` | **命令重试队列 500ms 节拍扫描**：将主循环每帧加锁扫描 `cmds.due_gated` 改为 500ms 节拍器，大幅降低锁争用。 |
+| **P3-B7** | **安全规范** | `hub/src/notifications.rs:795` | **WeCom 告警通知 Markdown 内容全面 HTML 转义**：防止节点名/告警内容含特殊符号破坏排版。 |
+| **P3-B11** | **代码清洁** | `hub/src/commands.rs:625` | **`prune_terminal` 同步清理无残留命令节点的序列号**：完全对齐函数注释承诺。 |
+| **P3-B12** | **安全防御** | `CopierTransport.mqh:234` | **`BindSender` 在开启 CURVE 但密钥为空时 fail-closed 拒服**：严格杜绝静默降级为明文传输。 |
+| **P3-B13** | **交易防御** | `CopierRisk.mqh:48, 65, 185` | **风控检查防 `NaN` 穿透**：引入 `MathIsValidNumber` 校验，杜绝浮点异常导致风控静默失效。 |
+| **P3-B14** | **手数规范** | `CopierSizing.mqh:173` | **`CopierComputeLots` 手数上限裁剪后复验最小手数**：低于 `minLot` 显式置 `rejected = true` 并返回 0.0。 |
+| **P3-C1 & C5** | **健壮优化** | `CopierReceiver.mq4:2802` / `CopierModel.mqh:345` | **未知品种 seen 键一致性与挂单止损止盈 digits 规范化**：挂单放置时对 SL/TP 规范化至 `si.digits`。 |
+| **P3-C6 ~ C16** | **细节清洁** | `CopierSender.mq4` / `CopierPeers.mqh` / `CopierTransport.mqh` | **Magic 数字过滤、Save 失败保留 dirty、未探测 Peer 不分配 PongBack 槽位、Socket 早退资源回收**。 |
 ---
 
 ---
