@@ -447,6 +447,18 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 二十三次审计：停止几何缓存失效闭环、持仓等待序列化 StrBuilder 优化与开放寻址 O(1) 淘汰（2026-10-23 10:45；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **F-01** | **P1 高危** | `CopierReceiver.mq4:1279, 1332` | **`ApplyCommonConfig` 与 `InitSenderSettings` 补齐 `g_stOvEpoch++`**：热重载配置时递增停止几何缓存纪元，彻底消灭修改 `inverttrades`、`emergencySLPips` 或券商 `stopsLevel` 变动后已存在持仓的止损止盈被旧缓存短路不重算的漏洞。 |
+| **F-02** | **P2 中危** | `CopierReceiver.mq4:3819, 3865` | **`EncodeReceiverPositions` 与 `EncodeReceiverWaitList` 引入 `CopierStrBuilder`**：消除 2048 真实容量下每分钟大字符串 `+=` 拼接产生的 146MB memcpy 开销，主线程耗时降至微秒级。 |
+| **F-03** | **P3 优化** | `CopierState.mqh:820, 856, 888, 1024` | **`CopierBackoff` 开放寻址 Backward-shift O(1) 原地消除**：实现 `FindHashSlot` 与 `EraseHashSlot`，消除 `Clear` 与 `FreeSlot` 时的全量哈希表 O(N) 循环重建，实测 50,000 次随机操作断言 100% 通过。 |
+| **F-04** | **P3 优化** | `CopierReceiver.mq4:1109` | **`ResetRuntimeInputsFromInputs` 升级为 64 位 `CopierParseLong`**：消除全库最后一处针对 EA 输入 `InpMagic` 的 32 位 `StringToInteger` 解析。 |
+| **F-05** | **代码清理** | `dashboard.html:1408, 2964` / `CopierDefs.mqh:781` | **清理无用死代码**：删除从不被调用的 `renderRecPositions()` 与 DOM `#recposbody` 孤儿节点；将 `CopierStrBuilder::Length()` 重命名为无歧义的 `ChunkCount()`。 |
+
+---
+
 ### 二十二次审计：手数语义纠偏、全栈字符串与快照 O(1) 优化、命令日志压缩与广播合并（2026-10-23 10:15；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

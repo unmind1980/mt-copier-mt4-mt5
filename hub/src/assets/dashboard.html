@@ -1405,7 +1405,6 @@
             <div id="pos_empty_view" class="empty hidden">Please select a node on the left to inspect its positions and waiting telemetry.</div>
           </div>
           <div id="pos" class="hidden"></div>
-          <div id="recposbody" class="hidden"></div>
         </div>
 
         <div class="posfoot-embedded">
@@ -2959,35 +2958,6 @@ function requestPosUpdate(){
       b.textContent = "🔄 Request Update";
     }
   }, 3000);
-}
-
-function renderRecPositions(){
-  var host = $("recposbody");
-  if(!host) return;
-  var d = s.data;
-  if(!d || !d.nodes) return;
-  var receivers = (d.nodes || []).filter(function(n){ return n.role === "receiver"; });
-  if(!receivers.length){
-    host.innerHTML = '<div class="empty">No receiver nodes registered yet</div>';
-    return;
-  }
-  var rows = receivers.map(function(n){
-    var posCount = (n.positions && n.positions.count !== undefined) ? n.positions.count : "-";
-    var posLots = (n.positions && n.positions.lots !== undefined) ? (" (" + n.positions.lots + " lots)") : "";
-    var orphanStr = (n.positions && typeof n.positions.orphaned === "number") ? (" [+" + n.positions.orphaned + " orphan]") : "";
-    var wt = formatWaiting(n);
-    var fin = formatFinancials(n) || "-";
-    return '<tr data-k="' + esc(n.key) + '">' +
-           '<td><strong>' + esc(n.key) + '</strong> (' + esc(n.name || "-") + ')</td>' +
-           '<td class="num">' + esc(posCount) + esc(posLots) + esc(orphanStr) + '</td>' +
-           '<td>' + wt + '</td>' +
-           '<td>' + fin + '</td>' +
-           '<td><span class="dot ' + esc(n.liveness) + '"></span>' + esc(n.liveness) + '</td>' +
-           '</tr>';
-  }).join("");
-  host.innerHTML =
-    '<table><thead><tr><th>Receiver Node</th><th class="num">Managed Mirrors</th><th>Waiting Telemetry</th><th>Equity &amp; Balance</th><th>Liveness</th></tr></thead><tbody>' +
-    rows + '</tbody></table>';
 }
 
 // ---------------------------------------------------------------- render

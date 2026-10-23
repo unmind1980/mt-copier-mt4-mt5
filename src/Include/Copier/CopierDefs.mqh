@@ -778,7 +778,7 @@ public:
       m_n=0;
      }
 
-   int               Length() const { return m_n; }
+   int               ChunkCount() const { return m_n; }
 
    void              Flush()
      {

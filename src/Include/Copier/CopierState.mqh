@@ -818,7 +818,13 @@ private:
    //--- string compare, never a wrong answer (the key is still compared).
    int               TagOf(const uint h) const { return (int)(h & 0x00FFFFFF)+1; }
 
-   int               Find(const string key) const
+   bool              IsBetweenCircular(const int a,const int b,const int c) const
+     {
+      if(a<=c) return (b>=a && b<c);
+      return (b>=a || b<c);
+     }
+
+   int               FindHashSlot(const string key) const
      {
       if(StringLen(key)==0) return -1;
       int tag=TagOf(HashOf(key));
@@ -829,10 +835,16 @@ private:
          int s=m_slot[k];
          if(s==0) return -1;                  // empty: not present
          int idx=s-1;
-         if(m_h[k]==tag && idx>=0 && idx<CP_BACKOFF_SLOTS && m_k[idx]==key) return idx;
+         if(m_h[k]==tag && idx>=0 && idx<CP_BACKOFF_SLOTS && m_k[idx]==key) return k;
          k=(k+1)&mask;                          // linear probe
         }
       return -1;
+     }
+
+   int               Find(const string key) const
+     {
+      int k=FindHashSlot(key);
+      return (k>=0)?(m_slot[k]-1):-1;
      }
 
    void              InsertHash(const int i,const uint h)
@@ -861,6 +873,45 @@ private:
       EraseHash(i);
      }
 
+   //--- Backward-shift deletion in O(1) expected time, without full rebuild.
+   //--- Fills the hole at bucket `i` by shifting entries along the cyclic probe chain.
+   void              EraseHashSlot(int i)
+     {
+      int mask=CP_BACKOFF_SLOTS-1;
+      int j=i;
+      for(int step=0;step<CP_BACKOFF_SLOTS;step++)
+        {
+         m_slot[i]=0;
+         m_h[i]=0;
+         bool moved=false;
+         while(true)
+           {
+            j=(j+1)&mask;
+            int s=m_slot[j];
+            if(s==0) return;                   // reached empty bucket, cluster ended
+            int idx=s-1;
+            if(idx<0 || idx>=CP_BACKOFF_SLOTS || StringLen(m_k[idx])==0)
+              {
+               m_slot[j]=0;
+               m_h[j]=0;
+               continue;
+              }
+            int r=(int)(HashOf(m_k[idx]) & (uint)mask);
+            if(IsBetweenCircular(r,i,j))
+              {
+               m_slot[i]=m_slot[j];
+               m_h[i]=m_h[j];
+               i=j;
+               moved=true;
+               break;
+              }
+           }
+         if(!moved) break;
+        }
+      m_slot[i]=0;
+      m_h[i]=0;
+     }
+
    //--- Remove one key from the hash index, then REBUILD the whole index from
    //--- the live keys.
    void              EraseHash(const int i)
@@ -885,8 +936,10 @@ private:
         {
          if(m_u[i]>m_u[worst]) worst=i;
         }
+      int k=FindHashSlot(m_k[worst]);
       m_k[worst]="";
-      EraseHash(worst);
+      if(k>=0) EraseHashSlot(k);
+      else     EraseHash(worst);
       return worst;
      }
 
@@ -969,13 +1022,14 @@ public:
    //--- than let a stale count penalise the next unrelated failure.
    void              Clear(const string key)
      {
-      int i=Find(key);
-      if(i<0) return;
+      int k=FindHashSlot(key);
+      if(k<0) return;
+      int i=m_slot[k]-1;
       m_k[i]="";
       m_n[i]=0;
       m_t[i]=0;
       m_u[i]=0;
-      EraseHash(i);
+      EraseHashSlot(k);
      }
   };
 

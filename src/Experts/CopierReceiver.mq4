@@ -1106,7 +1106,7 @@ void ResetRuntimeInputsFromInputs()
      }
    else
      {
-      Magic = StringToInteger(mStr);
+      Magic = CopierParseLong(mStr);
      }
 
    DeviationPoints                  = InpDeviationPoints;
@@ -1276,6 +1276,7 @@ void ApplyCommonConfig(const CopierIni &ini)
       EventKillTimer();
       EventSetMillisecondTimer(PollMs);
      }
+   g_stOvEpoch++; // Invalidate stop-geometry cache on config change
   }
 
 void InitSenderSettings(const int si, const CopierIni &ini, const string sec)
@@ -1329,6 +1330,7 @@ void InitSenderSettings(const int si, const CopierIni &ini, const string sec)
    g_senderPermittedMagic[si].Set(g_senderCfg[si].permittedmagic);
    g_senderHours[si].Set(g_senderCfg[si].includetradingtimes, g_senderCfg[si].daytradingtimes);
    g_senderIgnore[si].SetText(g_senderCfg[si].ignoreuids);
+   g_stOvEpoch++; // Invalidate stop-geometry cache on sender config change
   }
 
 void PendingOpensForSender(const int si, int &cnt, double &lots)
@@ -3819,7 +3821,7 @@ int ScanAndResolveAccountPositions()
 string EncodeReceiverPositions()
   {
    if(g_acctAllPosCount<=0) return "";
-   string out="";
+   CopierStrBuilder sb;
    int count=0;
    for(int i=0;i<g_acctAllPosCount;i++)
      {
@@ -3840,17 +3842,18 @@ string EncodeReceiverPositions()
                g_posCache[i].cmt=liveCmt;
            }
         }
-      if(count>0) out+=CP_SEP_REC;
-      out+=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
-          +g_acctAllPos[i].sym+CP_SEP_ITEM
-          +(string)g_acctAllPos[i].side+CP_SEP_ITEM
-          +CopierFmtDouble(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
-          +CopierFmtDouble(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
-          +CopierFmtDouble(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
-          +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
-          +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
-          +(string)isManaged+CP_SEP_ITEM
-          +CopierSanitizeComment(cmt);
+      if(count>0) sb.Add(CP_SEP_REC);
+      string rec=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
+                 +g_acctAllPos[i].sym+CP_SEP_ITEM
+                 +(string)g_acctAllPos[i].side+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
+                 +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
+                 +(string)isManaged+CP_SEP_ITEM
+                 +CopierSanitizeComment(cmt);
+      sb.Add(rec);
       count++;
       //--- CP_MAX_POSITIONS, not 128. 128 was a leftover from when the
       //--- position table itself was small: the receiver happily mirrors up to
@@ -3859,41 +3862,43 @@ string EncodeReceiverPositions()
       //--- compressed on the wire (typically a few tens of KB), once a minute.
       if(count>=CP_MAX_POSITIONS) break;
      }
-   return CopierCompressField(out);
+   return CopierCompressField(sb.Result());
   }
 
 string EncodeReceiverWaitList()
   {
-   string out="";
+   CopierStrBuilder sb;
    int count=0;
    for(int i=0;i<g_qn;i++)
      {
       if(g_q[g_qHead+i].kind!=CP_ACT_OPEN) continue;
-      if(count>0) out+=CP_SEP_REC;
-      out+=g_q[g_qHead+i].uid+CP_SEP_ITEM
-          +g_q[g_qHead+i].sym+CP_SEP_ITEM
-          +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
-          +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
-          +CopierFmtDouble(g_q[g_qHead+i].pprice>0.0?g_q[g_qHead+i].pprice:0.0,5)+CP_SEP_ITEM
-          +"queued"+CP_SEP_ITEM
-          +"Queued in broker dispatch";
+      if(count>0) sb.Add(CP_SEP_REC);
+      string rec=g_q[g_qHead+i].uid+CP_SEP_ITEM
+                 +g_q[g_qHead+i].sym+CP_SEP_ITEM
+                 +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
+                 +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_q[g_qHead+i].pprice>0.0?g_q[g_qHead+i].pprice:0.0,5)+CP_SEP_ITEM
+                 +"queued"+CP_SEP_ITEM
+                 +"Queued in broker dispatch";
+      sb.Add(rec);
       count++;
       if(count>=CP_MAX_POSITIONS) break;
      }
    for(int i=0;i<g_waitItemsCount;i++)
      {
       if(count>=CP_MAX_POSITIONS) break;
-      if(count>0) out+=CP_SEP_REC;
-      out+=g_waitItems[i].uid+CP_SEP_ITEM
-          +g_waitItems[i].sym+CP_SEP_ITEM
-          +(string)g_waitItems[i].side+CP_SEP_ITEM
-          +CopierFmtDouble(g_waitItems[i].lots,2)+CP_SEP_ITEM
-          +CopierFmtDouble(g_waitItems[i].openPx,5)+CP_SEP_ITEM
-          +g_waitItems[i].stage+CP_SEP_ITEM
-          +CopierSanitize(g_waitItems[i].reason,48);
+      if(count>0) sb.Add(CP_SEP_REC);
+      string rec=g_waitItems[i].uid+CP_SEP_ITEM
+                 +g_waitItems[i].sym+CP_SEP_ITEM
+                 +(string)g_waitItems[i].side+CP_SEP_ITEM
+                 +CopierFmtDouble(g_waitItems[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_waitItems[i].openPx,5)+CP_SEP_ITEM
+                 +g_waitItems[i].stage+CP_SEP_ITEM
+                 +CopierSanitize(g_waitItems[i].reason,48);
+      sb.Add(rec);
       count++;
      }
-   return CopierCompressField(out);
+   return CopierCompressField(sb.Result());
   }
 
 void RefreshRisk()
