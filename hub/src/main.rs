@@ -1597,20 +1597,28 @@ fn main() {
                                             if ver.is_empty() { "?" } else { ver.as_str() },
                                             up
                                         );
-                                        audit.record(
-                                            "", "",
-                                            "node.registered",
-                                            &format!("{}:{}", role, acc),
-                                            None,
-                                            Some(serde_json::json!({
-                                                "role": role,
-                                                "acc": acc,
-                                                "name": name,
-                                                "ver": ver,
-                                                "up_secs": up,
-                                            })),
-                                            "ok",
-                                        );
+                                        let throttle_key = ("wire".to_string(), "node.registered".to_string());
+                                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                            Some(t) => t.elapsed() >= Duration::from_millis(500),
+                                            None => true,
+                                        };
+                                        if should_audit {
+                                            wire_audit_throttle.insert(throttle_key, Instant::now());
+                                            audit.record(
+                                                "", "",
+                                                "node.registered",
+                                                &format!("{}:{}", role, acc),
+                                                None,
+                                                Some(serde_json::json!({
+                                                    "role": role,
+                                                    "acc": acc,
+                                                    "name": name,
+                                                    "ver": ver,
+                                                    "up_secs": up,
+                                                })),
+                                                "ok",
+                                            );
+                                        }
                                     } else if was_unnamed && !name.is_empty() {
                                         //--- The lost-REG race resolving. Worth a
                                         //--- line: until this arrives the node is
@@ -1758,15 +1766,15 @@ fn main() {
                                             );
                                         }
                                     } else if hub_rev > 0 && node_rev < hub_rev && args.writes {
-                                        let throttle_key = (key.clone(), "config.repush".to_string());
-                                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
-                                            Some(t) => t.elapsed() >= Duration::from_secs(60),
-                                            None => true,
-                                        };
-                                        if should_audit {
-                                            wire_audit_throttle.insert(throttle_key, Instant::now());
-                                            if let Some(r) = cfg.current(&key) {
-                                                let c = cmds.issue_cfg(&key, r.rev, "", "");
+                                        if let Some(r) = cfg.current(&key) {
+                                            let c = cmds.issue_cfg(&key, r.rev, "", "");
+                                            let throttle_key = (key.clone(), "config.repush".to_string());
+                                            let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                                Some(t) => t.elapsed() >= Duration::from_secs(60),
+                                                None => true,
+                                            };
+                                            if should_audit {
+                                                wire_audit_throttle.insert(throttle_key, Instant::now());
                                                 println!(
                                                     "[hub] {} is behind (rev {} < {}) - pushing CFG {}",
                                                     key, node_rev, r.rev, c.id

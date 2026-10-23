@@ -303,16 +303,17 @@ public:
    //--- insert or update by UID. Returns false when the table is full or
    //--- the UID is malformed (storing an entry we could never match again
    //--- would just be a future phantom slot).
-   bool              Upsert(const CopierPos &p)
+   //--- Returns slot index on success, or -1 on failure.
+   int               Upsert(const CopierPos &p)
      {
-      if(StringLen(p.uid)!=CP_UID_LEN) return false;
+      if(StringLen(p.uid)!=CP_UID_LEN) return -1;
       int i=Find(p.uid);
       if(i>=0)
         {
          m_p[i]=p;
          m_p[i].used=true;
          m_tkValid=false;
-         return true;
+         return i;
         }
       //--- hand out slots from the hint, like InsertEmpty: starting at 0 every
       //--- time made a 2048-row state restore walk the table 2048 times
@@ -327,12 +328,12 @@ public:
             m_hint=k+1;
             if(m_hint>=CP_MAX_POSITIONS) m_hint=0;
             m_tkValid=false;
-            return true;
+            return k;
            }
          k++;
          if(k>=CP_MAX_POSITIONS) k=0;
         }
-      return false;
+      return -1;
      }
 
    bool              Remove(const string uid)
@@ -433,6 +434,30 @@ public:
       return n;
      }
 
+   int               CopyToWithSlots(CopierPos &out[],int &slots[]) const
+     {
+      int cap=ArraySize(out);
+      if(cap<m_n && ArrayIsDynamic(out))
+        {
+         ArrayResize(out,m_n);
+         ArrayResize(slots,m_n);
+        }
+      int n=0;
+      for(int i=0;i<CP_MAX_POSITIONS && n<m_n;i++)
+        {
+         if(!SlotValid(i)) continue;
+         out[n]=m_p[i];
+         slots[n]=i;
+         n++;
+        }
+      if(ArrayIsDynamic(out) && n!=cap)
+        {
+         ArrayResize(out,n);
+         ArrayResize(slots,n);
+        }
+      return n;
+     }
+
    //--- drop every UID that is NOT in the given set. This is how a
    //--- snapshot prunes the table back down (bounded growth guarantee).
    int               PruneTo(const CopierPos &desired[],const int desiredCount)
@@ -441,7 +466,6 @@ public:
       static uint desHash[CP_UIDIDX_SLOTS];
       static string desUid[CP_UIDIDX_SLOTS];
       ArrayInitialize(desHash,0);
-      for(int z=0;z<CP_UIDIDX_SLOTS;z++) desUid[z]="";
 
       int mask=CP_UIDIDX_SLOTS-1;
       for(int k=0;k<desiredCount;k++)
@@ -449,6 +473,7 @@ public:
          if(StringLen(desired[k].uid)!=CP_UID_LEN) continue;
          uint hf=2166136261;
          for(int c=0;c<CP_UID_LEN;c++) { hf^=(uint)StringGetCharacter(desired[k].uid,c); hf*=16777619; }
+         if(hf==0) hf=1; // Sentinel 0 is empty slot
          int s=(int)(hf&mask);
          for(int p=0;p<CP_UIDIDX_SLOTS;p++)
            {
@@ -463,6 +488,7 @@ public:
          if(!SlotValid(i)) continue;
          uint hf=2166136261;
          for(int c=0;c<CP_UID_LEN;c++) { hf^=(uint)StringGetCharacter(m_p[i].uid,c); hf*=16777619; }
+         if(hf==0) hf=1; // Sentinel 0 is empty slot
          int s=(int)(hf&mask);
          bool keep=false;
          for(int p=0;p<CP_UIDIDX_SLOTS;p++)

@@ -564,6 +564,23 @@ void TestStateFile()
    Ok("state: 2048 positions count matches",fullN==CP_STATE_MAX_LINES);
    Ok("state: 2048 positions header matches",fullHdr=="FULL_2048");
    FileDelete(path);
+
+   //--- Test 2049 lines (Save clamps to 2048, END:2048 matches loaded got 2048)
+   static CopierPos overArr[];
+   ArrayResize(overArr,CP_STATE_MAX_LINES+1);
+   for(int k=0;k<CP_STATE_MAX_LINES+1;k++)
+     {
+      overArr[k]=MakePos("OVER"+IntegerToString(k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
+     }
+   bool overSaved=CopierStateFile::Save(path,"OVER_2049",overArr,CP_STATE_MAX_LINES+1);
+   Ok("state: 2049 positions save clamps to 2048",overSaved);
+   string overHdr="";
+   static CopierPos overBack[];
+   int overN=0;
+   bool overLoaded=CopierStateFile::Load(path,overHdr,overBack,overN);
+   Ok("state: 2049 clamped save loads cleanly",overLoaded);
+   Ok("state: loaded count is clamped to 2048",overN==CP_STATE_MAX_LINES);
+   FileDelete(path);
   }
 
 void TestSizing()
@@ -2360,34 +2377,21 @@ void TestEndpointNormalize()
    Ok("endpoint: empty stays empty",CopierNormalizeEndpoint("")=="");
   }
 
-bool TopicMatchForReceiver(const string topic,const string accStr,const string nidStr,const string &sids[],const int nSids)
-  {
-   if(StringLen(topic)==0) return false;
-   if(topic=="@all") return true;
-   if(StringFind(topic,"@")==0)
-     {
-      string sub=StringSubstr(topic,1);
-      if(sub==nidStr || sub==accStr) return true;
-      return false;
-     }
-   if(topic==nidStr || topic==accStr) return true;
-   for(int i=0;i<nSids;i++)
-      if(topic==sids[i]) return true;
-   return false;
-  }
-
 void TestTopicFilter()
   {
    string sids[2];
    sids[0]="252033316";
    sids[1]="252033317";
-   Ok("topic: @all is accepted",TopicMatchForReceiver("@all","1000","2000",sids,2));
-   Ok("topic: @nid is accepted",TopicMatchForReceiver("@2000","1000","2000",sids,2));
-   Ok("topic: @acc is accepted",TopicMatchForReceiver("@1000","1000","2000",sids,2));
-   Ok("topic: @10001 prefix collision is rejected",!TopicMatchForReceiver("@10001","1000","2000",sids,2));
-   Ok("topic: @20001 prefix collision is rejected",!TopicMatchForReceiver("@20001","1000","2000",sids,2));
-   Ok("topic: sender sid is accepted",TopicMatchForReceiver("252033316","1000","2000",sids,2));
-   Ok("topic: sender sid 2520333160 prefix collision is rejected",!TopicMatchForReceiver("2520333160","1000","2000",sids,2));
+   Ok("topic: empty topic is admitted",CopierIsTopicTarget("","2000","1000",sids,2));
+   Ok("topic: @all is accepted",CopierIsTopicTarget("@all","2000","1000",sids,2));
+   Ok("topic: @nid is accepted",CopierIsTopicTarget("@2000","2000","1000",sids,2));
+   Ok("topic: @acc is accepted",CopierIsTopicTarget("@1000","2000","1000",sids,2));
+   Ok("topic: @10001 prefix collision is rejected",!CopierIsTopicTarget("@10001","2000","1000",sids,2));
+   Ok("topic: @20001 prefix collision is rejected",!CopierIsTopicTarget("@20001","2000","1000",sids,2));
+   Ok("topic: sender sid is accepted",CopierIsTopicTarget("252033316","2000","1000",sids,2));
+   Ok("topic: sender sid 2520333160 prefix collision is rejected",!CopierIsTopicTarget("2520333160","2000","1000",sids,2));
+   Ok("topic: fallback envSid is accepted",CopierIsTopicTarget("random","2000","1000",sids,2,"252033316"));
+   Ok("topic: unrelated envSid is rejected",!CopierIsTopicTarget("random","2000","1000",sids,2,"999999999"));
   }
 
 void TestBackoff()

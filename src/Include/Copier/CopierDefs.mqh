@@ -881,10 +881,7 @@ bool CopierIsDigits(const string s)
   {
    int len=StringLen(s);
    if(len==0) return false;
-   int i=0;
-   if(StringGetCharacter(s,0)=='-') i=1;
-   if(i>=len) return false;
-   for(;i<len;i++)
+   for(int i=0;i<len;i++)
      {
       int c=StringGetCharacter(s,i);
       if(c<'0' || c>'9') return false;
@@ -1244,6 +1241,30 @@ double CopierMirrorStopInverted(const double senderStop,
    //--- where OUR stop belongs, given OUR side
    bool below=(isSl ? (side==CP_SIDE_BUY) : (side==CP_SIDE_SELL));
    return (below ? (localOpen-dist) : (localOpen+dist));
+  }
+
+//=====================================================================
+// Target topic check for Central Hub stream (Pure, testable)
+//=====================================================================
+bool CopierIsTopicTarget(const string topic,const string myNid,const string myAcc,
+                         const string &sids[],const int nSids,const string envSid="")
+  {
+   if(StringLen(topic)==0) return true;
+   if(StringSubstr(topic,0,1)=="@")
+     {
+      return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
+     }
+   if(topic==myNid || topic==myAcc) return true;
+   for(int i=0;i<nSids;i++)
+     {
+      if(topic==sids[i]) return true;
+     }
+   if(StringLen(envSid)>0)
+     {
+      for(int i=0;i<nSids;i++)
+         if(envSid==sids[i]) return true;
+     }
+   return false;
   }
 
 #endif

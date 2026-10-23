@@ -370,6 +370,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十五次审计** | 2026-10-23 13:40 | 跨节点主题前缀碰撞消除、空注释API退化根治、双向STAT与WebUI全面闭环 | 全栈安全与性能 |
 | **二十六次审计** | 2026-10-23 18:30 | 魔法过滤纯数字校验、状态文件满载边界自洽、挂单宽限死循环与配置事务提交 | 全栈健壮与性能 |
 | **二十七次审计** | 2026-10-23 20:20 | 跨 Tick 动作出队幂等锁防护、固定手数减仓等比广播与挂单改期 GTC 闭环 | 核心逻辑与全栈优化 |
+| **二十八次审计** | 2026-10-23 22:00 | Hub 注册洪水可用性防御、Upsert 槽位自洽、CFG 恢复解除限频与主题过滤去镜像 | 全栈可用性与严谨性 |
 
 ---
 
@@ -821,6 +822,28 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **O-06** | **Low 性能** | `CopierModel.mqh:160` | **MT5 `CopierM1BarsSince` 批量单次拉取 K 线时间**：采用单次 `CopyTime` 批量获取，消除跨内核多次调用。 |
 | **O-07** | **Low 清洁** | `CopierLog.mqh:370` | **`CopierOnceLog` 淘汰旧槽位时同步清理旧哈希缓存**：保持直接映射查找表干净一致。 |
 | **TEST-01** | **Medium 测试** | `CopierSelfTest.mq4:2235` | **补充 `CopierParseHhMm` 脏数据与非法输入断言**：覆盖纯数字校验、多冒号输入拒绝与合法边界值验证。 |
+
+---
+
+### 二十八次审计：Hub 注册洪水可用性防御、Upsert 槽位自洽、CFG 恢复解除限频与主题过滤去镜像（2026-10-23 22:00；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **H1** | **P1 致命** | `hub/src/registry.rs:29, 470` / `hub/src/main.rs:1600` | **Hub 节点注册洪水可用性防御与容量上限**：在 `registry.rs` 中引入 `MAX_NODES = 1000` 硬性容量保护，新节点满载时自动触发驱逐和 LRU 淘汰，杜绝注册表无界增长导致 OOM；在 `main.rs:1600` 将 `node.registered` 审计刷盘纳入 `wire_audit_throttle`（500ms 门控），彻底消除每秒海量新注册包触发同步 `fsync` 拖死 ZMQ 转发主循环的攻击面。 |
+| **P2-1** | **High 逻辑** | `CopierState.mqh:306` / `CopierSender.mq4:726` | **`CopierPosTable::Upsert` 槽位返回值自洽**：将 `Upsert` 返回值由 `bool` 改为真实插槽索引 `int`（失败返回 -1），彻底修复状态文件恢复路径将 `bool` 隐式转为 `1` 误写 `g_openLots[1]` 的严重缺陷。 |
+| **P2-2** | **High 状态机** | `hub/src/main.rs:1760` | **配置重推自愈解除限流闸门**：将 `cmds.issue_cfg(&key, r.rev, "", "")` 移出 `should_audit` 门控，使节点落后（behind）时的网络重推指令保持实时触发，而仅对磁盘 `audit.record` 限流。 |
+| **P2-3** | **Medium 边界** | `CopierReceiver.mq4:1117` | **Direct 模式挂单宽限期 `PendingFillGraceSeconds` 严格钳位**：在 Direct 模式配置加载时，对输入变量 `PendingFillGraceSeconds` 进行 `min(300.0)` 钳位并回写至 `g_senderCfg[0].pendingfillgraceseconds`，与 Hub 模式对齐，杜绝宽限倒计时无限重启。 |
+| **P2-4** | **Medium 测试** | `CopierDefs.mqh:1250` / `CopierReceiver.mq4:6583` / `CopierSelfTest.mq4:2396` | **主题过滤器真实逻辑共享与消除镜像空转**：在 `CopierDefs.mqh` 提取公共纯函数 `CopierIsTopicTarget`，Receiver 与自测脚本 100% 共享调用，并在 `CopierSelfTest.mq4` 补齐对空主题、`@all`、`@nid`、前缀碰撞、多 Sender 与 `envSid` 回退的测试断言。 |
+| **M1** | **Medium 性能** | `CopierReceiver.mq4:3850` | **快路径外来订单注释延迟回读门控**：在快路径增加 `MagicToSender(magic) >= 0` 守卫，仅对自家管理的订单在 UID 为空时才回读券商注释，消除 10Hz 热路径对外来手动单和外部 EA 订单的冗余扫描。 |
+| **M2** | **Medium 性能** | `CopierState.mqh:437` / `CopierSender.mq4:1414` | **`CopierPosTable::CopyToWithSlots` 零查找快照导出**：新增单次线性遍历同时导出仓位和槽位索引的方法，彻底消灭 `RebuildSnapshotPayload` 中逐条执行 $O(N)$ `Find` 的二次遍历。 |
+| **M6** | **Low 严谨** | `CopierReceiver.mq4:5200` | **HandleCfg 恢复失败分支补齐 ACK 缓存**：在所有配置拒绝分支均记录 `g_cfgId = id; g_cfgAck = ...;`，防止同一 ID 重复重跑恢复逻辑。 |
+| **M7** | **Low 清洁** | `CopierState.mqh:444` | **`CopierPosTable::PruneTo` 清理无用循环**：移除每轮全表 4096 次字符串置空循环，只在写入时填充。 |
+| **M8** | **Low 防御** | `CopierState.mqh:456, 470` | **`PruneTo` 哈希哨兵 0 防御**：FNV-1a 哈希值为 0 时偏置为 1，杜绝与空槽哨兵发生理论碰撞。 |
+| **M9** | **Low 规范** | `CopierDefs.mqh:880` | **`CopierIsDigits` 纯数字严格校验**：禁止负号 `-`，只接受严格纯数字 0-9。 |
+| **M10** | **Low 规范** | `CopierModel.mqh:913` | **`CopierModifyStops` MT5 挂单分支对齐设置 `type_time`**：保留订单既有过期时间。 |
+| **M14** | **Low 清洁** | `CopierModel.mqh:606` | **删除死代码重载 `CopierReadCommentByTicket(long)`**。 |
+| **H8** | **Low 安全** | `hub/src/notifications.rs:904` | **生产 Webhook 发送路径增加 URL 协议校验**：严格验证以 `http://` 或 `https://` 开头。 |
+| **TEST-01**| **Medium 测试** | `CopierSelfTest.mq4:568` | **新增状态文件 2049 行截断测试断言**：验证 2049 行存档保存时被安全钳位到 2048 行，且加载时与 `END:2048` 自洽。 |
 
 ---
 

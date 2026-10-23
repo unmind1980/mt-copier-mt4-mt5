@@ -1115,7 +1115,8 @@ bool LoadConfigFromInputs()
    InitSenderSettings(0, emptyIni, "sender0");
 
    double gs=PendingFillGraceSeconds;
-   if(gs>300.0) gs=300.0;
+   if(gs>300.0) { gs=300.0; PendingFillGraceSeconds=300.0; }
+   g_senderCfg[0].pendingfillgraceseconds=gs;
    long ringTtl=60000;
    if(gs>0.0)
      {
@@ -3846,7 +3847,7 @@ int ScanAndResolveAccountPositions()
            }
          g_rawScratch[i].uid=g_posCache[matchIdx].uid;
          g_rawScratch[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
-         if(StringLen(g_rawScratch[i].uid)==0)
+         if(StringLen(g_rawScratch[i].uid)==0 && MagicToSender(g_rawScratch[i].magic)>=0)
            {
             //--- Broker was slow to write comment; recover it on fast path if UID is still missing
             g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
@@ -5195,18 +5196,24 @@ void HandleCfg(const CopierEnv &e)
          bool lOk=wOk && LoadConfig();
          if(wOk && lOk)
            {
-            SendCfgAck("ID="+id+";OK=0;ERR=config rejected by LoadConfig; previous config restored");
+            g_cfgId=id;
+            g_cfgAck="ID="+id+";OK=0;ERR=config rejected by LoadConfig; previous config restored";
+            SendCfgAck(g_cfgAck);
             g_log.Error("CFG "+id+" rejected by LoadConfig - restored "+CP_INI_BAK_PATH);
            }
          else
            {
-            SendCfgAck("ID="+id+";OK=0;ERR=config rejected and failed to restore backup");
+            g_cfgId=id;
+            g_cfgAck="ID="+id+";OK=0;ERR=config rejected and failed to restore backup";
+            SendCfgAck(g_cfgAck);
             g_log.Error("CFG "+id+" rejected by LoadConfig and failed to restore "+CP_INI_BAK_PATH);
            }
         }
       else
         {
-         SendCfgAck("ID="+id+";OK=0;ERR=config rejected and no backup to restore");
+         g_cfgId=id;
+         g_cfgAck="ID="+id+";OK=0;ERR=config rejected and no backup to restore";
+         SendCfgAck(g_cfgAck);
          g_log.Error("CFG "+id+" rejected by LoadConfig and there is no backup");
         }
       return;
@@ -6576,17 +6583,7 @@ void UpdatePanel()
 bool IsTopicForReceiver(const string topic,const string envSid)
   {
    if(!g_hubOn) return true;
-   if(StringLen(topic)==0) return true;
-   string myNid=(string)g_nid;
-   string myAcc=(string)CopierAccountLogin();
-   if(StringSubstr(topic,0,1)=="@")
-     {
-      return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
-     }
-   if(topic==myNid || topic==myAcc) return true;
-   if(SenderIndexById(topic)>=0) return true;
-   if(StringLen(envSid)>0 && SenderIndexById(envSid)>=0) return true;
-   return false;
+   return CopierIsTopicTarget(topic,(string)g_nid,(string)CopierAccountLogin(),g_sid,g_nSenders,envSid);
   }
 
 void OnTimer()

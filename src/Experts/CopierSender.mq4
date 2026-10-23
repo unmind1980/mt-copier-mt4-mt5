@@ -1411,10 +1411,11 @@ void UpdatePanel()
 void RebuildSnapshotPayload()
   {
    CopierPos dense[];
-   int dn=g_prev.CopyTo(dense);
+   int slots[];
+   int dn=g_prev.CopyToWithSlots(dense,slots);
    for(int i=0;i<dn;i++)
      {
-      int slot=g_prev.Find(dense[i].uid);
+      int slot=slots[i];
       double initLots=(slot>=0)?g_openLots[slot]:dense[i].lots;
       dense[i].lots=BroadcastLots(dense[i].lots,initLots);
      }

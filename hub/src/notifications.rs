@@ -901,6 +901,10 @@ async fn send_webhook(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Webhook URL missing".to_string())?;
 
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("Webhook URL must begin with http:// or https://".to_string());
+    }
+
     let method_str = channel
         .config
         .get("method")

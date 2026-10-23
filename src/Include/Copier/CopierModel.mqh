@@ -603,19 +603,6 @@ string CopierReadCommentByTicket(const CopierPos &p)
 #endif
   }
 
-string CopierReadCommentByTicket(const long ticket)
-  {
-#ifdef __MQL5__
-   if(PositionSelectByTicket((ulong)ticket)) return PositionGetString(POSITION_COMMENT);
-   if(OrderSelect((ulong)ticket)) return OrderGetString(ORDER_COMMENT);
-   return "";
-#else
-   if(ticket<=0 || ticket>2147483647) return "";
-   if(OrderSelect((int)ticket,SELECT_BY_TICKET)) return OrderComment();
-   return "";
-#endif
-  }
-
 //=====================================================================
 // MT5: POSITION_IDENTIFIER is stable but PositionClose needs the
 // CURRENT position ticket. Resolve at execution time - never cache it.
@@ -911,6 +898,16 @@ bool CopierModifyStops(const long identifier,const string sym,
       req.price =OrderGetDouble(ORDER_PRICE_OPEN);
       req.sl    =sl;
       req.tp    =tp;
+      datetime exp=(datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
+      if(exp>0)
+        {
+         req.type_time =ORDER_TIME_SPECIFIED;
+         req.expiration=exp;
+        }
+      else
+        {
+         req.type_time =ORDER_TIME_GTC;
+        }
       if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
       if(res.retcode==TRADE_RETCODE_DONE
          || res.retcode==TRADE_RETCODE_PLACED

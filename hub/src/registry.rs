@@ -26,6 +26,9 @@ pub const STALE_AFTER: Duration = Duration::from_secs(15);
 /// flapping on a bad link does not churn in and out of the operator's view.
 pub const OFFLINE_AFTER: Duration = Duration::from_secs(60);
 
+/// Maximum active nodes allowed in the registry. Prevents wire flooding from exhausting memory.
+pub const MAX_NODES: usize = 1000;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Sender,
@@ -463,8 +466,23 @@ impl Registry {
         }
     }
 
+    fn ensure_capacity(&mut self, now: Instant) {
+        if self.nodes.len() >= MAX_NODES {
+            self.evict(now);
+            if self.nodes.len() >= MAX_NODES {
+                if let Some(oldest_key) = self.nodes.iter().min_by_key(|(_, n)| n.last_seen).map(|(k, _)| k.clone()) {
+                    self.nodes.remove(&oldest_key);
+                    self.evicted += 1;
+                }
+            }
+        }
+    }
+
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {
         let key = key_of(role, acc);
+        if !self.nodes.contains_key(&key) {
+            self.ensure_capacity(now);
+        }
         self.nodes.entry(key.clone()).or_insert_with(|| Node {
             key,
             acc: acc.to_string(),
