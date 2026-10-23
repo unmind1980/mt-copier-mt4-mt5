@@ -571,12 +571,7 @@ int CopierCharCount(const string s,const string c)
    return n;
   }
 
-// Replace every occurrence.
-//
-// Deliberately NOT using StringReplace(str, start_pos, substr): that
-// function replaces a span whose length is the length of the REPLACEMENT,
-// not of the text being replaced, so it silently corrupts the string
-// whenever the two differ in length. Splice explicitly instead.
+// Replace every occurrence of substring 'from' with 'to' across string 's'.
 string CopierReplaceAll(string s,const string from,const string to)
   {
    if(StringLen(from)==0) return s;
@@ -924,6 +919,12 @@ string CopierFmtDouble(const double v,const int digits)
 //=====================================================================
 string CopierNewUid()
   {
+   static bool s_seeded=false;
+   if(!s_seeded)
+     {
+      MathSrand((int)(CopierNowMs()%2147483647)+(int)CopierAccountLogin());
+      s_seeded=true;
+     }
    string s="";
    for(int i=0;i<CP_UID_LEN;i++)
      {

@@ -372,6 +372,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十七次审计** | 2026-10-23 20:20 | 跨 Tick 动作出队幂等锁防护、固定手数减仓等比广播与挂单改期 GTC 闭环 | 核心逻辑与全栈优化 |
 | **二十八次审计** | 2026-10-23 22:00 | Hub 注册洪水可用性防御、Upsert 槽位自洽、CFG 恢复解除限频与主题过滤去镜像 | 全栈可用性与严谨性 |
 | **二十九次审计** | 2026-10-23 23:20 | 减仓收敛手数换算修正、全周开休市判定、退避队列淘汰纠偏与跨平台模型加固 | 全栈核心与交易模型 |
+| **三十次审计** | 2026-10-24 00:25 | 随机数种子全自洽初始化、Remove O(1)计数、ReplaceAll注释与PayloadDRY重构 | 全栈安全与代码精炼 |
 
 ---
 
@@ -869,6 +870,18 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **R-01** | **P2 中危** | `hub/src/envelope.rs:99` | **`envelope.rs` 优先 UTF-8 解码**：未压缩负载与键值头优先按 UTF-8 解析，杜绝中文终端名与注释在 `<500B` 变为乱码。 |
 | **T-01** | **P1 工具** | `tools/logcheck.py:43` | **`logcheck.py` 挂单正则支持扩展字段**：支持 `stoplimit/exp/sl/tp` 及负 `senderTkt`，消灭带止损挂单撤销时的孤儿平仓假阳性。 |
 | **TEST-01**| **Medium 测试** | `CopierSelfTest.mq4:2260, 2470` | **补充时段解析、跨午夜与满表退避驱逐断言**。 |
+
+---
+
+### 三十次审计：随机数种子全自洽初始化、Remove O(1)计数、ReplaceAll注释与PayloadDRY重构（2026-10-24 00:25；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **1.1** | **Low 清洁** | `CopierDefs.mqh:574` | **`CopierReplaceAll` 修正函数说明注释**：删除与旧版不相符的错误说明，清晰准确地阐明当前 2 参数版本为全量替换。 |
+| **1.2** | **High 熵源** | `CopierDefs.mqh:925` | **`CopierNewUid` 内部种子静态守护与自动初始化**：在 `CopierNewUid` 中增加静态布尔守护标志 `s_seeded`，在首次生成 UID 时自动以 `CopierNowMs() ^ CopierAccountLogin()` 播种 `MathSrand()`，彻底杜绝未显式调用 `MathSrand` 的组件生成确定性重复 UID 序列。 |
+| **3.1** | **Medium 性能** | `CopierState.mqh:345` | **`CopierPosTable::Remove` 采用 O(1) 计数递减**：将全表线性扫描 2048 槽位的 `UsedCount()` 替换为与 `RemoveAt()` 一致的 `if(m_n > 0) m_n--;`，大幅消除批量关仓时的二次遍历开销。 |
+| **8.2** | **Low 清洁** | `hub/src/registry.rs:518` | **删除 `Registry::evict` 重复的 doc comment 标题行**。 |
+| **11.2** | **Low 维护** | `CopierCodec.mqh:685` | **`CopierPayloadReg` 与 `CopierPayloadHbt2` 提取公共构造器**：实现 DRY 原则，统一调用 `CopierBuildNodePayload`，消除两份完全相同代码未来可能引发的格式漂移风险。 |
 
 ---
 

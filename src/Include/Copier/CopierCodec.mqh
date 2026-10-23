@@ -693,8 +693,8 @@ string CopierPayloadPong(const long ms,const string from,const string to)
 //--- UP is the node's own uptime in seconds, so the hub can tell "reconnected
 //--- after a blip" from "has been running for a week" without keeping state
 //--- across its own restarts.
-string CopierPayloadReg(const string role,const long acc,const string name,
-                        const long upSeconds)
+string CopierBuildNodePayload(const string role,const long acc,const string name,
+                           const long upSeconds)
   {
    return "ROLE="+role+CP_SEP_KV+"ACC="+(string)acc
           +CP_SEP_KV+"VER="+CP_NODE_VER
@@ -702,33 +702,16 @@ string CopierPayloadReg(const string role,const long acc,const string name,
           +CP_SEP_KV+"UP="+(string)upSeconds;
   }
 
+string CopierPayloadReg(const string role,const long acc,const string name,
+                        const long upSeconds)
+  {
+   return CopierBuildNodePayload(role,acc,name,upSeconds);
+  }
+
 string CopierPayloadHbt2(const string role,const long acc,const string name,
                         const long upSeconds)
   {
-   //--- NAME IS HERE ON PURPOSE, and adding it is the fix for a real bug.
-   //---
-   //--- A node that only ever heartbeats is visible but ANONYMOUS, because
-   //--- this message used to carry no name and REG was the only thing that
-   //--- did. The EA already mitigates it by sending REG for its first
-   //--- CP_REG_REPEATS announcements - but that only helps a node that has
-   //--- never announced. Restart the HUB with the EAs already attached and
-   //--- g_announceCount is long past CP_REG_REPEATS, so they send HBT2 only,
-   //--- and the name waits for the hub's WHO sweep to make them re-REG.
-   //--- Measured on a live hub: about ten to fifteen seconds of rows with a
-   //--- blank Name column.
-   //---
-   //--- Carrying the name with the liveness evidence removes the whole class:
-   //--- there is no restart order in which a visible node has no name.
-   //---
-   //--- Backward compatible in both directions, which is why this is safe on
-   //--- a live link: an OLD hub ignores a key it does not know, and a NEW hub
-   //--- reading an OLD EA's HBT2 simply gets an empty NAME and keeps whatever
-   //--- REG already told it. Sanitised exactly as REG sanitises it, because
-   //--- this same string reaches a web page.
-   return "ROLE="+role+CP_SEP_KV+"ACC="+(string)acc
-          +CP_SEP_KV+"VER="+CP_NODE_VER
-          +CP_SEP_KV+"NAME="+CopierSanitize(name,CP_SYM_MAXLEN)
-          +CP_SEP_KV+"UP="+(string)upSeconds;
+   return CopierBuildNodePayload(role,acc,name,upSeconds);
   }
 
 

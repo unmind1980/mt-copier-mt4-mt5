@@ -342,7 +342,7 @@ public:
       if(i<0) return false;
       m_p[i].used=false;
       m_p[i].uid="";
-      m_n=UsedCount();          // resync, never trust the arithmetic
+      if(m_n>0) m_n--;
       m_tkValid=false;
       return true;
      }

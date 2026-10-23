@@ -517,7 +517,6 @@ impl Registry {
     }
 
     /// Drop nodes that have been offline long enough to be forgotten.
-    /// Drop nodes that have been offline long enough to be forgotten.
     ///
     /// Returns the keys forgotten, not just a count: forgetting a node is the
     /// one registry event that cannot be recovered by asking the node, so the
