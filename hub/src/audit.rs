@@ -576,7 +576,7 @@ impl Audit {
         if out.len() < limit {
             self.wait_for_rotation();
             let oldest_active_seq = out.first().and_then(|r| r["seq"].as_u64()).unwrap_or(u64::MAX);
-            if oldest_active_seq > since + 1 {
+            if oldest_active_seq > since.saturating_add(1) {
                 for idx in 1..=self.max_backups {
                     if out.len() >= limit {
                         break;
@@ -1054,6 +1054,35 @@ mod tests {
             assert_eq!(seq, 2);
             let s3 = b.record("", "", "after_crash", "", None, None, "ok");
             assert_eq!(s3, 3);
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn read_pagination_since_and_saturation() {
+        let p = tmp("since_pagination");
+        cleanup(&p);
+        {
+            let a = Audit::open(&p).unwrap();
+            for i in 1..=10 {
+                a.record("", "", &format!("act_{}", i), "", None, None, "ok");
+            }
+            // Read with since=0 (latest 3)
+            let (recs_latest, _) = a.read(3, 0);
+            assert_eq!(recs_latest.len(), 3);
+            assert_eq!(recs_latest[0]["seq"], 8);
+            assert_eq!(recs_latest[2]["seq"], 10);
+
+            // Read with since=5, limit=3 (forward from since: seq 6, 7, 8)
+            let (recs_since, _) = a.read(3, 5);
+            assert_eq!(recs_since.len(), 3);
+            assert_eq!(recs_since[0]["seq"], 6);
+            assert_eq!(recs_since[1]["seq"], 7);
+            assert_eq!(recs_since[2]["seq"], 8);
+
+            // Read with since=u64::MAX (should not panic or overflow)
+            let (recs_max, _) = a.read(10, u64::MAX);
+            assert_eq!(recs_max.len(), 0);
         }
         cleanup(&p);
     }

@@ -546,6 +546,24 @@ void TestStateFile()
    int n2=0;
    Ok("state: torn file rejected",!CopierStateFile::Load(path,hdr2,back2,n2));
    FileDelete(path);
+
+   //--- Test full capacity (2048 positions)
+   static CopierPos fullArr[];
+   ArrayResize(fullArr,CP_STATE_MAX_LINES);
+   for(int k=0;k<CP_STATE_MAX_LINES;k++)
+     {
+      fullArr[k]=MakePos("FULL"+IntegerToString(k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
+     }
+   bool fullSaved=CopierStateFile::Save(path,"FULL_2048",fullArr,CP_STATE_MAX_LINES);
+   Ok("state: 2048 positions full save",fullSaved);
+   string fullHdr="";
+   static CopierPos fullBack[];
+   int fullN=0;
+   bool fullLoaded=CopierStateFile::Load(path,fullHdr,fullBack,fullN);
+   Ok("state: 2048 positions full load succeeds",fullLoaded);
+   Ok("state: 2048 positions count matches",fullN==CP_STATE_MAX_LINES);
+   Ok("state: 2048 positions header matches",fullHdr=="FULL_2048");
+   FileDelete(path);
   }
 
 void TestSizing()
@@ -624,7 +642,7 @@ void TestConfig()
    FileWrite(h,"events=tcp://10.0.0.9:5555");
    FileClose(h);
 
-   CopierIni ini;
+   static CopierIni ini;
    Ok("config: load",ini.Load(path));
    OkInt("config: sender count",ini.SenderCount(),2);
    OkStr("config: trims value",ini.Get("sender0","id"),"alpari01");
@@ -2295,6 +2313,24 @@ void TestCopierList()
    Ok("magic: '!' inverts to a denylist",!l.Allows("77889"));
    Ok("magic: ...admitting everything else",l.Allows("54321"));
    Ok("magic: ...including zero",l.Allows("0"));
+
+   //--- AllowsLong tests with dirty inputs
+   l.Set("abc,def");
+   Ok("AllowsLong: dirty input does NOT match magic 0",!l.AllowsLong(0));
+   Ok("AllowsLong: dirty input does NOT match arbitrary magic",!l.AllowsLong(12345));
+
+   l.Set("12345,67890");
+   Ok("AllowsLong: valid magic admits 12345",l.AllowsLong(12345));
+   Ok("AllowsLong: valid magic admits 67890",l.AllowsLong(67890));
+   Ok("AllowsLong: unlisted magic rejected",!l.AllowsLong(99999));
+   Ok("AllowsLong: unlisted zero rejected",!l.AllowsLong(0));
+
+   l.Set("0,12345");
+   Ok("AllowsLong: explicitly listed zero admitted",l.AllowsLong(0));
+   Ok("AllowsLong: explicitly listed non-zero admitted",l.AllowsLong(12345));
+
+   l.Set("!abc");
+   Ok("AllowsLong: denylist with dirty input does NOT exclude magic 0",l.AllowsLong(0));
   }
 
 void TestEndpointNormalize()
@@ -2314,6 +2350,36 @@ void TestEndpointNormalize()
    Ok("endpoint: surrounding spaces are trimmed",
       CopierNormalizeEndpoint("  10.0.0.5:5555  ")=="tcp://10.0.0.5:5555");
    Ok("endpoint: empty stays empty",CopierNormalizeEndpoint("")=="");
+  }
+
+bool TopicMatchForReceiver(const string topic,const string accStr,const string nidStr,const string &sids[],const int nSids)
+  {
+   if(StringLen(topic)==0) return false;
+   if(topic=="@all") return true;
+   if(StringFind(topic,"@")==0)
+     {
+      string sub=StringSubstr(topic,1);
+      if(sub==nidStr || sub==accStr) return true;
+      return false;
+     }
+   if(topic==nidStr || topic==accStr) return true;
+   for(int i=0;i<nSids;i++)
+      if(topic==sids[i]) return true;
+   return false;
+  }
+
+void TestTopicFilter()
+  {
+   string sids[2];
+   sids[0]="252033316";
+   sids[1]="252033317";
+   Ok("topic: @all is accepted",TopicMatchForReceiver("@all","1000","2000",sids,2));
+   Ok("topic: @nid is accepted",TopicMatchForReceiver("@2000","1000","2000",sids,2));
+   Ok("topic: @acc is accepted",TopicMatchForReceiver("@1000","1000","2000",sids,2));
+   Ok("topic: @10001 prefix collision is rejected",!TopicMatchForReceiver("@10001","1000","2000",sids,2));
+   Ok("topic: @20001 prefix collision is rejected",!TopicMatchForReceiver("@20001","1000","2000",sids,2));
+   Ok("topic: sender sid is accepted",TopicMatchForReceiver("252033316","1000","2000",sids,2));
+   Ok("topic: sender sid 2520333160 prefix collision is rejected",!TopicMatchForReceiver("2520333160","1000","2000",sids,2));
   }
 
 void TestBackoff()
@@ -2434,6 +2500,7 @@ void OnStart()
    TestSnapshotCapacity();
    TestBackoff();
    TestEndpointNormalize();
+   TestTopicFilter();
    TestCopierList();
    TestInvertedStop();
    TestSecText();

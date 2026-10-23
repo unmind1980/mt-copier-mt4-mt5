@@ -20,6 +20,8 @@ class CopierList
   {
 private:
    string            m_item[];
+   long              m_itemLong[];
+   bool              m_itemLongValid[];
    bool              m_exclude;   // the list began with "!"
    bool              m_active;
    int               m_strayBang; // items that carried a "!" of their own
@@ -46,6 +48,8 @@ public:
    void              Set(const string csv)
      {
       ArrayResize(m_item,0);
+      ArrayResize(m_itemLong,0);
+      ArrayResize(m_itemLongValid,0);
       m_exclude=false;
       m_active=false;
       m_strayBang=0;
@@ -81,7 +85,12 @@ public:
            }
 
          ArrayResize(m_item,kept+1);
+         ArrayResize(m_itemLong,kept+1);
+         ArrayResize(m_itemLongValid,kept+1);
          m_item[kept]=v;
+         bool isNum=CopierIsDigits(v);
+         m_itemLongValid[kept]=isNum;
+         m_itemLong[kept]=isNum ? CopierParseLong(v) : -1;
          kept++;
         }
       m_active=(kept>0);
@@ -106,9 +115,9 @@ public:
      {
       if(!m_active) return true;
       bool found=false;
-      for(int i=0;i<ArraySize(m_item);i++)
+      for(int i=0;i<ArraySize(m_itemLong);i++)
         {
-         if(CopierParseLong(m_item[i])==val) { found=true; break; }
+         if(m_itemLongValid[i] && m_itemLong[i]==val) { found=true; break; }
         }
       return m_exclude ? !found : found;
      }

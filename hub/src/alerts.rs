@@ -138,8 +138,6 @@ pub struct AlertEngine {
     offline_since: HashMap<String, u64>,
     /// Last tripped risk key per node to prevent repeat spam.
     last_risk_tripped: HashMap<String, String>,
-    /// Last alerted count of blocked entries per node.
-    last_risk_blocked: HashMap<String, u32>,
     /// Last evaluated clock drift per node.
     last_drift_secs: HashMap<String, i64>,
 }
@@ -158,7 +156,6 @@ impl AlertEngine {
             was_offline: HashMap::new(),
             offline_since: HashMap::new(),
             last_risk_tripped: HashMap::new(),
-            last_risk_blocked: HashMap::new(),
             last_drift_secs: HashMap::new(),
         }
     }
@@ -238,7 +235,6 @@ impl AlertEngine {
         self.was_offline.remove(node_key);
         self.offline_since.remove(node_key);
         self.last_risk_tripped.remove(node_key);
-        self.last_risk_blocked.remove(node_key);
         self.last_drift_secs.remove(node_key);
         self.fired.retain(|(_, k), _| k != node_key);
     }

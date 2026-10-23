@@ -1047,6 +1047,8 @@ bool LoadConfigFromInputs()
    g_senderClockKnown[0]=false;
    g_senderClockOffset[0]=0;
    g_senderClockOffsetValid[0]=false;
+   g_snapRejectStreak[0]=0;
+   g_dropped[0]=0;
 
    //--- Start from an empty symbol map on every load - see MapClear.
    MapClear();
@@ -1111,6 +1113,16 @@ bool LoadConfigFromInputs()
 
    CopierIni emptyIni;
    InitSenderSettings(0, emptyIni, "sender0");
+
+   double gs=PendingFillGraceSeconds;
+   if(gs>300.0) gs=300.0;
+   long ringTtl=60000;
+   if(gs>0.0)
+     {
+      long reqTtl=(long)(gs*1000.0)+30000;
+      if(reqTtl>ringTtl) ringTtl=reqTtl;
+     }
+   g_fillGraceRing.SetTtlMs(ringTtl);
 
    g_lastFullScanMs=0;
    g_posCacheCount=0;
@@ -1303,7 +1315,11 @@ void ApplyCommonConfig(const CopierIni &ini)
       int p=PollMs;
       if(p<10) p=10;
       if(p>5000) p=5000;
-      EventSetMillisecondTimer(p);
+      if(!EventSetMillisecondTimer(p))
+        {
+         g_log.Error("ApplyCommonConfig: failed to set timer for "+(string)p+"ms, falling back to 100ms");
+         EventSetMillisecondTimer(100);
+        }
      }
    g_stOvEpoch++; // Invalidate stop-geometry cache on config change
   }
@@ -1622,6 +1638,39 @@ bool LoadConfigForHub()
       return true;                    // connected, zero senders - NOT a failure
      }
 
+   //--- Pass 1: Pre-validation without modifying global state.
+   //--- Ensures atomic rollback if any sender section is invalid.
+   int candidateMax=ini.SenderDeclaredMax();
+   int candidateCount=ini.SenderCount();
+   if(candidateCount>CP_MAX_SENDERS) candidateCount=CP_MAX_SENDERS;
+   for(int i=0;i<candidateCount;i++)
+     {
+      string sec="sender"+(string)i;
+      string sid=ini.Get(sec,"id","");
+      if(StringLen(sid)==0)
+        {
+         g_log.Error("central mode: "+sec+" has no id=. It must be the SENDER'S"
+                     +" NID - the number that sender prints as nid= in its"
+                     +" startup line. Without it there is no topic to subscribe"
+                     +" to, and this sender would be mirrored by nobody. Reload aborted.");
+         return false;
+        }
+      bool pinned=false;
+      long mg=CopierResolveMagic(ini.Get(sec,"magic",""),pinned);
+      if(mg<0)
+        {
+         g_log.Error("central mode: sender "+sid+" has no magic= in "
+                     +CP_INI_PATH+". Every sender MUST pin its magic - it is how"
+                     +" this receiver finds that sender's positions, so a guess"
+                     +" would orphan real orders. Reload aborted.");
+         return false;
+        }
+     }
+
+   //--- Pass 2: Commit verified configuration
+   g_lastFullScanMs=0;
+   g_posCacheCount=0;
+
    ResetRuntimeInputsFromInputs();
    ApplyCommonConfig(ini);
 
@@ -1636,9 +1685,8 @@ bool LoadConfigForHub()
    //--- CP_MAX_SENDERS, so a file that declared sender0..sender99 on a build
    //--- holding 16 loaded sixteen of them and said nothing about the other 84.
    //--- "I configured 30 senders and only some appear" was unanswerable.
-   int declaredMax=ini.SenderDeclaredMax();
-   g_nSenders=ini.SenderCount();
-   if(g_nSenders>CP_MAX_SENDERS) g_nSenders=CP_MAX_SENDERS;
+   int declaredMax=candidateMax;
+   g_nSenders=candidateCount;
    if(declaredMax>=CP_MAX_SENDERS)
      {
       //--- ERROR: the operator's intent cannot be honoured at all. This is the
@@ -1698,14 +1746,6 @@ bool LoadConfigForHub()
      {
       string sec="sender"+(string)i;
       g_sid[i]=ini.Get(sec,"id","");
-      if(StringLen(g_sid[i])==0)
-        {
-         g_log.Error("central mode: "+sec+" has no id=. It must be the SENDER'S"
-                     +" NID - the number that sender prints as nid= in its"
-                     +" startup line. Without it there is no topic to subscribe"
-                     +" to, and this sender would be mirrored by nobody.");
-         return false;
-        }
       //--- cleared, NOT read - see the note above
       g_epEvents[i] ="";
       g_epSnap[i]   ="";
@@ -1719,14 +1759,6 @@ bool LoadConfigForHub()
       bool pinned=false;
       g_magic[i]=CopierResolveMagic(ini.Get(sec,"magic",""),pinned);
       g_magicPinned[i]=pinned;
-      if(g_magic[i]<0)
-        {
-         g_log.Error("central mode: sender "+g_sid[i]+" has no magic= in "
-                     +CP_INI_PATH+". Every sender MUST pin its magic - it is how"
-                     +" this receiver finds that sender's positions, so a guess"
-                     +" would orphan real orders.");
-         return false;
-        }
 
       bool lotOk=false;
       g_lotMode[i] =CopierLotModeFromText(ini.Get(sec,"lotmode","multiplier"),
@@ -1765,13 +1797,26 @@ bool LoadConfigForHub()
       g_senderClockKnown[i]=false;
       g_senderClockOffset[i]=0;
       g_senderClockOffsetValid[i]=false;
+      g_snapRejectStreak[i]=0;
+      g_dropped[i]=0;
 
       InitSenderSettings(i, ini, sec);
      }
 
-   //--- Force next tick to do full scan & recompute orphan status for updated configuration
-   g_lastFullScanMs=0;
-   g_posCacheCount=0;
+   double maxGraceSec=0.0;
+   for(int i=0;i<g_nSenders;i++)
+     {
+      double gs=g_senderCfg[i].pendingfillgraceseconds;
+      if(gs>300.0) { gs=300.0; g_senderCfg[i].pendingfillgraceseconds=300.0; }
+      if(gs>maxGraceSec) maxGraceSec=gs;
+     }
+   long ringTtl=60000;
+   if(maxGraceSec>0.0)
+     {
+      long reqTtl=(long)(maxGraceSec*1000.0)+30000;
+      if(reqTtl>ringTtl) ringTtl=reqTtl;
+     }
+   g_fillGraceRing.SetTtlMs(ringTtl);
 
    g_log.Info("central mode: "+IntegerToString(g_nSenders)+" sender(s) from "
               +CP_INI_PATH+" - subscribing to each sender's NID, plus control"
@@ -2628,8 +2673,14 @@ void ExecuteQueue()
    int skipped=0;
    int sAddedCount[CP_MAX_SENDERS];
    double sAddedLots[CP_MAX_SENDERS];
+   int sHeldBase[CP_MAX_SENDERS];
+   double sHeldBaseLots[CP_MAX_SENDERS];
+   bool sHeldBaseKnown[CP_MAX_SENDERS];
    ArrayInitialize(sAddedCount,0);
    ArrayInitialize(sAddedLots,0.0);
+   ArrayInitialize(sHeldBase,0);
+   ArrayInitialize(sHeldBaseLots,0.0);
+   ArrayInitialize(sHeldBaseKnown,false);
    //--- `skipped` bounds a full rotation, so a queue in which EVERY action is
    //--- blocked does not spin through itself ten times a second.
    while(g_qn>0 && done<MaxActionsPerTick && skipped<=g_qn)
@@ -2777,15 +2828,21 @@ void ExecuteQueue()
             skipped++;
             continue;
            }
-         if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
-           {
-            int sHeldBase=LocalForSender(a.senderIdx,g_acctAllPos,g_acctAllPosCount);
-            double sHeldLots=sAddedLots[a.senderIdx];
-            for(int k=0;k<sHeldBase;k++) sHeldLots+=g_locScratch[k].lots;
-            int sHeldCount=sHeldBase+sAddedCount[a.senderIdx];
-            string sWhy="";
-            if(!g_senderRisk[a.senderIdx].AllowOpen(a.lots,sHeldCount,sHeldLots,
-                                                    0,0.0,sWhy))
+        if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
+          {
+           int si=a.senderIdx;
+           if(!sHeldBaseKnown[si])
+             {
+              sHeldBase[si]=LocalForSender(si,g_acctAllPos,g_acctAllPosCount);
+              sHeldBaseLots[si]=0.0;
+              for(int k=0;k<sHeldBase[si];k++) sHeldBaseLots[si]+=g_locScratch[k].lots;
+              sHeldBaseKnown[si]=true;
+             }
+           int sHeldCount=sHeldBase[si]+sAddedCount[si];
+           double sHeldLots=sHeldBaseLots[si]+sAddedLots[si];
+           string sWhy="";
+           if(!g_senderRisk[si].AllowOpen(a.lots,sHeldCount,sHeldLots,
+                                           0,0.0,sWhy))
               {
                g_riskBlocked++;
                if(g_once.ShouldEmit("drainsrisk|"+g_sid[a.senderIdx]+"|"+a.uid))
@@ -3789,6 +3846,22 @@ int ScanAndResolveAccountPositions()
            }
          g_rawScratch[i].uid=g_posCache[matchIdx].uid;
          g_rawScratch[i].cmt=g_posCache[matchIdx].cmt;   // carried, not re-read
+         if(StringLen(g_rawScratch[i].uid)==0)
+           {
+            //--- Broker was slow to write comment; recover it on fast path if UID is still missing
+            g_rawScratch[i].cmt=CopierReadCommentByTicket(g_rawScratch[i]);
+            g_rawScratch[i].uid=ResolveUid(g_rawScratch[i]);
+            if(matchIdx==i)
+              {
+               g_posCache[i].cmt=g_rawScratch[i].cmt;
+               g_posCache[i].uid=g_rawScratch[i].uid;
+              }
+            else
+              {
+               g_posCacheNext[i].cmt=g_rawScratch[i].cmt;
+               g_posCacheNext[i].uid=g_rawScratch[i].uid;
+              }
+           }
          g_acctAllPos[i]=g_rawScratch[i];
         }
       else
@@ -5107,10 +5180,18 @@ void HandleCfg(const CopierEnv &e)
       string old="";
       if(CopierIniReadAll(CP_INI_BAK_PATH,old) && StringLen(old)>0)
         {
-         CopierIniWriteAll(CP_INI_PATH,old);
-         LoadConfig();
-         SendCfgAck("ID="+id+";OK=0;ERR=config rejected by LoadConfig; previous config restored");
-         g_log.Error("CFG "+id+" rejected by LoadConfig - restored "+CP_INI_BAK_PATH);
+         bool wOk=CopierIniWriteAll(CP_INI_PATH,old);
+         bool lOk=wOk && LoadConfig();
+         if(wOk && lOk)
+           {
+            SendCfgAck("ID="+id+";OK=0;ERR=config rejected by LoadConfig; previous config restored");
+            g_log.Error("CFG "+id+" rejected by LoadConfig - restored "+CP_INI_BAK_PATH);
+           }
+         else
+           {
+            SendCfgAck("ID="+id+";OK=0;ERR=config rejected and failed to restore backup");
+            g_log.Error("CFG "+id+" rejected by LoadConfig and failed to restore "+CP_INI_BAK_PATH);
+           }
         }
       else
         {
@@ -5931,8 +6012,12 @@ int OnInit()
      }
 
    //--- desired sets: one slice per sender, allocated once, never grown
-   ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
-   ArrayResize(g_scratch,CP_MAX_POSITIONS);
+   if(ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS)<0 ||
+      ArrayResize(g_scratch,CP_MAX_POSITIONS)<0)
+     {
+      g_log.Error("out of memory allocating desired position arrays in OnInit");
+      return INIT_FAILED;
+     }
 
    //--- ONE endpoint per sender now: the sender binds a single socket, so
    //--- there is no separate snapshot address to collect. snap= in the

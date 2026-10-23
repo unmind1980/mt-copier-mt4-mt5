@@ -368,6 +368,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十三次审计** | 2026-10-23 10:45 | 停止几何指纹纪元失效、遥测 StrBuilder 与 Backoff O(1) 淘汰 | 核心优化 |
 | **二十四次审计** | 2026-10-23 11:40 | 全栈审查报告缺陷闭环（流重置、状态落盘、鉴权防注入） | 全栈安全 |
 | **二十五次审计** | 2026-10-23 13:40 | 跨节点主题前缀碰撞消除、空注释API退化根治、双向STAT与WebUI全面闭环 | 全栈安全与性能 |
+| **二十六次审计** | 2026-10-23 18:30 | 魔法过滤纯数字校验、状态文件满载边界自洽、挂单宽限死循环与配置事务提交 | 全栈健壮与性能 |
 
 ---
 
@@ -767,6 +768,36 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **OPT-INC-01** | **Medium 优化** | `CopierConfig.mqh:165` / `CopierReceiver.mq4:1738` | **`LoadConfigForHub` 采用 `SectionRange` 区间索引**：将 100 Sender 场景下的 74 万次字符串比较降至 7,400 次，提速 100 倍。 |
 | **OPT-HUB-01** | **Medium 优化** | `hub/src/main.rs:1995-2045` | **Hub `STAT` 锁合并与按需 WebSocket 推送**：每秒 `STAT` 由 3 次加锁合并为 1 次，直接基于哈希表 O(1) 判定有效性（消除全节点排序克隆），纯回执帧不再触发无意义的全量 WebSocket 广播。 |
 | **OPT-TEST-01** | **Low 测试** | `tools/hub_api_test.py:696` | **使用动态探测的 `free_port`**：消除端口硬编码冲突风险。 |
+
+---
+
+### 二十六次审计：全栈审计报告缺陷全面修复与性能加固（2026-10-23 18:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **N-1** | **High 回归** | `CopierFilter.mqh:20, 48, 105` | **魔法过滤器纯数字校验与预解析加速（消除脏输入误匹 Magic 0）**：在 `CopierList` 内部增加 `m_itemLong[]` 与 `m_itemLongValid[]`，`Set()` 阶段剔除非纯数字字符串；`AllowsLong` 进行纯 long 对比（杜绝 `"abc"` 导致 `CopierParseLong` 截断为 0 误匹配手动单，同时大幅消除逐次字符串解析开销）。 |
+| **N-2** | **High 边界** | `CopierState.mqh:1147` | **状态文件满载 2048 条读取边界自洽**：放宽读取循环条件为 `got < CP_STATE_MAX_LINES || expected < 0`，使持有恰好 2048 行上限的存档文件在读取完全部 `POS:` 行后能够继续读取并解析 `END:2048` 标志，彻底杜绝满额合法存档在启动时被误判损坏而拒绝加载的问题。 |
+| **N-3** | **High 逻辑** | `CopierReceiver.mq4:1115, 1780` | **挂单成交宽限环动态 TTL 与配置上限钳位**：在 Direct 模式与 Hub 模式加载配置时，根据所有 Sender 的 `pendingfillgraceseconds`（上限钳位至 300s）动态调整 `g_fillGraceRing.SetTtlMs(max(60000, maxGraceMs + 30000))`，彻底消除宽限期大于 60s 时环超时返回 0 导致倒计时无限重启无法撤单市价重开的死循环缺陷。 |
+| **N-4** | **High 事务** | `CopierReceiver.mq4:1640-1780` | **Central 配置原子化两阶段预校验加载（彻底杜绝加载中途失败半改写）**：`LoadConfigForHub` 重构为两阶段处理：Pass 1 预校验所有 Sender 的 `id` 与 `magic`，发现格式或必填项缺陷立即报错返回 `false`（全局变量、Symbol Map、队列保持原样，原运行态 100% 完整保留）；Pass 2 校验通过后原子提交生效。 |
+| **N-6** | **Medium 防护** | `CopierRisk.mqh:52, 65` | **日亏/回撤熔断百分比上限钳位与爆仓安全兜底**：在 `CopierLossTripLevel` 中针对 `pct >= 100.0` 钳位至 99.9%，并在 `CopierLossExceeded` 增加 `pct >= 100.0 && equity <= 0.0` 爆仓判定，彻底杜绝配置 `pct >= 100` 导致正净值下熔断开关静默失效的漏洞。 |
+| **M1** | **Medium 状态** | `CopierReceiver.mq4:1660` | **0-Sender 配置重载立即重置 `g_lastFullScanMs`**：将 `g_lastFullScanMs=0; g_posCacheCount=0;` 移至 `LoadConfigForHub` 头部，无论 Sender 数量多少均在下个 Tick 强制慢路径全量重新判定持仓孤儿状态。 |
+| **M2** | **Medium 性能** | `CopierReceiver.mq4:2670, 2785` | **`ExecuteQueue` 出队风控检查持仓扫描消除**：在每轮出队开始前一次性汇总或按需缓存各 Sender 当前基础持仓（`sHeldBase` 与 `sHeldBaseLots`），消除出队突发期每条排队 OPEN 动作重复执行 $O(N)$ 2048 项全持仓过滤扫描。 |
+| **M3** | **Low 状态** | `CopierReceiver.mq4:1049, 1775` | **Direct 模式与 Hub 模式配置重载重置快照拒绝计数**：补齐 `g_snapRejectStreak[i]=0; g_dropped[i]=0;`，防止重载后首个拒绝记录虚假里程碑。 |
+| **M4** | **Low 防御** | `CopierReceiver.mq4:6012` | **OnInit 阶段 `g_desired` 与 `g_scratch` 内存分配检查**：显式检查 `ArrayResize` 返回值，OOM 时干净返回 `INIT_FAILED`。 |
+| **M5** | **Low 严谨** | `CopierReceiver.mq4:5180` | **HandleCfg 备份恢复返回值严格检查**：检查 `CopierIniWriteAll` 与 `LoadConfig` 返回值，失败时如实上报 `ERR=config rejected and failed to restore backup`。 |
+| **M6** | **Low 稳定性** | `CopierReceiver.mq4:1315` | **ApplyCommonConfig 定时器重置防失败**：检查 `EventSetMillisecondTimer` 返回值，失败时告警并安全回退默认 100ms，防止 Receiver 静默全停。 |
+| **M7** | **Medium 容错** | `CopierReceiver.mq4:3845` | **快路径无 UID 订单注释延迟写入回读愈合**：快路径匹配上订单但缓存 `uid` 为空时，回读一次注释并解析 `ResolveUid`，解决券商迟写注释导致订单长达 30 秒无法识别为 Copier 单的缺陷。 |
+| **M8** | **Medium 规范** | `CopierModel.mqh:991` | **MT5 `CopierModifyPendingOrder` 设置 `type_time`**：当 `expire > 0` 时显式设置 `req.type_time = ORDER_TIME_SPECIFIED; req.expiration = expire;`，防止挂单到期时间被券商重置为 GTC。 |
+| **M9** | **Medium 安全** | `CopierTransport.mqh:304` | **ConnectReceiver CURVE 错误套接字释放与 Fail-Closed**：对齐 `ConnectHub` 规范，CURVE 开启但 key 为空或解析失败时立即 `delete m_sub; m_sub = NULL;` 并返回 `false`，彻底消灭套接字泄漏与无加密连接。 |
+| **M10** | **Low 防抖** | `CopierSender.mq4:285, 297` | **快照哈希环增加时间戳衰减**：记录 `g_recentSnapHashTime[4]`，仅 5000ms 窗口内的哈希视作 in-step，超过 5 秒的陈旧快照哈希自动失效，兼顾中间态防抖与故障快速恢复。 |
+| **M11** | **Low 兼容** | `CopierSender.mq4:1728` | **旧版 Receiver 完整监控报告向下兼容**：STAT 接收判别在无 `RISK=` 但包含 `NSEND=` 时自动赋予 `rk="ok"`，确保旧版 Receiver 面板备注与状态行正常更新。 |
+| **M12** | **Low 清洁** | `CopierSender.mq4:672` | **删除死代码 `FindUidIn`**：清除已无调用方的线性查找死函数。 |
+| **H1** | **High 磁盘** | `hub/src/main.rs:1736-1771` | **Hub `config.drift` 与 `config.repush` 审计写入限流**：将随 5s 心跳触发的配置漂移与重发审计记录纳入 `wire_audit_throttle`（60s 窗口），彻底消除每天高达近 2 万次的无意义磁盘 `fsync` 刷盘与日志轰炸。 |
+| **H2** | **Medium 溢出**| `hub/src/audit.rs:579` | **Audit 压缩归档游标 `since + 1` 算术溢出防范**：替换为 `since.saturating_add(1)`，防止 `u64::MAX` 在 debug/测试模式下发生越界 panic。 |
+| **H3** | **Medium 性能**| `hub/src/main.rs:1381` / `hub/src/stats.rs:124` | **Hub 消息转发热路径零拷贝与 HashMap 内存分配优化**：直接借用 `&parts[0]` 与 `&parts[1]` 切片发送，仅日志输出时格式化字符串；`stats.rs` 采用 `get_mut` 避免高频 `to_string()` 堆内存分配。 |
+| **H4** | **Low 清洁** | `hub/src/alerts.rs:141, 161, 241` | **清理死字段 `last_risk_blocked`**：保持 Rust Hub 告警引擎数据结构整洁。 |
+| **TEST-01** | **Medium 测试** | `CopierSelfTest.mq4:550, 2318, 2345` | **补充 MQL 级自测试用例**：新增 `IsTopicForReceiver` 主题严格过滤测试、`AllowsLong` 脏输入防手动单 0 误匹配测试、`CopierStateFile` 2048 满载边界保存与读取测试。 |
+| **TEST-02** | **Medium 测试** | `hub/src/audit.rs:1065` | **补充 Rust Hub 游标分页与溢出单元测试**：新增 `read_pagination_since_and_saturation` 单元测试，覆盖 `since > 0` 正向读取与 `u64::MAX` 边界安全。 |
 
 ---
 

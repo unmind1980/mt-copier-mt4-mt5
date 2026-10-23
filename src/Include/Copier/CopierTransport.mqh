@@ -301,7 +301,7 @@ public:
       for(int i=0;i<nEndpoints;i++)
         {
          if(StringLen(endpoints[i])==0) continue;
-         if(useCurve && StringLen(serverKeys[i])>0)
+         if(useCurve)
            {
             //--- ONE serverkey per SOCKET, not per connection: a second
             //--- assignment replaces the first, so several senders with
@@ -310,9 +310,17 @@ public:
             //--- channel's CURVE therefore supports one key for all its
             //--- senders (i.e. a shared key), while the hub link - one
             //--- endpoint, one key - has no such limit.
+            if(StringLen(serverKeys[i])==0)
+              {
+               delete m_sub; m_sub=NULL;
+               return false;
+              }
             uchar sk[];
-            if(!CurveRaw(serverKeys[i],sk)) return false;
-            if(!m_sub.setCurveServerKey(sk)) return false;
+            if(!CurveRaw(serverKeys[i],sk) || !m_sub.setCurveServerKey(sk))
+              {
+               delete m_sub; m_sub=NULL;
+               return false;
+              }
            }
          m_sub.connect(endpoints[i]);
         }

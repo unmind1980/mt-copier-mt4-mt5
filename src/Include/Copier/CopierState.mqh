@@ -1144,7 +1144,7 @@ public:
 
       int expected=-1;
       int got=0;
-      while(!FileIsEnding(h) && got<CP_STATE_MAX_LINES)
+      while(!FileIsEnding(h) && (got<CP_STATE_MAX_LINES || expected<0))
         {
          string line=FileReadString(h);
          if(StringLen(line)==0) continue;
@@ -1160,13 +1160,16 @@ public:
            }
          if(StringFind(line,CP_STATE_TAG_POS)==0)
            {
-            string rec=StringSubstr(line,StringLen(CP_STATE_TAG_POS));
-            CopierPos p;
-            if(CopierDecodeRec(rec,p))
+            if(got<CP_STATE_MAX_LINES)
               {
-               ArrayResize(pos,got+1,CP_MAX_POSITIONS);
-               pos[got]=p;
-               got++;
+               string rec=StringSubstr(line,StringLen(CP_STATE_TAG_POS));
+               CopierPos p;
+               if(CopierDecodeRec(rec,p))
+                 {
+                  ArrayResize(pos,got+1,CP_MAX_POSITIONS);
+                  pos[got]=p;
+                  got++;
+                 }
               }
             continue;
            }

@@ -988,7 +988,11 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    req.sl    =sl;
    req.tp    =tp;
    if(stoplimit>0.0) req.stoplimit=stoplimit;
-   if(expire>0) req.expiration=expire;
+   if(expire>0)
+     {
+      req.type_time =ORDER_TIME_SPECIFIED;
+      req.expiration=expire;
+     }
    if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
    if(res.retcode==TRADE_RETCODE_DONE
       || res.retcode==TRADE_RETCODE_PLACED

@@ -283,14 +283,23 @@ string           g_snapHash="";
 string           g_latestSnapHash="";
 #define CP_RECENT_HASH_COUNT 4
 string           g_recentSnapHashes[CP_RECENT_HASH_COUNT];
+long             g_recentSnapHashTime[CP_RECENT_HASH_COUNT];
 int              g_recentSnapHashHead=0;
 
 void NoteRecentSnapHash(const string h)
   {
    if(StringLen(h)==0) return;
+   long now=CopierNowMs();
    for(int i=0;i<CP_RECENT_HASH_COUNT;i++)
-      if(g_recentSnapHashes[i]==h) return;
+     {
+      if(g_recentSnapHashes[i]==h)
+        {
+         g_recentSnapHashTime[i]=now;
+         return;
+        }
+     }
    g_recentSnapHashes[g_recentSnapHashHead]=h;
+   g_recentSnapHashTime[g_recentSnapHashHead]=now;
    g_recentSnapHashHead=(g_recentSnapHashHead+1)%CP_RECENT_HASH_COUNT;
   }
 
@@ -298,8 +307,11 @@ bool IsRecentSnapHash(const string h)
   {
    if(StringLen(h)==0) return false;
    if(h==g_snapHash || h==g_latestSnapHash) return true;
+   long now=CopierNowMs();
    for(int i=0;i<CP_RECENT_HASH_COUNT;i++)
-      if(g_recentSnapHashes[i]==h) return true;
+     {
+      if(g_recentSnapHashes[i]==h && (now-g_recentSnapHashTime[i]<=5000)) return true;
+     }
    return false;
   }
 //--- The exact bytes of the last BROADCAST snapshot, kept so a repair can
@@ -667,12 +679,6 @@ int BuildCurrent()
       n++;
      }
    return n;
-  }
-
-int FindUidIn(const CopierPos &arr[],const int n,const string uid)
-  {
-   for(int i=0;i<n;i++) { if(arr[i].uid==uid) return i; }
-   return -1;
   }
 
 //=====================================================================
@@ -1719,17 +1725,19 @@ void OnTimer()
       //--- RISK is the discriminator for the 60s full monitoring report because
       //--- the 5s position summary carries EQ/BL without RISK, while the full
       //--- report appends NSEND/BLOCKED/RISK together.
-      if(StringLen(login)>0 && StringLen(risk)>0)
+      string rk=risk;
+      if(StringLen(rk)==0 && StringLen(nsend)>0) rk="ok";
+      if(StringLen(login)>0 && StringLen(rk)>0)
         {
-         g_peers.SetNote(login,risk);
+         g_peers.SetNote(login,rk);
          //--- Keyed on the account and the risk state, NOT on the figures. A
          //--- steady receiver reports the same thing every minute, and logging
          //--- all of it would be noise; a CHANGE in risk state is what is
          //--- worth interrupting the log for.
-         if(g_once.ShouldEmit("stat|"+login+"|"+risk))
+         if(g_once.ShouldEmit("stat|"+login+"|"+rk))
             g_log.Info("receiver "+login+" status: equity="+eq+" balance="+bl
                        +" held="+held+" position(s) lots="+lots
-                       +" senders="+nsend+" risk="+risk
+                       +" senders="+nsend+" risk="+rk
                        +" blocked="+blocked+" since the last report");
         }
      }

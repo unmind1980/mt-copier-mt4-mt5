@@ -121,14 +121,26 @@ impl Stats {
     pub fn note_forward(&mut self, topic: &str, ty: &str) {
         self.forwarded += 1;
         self.total_forwarded += 1;
-        *self.by_topic.entry(topic.to_string()).or_insert(0) += 1;
-        *self.by_type.entry(ty.to_string()).or_insert(0) += 1;
+        if let Some(c) = self.by_topic.get_mut(topic) {
+            *c += 1;
+        } else {
+            self.by_topic.insert(topic.to_string(), 1);
+        }
+        if let Some(c) = self.by_type.get_mut(ty) {
+            *c += 1;
+        } else {
+            self.by_type.insert(ty.to_string(), 1);
+        }
     }
 
     pub fn note_control(&mut self, ty: &str) {
         self.control += 1;
         self.total_control += 1;
-        *self.control_by_type.entry(ty.to_string()).or_insert(0) += 1;
+        if let Some(c) = self.control_by_type.get_mut(ty) {
+            *c += 1;
+        } else {
+            self.control_by_type.insert(ty.to_string(), 1);
+        }
     }
 
     /// A two-frame message whose payload is not an envelope.

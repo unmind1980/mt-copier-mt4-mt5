@@ -1379,14 +1379,14 @@ fn main() {
                         st.note_single_dropped();
                     }
                 } else if parts.len() >= 2 {
-                    let topic = parts[0].clone();
-                    let payload = parts[1].clone();
-                    let ts: String = topic.iter().map(|c| *c as char).collect();
+                    let topic = &parts[0];
+                    let payload = &parts[1];
 
                     if !payload.starts_with(b"V=") {
                         st.note_dropped();
                         dropped_since_log += 1;
                         if args.verbose || last_drop_log.elapsed() >= Duration::from_secs(2) {
+                            let ts = String::from_utf8_lossy(topic);
                             if dropped_since_log > 1 && !args.verbose {
                                 println!(
                                     "[hub] DROP  topic={}  {} bytes, does not start with 'V=' ({} dropped in last {:.1}s)",
@@ -1444,6 +1444,7 @@ fn main() {
                         //--- as `receipts`. --verbose still prints every one.
                         let routine = ty == "PING" || ty == "HBT2" || ty == "STAT";
                         if args.verbose || !routine {
+                            let ts = String::from_utf8_lossy(topic);
                             println!(
                                 "[hub] up    {:<14} T={:<5} {}",
                                 ts,
@@ -1734,40 +1735,52 @@ fn main() {
                                     let key = format!("{}:{}", role, acc);
                                     let hub_rev = cfg.current(&key).map(|r| r.rev).unwrap_or(0);
                                     if hub_rev > 0 && node_rev > hub_rev {
-                                        println!(
-                                            "[hub] WARN  {} reports config REV {} but this hub \
-                                             issued {} - drifted, not overwriting",
-                                            key, node_rev, hub_rev
-                                        );
-                                        audit.record(
-                                            "",
-                                            "",
-                                            "config.drift",
-                                            &key,
-                                            Some(serde_json::json!({ "hub_rev": hub_rev })),
-                                            Some(serde_json::json!({ "node_rev": node_rev })),
-                                            "drift",
-                                        );
-                                    } else if hub_rev > 0 && node_rev < hub_rev && args.writes {
-                                        //--- Behind, and the hub is allowed to
-                                        //--- act. Registers the command (which
-                                        //--- the retry loop below will send) and
-                                        //--- nudges it to fire immediately.
-                                        if let Some(r) = cfg.current(&key) {
-                                            let c = cmds.issue_cfg(&key, r.rev, "", "");
+                                        let throttle_key = (key.clone(), "config.drift".to_string());
+                                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                            Some(t) => t.elapsed() >= Duration::from_secs(60),
+                                            None => true,
+                                        };
+                                        if should_audit {
+                                            wire_audit_throttle.insert(throttle_key, Instant::now());
                                             println!(
-                                                "[hub] {} is behind (rev {} < {}) - pushing CFG {}",
-                                                key, node_rev, r.rev, c.id
+                                                "[hub] WARN  {} reports config REV {} but this hub \
+                                                 issued {} - drifted, not overwriting",
+                                                key, node_rev, hub_rev
                                             );
                                             audit.record(
                                                 "",
                                                 "",
-                                                "config.repush",
+                                                "config.drift",
                                                 &key,
+                                                Some(serde_json::json!({ "hub_rev": hub_rev })),
                                                 Some(serde_json::json!({ "node_rev": node_rev })),
-                                                Some(serde_json::json!({ "hub_rev": r.rev })),
-                                                "ok",
+                                                "drift",
                                             );
+                                        }
+                                    } else if hub_rev > 0 && node_rev < hub_rev && args.writes {
+                                        let throttle_key = (key.clone(), "config.repush".to_string());
+                                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                            Some(t) => t.elapsed() >= Duration::from_secs(60),
+                                            None => true,
+                                        };
+                                        if should_audit {
+                                            wire_audit_throttle.insert(throttle_key, Instant::now());
+                                            if let Some(r) = cfg.current(&key) {
+                                                let c = cmds.issue_cfg(&key, r.rev, "", "");
+                                                println!(
+                                                    "[hub] {} is behind (rev {} < {}) - pushing CFG {}",
+                                                    key, node_rev, r.rev, c.id
+                                                );
+                                                audit.record(
+                                                    "",
+                                                    "",
+                                                    "config.repush",
+                                                    &key,
+                                                    Some(serde_json::json!({ "node_rev": node_rev })),
+                                                    Some(serde_json::json!({ "hub_rev": r.rev })),
+                                                    "ok",
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -2108,7 +2121,7 @@ fn main() {
                         //--- frame. A blocking send only fails here when the
                         //--- context is terminating, so the honest response is to
                         //--- stop rather than to keep writing into a torn message.
-                        let fwd_res = sock.send(&topic, zmq::SNDMORE).and_then(|_| sock.send(&payload, 0));
+                        let fwd_res = sock.send(topic, zmq::SNDMORE).and_then(|_| sock.send(payload, 0));
                         if let Err(e) = fwd_res {
                             eprintln!(
                                 "[hub] FATAL forward failed mid-message ({}): the socket is \
@@ -2121,7 +2134,8 @@ fn main() {
                         }
 
                         let ty = envelope_type(&payload);
-                        st.note_forward(&ts, &ty);
+                        let topic_str = std::str::from_utf8(topic).unwrap_or("");
+                        st.note_forward(topic_str, &ty);
 
                         //--- M3 POSITION VIEW - read-only, and deliberately
                         //--- AFTER the forward above.
@@ -2191,6 +2205,7 @@ fn main() {
                         //--- and HBT fire continuously and are what the stats
                         //--- line is for
                         if args.verbose || ty == "OPEN" || ty == "CLOSE" {
+                            let ts = String::from_utf8_lossy(topic);
                             println!(
                                 "[hub] fwd   {:<14} T={:<5} {}",
                                 ts,
