@@ -657,6 +657,8 @@ int BuildCurrent()
                     }
                   curFrom=prevFrom;
                  }
+               if(StringLen(uid)==0 && g_once.ShouldEmit("fromhops|"+(string)p.ticket))
+                  g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket+"; minting fresh UID");
               }
            }
 #endif

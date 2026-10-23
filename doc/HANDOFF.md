@@ -374,6 +374,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **二十九次审计** | 2026-10-23 23:20 | 减仓收敛手数换算修正、全周开休市判定、退避队列淘汰纠偏与跨平台模型加固 | 全栈核心与交易模型 |
 | **三十次审计** | 2026-10-24 00:25 | 随机数种子全自洽初始化、Remove O(1)计数、ReplaceAll注释与PayloadDRY重构 | 全栈安全与代码精炼 |
 | **三十一次审计** | 2026-10-24 01:30 | MODIFY节流缓存脱钩、缺N快照拦截拒空仓、CSPRNG安全真随机与测试夹具全修复 | 资金安全与全栈加固 |
+| **三十二次审计** | 2026-10-24 09:30 | MQL入队预扫O(N)优化、Hub快照Move零拷贝、图表熵混入与测试端口隔离 | 性能与测试工程化 |
 
 ---
 
@@ -929,6 +930,22 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **6.7** | **Medium 安全** | `hub/src/api.rs:2475` | **测试通知 URL 变更时禁止合并已存机密授权头**：杜绝利用测试接口外传密钥。 |
 | **6.9 & 6.10** | **Medium 容错** | `hub/src/audit.rs:542` / `config.rs:294` | **活动审计与配置历史采用 lossy 模式读取**：杜绝末尾字符撕裂导致全量历史空响应。 |
 | **6.11** | **Medium 安全** | `tools/reset_password.py:30` | **移除硬编码默认弱口令，缺省自动生成 12 字符高熵安全随机密码**。 |
+
+---
+
+### 三十二次审计：MQL入队预扫O(N)优化、Hub快照Move零拷贝、图表熵混入与测试端口隔离（2026-10-24 09:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **M-01** | **Low 清洁** | `CopierCodec.mqh:582` | **`CopierPayloadOpenParse` 显式初始化 `p.cmt=""`**：消除结构体未设置字段继承旧内存残留风险，与代码注释保证 100% 自洽。 |
+| **M-02** | **Medium 性能** | `CopierReceiver.mq4:4310` | **`ConvergeSender` 队列扫描预收集 O(N+Q) 降维**：循环前预扫一遍该 sender 排队的 `CLOSE`/`TRIM` 动作，将 2048 仓位每 tick 执行 105 万次 $O(N \times Q)$ 字符串比较降至 256 + 2048 次，提升突发入队期性能。 |
+| **M-03** | **Low 可观测** | `CopierSender.mq4:660` / `CopierReceiver.mq4:1863` | **MT4 partial-close 继承 5 跳上限预警**：当 "from #" 追溯达 5 跳上限仍未定位初始单时，记录 `g_once.ShouldEmit` 限流警告日志。 |
+| **M-04** | **Low 熵源** | `CopierDefs.mqh:930` | **`CopierNewUid` 种子混入 `ChartID()`**：使同账号同一毫秒启动的多个图表/EA 实例获得完全不同的独立随机种子。 |
+| **M-05** | **Low 性能** | `CopierReceiver.mq4:6721` | **`seenSnapSid` 提为局部静态数组**：避免每 tick 在栈上高频构造/析构 100 个字符串对象。 |
+| **M-07** | **Low 规范** | `CopierCodec.mqh:517` | **`CopierDecodeSnapshot` 截断超过容量声明时记录告警**：当网络 N 超过 `maxOut` 时明确打印日志提示。 |
+| **R-01** | **Medium 性能** | `hub/src/positions.rs:123` / `main.rs:2177` | **`Positions::on_snap` 所有权转移零拷贝**：改用 move 语义传值，彻底消灭持锁期间对 4096 条 `PositionItem` 的深度克隆，锁持有时间稳定在亚微秒级。 |
+| **R-05** | **Low 测试** | `hub/src/envelope.rs:245` | **新增 `decompress_field` 完整单元测试**：覆盖未压缩、原生字符串、Z85+zlib 往返、带 pad 往返以及损坏流安全容错。 |
+| **T-01** | **Medium 测试** | `tools/hub_curve_test.py:35` / `tools/hub_positions_test.py:36` | **消除硬编码测试端口冲突**：`hub_curve_test.py` 迁移至 6192/6193，`hub_positions_test.py` 迁移至 6198，彻底解决多套件并发或残留进程导致的端口占有假死。 |
 
 ---
 

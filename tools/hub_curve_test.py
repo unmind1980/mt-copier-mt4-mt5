@@ -32,8 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 HUB = os.path.join(REPO, "hub", "target", "release", "copier-hub.exe")
 
-ZMQ_PORT = 6190
-HTTP_PORT = 6191
+ZMQ_PORT = 6192
+HTTP_PORT = 6193
 CHECKS = []
 
 

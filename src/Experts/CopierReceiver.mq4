@@ -1860,6 +1860,8 @@ string ResolveUid(const CopierPos &p)
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
          curFrom=prevFrom;
         }
+      if(g_once.ShouldEmit("recvfromhops|"+(string)p.ticket))
+         g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket);
 #endif
      }
 
@@ -2968,6 +2970,9 @@ void ExecuteQueue()
                g_ourLots=MathMax(0.0,g_ourLots-a.lots);
                if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                  {
+                  //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
+                  //--- position is closed before an open lands in the same tick, these may become negative;
+                  //--- they are safely floored at 0 via MathMax at the risk gate (line 2809).
                   sAddedCount[a.senderIdx]--;
                   sAddedLots[a.senderIdx]-=a.lots;
                  }
@@ -4302,6 +4307,22 @@ void ConvergeSender(const int si)
    double sPendLots=0.0;
    PendingOpensForSender(si,sPendCount,sPendLots);
 
+   //--- Pre-scan queued CLOSE and TRIM actions for this sender once per tick,
+   //--- reducing worst-case O(N * Q) string comparisons across 2048 desired positions to O(N + Q).
+   static string queuedCloseOrTrim[CP_MAX_ACTIONS];
+   int queuedCloseOrTrimCount=0;
+   if(g_qn>0)
+     {
+      for(int q=0;q<g_qn;q++)
+        {
+         int qidx=g_qHead+q;
+         if(g_q[qidx].senderIdx==si && (g_q[qidx].kind==CP_ACT_CLOSE || g_q[qidx].kind==CP_ACT_TRIM))
+           {
+            queuedCloseOrTrim[queuedCloseOrTrimCount++]=g_q[qidx].uid;
+           }
+        }
+     }
+
    //--- desired but not mirrored -> open
    for(int i=0;i<g_desiredCount[si];i++)
      {
@@ -4317,7 +4338,11 @@ void ConvergeSender(const int si)
          //--- and for TRIM only when volume has actually converged to the desired level.
          //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
          //--- causes duplicate execution on the next tick.
-         bool hasQueued=(g_qn>0) && (ActionQueued(si,CP_ACT_CLOSE,d.uid) || ActionQueued(si,CP_ACT_TRIM,d.uid));
+         bool hasQueued=false;
+         for(int q=0;q<queuedCloseOrTrimCount;q++)
+           {
+            if(queuedCloseOrTrim[q]==d.uid) { hasQueued=true; break; }
+           }
          if(!hasQueued)
            {
             double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
@@ -6718,7 +6743,7 @@ void OnTimer()
          s_isLatestSnap[i]=false;
         }
 
-      string seenSnapSid[CP_MAX_SENDERS];
+      static string s_seenSnapSid[CP_MAX_SENDERS];
       int seenCount=0;
       for(int i=n-1;i>=0;i--)
         {
@@ -6727,11 +6752,11 @@ void OnTimer()
             bool seen=false;
             for(int s=0;s<seenCount;s++)
               {
-               if(seenSnapSid[s]==s_envs[i].sid) { seen=true; break; }
+               if(s_seenSnapSid[s]==s_envs[i].sid) { seen=true; break; }
               }
             if(!seen)
               {
-               if(seenCount<CP_MAX_SENDERS) seenSnapSid[seenCount++]=s_envs[i].sid;
+               if(seenCount<CP_MAX_SENDERS) s_seenSnapSid[seenCount++]=s_envs[i].sid;
                s_isLatestSnap[i]=true;
               }
            }

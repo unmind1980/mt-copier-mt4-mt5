@@ -514,7 +514,11 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
       cap=count;
      }
    if(count>cap) count=cap;
-   if(count>maxOut) count=maxOut;         // never trust the wire
+   if(count>maxOut)
+     {
+      Print("[copier] WARN: Snapshot N="+(string)countLong+" exceeds maxOut "+(string)maxOut+"; clamping.");
+      count=maxOut;         // never trust the wire
+     }
 
    string recs="";
    if(!CopierKvGet(payload,"R",recs) || StringLen(recs)==0) return -1;
@@ -590,6 +594,7 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.pexpire =CopierKvGetLong(payload,"PEXP",0);
    if(p.pprice<0.0 || p.pstop<0.0) return false;
    p.magic   =0;
+   p.cmt     ="";
    p.used    =true;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
    if(p.lots<=0.0) return false;

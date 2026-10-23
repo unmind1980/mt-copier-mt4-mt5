@@ -240,4 +240,36 @@ mod tests {
         assert_eq!(envelope_payload(b"V=1|SID=9|T=SNAP"), b"");
         assert_eq!(envelope_payload(b"garbage"), b"");
     }
+
+    #[test]
+    fn decompress_field_uncompressed_and_raw() {
+        assert_eq!(decompress_field(b"0:hello world"), "hello world");
+        assert_eq!(decompress_field(b"raw fallback"), "raw fallback");
+        assert_eq!(decompress_field(b""), "");
+    }
+
+    #[test]
+    fn decompress_field_compressed_zlib_roundtrip() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let src = b"UID12345,EURUSD,0.1,1.08500";
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(src).unwrap();
+        let mut comp = enc.finish().unwrap();
+
+        let pad = (4 - (comp.len() % 4)) % 4;
+        comp.resize(comp.len() + pad, 0);
+
+        let z85 = zmq::z85_encode(&comp).unwrap();
+        let wire = format!("1:{}:{}", pad, z85);
+        assert_eq!(decompress_field(wire.as_bytes()), "UID12345,EURUSD,0.1,1.08500");
+    }
+
+    #[test]
+    fn decompress_field_corrupted_graceful() {
+        assert_eq!(decompress_field(b"1:0:not_valid_z85!!!"), "1:0:not_valid_z85!!!");
+        assert_eq!(decompress_field(b"1:"), "1:");
+    }
 }

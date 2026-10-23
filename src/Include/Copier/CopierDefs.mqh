@@ -927,7 +927,8 @@ string CopierNewUid()
       uint seed=(uint)(CopierNowMs()&0x7FFFFFFF)
                 ^ (uint)CopierAccountLogin()
                 ^ (uint)TimeLocal()
-                ^ (uint)TimeCurrent();
+                ^ (uint)TimeCurrent()
+                ^ (uint)ChartID();
       MathSrand((int)seed);
       s_seeded=true;
      }

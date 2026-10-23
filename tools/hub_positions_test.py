@@ -33,7 +33,7 @@ import zmq
 HERE = os.path.dirname(os.path.abspath(__file__))
 HUB = os.path.join(os.path.dirname(HERE), "hub", "target", "release", "copier-hub.exe")
 
-PORT = 6197                      # NOT 6000 - do not disturb a live hub
+PORT = 6198                      # NOT 6000 - do not disturb a live hub
 SID = "252033316"                # the sender
 RECV_NID = "252034803"           # a receiver mirroring it
 

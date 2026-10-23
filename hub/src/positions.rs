@@ -120,7 +120,7 @@ impl Positions {
     /// The topic would be wrong and quietly so: a targeted repair is published
     /// on the RECEIVER's nid, so keying by topic would file that receiver's
     /// account as a sender holding somebody else's positions.
-    pub fn on_snap(&mut self, sid: &str, v: &SnapView, now: Instant) {
+    pub fn on_snap(&mut self, sid: &str, v: SnapView, now: Instant) {
         if sid.is_empty() {
             return; // no identity, no row
         }
@@ -141,11 +141,11 @@ impl Positions {
         });
         e.count = v.records;
         e.lots = v.lots;
-        e.symbols = v.symbols.clone();
-        e.receipt = v.receipt.clone();
+        e.symbols = v.symbols;
+        e.receipt = v.receipt;
         e.updated = now;
         e.snaps += 1;
-        e.items = v.items.clone();
+        e.items = v.items;
     }
 
     pub fn view_for(&self, sid: &str) -> Option<&SenderView> {
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(v.declared, None);
         assert_eq!(v.records, 1);
         let mut pos = Positions::new();
-        pos.on_snap("1", &v, Instant::now());
+        pos.on_snap("1", v, Instant::now());
         assert_eq!(pos.mismatched, 0);
     }
 
@@ -577,11 +577,11 @@ mod tests {
         let now = Instant::now();
         let v = parse_snap(&snap(&[&rec("AAAA", "EURUSD", 1, "0.5")]));
         // a broadcast arrives on the sender's nid...
-        p.on_snap("252033316", &v, now);
+        p.on_snap("252033316", v.clone(), now);
         // ...and a targeted repair on the RECEIVER's nid. Both carry the same
         // SID, so both land on the same row - and no receiver ever appears as a
         // sender holding somebody else's book.
-        p.on_snap("252033316", &v, now);
+        p.on_snap("252033316", v, now);
         assert_eq!(p.senders(), 1);
         assert_eq!(p.total_positions(), 1);
         assert_eq!(p.by_sender["252033316"].snaps, 2);
@@ -591,7 +591,7 @@ mod tests {
     fn a_snapshot_with_no_identity_is_ignored() {
         let mut p = Positions::new();
         let v = parse_snap(&snap(&[&rec("AAAA", "EURUSD", 1, "0.5")]));
-        p.on_snap("", &v, Instant::now());
+        p.on_snap("", v, Instant::now());
         assert_eq!(p.senders(), 0);
     }
 
@@ -599,9 +599,9 @@ mod tests {
     fn a_newer_snapshot_replaces_the_old_one() {
         let mut p = Positions::new();
         let now = Instant::now();
-        p.on_snap("A", &parse_snap(&snap(&[&rec("U1", "EURUSD", 1, "0.5")])), now);
+        p.on_snap("A", parse_snap(&snap(&[&rec("U1", "EURUSD", 1, "0.5")])), now);
         assert_eq!(p.total_positions(), 1);
-        p.on_snap("A", &parse_snap(&snap(&[])), now); // the position closed
+        p.on_snap("A", parse_snap(&snap(&[])), now); // the position closed
         assert_eq!(p.total_positions(), 0);
         assert_eq!(p.senders(), 1, "the sender row stays, its book is empty");
     }
@@ -610,7 +610,7 @@ mod tests {
     fn eviction_is_by_age() {
         let mut p = Positions::new();
         let now = Instant::now();
-        p.on_snap("A", &parse_snap(&snap(&[])), now);
+        p.on_snap("A", parse_snap(&snap(&[])), now);
         assert_eq!(p.evict(now), 0);
         assert_eq!(p.evict(now + POSITIONS_TTL + Duration::from_secs(1)), 1);
         assert_eq!(p.senders(), 0);
@@ -622,9 +622,9 @@ mod tests {
         let now = Instant::now();
         let one = snap(&[&rec("U1", "EURUSD", 1, "0.1")]);
         let two = snap(&[&rec("U1", "EURUSD", 1, "0.1"), &rec("U2", "EURUSD", 1, "0.1")]);
-        p.on_snap("bbb", &parse_snap(&one), now);
-        p.on_snap("aaa", &parse_snap(&two), now);
-        p.on_snap("ccc", &parse_snap(&one), now);
+        p.on_snap("bbb", parse_snap(&one), now);
+        p.on_snap("aaa", parse_snap(&two), now);
+        p.on_snap("ccc", parse_snap(&one), now);
         let t = p.top(8);
         assert_eq!(t[0].0, "aaa");
         // the two one-position senders tie, so the name decides - and it is

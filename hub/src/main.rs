@@ -2171,11 +2171,13 @@ fn main() {
 
                             if should_parse {
                                 let view = parse_snap(snap_payload);
-                                let (declared, carried, mismatched_now) = {
+                                let declared = view.declared;
+                                let carried = view.records;
+                                let mismatched_now = {
                                     let mut s = shared.lock_or_recover();
                                     let before = s.pos.mismatched;
-                                    s.pos.on_snap(&sid, &view, pos_now);
-                                    (view.declared, view.records, s.pos.mismatched - before)
+                                    s.pos.on_snap(&sid, view, pos_now);
+                                    s.pos.mismatched - before
                                 };
                                 if mismatched_now > 0 {
                                     //--- A snapshot whose N= disagreed with what
