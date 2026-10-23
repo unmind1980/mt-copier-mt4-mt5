@@ -625,6 +625,9 @@ impl Inner {
             now_secs.saturating_sub(c.ts) <= max_age_secs
         });
         self.in_flight.retain(|id| self.commands.contains_key(id));
+        let active_nodes: std::collections::HashSet<&str> =
+            self.commands.values().map(|c| c.node.as_str()).collect();
+        self.seq.retain(|node, _| active_nodes.contains(node.as_str()));
         before - self.commands.len()
     }
 }

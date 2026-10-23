@@ -230,15 +230,22 @@ public:
       if(CheckPointer(m_pub)==POINTER_INVALID) return false;
       Hardening(m_pub);
       m_pub.setSendHighWaterMark(CP_SNDHWM);
-      if(useCurve && StringLen(curveSecretKey)>0)
+      if(useCurve)
         {
          //--- Fail CLOSED. If CURVE was asked for and the key cannot be
          //--- installed, binding anyway would quietly serve plaintext - the
          //--- exact silent downgrade the operator asked us not to do.
+         if(StringLen(curveSecretKey)==0)
+           {
+            delete m_pub; m_pub=NULL;
+            return false;
+           }
          uchar sec[];
-         if(!CurveRaw(curveSecretKey,sec)) return false;
-         if(!m_pub.setCurveServer(true)) return false;
-         if(!m_pub.setCurveSecretKey(sec)) return false;
+         if(!CurveRaw(curveSecretKey,sec) || !m_pub.setCurveServer(true) || !m_pub.setCurveSecretKey(sec))
+           {
+            delete m_pub; m_pub=NULL;
+            return false;
+           }
         }
       //--- "*" or "10.0.0.5" is accepted as well as "tcp://*". Same reason as
       //--- the receiver's endpoint: the scheme is the only one this speaks,
@@ -246,6 +253,7 @@ public:
       if(!m_pub.bind(CopierNormalizeEndpoint(bindAddr)+":"+(string)port))
         {
          m_errno=CopierZmqErrno();
+         delete m_pub; m_pub=NULL;
          return false;
         }
       return true;
@@ -278,10 +286,12 @@ public:
       if(useCurve)
         {
          uchar pub[],sec[];
-         if(!CurveRaw(myPublicKey,pub)) return false;
-         if(!CurveRaw(mySecretKey,sec)) return false;
-         if(!m_sub.setCurvePublicKey(pub)) return false;
-         if(!m_sub.setCurveSecretKey(sec)) return false;
+         if(!CurveRaw(myPublicKey,pub) || !CurveRaw(mySecretKey,sec) ||
+            !m_sub.setCurvePublicKey(pub) || !m_sub.setCurveSecretKey(sec))
+           {
+            delete m_sub; m_sub=NULL;
+            return false;
+           }
         }
       //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
       //--- send the subscription itself: one byte, 0x01 for "everything",
@@ -349,14 +359,15 @@ public:
          //--- encrypt TO the server and verify the server), and its own
          //--- keypair (so the server can verify IT). Failing any of the three
          //--- is fatal - see the fail-closed note in BindSender.
-         if(StringLen(hubPublicKey)==0) return false;
+         if(StringLen(hubPublicKey)==0) { delete m_sub; m_sub=NULL; return false; }
          uchar pub[],sec[],srv[];
-         if(!CurveRaw(myPublicKey,pub)) return false;
-         if(!CurveRaw(mySecretKey,sec)) return false;
-         if(!m_sub.setCurvePublicKey(pub)) return false;
-         if(!m_sub.setCurveSecretKey(sec)) return false;
-         if(!CurveRaw(hubPublicKey,srv)) return false;
-         if(!m_sub.setCurveServerKey(srv)) return false;
+         if(!CurveRaw(myPublicKey,pub) || !CurveRaw(mySecretKey,sec) ||
+            !m_sub.setCurvePublicKey(pub) || !m_sub.setCurveSecretKey(sec) ||
+            !CurveRaw(hubPublicKey,srv) || !m_sub.setCurveServerKey(srv))
+           {
+            delete m_sub; m_sub=NULL;
+            return false;
+           }
         }
       //--- deliberately NO \x01 here. See the note above.
       m_sub.connect(ep);

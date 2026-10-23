@@ -115,8 +115,22 @@ public:
    //--- The self-test caught exactly this; it was a real production bug,
    //--- not a test artefact.
                      CopierPosTable() { Clear(); }
-   int               Count() const { return UsedCount(); }
-   bool              IsFull() const { return UsedCount()>=CP_MAX_POSITIONS; }
+   int               Count() const { return m_n; }
+   bool              IsFull() const { return m_n>=CP_MAX_POSITIONS; }
+
+   //--- fast summary without copying any CopierPos struct or strings
+   void              Summary(int &nPos,int &nOrd,double &totalLots) const
+     {
+      nPos=0;
+      nOrd=0;
+      totalLots=0.0;
+      for(int i=0;i<CP_MAX_POSITIONS;i++)
+        {
+         if(!SlotValid(i)) continue;
+         if(m_p[i].kind==CP_ORD_PENDING) nOrd++; else nPos++;
+         totalLots+=m_p[i].lots;
+        }
+     }
 
    //--- Rebuild the ticket index. One pass, once per tick.
    void              RebuildTicketIndex()
@@ -1107,11 +1121,20 @@ public:
          FileClose(rh);
          return false;                      // old file intact, tmp kept
         }
+      bool copyOk=true;
       while(!FileIsEnding(rh))
-         FileWrite(wh,FileReadString(rh));
+        {
+         string line=FileReadString(rh);
+         if(FileWrite(wh,line)<=0)
+           {
+            copyOk=false;
+            break;
+           }
+        }
       FileClose(rh);
       FileFlush(wh);
       FileClose(wh);
+      if(!copyOk) return false;                  // write failed: keep tmp, report false
       FileDelete(tmp);
       return true;
      }
@@ -1128,7 +1151,7 @@ public:
 
       int expected=-1;
       int got=0;
-      while(!FileIsEnding(h) && got<=CP_STATE_MAX_LINES)
+      while(!FileIsEnding(h) && got<CP_STATE_MAX_LINES)
         {
          string line=FileReadString(h);
          if(StringLen(line)==0) continue;

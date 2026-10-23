@@ -288,6 +288,7 @@ impl UserStore {
     /// password, and that is deliberately not an admin privilege - an
     /// operator locked out of their own credential is an operator who shares
     /// somebody else's.
+    #[allow(dead_code)]
     pub fn set_password(&mut self, id: &str, new_password: &str) -> Result<(), String> {
         let salt = random_token()[..16].to_string();
         let hashed = hash_password(new_password, &salt);

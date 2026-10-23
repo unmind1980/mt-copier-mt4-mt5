@@ -795,7 +795,12 @@ async fn send_wecom(
         > **Target**: <font color=\"comment\">{}</font>\n\
         > **Time**: {}\n\
         > **Detail**: {}",
-        color_tag, fmt.title, fmt.severity_badge, fmt.node, fmt.time_str, fmt.detail_summary
+        color_tag,
+        html_escape(&fmt.title),
+        html_escape(&fmt.severity_badge),
+        html_escape(&fmt.node),
+        html_escape(&fmt.time_str),
+        html_escape(&fmt.detail_summary)
     );
 
     let payload = json!({

@@ -579,6 +579,12 @@ bool CopierIniWriteAtomic(const string ini,string &err)
    if(!CopierIniWriteAll(CP_INI_PATH,ini))
      {
       err="cannot write "+CP_INI_PATH;
+      if(had && StringLen(old)>0)
+        {
+         CopierIniWriteAll(CP_INI_PATH,old);
+         if(CopierIniParses(CP_INI_PATH)) err+=" - previous config restored";
+         else                              err+=" - AND THE RESTORE FAILED";
+        }
       return false;
      }
 

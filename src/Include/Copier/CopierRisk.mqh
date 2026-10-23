@@ -47,8 +47,8 @@ struct CopierRiskLimits
 //=====================================================================
 double CopierLossTripLevel(const double baseline,const double pct)
   {
-   if(baseline<=0.0) return 0.0;
-   if(pct<=0.0)      return 0.0;   // switch off: no level
+   if(!MathIsValidNumber(baseline) || baseline<=0.0) return 0.0;
+   if(!MathIsValidNumber(pct) || pct<=0.0)      return 0.0;   // switch off: no level
    return baseline*(1.0-pct/100.0);
   }
 
@@ -64,6 +64,7 @@ double CopierLossTripLevel(const double baseline,const double pct)
 //=====================================================================
 bool CopierLossExceeded(const double equity,const double baseline,const double pct)
   {
+   if(!MathIsValidNumber(equity) || !MathIsValidNumber(baseline) || !MathIsValidNumber(pct)) return false;
    if(pct<=0.0)      return false;   // switch off
    if(baseline<=0.0) return false;   // nothing to measure from
    return (equity<=CopierLossTripLevel(baseline,pct));
@@ -181,7 +182,7 @@ public:
    void              ObserveAt(const double equity,const long serverDay,
                                const double dayStartEquity)
      {
-      if(equity<=0.0) return;
+      if(!MathIsValidNumber(equity) || equity<=0.0) return;
 
       if(!m_armed)
         {

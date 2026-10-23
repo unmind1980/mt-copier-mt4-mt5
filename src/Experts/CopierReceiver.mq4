@@ -325,6 +325,7 @@ long    g_lastSeq[CP_MAX_SENDERS][2];
 //--- least delayed - a message that sat in the queue would overstate it.
 long    g_senderClockOffset[CP_MAX_SENDERS];
 bool    g_senderClockKnown[CP_MAX_SENDERS];
+bool    g_senderClockOffsetValid[CP_MAX_SENDERS];
 string  g_ssidSeen[CP_MAX_SENDERS];
 long    g_lastMsgMs[CP_MAX_SENDERS];
 long    g_firstMsgMs[CP_MAX_SENDERS];   // first message ever heard
@@ -1023,7 +1024,29 @@ bool LoadConfigFromInputs()
    //--- mode never re-loads its config after OnInit today, but the resize
    //--- is one line and makes the invariant local rather than depending on
    //--- which caller ran first.
-   ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS);
+   if(ArrayResize(g_desired,g_nSenders*CP_MAX_POSITIONS)<0)
+     {
+      g_log.Error("out of memory resizing g_desired");
+      return false;
+     }
+
+   //--- reset sender 0's stream state. Globals SURVIVE a reinitialisation,
+   //--- so a stale watermark here would make the receiver discard the first
+   //--- messages from a sender it has only just been told about, or converge
+   //--- on stale desired positions from a previous sender configuration.
+   g_lastSeq[0][CP_STREAM_EVENTS]=-1;
+   g_lastSeq[0][CP_STREAM_SNAP]=-1;
+   g_ssidSeen[0]="";
+   g_lastMsgMs[0]=0;
+   g_firstMsgMs[0]=0;
+   g_lastSnapMs[0]=0;
+   g_snapHash[0]="";
+   g_stale[0]=false;
+   g_ready[0]=false;
+   g_desiredCount[0]=0;
+   g_senderClockKnown[0]=false;
+   g_senderClockOffset[0]=0;
+   g_senderClockOffsetValid[0]=false;
 
    //--- Start from an empty symbol map on every load - see MapClear.
    MapClear();
@@ -1271,10 +1294,13 @@ void ApplyCommonConfig(const CopierIni &ini)
 
    if(LogLevel != oldLogLevel)
       g_log.Init("receiver"+InstanceSuffix(),LogLevel);
-   if(PollMs != oldPollMs && PollMs > 0)
+   if(PollMs != oldLogLevel && PollMs > 0)
      {
       EventKillTimer();
-      EventSetMillisecondTimer(PollMs);
+      int p=PollMs;
+      if(p<10) p=10;
+      if(p>5000) p=5000;
+      EventSetMillisecondTimer(p);
      }
    g_stOvEpoch++; // Invalidate stop-geometry cache on config change
   }
@@ -1647,7 +1673,14 @@ bool LoadConfigForHub()
    //--- otherwise pay a 30 MB memcpy for nothing.
    {
     int want=g_nSenders*CP_MAX_POSITIONS;
-    if(ArraySize(g_desired)!=want) ArrayResize(g_desired,want);
+    if(ArraySize(g_desired)!=want)
+      {
+       if(ArrayResize(g_desired,want)<0)
+         {
+          g_log.Error("out of memory resizing g_desired to "+(string)want);
+          return false;
+         }
+      }
    }
    //--- the magic -> sender cache is derived from the config, so it goes with it
    MagicLookupClear();
@@ -1723,6 +1756,9 @@ bool LoadConfigForHub()
       g_stale[i]=false;
       g_ready[i]=false;
       g_desiredCount[i]=0;
+      g_senderClockKnown[i]=false;
+      g_senderClockOffset[i]=0;
+      g_senderClockOffsetValid[i]=false;
 
       InitSenderSettings(i, ini, sec);
      }
@@ -1799,7 +1835,21 @@ string ResolveUid(const CopierPos &p)
    if(g_recKnown.GetByTicket(p.ticket,prev)) return prev.uid;
 
    long from=CopierMt4FromTicket(p.cmt);
-   if(from>0 && g_recKnown.GetByTicket(from,prev)) return prev.uid;
+   if(from>0)
+     {
+      if(g_recKnown.GetByTicket(from,prev)) return prev.uid;
+#ifndef __MQL5__
+      long curFrom=from;
+      for(int hops=0;hops<5;hops++)
+        {
+         if(!OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+         long prevFrom=CopierMt4FromTicket(OrderComment());
+         if(prevFrom<=0) break;
+         if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
+         curFrom=prevFrom;
+        }
+#endif
+     }
 
    return "";
   }
@@ -2749,7 +2799,7 @@ void ExecuteQueue()
             if(g_once.ShouldEmit("unknownsym|"+a.sym))
                g_log.Warn("unknown symbol "+a.sym+", dropping "
                           +a.uid+" (reported at most once per 10 min)");
-            g_seen.Add(g_sid[a.senderIdx]+":"+(string)a.kind+":"+a.uid);
+            g_seen.Add(a.key);
             ShiftQueue();
             done++;
             continue;
@@ -4034,7 +4084,7 @@ long SenderTimeToOurs(const int si,const long senderTime)
    //---
    //--- 0 means "cannot measure", which every age-based gate already treats as
    //--- "do not act" - the right answer when the clock is unusable.
-   if(!g_srvEverMoved) return 0;
+   if(!g_srvEverMoved || !g_senderClockOffsetValid[si]) return 0;
    return senderTime+g_senderClockOffset[si];
   }
 
@@ -4114,6 +4164,13 @@ void ConvergeSender(const int si)
       ln=DedupLocal(si,base,g_locScratch,ln);
       g_locIdx.Build(g_locScratch,0,ln);
      }
+
+   int    pendCount=0;
+   double pendLots=0.0;
+   PendingOpens(pendCount,pendLots);
+   int    sPendCount=0;
+   double sPendLots=0.0;
+   PendingOpensForSender(si,sPendCount,sPendLots);
 
    //--- desired but not mirrored -> open
    for(int i=0;i<g_desiredCount[si];i++)
@@ -4279,8 +4336,9 @@ void ConvergeSender(const int si)
       double lots=ComputeReceiverLots(si,rsym,d.lots,rejected);
       if(rejected || lots<=0.0)
         {
-         g_log.Warn("lot sizing rejected "+d.uid+" "+rsym
-                    +" senderLots="+DoubleToString(d.lots,2));
+         if(g_once.ShouldEmit("lotsrej|"+g_sid[si]+"|"+d.uid))
+            g_log.Warn("lot sizing rejected "+d.uid+" "+rsym
+                       +" senderLots="+DoubleToString(d.lots,2));
          continue;
         }
 
@@ -4497,9 +4555,6 @@ void ConvergeSender(const int si)
         }
 
       //--- 6. Risk limits & broker quota
-      int    pendCount=0;
-      double pendLots=0.0;
-      PendingOpens(pendCount,pendLots);
       string riskWhy="";
       if(!g_risk.AllowOpen(lots,g_ourCount,g_ourLots,pendCount,pendLots,riskWhy))
         {
@@ -4512,9 +4567,6 @@ void ConvergeSender(const int si)
         }
 
       //--- Per-sender specific risk gate
-      int    sPendCount=0;
-      double sPendLots=0.0;
-      PendingOpensForSender(si,sPendCount,sPendLots);
       string sRiskWhy="";
       if(!g_senderRisk[si].AllowOpen(lots,ln,sLots,sPendCount,sPendLots,sRiskWhy))
         {
@@ -4563,6 +4615,13 @@ void ConvergeSender(const int si)
       bool queued=PushAction(si,CP_ACT_OPEN,d.uid,rsym,d.side,lots,0,d.ticket,
                              ":"+(string)d.kind,osl,otp,
                              d.kind,d.ptype,d.pprice,d.pstop,d.pexpire);
+      if(queued)
+        {
+         pendCount++;
+         pendLots+=lots;
+         sPendCount++;
+         sPendLots+=lots;
+        }
 
       string openKey=g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid;
       if(queued && g_everOpened.Has(openKey)
@@ -4615,8 +4674,6 @@ int SenderIndexById(const string sid)
 
 void HandleSnapshot(const int si,const CopierEnv &e)
   {
-   g_lastSnapMs[si]=CopierNowMs();
-
    //--- Learn the sender's clock offset. Taken here rather than on every
    //--- message because this is the snapshot that survived conflation - the
    //--- newest of its batch, so the one least delayed in the queue. A message
@@ -4627,6 +4684,7 @@ void HandleSnapshot(const int si,const CopierEnv &e)
       bool first=!g_senderClockKnown[si];
       g_senderClockKnown[si]=true;
       g_senderClockOffset[si]=off;
+      g_senderClockOffsetValid[si]=g_srvEverMoved;
 
       //--- Two very different situations produce a large offset, and they
       //--- must not be reported the same way:
@@ -4729,6 +4787,7 @@ void HandleSnapshot(const int si,const CopierEnv &e)
 
    //--- accepted: the streak only measures CONSECUTIVE failures
    g_snapRejectStreak[si]=0;
+   g_lastSnapMs[si]=CopierNowMs();
 
    //--- Store this sender's receipt hash once validated.
    g_snapHash[si]=CopierSnapshotHash(e.payload);
@@ -5041,8 +5100,7 @@ void HandleCfg(const CopierEnv &e)
         {
          CopierIniWriteAll(CP_INI_PATH,old);
          LoadConfig();
-         SendCfgAck("ID="+id+";OK=0;ERR=config rejected: "+err
-                    +"; previous config restored");
+         SendCfgAck("ID="+id+";OK=0;ERR=config rejected by LoadConfig; previous config restored");
          g_log.Error("CFG "+id+" rejected by LoadConfig - restored "+CP_INI_BAK_PATH);
         }
       else
@@ -5394,12 +5452,18 @@ void CopierSendStatus(const string type,const string payload)
    if(g_hubOn)
      {
       if(!g_tp.SendUp("@hub",msg))
-         g_log.Warn("status send failed errno="+(string)g_tp.LastErrno());
+        {
+         if(g_once.ShouldEmit("statfail"))
+            g_log.Warn("status send failed errno="+(string)g_tp.LastErrno());
+        }
       return;
      }
 
    if(!g_tp.SendStatus(msg))
-      g_log.Warn("status send failed errno="+(string)g_tp.LastErrno());
+     {
+      if(g_once.ShouldEmit("statfail"))
+         g_log.Warn("status send failed errno="+(string)g_tp.LastErrno());
+     }
   }
 
 //--- Announce this node to the hub: REG once, HBT2 afterwards.
@@ -5521,39 +5585,8 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
    return true;
   }
 
-void HandleMessage(const string msg,const int stream)
+void RouteMessage(const CopierEnv &e,const int stream)
   {
-   CopierEnv e;
-   int err=CopierDecodeEnv(msg,e);
-   if(err!=CP_ERR_NONE)
-     {
-      //--- "bad message err=1" was reported and answerable only by reading
-      //--- the source. err=1 is also AMBIGUOUS: it means "empty OR longer
-      //--- than the limit", two unrelated faults with unrelated fixes, and
-      //--- the old line did not even print the length that separates them.
-      //---
-      //--- Say which, say the size, and show the head of the message: an
-      //--- unparseable frame is usually obvious once you can see 60 bytes
-      //--- of it (a stray subscription frame, a truncated snapshot, a peer
-      //--- speaking a different protocol).
-      string why=CopierErrText(err);
-      if(err==CP_ERR_TRUNCATED)
-        {
-         if(StringLen(msg)==0)
-            why="EMPTY (zero bytes)";
-         else
-            why="TOO LONG - "+(string)StringLen(msg)+" bytes against a "
-                +(string)CP_MAX_MSG_LEN+" limit. A snapshot this size can"
-                +" never be parsed, so that sender's state is NOT being"
-                +" applied: raise CP_MAX_MSG_LEN to hold CP_MAX_POSITIONS"
-                +" records";
-        }
-      g_log.Warn("bad message err="+(string)err+" ("+why+")"
-                 +" len="+(string)StringLen(msg)
-                 +" head=\""+StringSubstr(msg,0,60)+"\"");
-      return;
-     }
-
    //--- THE HUB'S OWN MESSAGES, before the per-sender lookup below.
    //---
    //--- That lookup drops anything whose SID is not a configured sender, and
@@ -5690,6 +5723,32 @@ void HandleMessage(const string msg,const int stream)
    else if(e.type==CP_T_MODIFY) HandleModifyEvent(si,e);
    else if(e.type==CP_T_HBT)   HandleHeartbeat(si,e);
    else                        g_log.Verbose("ignoring type "+e.type);
+  }
+
+void HandleMessage(const string msg,const int stream)
+  {
+   CopierEnv e;
+   int err=CopierDecodeEnv(msg,e);
+   if(err!=CP_ERR_NONE)
+     {
+      string why=CopierErrText(err);
+      if(err==CP_ERR_TRUNCATED)
+        {
+         if(StringLen(msg)==0)
+            why="EMPTY (zero bytes)";
+         else
+            why="TOO LONG - "+(string)StringLen(msg)+" bytes against a "
+                +(string)CP_MAX_MSG_LEN+" limit. A snapshot this size can"
+                +" never be parsed, so that sender's state is NOT being"
+                +" applied: raise CP_MAX_MSG_LEN to hold CP_MAX_POSITIONS"
+                +" records";
+        }
+      g_log.Warn("bad message err="+(string)err+" ("+why+")"
+                 +" len="+(string)StringLen(msg)
+                 +" head=\""+StringSubstr(msg,0,60)+"\"");
+      return;
+     }
+   RouteMessage(e,stream);
   }
 
 //=====================================================================
@@ -6011,7 +6070,14 @@ int OnInit()
    //--- the data already comes down.
 
 
-   EventSetMillisecondTimer(PollMs);
+   int effectivePollMs=PollMs;
+   if(effectivePollMs<10) effectivePollMs=10;
+   if(effectivePollMs>5000) effectivePollMs=5000;
+   if(!EventSetMillisecondTimer(effectivePollMs))
+     {
+      g_log.Error("EventSetMillisecondTimer("+(string)effectivePollMs+") failed");
+      return INIT_FAILED;
+     }
    g_panel.Init("cprcv",10,20,430);
    //--- list the magics rather than a base: there is no base any more, and
    //--- the actual numbers are what you check against the terminal.
@@ -6481,10 +6547,10 @@ void OnTimer()
                g_snapSkipped++;
                continue;
               }
-            HandleMessage(g_drainMsgs[i],CP_STREAM_SNAP);
+            RouteMessage(s_envs[i],CP_STREAM_SNAP);
             continue;
            }
-         HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
+         RouteMessage(s_envs[i],CP_STREAM_EVENTS);
         }
      }
 

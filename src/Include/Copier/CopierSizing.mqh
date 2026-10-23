@@ -170,7 +170,11 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
    if(v<si.minLot) { rejected=true; return 0.0; }
 
    if(minLots>0.0 && v<minLots) { rejected=true; return 0.0; }
-   if(maxLots>0.0 && v>maxLots) v=CopierNormalizeLot(maxLots,si);
+   if(maxLots>0.0 && v>maxLots)
+     {
+      v=CopierNormalizeLot(maxLots,si);
+      if(v<si.minLot) { rejected=true; return 0.0; }
+     }
    return v;
   }
 

@@ -877,6 +877,21 @@ long CopierParseLongRange(const string s,const int start,const int end)
    return neg?-v:v;
   }
 
+bool CopierIsDigits(const string s)
+  {
+   int len=StringLen(s);
+   if(len==0) return false;
+   int i=0;
+   if(StringGetCharacter(s,0)=='-') i=1;
+   if(i>=len) return false;
+   for(;i<len;i++)
+     {
+      int c=StringGetCharacter(s,i);
+      if(c<'0' || c>'9') return false;
+     }
+   return true;
+  }
+
 long CopierKvGetLong(const string payload,const string key,const long deflt)
   {
    string v;

@@ -206,7 +206,10 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
    p.cmt="";
    p.used=true;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
-   if(StringLen(p.uid)!=CP_UID_LEN) return false;
+   if(p.lots<=0.0) return false;
+   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0 || p.pprice<0.0 || p.pstop<0.0) return false;
+   if(StringLen(p.uid)!=CP_UID_LEN || !CopierUidValid(p.uid)) return false;
+   p.sym=CopierSanitizeSymbol(p.sym);
    //--- a record with no symbol cannot be mirrored, and carrying it into the
    //--- desired set only makes converge ask the broker for "" forever
    if(StringLen(p.sym)==0) return false;
@@ -552,16 +555,19 @@ string CopierPayloadOpen(const CopierPos &p)
 bool CopierPayloadOpenParse(const string payload,CopierPos &p)
   {
    if(!CopierKvGet(payload,"UID",p.uid)) return false;
+   if(StringLen(p.uid)!=CP_UID_LEN || !CopierUidValid(p.uid)) return false;
    string sym="";
    p.ticket  =CopierKvGetLong(payload,"TKT",0);
    CopierKvGet(payload,"SYM",sym);
-   p.sym     =sym;
+   p.sym     =CopierSanitizeSymbol(sym);
+   if(StringLen(p.sym)==0) return false;
    p.side    =CopierKvGetInt(payload,"SIDE",0);
    p.lots    =CopierKvGetDouble(payload,"LOTS",0.0);
    p.openPx  =CopierKvGetDouble(payload,"OPN",0.0);
    p.sl      =CopierKvGetDouble(payload,"SL",0.0);
    p.tp      =CopierKvGetDouble(payload,"TP",0.0);
    p.openTime=CopierKvGetLong(payload,"OTS",0);
+   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
    //--- EVERY field is written, including the ones a market event does not
    //--- carry. A struct field left unset would inherit whatever was in that
    //--- memory before it - the same phantom-slot trap CopierPosTable's
@@ -571,6 +577,7 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.pprice  =CopierKvGetDouble(payload,"PPRICE",0.0);
    p.pstop   =CopierKvGetDouble(payload,"PSTOP",0.0);
    p.pexpire =CopierKvGetLong(payload,"PEXP",0);
+   if(p.pprice<0.0 || p.pstop<0.0) return false;
    p.magic   =0;
    p.used    =true;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
@@ -617,10 +624,11 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
   {
    p.uid="";
    if(!CopierKvGet(payload,"UID",p.uid)) return false;
-   if(StringLen(p.uid)==0) return false;
+   if(StringLen(p.uid)!=CP_UID_LEN || !CopierUidValid(p.uid)) return false;
    p.openPx=CopierKvGetDouble(payload,"OPN",0.0);
    p.sl    =CopierKvGetDouble(payload,"SL",0.0);
    p.tp    =CopierKvGetDouble(payload,"TP",0.0);
+   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
    return true;
   }
 

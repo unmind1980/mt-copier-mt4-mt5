@@ -1356,6 +1356,9 @@ async fn users_upsert(
         //--- the shared state rather than its own Arc, and an admin write is
         //--- rare enough that one flush here is not the hot path. The audit
         //--- write below IS moved out, because it is the second flush.
+        if !b.password.is_empty() || b.disabled {
+            s.users.drop_other_sessions(&b.id, None);
+        }
         let _ = s.users.save();
         Arc::clone(&s.audit)
     };
@@ -1466,9 +1469,11 @@ async fn change_password(
         )
             .into_response();
     }
+    let new_salt = crate::users::random_token()[..16].to_string();
+    let new_hash = crate::users::hash_password(&b.new, &new_salt);
     let changed = {
         let mut s = st.lock_or_recover();
-        match s.users.set_password(&sess.user_id, &b.new) {
+        match s.users.set_password_hashed(&sess.user_id, new_hash) {
             Err(e) => Err(e),
             Ok(()) => {
                 let _ = s.users.save();

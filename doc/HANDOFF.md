@@ -447,6 +447,39 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 **配套回归**：`CopierSelfTest.mq4` 新增 `TestSeenRingOccupancy()`（占用索引的增删、连续删除、整环环绕）并在 `TestBackoff()` 中补入"超过 256 个键的淘汰可寻性"与"内部擦除后其余键仍可寻"——这两条正是开放寻址与紧凑索引各自的静默失败模式。
 
+### 二十四次审计：全栈审计报告缺陷全面修复与安全加固（2026-10-23 11:40；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **P1-1** | **P1 致命** | `CopierReceiver.mq4:1028` | **Direct 模式配置重载重置发送端流状态**：在 `LoadConfigFromInputs()` 中重置 sender 0 的 `g_lastSeq`、`g_ssidSeen`、`g_lastMsgMs`、`g_lastSnapMs`、`g_ready`、`g_desiredCount` 等全部流状态，彻底消灭切换 `SenderPort`/`InpMagic` 时全局变量残留旧 sender 持仓导致误下整车订单的严重隐患。 |
+| **P1-2 & P2-6** | **P1 致命** | `CopierState.mqh:1120-1145` | **状态文件写回校验与 Load 严格上界**：`CopierStateFile::Save` 在读回拷贝循环中严格校验 `FileWrite` 返回值，写入失败立即中止并保留 `.tmp` 备份；`Load` 循环改用 `got < CP_STATE_MAX_LINES` 严格防止越界；Sender/Receiver 恢复循环对 `Upsert` 失败记 Warn。 |
+| **P1-3** | **P1 致命** | `CopierModel.mqh:591, 603, 650, 838, 929, 989, 1089` | **MT4 订单标识符防越界与负数截断防御**：所有 MT4 分支的 `OrderSelect/OrderClose/OrderModify/OrderDelete` 严格校验 `ticket <= 0 || ticket > 2147483647` 时报错退出，杜绝跨平台 MT5 64 位大单号在 MT4 窄化溢出误操作其他订单。 |
+| **P1-4** | **P1 致命** | `hub/src/main.rs:1484` | **畸形 REG 审计写入 10s 频控防 DoS 挂死**：对空 ACC 的 REG/HBT2 报文引入 `wire_audit_throttle` 10 秒冷却门限，彻底杜绝数据面垃圾帧每秒触发上千次同步磁盘 fsync 挂死 ZMQ 交易转发线程。 |
+| **P2-1 & P2-2** | **P2 高危** | `CopierCodec.mqh:185, 555, 620` | **快照与事件解码器补齐 UID/价格/手数/符号严格校验**：`CopierPayloadOpenParse` 与 `CopierPayloadModifyParse` 补齐 `CP_UID_LEN` 与 `CopierUidValid`；`CopierDecodeRec` 严格校验 `lots > 0`、非负价格与符号净化，消灭畸形数据穿透。 |
+| **P2-3** | **P2 高危** | `CopierModel.mqh:785` | **MT4 ECN 模式止损修改失败感知与记录**：市价单在 ECN 130 错误剥离止损成交后，若补发 `CopierModifyStops` 失败，打印详细告警并回传 `outErr = mErr`，杜绝无止损裸奔被当作完全成功。 |
+| **P2-4** | **P2 高危** | `CopierSender.mq4:630` / `CopierReceiver.mq4:1835` | **MT4 多跳 'from #' 部分平仓历史溯源链**：当直接父单已移入历史（`MODE_HISTORY`）时，沿 `from #` 链向前追溯最多 5 跳，彻底消灭短周期连续部分平仓换发新 UID 导致的关仓重开损耗。 |
+| **P2-5** | **P2 高危** | `CopierSender.mq4:870` / `CopierReceiver.mq4:1300, 6064` | **`PollMs` 范围钳制与定时器初始化失败断言**：将 `PollMs` 钳制在 `[10, 5000]` 毫秒安全区间，并在 `EventSetMillisecondTimer` 失败时记 Error 并返回 `INIT_FAILED`，杜绝静默挂起。 |
+| **P2-7** | **P2 高危** | `CopierConfig.mqh:582` | **原子写步骤 3 失败自动回写内存备份**：写配置失败时自动写回此前保存在内存中的旧配置并复验，严格履行配置文件任何时刻均可启动的原子承诺。 |
+| **P2-8** | **P2 高危** | `CopierReceiver.mq4:327, 4070, 4662` | **冻钟恢复窗口时钟偏移无效保护**：引入 `g_senderClockOffsetValid`，仅在服务器时钟真实推进时测量的偏移方为有效，消灭停盘周末巨额负偏移在周一开盘瞬间导致订单被判定超时遗弃的漏洞。 |
+| **P2-9** | **P2 高危** | `CopierReceiver.mq4:4332` | **`lot sizing rejected` 引入 `g_once` 10 分钟限频**：消灭低于最小手数等持续性拒绝时每秒输出 10 行日志的刷屏问题。 |
+| **P2-10** | **P2 高危** | `CopierReceiver.mq4:4651, 4764` | **快照时间戳移至校验通过后更新**：快照仅在成功通过声明条数与解压验证后才记录 `g_lastSnapMs`，恢复\"有事件无有效快照\"的严重告警探测。 |
+| **P2-12 & P2-13** | **P2 高危** | `hub/src/main.rs:1920, 2020` | **Hub 拓扑与配置上报鉴权防注入**：`CFGRPT` 必须校验节点已注册；`mirrors` 边记录必须校验 `sid_is_sender` 与 `login_is_receiver`，杜绝伪造帧膨胀全局哈希表。 |
+| **P2-14 & P2-15** | **P2 高危** | `hub/src/api.rs:1348, 1475` | **改密锁外哈希与密码重置销毁旧 Session**：管理员修改密码/禁用用户时销毁其现有 Session；用户自主改密将 4096 轮 SHA-256 移至锁外，彻底消除锁阻塞。 |
+| **P2-16** | **P2 高危** | `hub/src/main.rs:2057` | **收据转发校验接收端有效性**：收据转发校验 `LOGIN` 属于已知 receiver，杜绝伪造收据欺骗发送端抑制修复。 |
+| **P3-A5** | **性能优化** | `CopierReceiver.mq4:5580, 6545` | **消息转发零二次解码与快照零二次解压**：解耦 `RouteMessage`，排水循环预解码出的 `s_envs[i]` 直传路由，消灭每条快照二次解压缩。 |
+| **P3-A6** | **性能优化** | `CopierReceiver.mq4:4165, 4615` | **收敛循环外提 `PendingOpens` 计数**：在遍历 desired 循环前单次统计排队单，开仓入队时增量维护，将复杂度由 O(N×Q) 降为 O(Q+N)。 |
+| **P3-A9 & A10** | **性能优化** | `CopierState.mqh:118, 120` / `CopierSender.mq4:1305` | **持仓表 Summary 轻量统计与 Count/IsFull O(1)**：增量读 `m_n`；面板刷新通过 `Summary` 批量累加，消灭每 1.5s 拷贝 2048 结构体与字符串克隆。 |
+| **P3-A11** | **性能优化** | `hub/src/main.rs:1196, 2445` | **命令重试队列 500ms 节拍扫描**：将主循环每帧加锁扫描 `cmds.due_gated` 改为 500ms 节拍器，大幅降低锁争用。 |
+| **P3-B7** | **安全规范** | `hub/src/notifications.rs:795` | **WeCom 告警通知 Markdown 内容全面 HTML 转义**：防止节点名/告警内容含特殊符号破坏排版。 |
+| **P3-B11** | **代码清洁** | `hub/src/commands.rs:625` | **`prune_terminal` 同步清理无残留命令节点的序列号**：完全对齐函数注释承诺。 |
+| **P3-B12** | **安全防御** | `CopierTransport.mqh:234` | **`BindSender` 在开启 CURVE 但密钥为空时 fail-closed 拒服**：严格杜绝静默降级为明文传输。 |
+| **P3-B13** | **交易防御** | `CopierRisk.mqh:48, 65, 185` | **风控检查防 `NaN` 穿透**：引入 `MathIsValidNumber` 校验，杜绝浮点异常导致风控静默失效。 |
+| **P3-B14** | **手数规范** | `CopierSizing.mqh:173` | **`CopierComputeLots` 手数上限裁剪后复验最小手数**：低于 `minLot` 显式置 `rejected = true` 并返回 0.0。 |
+| **P3-C1 & C5** | **健壮优化** | `CopierReceiver.mq4:2802` / `CopierModel.mqh:345` | **未知品种 seen 键一致性与挂单止损止盈 digits 规范化**：挂单放置时对 SL/TP 规范化至 `si.digits`。 |
+| **P3-C6 ~ C16** | **细节清洁** | `CopierSender.mq4` / `CopierPeers.mqh` / `CopierTransport.mqh` | **Magic 数字过滤、Save 失败保留 dirty、未探测 Peer 不分配 PongBack 槽位、Socket 早退资源回收**。 |
+
+---
+
 ### 二十三次审计：停止几何缓存失效闭环、持仓等待序列化 StrBuilder 优化与开放寻址 O(1) 淘汰（2026-10-23 10:45；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |

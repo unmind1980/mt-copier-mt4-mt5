@@ -1193,6 +1193,7 @@ fn main() {
     let mut last_who = Instant::now();
     let mut last_registry = Instant::now();
     let mut last_cmd_prune = Instant::now();
+    let mut last_cmd_due = Instant::now() - Duration::from_secs(1);
     let mut who_nonce: u64 = 0;
     //--- Last counts printed, so the registry line only appears when something
     //--- actually changed. A line repeated every 5 s saying the same thing is
@@ -1481,15 +1482,23 @@ fn main() {
                                 //--- node - it is a message with no return
                                 //--- address, and saying so beats filing it
                                 //--- under an empty key forever.
-                                println!("[hub] WARN  {} with no ACC - not registered", ty);
-                                audit.record(
-                                    "", "",
-                                    "node.malformed",
-                                    "",
-                                    None,
-                                    Some(serde_json::json!({ "type": ty, "role": role })),
-                                    "rejected",
-                                );
+                                let throttle_key = ("wire".to_string(), "node.malformed".to_string());
+                                let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                    Some(t) => t.elapsed() >= Duration::from_secs(10),
+                                    None => true,
+                                };
+                                if should_audit {
+                                    wire_audit_throttle.insert(throttle_key, Instant::now());
+                                    println!("[hub] WARN  {} with no ACC - not registered", ty);
+                                    audit.record(
+                                        "", "",
+                                        "node.malformed",
+                                        "",
+                                        None,
+                                        Some(serde_json::json!({ "type": ty, "role": role })),
+                                        "rejected",
+                                    );
+                                }
                             } else {
                                 let ver = envelope_kv(&payload, "VER");
                                 let up: u64 = envelope_kv(&payload, "UP").parse().unwrap_or(0);
@@ -1914,7 +1923,11 @@ fn main() {
                             } else {
                                 format!("{}:{}", crole, cacc)
                             };
-                            if !ini_esc.is_empty() {
+                            let is_registered = {
+                                let s = shared.lock_or_recover();
+                                s.reg.get(&key).is_some()
+                            };
+                            if is_registered && !ini_esc.is_empty() {
                                 let current_ini = config::unescape_ini(&ini_esc);
                                 let chash = config::cfg_hash(&current_ini);
                                 let mut s = shared.lock_or_recover();
@@ -2004,57 +2017,33 @@ fn main() {
                                     if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
                                         s.reg.note_ping("receiver", &login, ping_ms);
                                     }
-                                    //--- LOGIN is the receiver's own account
-                                    //--- and must be PRESENT: a STAT without
-                                    //--- it (an old EA build, a forged frame)
-                                    //--- would otherwise register the empty
-                                    //--- string as a mirroring account, which
-                                    //--- shows up in /topology as an edge to
-                                    //--- "". A missing LOGIN means "this frame
-                                    //--- says nothing about who mirrored",
-                                    //--- never "somebody with no name".
+                                }
+                                let warm = started.elapsed() < Duration::from_secs(60);
+                                let (sid_is_sender, any_sender_known, login_is_receiver, any_receiver_known) = {
+                                    let s = shared.lock_or_recover();
+                                    let skey = format!("sender:{}", sid);
+                                    let rkey = format!("receiver:{}", login);
+                                    let nodes = s.reg.nodes();
+                                    (
+                                        nodes.iter().any(|n| n.key == skey),
+                                        nodes.iter().any(|n| n.key.starts_with("sender:")),
+                                        nodes.iter().any(|n| n.key == rkey),
+                                        nodes.iter().any(|n| n.key.starts_with("receiver:")),
+                                    )
+                                };
+                                let sender_valid = sid_is_sender || !any_sender_known || warm;
+                                let receiver_valid = login_is_receiver || !any_receiver_known || warm;
+
+                                if sender_valid && receiver_valid {
+                                    let mut s = shared.lock_or_recover();
                                     s.mirrors
                                         .entry(sid.clone())
                                         .or_default()
                                         .insert(login.clone(), Instant::now());
                                 }
                                 //--- THE RECEIPT IS RELAYED ONLY TO A REAL
-                                //--- SENDER.
-                                //---
-                                //--- `SID` is a field the RECEIVER chooses, so
-                                //--- without this check a receiver could make
-                                //--- the hub unicast a `RCPT` to any nid on the
-                                //--- fleet - including another receiver's -
-                                //--- with any hash it liked. A sender acts on a
-                                //--- receipt ("the snapshot I sent is the one
-                                //--- you hold"), so a forged one either
-                                //--- suppresses a real repair or triggers a
-                                //--- repair flood. The hub already knows which
-                                //--- nodes registered as senders; asking it is
-                                //--- one short lookup.
-                                //--- ...and the check is SKIPPED for the first
-                                //--- minute and while the hub knows of no
-                                //--- sender at all. Right after a restart the
-                                //--- registry is rebuilt from HBT2/WHO, and a
-                                //--- receiver's STAT can easily arrive before
-                                //--- its sender's first heartbeat - measured
-                                //--- live: one receipt was refused in that
-                                //--- window on a 6 s run. Dropping it is
-                                //--- harmless (a receipt only ever CONFIRMS),
-                                //--- but the warning is noise, and a hub that
-                                //--- cries wolf at every restart teaches the
-                                //--- operator to ignore the line.
-                                let warm = started.elapsed() < Duration::from_secs(60);
-                                let (sid_is_sender, any_sender_known) = {
-                                    let s = shared.lock_or_recover();
-                                    let key = format!("sender:{}", sid);
-                                    let nodes = s.reg.nodes();
-                                    (
-                                        nodes.iter().any(|n| n.key == key),
-                                        nodes.iter().any(|n| n.key.starts_with("sender:")),
-                                    )
-                                };
-                                if sid_is_sender || !any_sender_known || warm {
+                                //--- SENDER AND FROM A VALID RECEIVER.
+                                if sender_valid && receiver_valid {
                                     //--- Count what ARRIVED, before the
                                     //--- de-duplication decides what to relay:
                                     //--- the difference between the two is the
@@ -2444,11 +2433,13 @@ fn main() {
         //---
         //--- Gated on `writes` as well as on there being a command, except for
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
-        for c in cmds.due_gated(Instant::now(), args.writes) {
-            if !args.writes && !commands::is_read_only_op(&c.op) {
-                continue;
-            }
-            match c.kind.as_str() {
+        if last_cmd_due.elapsed() >= Duration::from_millis(500) {
+            last_cmd_due = Instant::now();
+            for c in cmds.due_gated(Instant::now(), args.writes) {
+                if !args.writes && !commands::is_read_only_op(&c.op) {
+                    continue;
+                }
+                match c.kind.as_str() {
                     commands::KIND_CONFIG => {
                         match cfg.current(&c.node) {
                             Some(r) if r.rev == c.rev => {
@@ -2502,6 +2493,7 @@ fn main() {
                     );
                 }
             }
+        }
 
         //--- One serialisation per change window, shared by every dashboard.
         //--- Placed at the very end of the iteration so it covers a poke raised

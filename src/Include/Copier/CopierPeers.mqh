@@ -170,7 +170,8 @@ public:
    bool              PongBack(const string name,const long ms)
      {
       if(StringLen(name)==0) return false;
-      int i=Slot(name);
+      int i=Find(name);
+      if(i<0) return false;
       m_seen[i]=CopierNowMs();
       if(m_ping[i]==0 || m_ping[i]!=ms) return false;
       m_rtt[i]=CopierNowMs()-ms;

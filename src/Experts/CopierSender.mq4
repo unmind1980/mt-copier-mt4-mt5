@@ -415,7 +415,9 @@ bool MagicAllowed(const long magic)
    bool found=false;
    for(int i=0;i<ArraySize(g_magicFilter);i++)
      {
-      if(CopierParseLong(g_magicFilter[i])==magic) { found=true; break; }
+      string item=g_magicFilter[i];
+      if(!CopierIsDigits(item)) continue;
+      if(CopierParseLong(item)==magic) { found=true; break; }
      }
    return g_magicExclude ? !found : found;
   }
@@ -626,6 +628,24 @@ int BuildCurrent()
               {
                uid=q.uid;
                slot=j;
+              }
+            else
+              {
+               long curFrom=from;
+               for(int hops=0;hops<5;hops++)
+                 {
+                  if(!OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+                  long prevFrom=CopierMt4FromTicket(OrderComment());
+                  if(prevFrom<=0) break;
+                  j=g_prev.FindByTicket(prevFrom);
+                  if(j>=0 && g_prev.At(j,q))
+                    {
+                     uid=q.uid;
+                     slot=j;
+                     break;
+                    }
+                  curFrom=prevFrom;
+                 }
               }
            }
 #endif
@@ -848,7 +868,14 @@ int OnInit()
                  +(string)g_nid+", which is what a hub-mode receiver would use"
                  +" as id=.)");
 
-   EventSetMillisecondTimer(PollMs);
+   int effectivePollMs=PollMs;
+   if(effectivePollMs<10) effectivePollMs=10;
+   if(effectivePollMs>5000) effectivePollMs=5000;
+   if(!EventSetMillisecondTimer(effectivePollMs))
+     {
+      g_log.Error("EventSetMillisecondTimer("+(string)effectivePollMs+") failed");
+      return INIT_FAILED;
+     }
    g_panel.Init("cpsnd",10,20,430);
    g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
               +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
@@ -1276,13 +1303,7 @@ void UpdatePanel()
 
    int npos=0,nord=0;
    double lots=0.0;
-   for(int i=0;i<CP_MAX_POSITIONS;i++)
-     {
-      CopierPos p;
-      if(!g_prev.At(i,p)) continue;
-      if(p.kind==CP_ORD_PENDING) nord++; else npos++;
-      lots+=p.lots;
-     }
+   g_prev.Summary(npos,nord,lots);
 
    int np=g_peers.Count();
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
@@ -1586,6 +1607,7 @@ void OnTimer()
       string hdr="SEQ="+(string)g_seq+";SSID="+g_ssid;
       if(!CopierStateFile::Save(StatePath(),hdr,dense,dn))
         {
+         g_stateDirty=true;
          //--- rate-limited: on a busy account this can fire on most scans,
          //--- and an unreadable log is worse than no log at all
          if(g_once.ShouldEmit("statesave"))

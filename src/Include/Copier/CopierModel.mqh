@@ -343,6 +343,8 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
    string cmt=CopierCommentForUid(p.uid,p.ticket);
    double px=NormalizeDouble(p.pprice,si.digits);
    double stop=NormalizeDouble(p.pstop,si.digits);
+   double sl=(p.sl>0.0)?NormalizeDouble(p.sl,si.digits):0.0;
+   double tp=(p.tp>0.0)?NormalizeDouble(p.tp,si.digits):0.0;
 
 #ifdef __MQL5__
    long pt=CopierPendToPlatformType(p.ptype);
@@ -362,8 +364,8 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
    req.volume      =p.lots;
    req.type        =(ENUM_ORDER_TYPE)pt;
    req.price       =px;
-   req.sl          =p.sl;
-   req.tp          =p.tp;
+   req.sl          =sl;
+   req.tp          =tp;
    req.deviation   =(ulong)deviationPoints;
    req.magic       =(ulong)magic;
    req.comment     =cmt;
@@ -392,7 +394,7 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
       return false;
      }
    int cmd=(int)pt;
-   int ticket=OrderSend(sym,cmd,p.lots,px,deviationPoints,p.sl,p.tp,cmt,
+   int ticket=OrderSend(sym,cmd,p.lots,px,deviationPoints,sl,tp,cmt,
                         (int)magic,(datetime)p.pexpire,clrNONE);
    if(ticket<0)
      {
@@ -588,6 +590,7 @@ string CopierReadCommentByTicket(const CopierPos &p)
    if(OrderSelect((ulong)p.ticket)) return OrderGetString(ORDER_COMMENT);
    return "";
 #else
+   if(p.ticket<=0 || p.ticket>2147483647) return "";
    if(OrderSelect((int)p.ticket,SELECT_BY_TICKET)) return OrderComment();
    return "";
 #endif
@@ -600,6 +603,7 @@ string CopierReadCommentByTicket(const long ticket)
    if(OrderSelect((ulong)ticket)) return OrderGetString(ORDER_COMMENT);
    return "";
 #else
+   if(ticket<=0 || ticket>2147483647) return "";
    if(OrderSelect((int)ticket,SELECT_BY_TICKET)) return OrderComment();
    return "";
 #endif
@@ -647,6 +651,7 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
      }
    return false;
 #else
+   if(identifier<=0 || identifier>2147483647) return false;
    if(!OrderSelect((int)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
    ticket=identifier;
    int t=(int)OrderType();
@@ -777,7 +782,11 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                if(OrderSelect(ticket,SELECT_BY_TICKET))
                  {
                   int mErr=0;
-                  CopierModifyStops((long)ticket,sym,sl,tp,mErr);
+                  if(!CopierModifyStops((long)ticket,sym,sl,tp,mErr))
+                    {
+                     Print("[copier] WARN: ECN open succeeded (ticket ",ticket,") but immediate stops modify failed: err=",mErr);
+                     outErr=mErr;
+                    }
                  }
                return true;
               }
@@ -835,6 +844,7 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
    if(!ok) outErr=(int)trade.ResultRetcode();
    return ok;
 #else
+   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
    if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES)) { outErr=0; return true; }
    if(pending)
      {
@@ -926,6 +936,7 @@ bool CopierModifyStops(const long identifier,const string sym,
    outErr=(int)res.retcode;
    return false;
 #else
+   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
    if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
      {
       outErr=0;
@@ -986,6 +997,7 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    outErr=(int)res.retcode;
    return false;
 #else
+   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
    if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
      {
       outErr=0;
@@ -1086,6 +1098,7 @@ bool CopierClosePartial(const long identifier,const double lots,
      }
    return false;
 #else
+   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
    if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
      {
       outErr=0;
