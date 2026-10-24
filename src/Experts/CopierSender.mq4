@@ -34,9 +34,6 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierPeers.mqh>
 #include <Copier/CopierPanel.mqh>
 #include <Copier/CopierCurveKey.mqh>
-#include <Copier/CopierNotify.mqh>
-
-CopierNotifier g_notifier;
 
 //--- identity / transport -------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -912,15 +909,6 @@ int OnInit()
      }
    g_panel.Init("cpsnd",10,20,430);
    RebuildSnapshotPayload();
-
-   long hwnd=ChartGetInteger(0,CHART_WINDOW_HANDLE);
-   intptr_t watchSock=(g_hubOn)?g_tp.SubSocketRef():g_tp.PubSocketRef();
-   if(hwnd!=0 && watchSock!=0)
-     {
-      if(g_notifier.Start(watchSock,hwnd,CP_NOTIFY_VK_CODE))
-         g_log.Info("interrupt notifier active on chart HWND "+(string)hwnd);
-     }
-
    g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
               +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
               +" (one socket, both streams) ssid="+g_ssid
@@ -931,7 +919,6 @@ int OnInit()
 
 void OnDeinit(const int reason)
   {
-   g_notifier.Stop();
    EventKillTimer();
    timeEndPeriod(1);
 
@@ -2020,18 +2007,6 @@ void OnTick()
      {
       s_lastFastScanMs=now;
       OnTimer();
-     }
-  }
-
-void OnChartEvent(const int id,
-                  const long &lparam,
-                  const double &dparam,
-                  const string &sparam)
-  {
-   if(id==CHARTEVENT_KEYDOWN && lparam==CP_NOTIFY_VK_CODE)
-     {
-      OnTimer();
-      g_notifier.Ack();
      }
   }
 //+------------------------------------------------------------------+

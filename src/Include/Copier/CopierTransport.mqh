@@ -549,16 +549,6 @@ public:
               || CheckPointer(m_sub)!=POINTER_INVALID);
      }
 
-   intptr_t          SubSocketRef() const
-     {
-      return (CheckPointer(m_sub)!=POINTER_INVALID)?m_sub.ref():0;
-     }
-
-   intptr_t          PubSocketRef() const
-     {
-      return (CheckPointer(m_pub)!=POINTER_INVALID)?m_pub.ref():0;
-     }
-
    //=================================================================
    // Teardown. Order matters: sockets first, context last.
    //=================================================================
