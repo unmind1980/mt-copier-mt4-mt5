@@ -1337,6 +1337,57 @@ fn main() {
     let mut last_rcpt_relayed: std::collections::HashMap<(String, String), (String, Instant)> =
         std::collections::HashMap::new();
     let mut last_rcpt_prune = Instant::now();
+    let mut last_known_receipt: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    //--- Background Worker for Asynchronous Snapshot Parsing
+    let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
+    let snap_shared = shared.clone();
+    let snap_audit = audit.clone();
+    let snap_poke = poke_tx.clone();
+    std::thread::Builder::new()
+        .name("snap-worker".to_string())
+        .spawn(move || {
+            let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
+                std::collections::HashMap::new();
+            while let Some((sid, payload, pos_now)) = snap_rx.blocking_recv() {
+                let view = parse_snap(&payload);
+                let declared = view.declared;
+                let carried = view.records;
+                let mismatched_now = {
+                    let mut s = snap_shared.lock_or_recover();
+                    let before = s.pos.mismatched;
+                    s.pos.on_snap(&sid, view, pos_now);
+                    s.pos.mismatched - before
+                };
+                if mismatched_now > 0 {
+                    let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
+                    let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                        Some(t) => t.elapsed() >= Duration::from_secs(10),
+                        None => true,
+                    };
+                    if should_audit {
+                        wire_audit_throttle.insert(throttle_key, Instant::now());
+                        snap_audit.record(
+                            "", "",
+                            "snapshot.mismatch",
+                            &format!("sender:{}", sid),
+                            None,
+                            Some(serde_json::json!({
+                                "declared": declared,
+                                "carried": carried,
+                            })),
+                            "mismatch",
+                        );
+                    }
+                }
+                if let Some(tx) = &snap_poke {
+                    let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
+                    let _ = tx.send(body);
+                }
+            }
+        })
+        .expect("cannot spawn snap-worker thread");
 
     while !EXIT.load(Ordering::SeqCst) {
         match sock.poll(zmq::POLLIN, POLL_MS) {
@@ -2162,53 +2213,17 @@ fn main() {
                             let new_receipt = crate::positions::extract_receipt(snap_payload);
                             let pos_now = Instant::now();
 
-                            let should_parse = {
-                                let s = shared.lock_or_recover();
-                                match s.pos.view_for(&sid) {
-                                    Some(existing) => existing.receipt != new_receipt || new_receipt.is_empty(),
-                                    None => true, // First snapshot seen from this sender
-                                }
+                            // Fast-path zero-lock check in local router thread state:
+                            let should_dispatch = match last_known_receipt.get(&sid) {
+                                Some(prev) => prev != &new_receipt || new_receipt.is_empty(),
+                                None => true,
                             };
 
-                            if should_parse {
-                                let view = parse_snap(snap_payload);
-                                let declared = view.declared;
-                                let carried = view.records;
-                                let mismatched_now = {
-                                    let mut s = shared.lock_or_recover();
-                                    let before = s.pos.mismatched;
-                                    s.pos.on_snap(&sid, view, pos_now);
-                                    s.pos.mismatched - before
-                                };
-                                if mismatched_now > 0 {
-                                    //--- A snapshot whose N= disagreed with what
-                                    //--- arrived. This is a DATA-INTEGRITY event,
-                                    //--- not a transport one - the frame was
-                                    //--- whole, its own header was wrong - so it
-                                    //--- belongs in the audit rather than in a
-                                    //--- counter nobody watches.
-                                    let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
-                                    let should_audit = match wire_audit_throttle.get(&throttle_key) {
-                                        Some(t) => t.elapsed() >= Duration::from_secs(10),
-                                        None => true,
-                                    };
-                                    if should_audit {
-                                        wire_audit_throttle.insert(throttle_key, Instant::now());
-                                        audit.record(
-                                            "", "",
-                                            "snapshot.mismatch",
-                                            &format!("sender:{}", sid),
-                                            None,
-                                            Some(serde_json::json!({
-                                                "declared": declared,
-                                                "carried": carried,
-                                            })),
-                                            "mismatch",
-                                        );
-                                    }
-                                }
+                            if should_dispatch {
+                                last_known_receipt.insert(sid.clone(), new_receipt);
+                                let _ = snap_tx.try_send((sid, snap_payload.to_vec(), pos_now));
                             } else {
-                                // Touch timestamp so eviction does not prune it while unchanged
+                                // Touch timestamp in positions without blocking for full parse
                                 let mut s = shared.lock_or_recover();
                                 s.pos.touch(&sid, pos_now);
                             }

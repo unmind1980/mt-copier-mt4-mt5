@@ -28,7 +28,7 @@
 //! logged by the panicking thread), and keep serving. Availability beats a
 //! consistency guarantee that this process does not actually need.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Take a lock, recovering the guard if the mutex was poisoned.
 pub trait LockExt<T> {
@@ -41,6 +41,28 @@ impl<T> LockExt<T> for Mutex<T> {
             Ok(g) => g,
             //--- the guard is still valid; only the "somebody panicked"
             //--- flag is set. `into_inner` hands back the data as-is.
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub trait RwLockExt<T> {
+    fn read_or_recover(&self) -> RwLockReadGuard<'_, T>;
+    fn write_or_recover(&self) -> RwLockWriteGuard<'_, T>;
+}
+
+#[allow(dead_code)]
+impl<T> RwLockExt<T> for RwLock<T> {
+    fn read_or_recover(&self) -> RwLockReadGuard<'_, T> {
+        match self.read() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+    fn write_or_recover(&self) -> RwLockWriteGuard<'_, T> {
+        match self.write() {
+            Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         }
     }
