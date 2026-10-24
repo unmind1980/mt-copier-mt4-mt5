@@ -727,24 +727,25 @@ int OnInit()
    //--- positions that are already open (which would double them up)
    string hdr="";
    CopierPos saved[];
+   double savedOpenLots[];
    int savedCount=0;
-   if(CopierStateFile::Load(StatePath(),hdr,saved,savedCount))
+   if(CopierStateFile::Load(StatePath(),hdr,saved,savedCount,savedOpenLots))
      {
       for(int i=0;i<savedCount;i++)
         {
          if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
          int s=g_prev.Upsert(saved[i]);
-         if(s>=0) g_openLots[s]=saved[i].lots;
+         if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
         }
       g_log.Info("restored "+(string)savedCount+" position(s) from state ("+StatePath()+")");
      }
-   else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount))
+   else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount,savedOpenLots))
      {
       for(int i=0;i<savedCount;i++)
         {
          if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
          int s=g_prev.Upsert(saved[i]);
-         if(s>=0) g_openLots[s]=saved[i].lots;
+         if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
         }
       g_log.Info("restored "+(string)savedCount+" position(s) from legacy state (copier_sender_"+SenderId()+".st)");
      }
@@ -923,7 +924,8 @@ void OnDeinit(const int reason)
    //--- set we were broadcasting, so the log can be read as a state rather
    //--- than a diff with holes in it
    CopierPos dense[];
-   int dn=g_prev.CopyTo(dense);
+   int slots[];
+   int dn=g_prev.CopyToWithSlots(dense,slots);
    string held="";
    for(int i=0;i<dn;i++) held+=(i>0?",":"")+dense[i].uid;
    g_log.Info("sender stopped reason="+(string)reason+" holding "
@@ -935,7 +937,10 @@ void OnDeinit(const int reason)
      {
       g_stateDirty=false;
       string hdr="SEQ="+(string)g_seq+";SSID="+g_ssid;
-      CopierStateFile::Save(StatePath(),hdr,dense,dn);
+      double openLotsDense[];
+      ArrayResize(openLotsDense,dn);
+      for(int i=0;i<dn;i++) openLotsDense[i]=(slots[i]>=0)?g_openLots[slots[i]]:dense[i].lots;
+      CopierStateFile::Save(StatePath(),hdr,dense,dn,openLotsDense);
      }
 
    g_tp.Close();          // sockets first, then context (LINGER=0 already set)
@@ -1657,9 +1662,13 @@ void OnTimer()
      {
       g_stateDirty=false;
       CopierPos dense[];
-      int dn=g_prev.CopyTo(dense);
+      int slots[];
+      int dn=g_prev.CopyToWithSlots(dense,slots);
       string hdr="SEQ="+(string)g_seq+";SSID="+g_ssid;
-      if(!CopierStateFile::Save(StatePath(),hdr,dense,dn))
+      double openLotsDense[];
+      ArrayResize(openLotsDense,dn);
+      for(int i=0;i<dn;i++) openLotsDense[i]=(slots[i]>=0)?g_openLots[slots[i]]:dense[i].lots;
+      if(!CopierStateFile::Save(StatePath(),hdr,dense,dn,openLotsDense))
         {
          g_stateDirty=true;
          //--- rate-limited: on a busy account this can fire on most scans,

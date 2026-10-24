@@ -375,6 +375,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十次审计** | 2026-10-24 00:25 | 随机数种子全自洽初始化、Remove O(1)计数、ReplaceAll注释与PayloadDRY重构 | 全栈安全与代码精炼 |
 | **三十一次审计** | 2026-10-24 01:30 | MODIFY节流缓存脱钩、缺N快照拦截拒空仓、CSPRNG安全真随机与测试夹具全修复 | 资金安全与全栈加固 |
 | **三十二次审计** | 2026-10-24 09:30 | MQL入队预扫O(N)优化、Hub快照Move零拷贝、图表熵混入与测试端口隔离 | 性能与测试工程化 |
+| **三十三次审计** | 2026-10-24 11:45 | MODIFY入队成功后置签名、微小手数平仓防震荡、挂单撤单ordKind纠偏与initLots状态持久化 | 交易资金安全与全栈稳健 |
 
 ---
 
@@ -946,6 +947,24 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **R-01** | **Medium 性能** | `hub/src/positions.rs:123` / `main.rs:2177` | **`Positions::on_snap` 所有权转移零拷贝**：改用 move 语义传值，彻底消灭持锁期间对 4096 条 `PositionItem` 的深度克隆，锁持有时间稳定在亚微秒级。 |
 | **R-05** | **Low 测试** | `hub/src/envelope.rs:245` | **新增 `decompress_field` 完整单元测试**：覆盖未压缩、原生字符串、Z85+zlib 往返、带 pad 往返以及损坏流安全容错。 |
 | **T-01** | **Medium 测试** | `tools/hub_curve_test.py:35` / `tools/hub_positions_test.py:36` | **消除硬编码测试端口冲突**：`hub_curve_test.py` 迁移至 6192/6193，`hub_positions_test.py` 迁移至 6198，彻底解决多套件并发或残留进程导致的端口占有假死。 |
+
+---
+
+### 三十三次审计：MODIFY入队成功后置签名、微小手数平仓防震荡、挂单撤单ordKind纠偏与initLots状态持久化（2026-10-24 11:45；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **1.1** | **High 资金安全** | `CopierReceiver.mq4:3595` | **`QueueModifyIfNeeded` 动作入队成功后置签名**：仅在 `PushAction` 确认返回 `true` 时才记录 `g_stopSig[sh]`，消除 MODIFY 遇节流/队列满/backoff 失败后止损修改被永久吞掉导致仓位裸奔的资金安全隐患。 |
+| **1.2** | **High 资金安全** | `CopierReceiver.mq4:3280, 3310` | **`QueueTrimIfNeeded` 微小残单强平防震荡保护**：当目标手数裁剪后剩余不足 `minLot` 时，优先裁剪到 `minLot`；若无法裁剪且发送方仍持有该单，严禁强平全仓触发 RESTORE，彻底杜绝部分平仓陷入"全平→开仓→全平"无限震荡死循环（Ping-Pong Churn）。 |
+| **1.3** | **Medium 风控安全** | `CopierReceiver.mq4:3726, 4200, 4412, 4840` | **平仓/去重操作传递真实 `ordKind`**：全面显式传递 `loc.kind`（`CP_ORD_MARKET` 或 `CP_ORD_PENDING`），消除挂单撤销被误判为市价平仓导致扣减持仓与总手数造成的风控统计负漂移与限额被穿透。 |
+| **1.4** | **Medium 状态持久** | `CopierState.mqh:1120` / `CopierSender.mq4:730, 938, 1664` | **状态文件持久化 `ILOT:` 初始开仓手数**：新增 `CP_STATE_TAG_ILOT` 标签与重载 `Save`/`Load`，将 `g_openLots` 随状态文件落盘并在重启时无缝恢复，解决多次部分平仓缩放比例失真。 |
+| **1.5** | **Medium 交易模型** | `CopierReceiver.mq4:2860` | **挂单紧急止损对齐券商最小停损距离（StopLevel）**：在生成挂单紧急止损/止盈后调用 `CopierFitStopAt` 严格距离校准，防止因落在最小距离内被券商以错误码 130 拒单。 |
+| **2.1** | **Medium 容错** | `hub/src/envelope.rs:130` | **Rust 端 PKZIP 解压自动定位目录结构截断**：搜索 `PK\x01\x02`、`PK\x07\x08`、`PK\x05\x06` 安全修剪尾部目录数据，杜绝 `comp_size == 0` 时 DeflateDecoder 遇到尾部元数据报错失败。 |
+| **2.2** | **Medium 健壮** | `hub/src/commands.rs:326` | **配置下发死循环治理**：对被节点明确以 `STATE_REJECTED` 应答的配置指令禁止自动无界复活重推，防止每 60s 轰炸节点和无限膨胀 `commands.jsonl`。 |
+| **2.3** | **Medium 配置** | `CopierConfig.mqh:126, 190, 202` | **INI 文件 UTF-8 BOM 自动剥离与 Last-Wins 段块语义**：在读取第一行时自动检测并剥离 UTF-8 / UTF-16 BOM；`Has`/`Get` 采用倒序遍历段块，确保后写入同名配置段成功覆盖前段。 |
+| **3.2** | **Medium 安全** | `hub/src/main.rs:1320` | **引导管理员密码禁止明文打印至 stdout**：无环境变量指定时，初始安全随机密码自动写入受限权限凭据文件 `.admin_bootstrap_password`，防止重定向日志泄露明文。 |
+| **4.1** | **Low 性能** | `CopierReceiver.mq4:2658, 2798, 2825` | **`ShiftQueue` 出队丢弃动作不累加 `skipped`**：仅在 `RotateQueue` 时累加 `skipped`，杜绝丢弃过期动作引发正常排队动作被提前截断延迟。 |
+| **5.1** | **Low 测试** | `CopierSelfTest.mq4:573` | **修正 2049 行截断测试夹具 UID 为合法 Crockford 字符**：将非法字符 `'O'` 修正为合法字符 `'K'`，使状态文件满载与截断逻辑获得 100% 真实有效测试覆盖。 |
 
 ---
 

@@ -324,13 +324,15 @@ impl CommandStore {
                 c.next_at = Instant::now();
                 return c.clone();
             }
-            //--- A command that has ENDED - `unknown` after the ladder, or
-            //--- `rejected` by the node - is revived here, because the whole
-            //--- point of this call is "this node needs this revision". A node
-            //--- that restarts with a stale ini, or one that was simply
-            //--- offline for the whole ladder, would otherwise be stuck on the
-            //--- old config forever: the command existed, so nothing new was
-            //--- ever minted, and nothing ever re-sent it.
+            if c.state == STATE_REJECTED {
+                // If the node rejected this revision, do NOT endlessly retry it
+                // unless an operator explicitly initiates a new revision or change.
+                return c.clone();
+            }
+            //--- A command that has ENDED - `unknown` after the ladder - is revived here,
+            //--- because the whole point of this call is "this node needs this revision". A node
+            //--- that restarts with a stale ini, or one that was simply offline for the whole ladder,
+            //--- would otherwise be stuck on the old config forever.
             //---
             //--- BUT NOT ON EVERY HEARTBEAT. This is called from the REG/HBT2
             //--- comparison, which fires every 5 s - so an unconditional

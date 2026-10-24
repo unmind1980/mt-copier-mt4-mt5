@@ -113,6 +113,7 @@ public:
 
       string section="";
       bool overflow=false;
+      bool firstLine=true;
       while(!FileIsEnding(h))
         {
          if(m_n>=CP_INI_MAX)
@@ -121,6 +122,14 @@ public:
             break;
            }
          string line=Trim(FileReadString(h));
+         if(firstLine)
+           {
+            firstLine=false;
+            if(StringLen(line)>=3 && StringGetCharacter(line,0)==0xEF && StringGetCharacter(line,1)==0xBB && StringGetCharacter(line,2)==0xBF)
+               line=Trim(StringSubstr(line,3));
+            else if(StringLen(line)>=1 && (StringGetCharacter(line,0)==0xFEFF || StringGetCharacter(line,0)==0xFFFE))
+               line=Trim(StringSubstr(line,1));
+           }
          if(StringLen(line)==0) continue;
          string first=StringSubstr(line,0,1);
          if(first=="[" )                      // section header
@@ -187,11 +196,11 @@ public:
 
    bool              Has(const string section,const string key) const
      {
-      for(int s=0;s<m_nSec;s++)
+      for(int s=m_nSec-1;s>=0;s--)
         {
          if(StringCompare(m_secName[s],section,false)!=0) continue;
          int e=m_secStart[s]+m_secLen[s];
-         for(int i=m_secStart[s];i<e;i++)
+         for(int i=e-1;i>=m_secStart[s];i--)
             if(StringCompare(m_key[i],key,false)==0) return true;
         }
       return false;
@@ -199,7 +208,7 @@ public:
 
    string            Get(const string section,const string key,const string deflt="") const
      {
-      for(int s=0;s<m_nSec;s++)
+      for(int s=m_nSec-1;s>=0;s--)
         {
          if(StringCompare(m_secName[s],section,false)!=0) continue;
          int e=m_secStart[s]+m_secLen[s];

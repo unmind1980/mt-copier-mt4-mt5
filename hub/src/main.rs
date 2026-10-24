@@ -1318,10 +1318,11 @@ fn main() {
                     println!("[hub]     from MTC_ADMIN_PASSWORD (testing; not a back door -");
                     println!("[hub]     only the salted hash is stored).");
                 } else {
-                    println!("[hub] M9 first run: created user 'admin' (password printed ONCE):");
-                    println!("[hub]     {}", pw);
-                    println!("[hub]     it is stored salted+hashed; log in and change the");
-                    println!("[hub]     password from the dashboard (or POST /api/v1/users).");
+                    let pw_file = users_path.parent().unwrap_or(std::path::Path::new(".")).join(".admin_bootstrap_password");
+                    let _ = std::fs::write(&pw_file, format!("{}\n", pw));
+                    println!("[hub] M9 first run: created user 'admin'. Initial password written to:");
+                    println!("[hub]     {} (delete after first login)", pw_file.display());
+                    println!("[hub]     (or pass MTC_ADMIN_PASSWORD env var on launch)");
                 }
                 audit.record("hub", "", "user.bootstrap", "admin", None, None, "ok");
             } else {

@@ -2655,7 +2655,6 @@ void ExecuteQueue()
         {
          g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
          ShiftQueue();
-         skipped++;
          continue;
         }
 
@@ -2795,7 +2794,6 @@ void ExecuteQueue()
                           +" re-gated, so nothing is lost if the risk state"
                           +" frees (reported at most once per 10 min).");
             ShiftQueue();
-            skipped++;
             continue;
            }
         if(a.senderIdx>=0 && a.senderIdx<g_nSenders)
@@ -2822,7 +2820,6 @@ void ExecuteQueue()
                              +" next snapshot and re-gated (reported at most"
                              +" once per 10 min).");
                ShiftQueue();
-               skipped++;
                continue;
               }
            }
@@ -2862,6 +2859,12 @@ void ExecuteQueue()
                double rawTp=(a.side==CP_SIDE_BUY)?(anchorPx+emTP*pipSize):(anchorPx-emTP*pipSize);
                pendTp=NormalizeDouble(rawTp,si.digits);
               }
+
+            bool clamped=false;
+            if(pendSl>0.0 && anchorPx>0.0)
+               pendSl=CopierFitStopAt(pendSl,a.side,true,anchorPx,si,clamped);
+            if(pendTp>0.0 && anchorPx>0.0)
+               pendTp=CopierFitStopAt(pendTp,a.side,false,anchorPx,si,clamped);
 
             CopierPos pp;
             pp.uid     =a.uid;
@@ -3279,6 +3282,7 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
       targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
      }
    if(rejected || targetLots<=0.0) return 0.0;
+   if(targetLots<si2.minLot) targetLots=si2.minLot;
    return targetLots;
   }
 
@@ -3308,9 +3312,19 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
    double remaining=NormalizeDouble(local.lots-trim,digits);
    if(remaining<si2.minLot-0.0000001)
      {
-      PushAction(si,CP_ACT_CLOSE,desired.uid,local.sym,local.side,
-                 local.lots,local.ticket);
-      return;
+      double altTrim=NormalizeDouble(local.lots-si2.minLot,digits);
+      if(altTrim>=si2.minLot-0.0000001 && altTrim>=step*0.999999)
+        {
+         trim=altTrim;
+         remaining=si2.minLot;
+        }
+      else
+        {
+         // Trimming would leave less than minLot, and cannot trim to minLot without
+         // violating broker minLot. Do NOT close the entire position while sender
+         // still holds it to avoid infinite reopen-close ping-pong churn.
+         return;
+        }
      }
 
    //--- The comment on the CLOSING deal is what MT5 writes back onto the
@@ -3591,16 +3605,16 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double actPStop  = (local.kind==CP_ORD_PENDING && desired.pstop>0.0) ? desired.pstop : local.pstop;
    long   actPExp   = (local.kind==CP_ORD_PENDING) ? desired.pexpire : local.pexpire;
 
-   PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
-              0.0,local.ticket,0,
-              ":"+CopierFmtDouble(wantSl,CP_DIGITS_PX)
-              +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX)
-              +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX),
-              wantSl,wantTp,
-              local.kind,local.ptype,actPPrice,actPStop,actPExp);
+   bool pushed=PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
+                          0.0,local.ticket,0,
+                          ":"+CopierFmtDouble(wantSl,CP_DIGITS_PX)
+                          +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX)
+                          +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX),
+                          wantSl,wantTp,
+                          local.kind,local.ptype,actPPrice,actPStop,actPExp);
 
-   //--- Action queued: now record signature to throttle until broker applies or inputs change
-   if(local.ticket!=0)
+   //--- Action queued: only record signature when successfully pushed to throttle until broker applies
+   if(pushed && local.ticket!=0)
      {
       g_stopSig[sh].ticket=local.ticket;
       g_stopSig[sh].epoch=g_stOvEpoch;
@@ -3713,7 +3727,8 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
                     +" lots="+DoubleToString(loc[keep].lots,2)
                     +"; one UID must map to one position");
          PushAction(si,CP_ACT_DEDUP,loc[k].uid,loc[k].sym,loc[k].side,
-                    loc[k].lots,loc[k].ticket,0,":"+(string)loc[k].ticket);
+                    loc[k].lots,loc[k].ticket,0,":"+(string)loc[k].ticket,
+                    0.0,0.0,loc[k].kind);
         }
      }
 
@@ -4186,7 +4201,7 @@ int CloseAllOurs(const string reason)
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
       if(PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
-                 g_scanScratch[i].ticket))
+                 g_scanScratch[i].ticket,0,"",0.0,0.0,g_scanScratch[i].kind))
          queued++;
       else
          g_log.Error("CloseAll: failed to queue close action for ticket "+(string)g_scanScratch[i].ticket+" uid "+uid);
@@ -4398,7 +4413,8 @@ void ConvergeSender(const int si)
                        +"); cancelling the mirror and re-opening it");
             g_reopenExpected.Add(g_sid[si]+":"+d.uid);
             PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
-                       g_locScratch[li].lots,g_locScratch[li].ticket);
+                       g_locScratch[li].lots,g_locScratch[li].ticket,
+                       0,"",0.0,0.0,g_locScratch[li].kind);
             continue;
            }
 
@@ -4824,7 +4840,8 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket);
+      PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
+                 0,"",0.0,0.0,g_locScratch[i].kind);
       ForgetSenderPeakLots(g_locScratch[i].uid);
       StopsForget(g_locScratch[i].uid);
      }

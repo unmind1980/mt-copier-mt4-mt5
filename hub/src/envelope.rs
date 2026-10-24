@@ -126,16 +126,23 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                     let extra_len = u16::from_le_bytes(raw_bytes[28..30].try_into().unwrap_or([0; 2])) as usize;
                     let data_start = 30 + name_len + extra_len;
                     if data_start <= raw_bytes.len() {
-                        let data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
+                        let mut data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
                             data_start + comp_size
                         } else {
                             raw_bytes.len()
                         };
+                        for sig in [b"PK\x01\x02", b"PK\x07\x08", b"PK\x05\x06"] {
+                            if let Some(pos) = raw_bytes[data_start..data_end].windows(4).position(|w| w == sig) {
+                                data_end = data_start + pos;
+                            }
+                        }
                         let compressed_slice = &raw_bytes[data_start..data_end];
                         let mut buf = Vec::new();
                         let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);
-                        if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
-                            return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
+                        if (d.read_to_end(&mut buf).is_ok() || !buf.is_empty()) && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                            if let Ok(s) = String::from_utf8(buf.clone()) {
+                                return s;
+                            }
                         }
                     }
                 }
@@ -271,5 +278,42 @@ mod tests {
     fn decompress_field_corrupted_graceful() {
         assert_eq!(decompress_field(b"1:0:not_valid_z85!!!"), "1:0:not_valid_z85!!!");
         assert_eq!(decompress_field(b"1:"), "1:");
+    }
+
+    #[test]
+    fn decompress_field_pkzip_container() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let src = b"UID99999,GBPUSD,0.5,1.25000";
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(src).unwrap();
+        let comp_data = enc.finish().unwrap();
+
+        let mut pkzip = Vec::new();
+        pkzip.extend_from_slice(b"PK\x03\x04");
+        pkzip.extend_from_slice(&[20, 0]); // version needed
+        pkzip.extend_from_slice(&[0, 0]);  // flags
+        pkzip.extend_from_slice(&[8, 0]);  // compression method (deflate)
+        pkzip.extend_from_slice(&[0, 0, 0, 0]); // mtime/mdate
+        pkzip.extend_from_slice(&[0, 0, 0, 0]); // crc32
+        pkzip.extend_from_slice(&(comp_data.len() as u32).to_le_bytes()); // comp_size
+        pkzip.extend_from_slice(&(src.len() as u32).to_le_bytes()); // uncomp_size
+        let fname = b"data.txt";
+        pkzip.extend_from_slice(&(fname.len() as u16).to_le_bytes()); // name_len
+        pkzip.extend_from_slice(&[0, 0]); // extra_len
+        pkzip.extend_from_slice(fname);
+        pkzip.extend_from_slice(&comp_data);
+        // Append simulated Central Directory header to test trimming
+        pkzip.extend_from_slice(b"PK\x01\x02");
+        pkzip.extend_from_slice(&[0; 42]);
+
+        let pad = (4 - (pkzip.len() % 4)) % 4;
+        pkzip.resize(pkzip.len() + pad, 0);
+
+        let z85 = zmq::z85_encode(&pkzip).unwrap();
+        let wire = format!("1:{}:{}", pad, z85);
+        assert_eq!(decompress_field(wire.as_bytes()), "UID99999,GBPUSD,0.5,1.25000");
     }
 }

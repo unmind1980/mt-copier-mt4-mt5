@@ -1111,15 +1111,17 @@ public:
 // identity from the order comments. The state file is a cache, not the
 // source of truth, so this is safe.
 //=====================================================================
-#define CP_STATE_TAG_HDR "HDR:"
-#define CP_STATE_TAG_POS "POS:"
-#define CP_STATE_TAG_END "END:"
+#define CP_STATE_TAG_HDR  "HDR:"
+#define CP_STATE_TAG_POS  "POS:"
+#define CP_STATE_TAG_ILOT "ILOT:"
+#define CP_STATE_TAG_END  "END:"
 
 class CopierStateFile
   {
 public:
    static bool       Save(const string path,const string header,
-                          const CopierPos &pos[],const int count)
+                          const CopierPos &pos[],const int count,
+                          const double &openLots[])
      {
       //--- The successor is written FIRST. If this open fails, or the
       //--- writes below fail, the previous state file is untouched - the
@@ -1137,10 +1139,16 @@ public:
       int written=0;
       int n=count;
       if(n>CP_STATE_MAX_LINES) n=CP_STATE_MAX_LINES;
+      int openLotsCount=ArraySize(openLots);
       for(int i=0;i<n && writeOk;i++)
         {
          if(StringLen(pos[i].uid)!=CP_UID_LEN) continue;
          if(FileWrite(h,CP_STATE_TAG_POS+CopierEncodeRec(pos[i]))<=0) { writeOk=false; break; }
+         if(i<openLotsCount && openLots[i]>0.0)
+           {
+            if(FileWrite(h,CP_STATE_TAG_ILOT+pos[i].uid+"="+DoubleToString(openLots[i],CP_DIGITS_LOTS))<=0)
+              { writeOk=false; break; }
+           }
          written++;
         }
       if(writeOk && FileWrite(h,CP_STATE_TAG_END+(string)written)<=0) writeOk=false;
@@ -1184,12 +1192,20 @@ public:
       return true;
      }
 
+   static bool       Save(const string path,const string header,
+                          const CopierPos &pos[],const int count)
+     {
+      double dummy[];
+      return Save(path,header,pos,count,dummy);
+     }
+
    static bool       Load(const string path,string &header,
-                          CopierPos &pos[],int &count)
+                          CopierPos &pos[],int &count,double &openLots[])
      {
       header="";
       count=0;
       ArrayResize(pos,0);
+      ArrayResize(openLots,0);
       int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI
                      |FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(h==INVALID_HANDLE) return false;
@@ -1219,9 +1235,23 @@ public:
                if(CopierDecodeRec(rec,p))
                  {
                   ArrayResize(pos,got+1,CP_MAX_POSITIONS);
+                  ArrayResize(openLots,got+1,CP_MAX_POSITIONS);
                   pos[got]=p;
+                  openLots[got]=p.lots;
                   got++;
                  }
+              }
+            continue;
+           }
+         if(StringFind(line,CP_STATE_TAG_ILOT)==0)
+           {
+            string ilotStr=StringSubstr(line,StringLen(CP_STATE_TAG_ILOT));
+            int eq=StringFind(ilotStr,"=");
+            if(eq>0)
+              {
+               string uid=StringSubstr(ilotStr,0,eq);
+               double ilot=StringToDouble(StringSubstr(ilotStr,eq+1));
+               if(got>0 && pos[got-1].uid==uid) openLots[got-1]=ilot;
               }
             continue;
            }
@@ -1233,12 +1263,19 @@ public:
         {
          if(StringFind(path,".tmp")<0)
            {
-            return Load(path+".tmp",header,pos,count);
+            return Load(path+".tmp",header,pos,count,openLots);
            }
          return false;
         }
       count=got;
       return true;
+     }
+
+   static bool       Load(const string path,string &header,
+                          CopierPos &pos[],int &count)
+     {
+      double dummy[];
+      return Load(path,header,pos,count,dummy);
      }
   };
 

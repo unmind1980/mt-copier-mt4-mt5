@@ -570,7 +570,7 @@ void TestStateFile()
    ArrayResize(overArr,CP_STATE_MAX_LINES+1);
    for(int k=0;k<CP_STATE_MAX_LINES+1;k++)
      {
-      overArr[k]=MakePos("O"+StringFormat("%07d",k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
+      overArr[k]=MakePos("K"+StringFormat("%07d",k),1000+k,"EURUSD",CP_SIDE_BUY,0.01,1.1000,0,0,0,1000);
      }
    bool overSaved=CopierStateFile::Save(path,"OVER_2049",overArr,CP_STATE_MAX_LINES+1);
    Ok("state: 2049 positions save clamps to 2048",overSaved);
