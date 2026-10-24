@@ -41,6 +41,9 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierRisk.mqh>
 #include <Copier/CopierTransport.mqh>
 #include <Copier/CopierCurveKey.mqh>
+#include <Copier/CopierNotify.mqh>
+
+CopierNotifier g_notifier;
 
 //--- configuration --------------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -6376,11 +6379,20 @@ int OnInit()
    ReportOrphanedMirrors();
 
    ClearQueue();
+
+   long hwnd=ChartGetInteger(0,CHART_WINDOW_HANDLE);
+   if(hwnd!=0 && g_tp.SubSocketRef()!=0)
+     {
+      if(g_notifier.Start(g_tp.SubSocketRef(),hwnd,CP_NOTIFY_VK_CODE))
+         g_log.Info("interrupt notifier active on chart HWND "+(string)hwnd);
+     }
+
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
+   g_notifier.Stop();
    EventKillTimer();
    timeEndPeriod(1);
    ClearQueue();
@@ -7305,6 +7317,18 @@ void OnTick()
      {
       s_lastFastTickMs=now;
       OnTimer();
+     }
+  }
+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+   if(id==CHARTEVENT_KEYDOWN && lparam==CP_NOTIFY_VK_CODE)
+     {
+      OnTimer();
+      g_notifier.Ack();
      }
   }
 //+------------------------------------------------------------------+
