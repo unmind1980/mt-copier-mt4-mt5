@@ -34,9 +34,6 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierPeers.mqh>
 #include <Copier/CopierPanel.mqh>
 #include <Copier/CopierCurveKey.mqh>
-#include <Copier/CopierPump.mqh>
-
-CopierEventPump g_pump;
 
 //--- identity / transport -------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -186,7 +183,7 @@ input string _g_cadence_ = ""; // --- Cadence & Performance ---
 #endif
 input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0=off
 input int    HeartbeatSeconds= 5;   // HeartbeatSeconds - account state interval (default 5s)
-input int    PollMs          = 2;           // PollMs - timer interval in milliseconds (default 2ms for sub-10ms)
+input int    PollMs          = 5;           // PollMs - timer interval in milliseconds (default 5ms for sub-10ms)
 
 #ifdef __MQL5__
 input group "--- Filters ---"
@@ -410,7 +407,7 @@ bool             g_peerWasDown[CP_MAX_PEERS];
 long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
 string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slot
 #define CP_PEER_TIMEOUT_MS 15000       // silence beyond this = disconnected
-#define CP_PING_MS          2000       // probe cadence (2s for responsive measurement)
+#define CP_PING_MS          5000       // probe cadence (5s for responsive measurement)
 //--- After an alert for a peer, stay quiet about that peer for a while. One
 //--- popup per outage is useful; one per flap cycle is not, and a flapping
 //--- link is exactly when an operator most needs the popup to still mean
@@ -912,7 +909,6 @@ int OnInit()
      }
    g_panel.Init("cpsnd",10,20,430);
    RebuildSnapshotPayload();
-   g_pump.Init();
    g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
               +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
               +" (one socket, both streams) ssid="+g_ssid
@@ -923,7 +919,6 @@ int OnInit()
 
 void OnDeinit(const int reason)
   {
-   g_pump.Disarm();
    EventKillTimer();
    timeEndPeriod(1);
 
@@ -993,7 +988,6 @@ void CheckPeers()
          string pn=g_peers.NameAt(k);
          if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
-      g_pump.ArmFast(500);
      }
 
    //--- The HUB is probed on its own channel.
@@ -1021,7 +1015,6 @@ void CheckPeers()
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
       g_peers.ProbeSent(g_hubPeerName,now);
-      g_pump.ArmFast(500);
      }
 
    //--- REG/HBT2. The hub's node table is built from these and NOTHING else -
@@ -1487,7 +1480,6 @@ void OnTimer()
          CopierKvGet(se.payload,"FROM",pfrom);
          if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
            {
-            g_pump.Disarm();
             if(g_once.ShouldEmit("rtt|"+pfrom))
                g_log.Info("link to "+pfrom+" measured: "
                           +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -1535,10 +1527,8 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
-              {
-               g_pump.Disarm();
-              }
+            if(StringLen(hfrom)>0)
+               g_peers.PongBack(hfrom,CopierParseLong(hms));
             continue;
            }
          if(he.type==CP_T_WHO)
@@ -1790,7 +1780,6 @@ void OnTimer()
          CopierKvGet(se.payload,"FROM",pfrom);
          if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
            {
-            g_pump.Disarm();
             if(g_once.ShouldEmit("rtt|"+pfrom))
                g_log.Info("link to "+pfrom+" measured: "
                           +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -1923,10 +1912,8 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
-              {
-               g_pump.Disarm();
-              }
+            if(StringLen(hfrom)>0)
+               g_peers.PongBack(hfrom,CopierParseLong(hms));
             continue;
            }
          //--- WHO: the hub has lost its node table - it restarted, and the
@@ -2007,7 +1994,6 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       trans.type==TRADE_TRANSACTION_ORDER_DELETE ||
       trans.type==TRADE_TRANSACTION_HISTORY_ADD)
      {
-      g_pump.ArmFast(1000);
       OnTimer();
      }
   }
@@ -2021,19 +2007,6 @@ void OnTick()
      {
       s_lastFastScanMs=now;
       OnTimer();
-     }
-  }
-
-void OnChartEvent(const int id,
-                  const long &lparam,
-                  const double &dparam,
-                  const string &sparam)
-  {
-   if(g_pump.OnEvent(id))
-     {
-      OnTimer();
-      if(g_pump.IsActive())
-         g_pump.Trigger();
      }
   }
 //+------------------------------------------------------------------+

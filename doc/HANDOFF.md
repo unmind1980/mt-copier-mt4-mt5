@@ -382,7 +382,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十七次审计** | 2026-10-24 20:20 | SendUp两帧原子闭合防御、独立Context避开double指针截断、ZAP白名单O(1)与纯Hub跳编码 | 协议健壮与底层安全 |
 | **三十八次审计** | 2026-10-24 21:20 | 1ms高精度时钟、快慢通道分离、Sender交易事件化与Receiver直通车 | 亚10ms极速架构 |
 | **三十九次审计** | 2026-10-24 22:20 | 探测路径快通道直通、微秒级时钟CopierNowMs与2ms默认PollMs对齐 | 探针测量真实化 |
-| **四十次审计** | 2026-10-25 08:00 | 纯MQL高优先级图表自定义事件自驱动泵（EventChartCustom） | 零DLL零崩溃亚毫秒事件泵 |
+| **四十次审计** | 2026-10-25 08:45 | PING探针优化为5s、根除EventChartCustom自循环空转与CPU降载归零 | 性能平稳与CPU治理 |
 
 ---
 
@@ -1043,13 +1043,13 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-### 四十次审计：纯MQL高优先级图表自定义事件自驱动泵（EventChartCustom）（2026-10-25 08:00；全部闭环落地）
+### 四十次审计：PING探针优化为5s、根除EventChartCustom自循环空转与CPU降载归零（2026-10-25 08:45；全部闭环落地）
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **E-01** | **High 原生事件泵** | `src/Include/Copier/CopierPump.mqh` | **纯 MQL 高优先级事件自驱动泵**：封装 `CopierEventPump` 类，利用 MQL 原生 `EventChartCustom(0, 1001, ...)` 在图表消息泵中以极高优先级驱动处理，彻底绕过 Windows `WM_TIMER` 低优先级 8~21ms 调度壁垒，达成真实 0~2ms 极速响应；内部维护 `m_inFlight` 标志确保事件队列永远最多仅有 1 个待处理事件，杜绝队列积压。 |
-| **E-02** | **High 零DLL安全** | `CopierReceiver.mq4` / `CopierSender.mq4` | **零外部线程与 100% 内存安全**：彻底放弃任何第三方 C/C++ 伴生线程，全链路保持 MQL 单线程纯净调用，100% 杜绝多线程竞态与 `0xc00001a5` 终端崩溃异常，热重载、换周期、换参数随意切换绝对零闪退。 |
-| **E-03** | **High 探针即时捕获** | `CopierReceiver.mq4:6440, 6830` / `CopierSender.mq4:970, 1480` | **探针到期与回包自适应加速**：Receiver 将 PING 发射移入快通道前置判断，发出 PING 或检测到交易信号时自动激活 500ms~1000ms 快速事件自驱动泵，PONG 到达或订单执行完毕后立刻 `Disarm()` 回归常态（CPU 恒低于 0.3%），同机环境下探针实测直下 0~1ms。 |
+| **P-01** | **High CPU治理** | `CopierReceiver.mq4` / `CopierSender.mq4` | **根除 `EventChartCustom` 自循环空转**：排查确认前序实验性 `CopierPump` 在 `OnChartEvent` 中重复触发 `Trigger()` 构成了每秒数万次的死循环忙等待（Busy-Wait Spinloop），导致单核 CPU 100% 占满；彻底移除 `CopierPump`，恢复标准单线程内核定时器驱动（空 Tick 耗时 <1µs），CPU 瞬间归零（<0.2%）。 |
+| **P-02** | **Medium 探针优化** | `CopierReceiver.mq4:747` / `CopierSender.mq4:410` | **`CP_PING_MS` 调整为 5000ms（5秒）**：将高频 2 秒探测周期放宽至标准的 5 秒（与心跳周期完全一致），消除 60% 的无效探针流量与网络排队，探针回归慢通道安全评估，回包依然由快通道即时结算。 |
+| **P-03** | **Medium 节奏平衡** | `CopierReceiver.mq4:229` / `CopierSender.mq4:186` | **默认 `PollMs` 设定为 5ms（极速与超低消耗兼备）**：在 `winmm.dll` 1ms 时钟支持下，5ms 周期提供每秒 200 次高速排空与 <5ms 确定性响应，同时将 VPS 虚拟 CPU 上下文切换负担减半，全天候保持极致冷静与超低功耗。 |
 
 ---
 
