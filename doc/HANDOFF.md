@@ -379,6 +379,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十四次审计** | 2026-10-24 13:15 | 执行失败清除止损缓存、平仓豁免长阶梯退避、OPEN补MAGIC与配置防手误回退 | 交易容错与配置防御 |
 | **三十五次审计** | 2026-10-24 18:05 | Hub快照异步Worker解析脱钩、ZMQ主循环纯路由零卡顿与RwLock并发扩展 | 性能优化与并发架构 |
 | **三十六次审计** | 2026-10-24 19:15 | ZMQ高水位线收敛至64、ZMTP原生心跳15s半开连接自愈与命令下发订阅前置校验 | 管道安全与防僵死连接 |
+| **三十七次审计** | 2026-10-24 20:20 | SendUp两帧原子闭合防御、独立Context避开double指针截断、ZAP白名单O(1)与纯Hub跳编码 | 协议健壮与底层安全 |
 
 ---
 
@@ -1004,6 +1005,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **Z-01** | **High 内存安全** | `CopierTransport.mqh:96` / `main.rs:179` | **HWM（高水位线）从 1000 收敛至 64**：消灭单管道最坏 1GB 内存预算隐患（`1000 × 1MB`），两端统一收敛至 64，杜绝恶意或故障节点撑爆 MQL 终端与 Rust Hub 进程导致 OOM 崩溃。 |
 | **Z-02** | **High 链路自愈** | `CopierTransport.mqh:147` / `main.rs:904` | **启用 ZeroMQ 原生 ZMTP 心跳（5s 发送 / 15s 超时）**：调用底层 `setHeartbeatInterval(5000)` 与 `setHeartbeatTimeout(15000)`，使底层网络协议栈能自主检测网络断线与半开 TCP 连接，在 15 秒内主动切断死连接并立即回收管道发送队列，防止幽灵内存积压。 |
 | **Z-03** | **Medium 下发可靠** | `hub/src/main.rs:2490` | **命令/配置下发前检查订阅表（`st.subs`）**：在通过 `@<nid>` 发送指令前前置校验目标节点是否已建立订阅；未订阅时保持 `pending` 延后，消除 Hub 重启窗口期盲目发送被 XPUB 静默丢弃造成的首轮 2 秒无谓等待。 |
+
+---
+
+### 三十七次审计：SendUp两帧原子闭合防御、独立Context避开double指针截断、ZAP白名单O(1)与纯Hub跳编码（2026-10-24 20:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **P0-1** | **High 协议原子** | `CopierTransport.mqh:425` | **`SendUp()` 两帧原子闭合防御**：Frame 0 经 `sendMore` 挂入 pipe 后，Frame 1 发送失败时补发空帧闭合信封（`m_sub.send("", false)`），彻底消灭 Frame 1 失败导致 Socket 残留 `more_out=true` 从而使下一条消息发生连锁帧错位损坏的漏洞。 |
+| **P0-2** | **High 内存指针** | `CopierTransport.mqh:203` | **Context 独立实例化（传入 `NULL`）**：废除 MQL `GlobalVariable` 共享 Context，直接 `new Context(NULL)` 调用 `zmq_ctx_new()`，彻底消除 64 位指针转 IEEE 754 `double`（仅 53 位精度）的高位截断崩溃隐患，杜绝 `CriticalSection` 竞态。 |
+| **P1-1** | **Medium 鉴权性能** | `hub/src/curve.rs:150, 240` | **ZAP 白名单预解码为 `HashSet<[u8; 32]>`**：在解析 allow-list 时一次性预解码二进制公钥，鉴权时由遍历解码 $O(N)$ 降至直接内存查表 $O(1)$，消灭多节点重连风暴时的握手排队延迟。 |
+| **P1-2** | **Low 性能优化** | `CopierTransport.mqh:505` / `CopierSender.mq4:508` | **纯 Hub 模式跳过 Direct 通道多余序列化**：在 `CopierSender::Emit` 中增加 Direct Socket 状态判定，无直连通道需求时跳过本地 Direct 端口字符串拼接与 `StringToUtf8` 堆分配。 |
 
 ---
 

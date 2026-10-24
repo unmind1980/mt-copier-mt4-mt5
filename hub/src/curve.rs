@@ -46,6 +46,7 @@
 //! public key here, reload the hub". Reloading the allow-list without a
 //! restart is not implemented either - the file is read once at startup.
 
+use std::collections::HashSet;
 use std::path::Path;
 use crate::lockx::LockExt;
 
@@ -145,17 +146,19 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
 }
 
 /// Which client public keys this hub will accept.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AllowList {
     /// `*` was written on its own line: accept any authenticated keypair.
     any: bool,
     keys: Vec<String>,
+    raw_keys: HashSet<[u8; 32]>,
 }
 
 impl AllowList {
     pub fn parse(text: &str) -> AllowList {
         let mut any = false;
         let mut keys: Vec<String> = Vec::new();
+        let mut raw_keys: HashSet<[u8; 32]> = HashSet::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -180,6 +183,11 @@ impl AllowList {
             if shape_ok(candidate) {
                 if !keys.iter().any(|k| k == candidate) {
                     keys.push(candidate.to_string());
+                    if let Ok(raw) = zmq::z85_decode(candidate) {
+                        if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
+                            raw_keys.insert(arr);
+                        }
+                    }
                 }
             } else {
                 eprintln!(
@@ -188,7 +196,7 @@ impl AllowList {
                 );
             }
         }
-        AllowList { any, keys }
+        AllowList { any, keys, raw_keys }
     }
 
     pub fn load(path: &Path) -> Result<AllowList, String> {
@@ -223,6 +231,11 @@ impl AllowList {
     pub fn add_key(&mut self, z85: &str) {
         if !self.has_key(z85) {
             self.keys.push(z85.to_string());
+            if let Ok(raw) = zmq::z85_decode(z85) {
+                if let Ok(arr) = <[u8; 32]>::try_from(raw.as_slice()) {
+                    self.raw_keys.insert(arr);
+                }
+            }
         }
     }
 
@@ -241,11 +254,9 @@ impl AllowList {
             return true;
         }
         if cred.len() == 32 {
-            for k in &self.keys {
-                if let Ok(raw) = zmq::z85_decode(k) {
-                    if raw == cred {
-                        return true;
-                    }
+            if let Ok(arr) = <[u8; 32]>::try_from(cred) {
+                if self.raw_keys.contains(&arr) {
+                    return true;
                 }
             }
         }

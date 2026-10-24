@@ -506,14 +506,14 @@ void Emit(const string type,const string payload,const bool snapshot,
    e.payload=payload;
 
    //--- DIRECT channel: identity is the PORT, one frame.
-   e.sid=SenderId();
-   bool ok=g_tp.Send(CopierEncodeEnv(e));
-   //--- one socket for both streams, so `snapshot` no longer selects a
-   //--- transport - it only decides how much a failure matters. A dropped
-   //--- event is a divergence the next snapshot has to repair; a dropped
-   //--- snapshot is repaired by the next snapshot, two seconds later.
-   if(!ok && !snapshot)
-      g_log.Warn("send failed type="+type+" errno="+(string)g_tp.LastErrno());
+   //--- Only encode and send if direct socket is bound and ready.
+   if(g_tp.HasDirectSubscribers())
+     {
+      e.sid=SenderId();
+      bool ok=g_tp.Send(CopierEncodeEnv(e));
+      if(!ok && !snapshot)
+         g_log.Warn("send failed type="+type+" errno="+(string)g_tp.LastErrno());
+     }
 
    //--- CENTRAL channel: identity is the NID, two frames [NID, envelope].
    //---
