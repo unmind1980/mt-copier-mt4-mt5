@@ -41,6 +41,9 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierRisk.mqh>
 #include <Copier/CopierTransport.mqh>
 #include <Copier/CopierCurveKey.mqh>
+#include <Copier/CopierPump.mqh>
+
+CopierEventPump g_pump;
 
 //--- configuration --------------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -5880,6 +5883,7 @@ void RouteMessage(const CopierEnv &e,const int stream)
            {
             if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
               {
+               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
                if(g_once.ShouldEmit("rtt|"+pfrom))
                   g_log.Info("link to "+pfrom+" measured: "
                              +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -5954,6 +5958,7 @@ void RouteMessage(const CopierEnv &e,const int stream)
       if((pto==(string)CopierAccountLogin() || (g_hubOn && pto==(string)g_nid)) && StringLen(pfrom)>0
          && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
+         g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
          //--- first successful measurement: the only line that distinguishes
          //--- "the link is fine" from "both ends answer and nobody records it"
          if(g_once.ShouldEmit("rtt|"+pfrom))
@@ -6376,11 +6381,13 @@ int OnInit()
    ReportOrphanedMirrors();
 
    ClearQueue();
+   g_pump.Init();
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
+   g_pump.Disarm();
    EventKillTimer();
    timeEndPeriod(1);
    ClearQueue();
@@ -6448,6 +6455,7 @@ void CheckPeers()
          string pn=g_peers.NameAt(k);
          if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
+      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
@@ -6464,6 +6472,7 @@ void CheckPeers()
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
       g_peers.ProbeSent(g_hubPeerName,now);
+      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    for(int i=0;i<CP_MAX_PEERS;i++)
@@ -6808,6 +6817,7 @@ void OnTimer()
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
       if(hasFastAction)
         {
+         g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
          for(int i=0;i<g_nSenders;i++)
            {
             if(!g_stale[i] && g_ready[i]) ConvergeSender(i);
@@ -7263,4 +7273,17 @@ void OnTick()
      }
   }
 
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+   if(g_pump.OnEvent(id))
+     {
+      OnTimer();
+      // Bounded re-trigger: only pump if armed, within 15ms limit, and under burst cap
+      if(g_pump.IsActive())
+         g_pump.Trigger();
+     }
+  }
 //+------------------------------------------------------------------+

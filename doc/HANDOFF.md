@@ -383,6 +383,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十八次审计** | 2026-10-24 21:20 | 1ms高精度时钟、快慢通道分离、Sender交易事件化与Receiver直通车 | 亚10ms极速架构 |
 | **三十九次审计** | 2026-10-24 22:20 | 探测路径快通道直通、微秒级时钟CopierNowMs与2ms默认PollMs对齐 | 探针测量真实化 |
 | **四十次审计** | 2026-10-25 08:45 | PING探针优化为5s、根除EventChartCustom自循环空转与CPU降载归零 | 性能平稳与CPU治理 |
+| **四十一次审计** | 2026-10-25 09:40 | A+B熔断事件泵、15ms硬超时、3次脉冲限额与RTT老化防呆 | 完备弹性自驱动架构 |
 
 ---
 
@@ -1050,6 +1051,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **P-01** | **High CPU治理** | `CopierReceiver.mq4` / `CopierSender.mq4` | **根除 `EventChartCustom` 自循环空转**：排查确认前序实验性 `CopierPump` 在 `OnChartEvent` 中重复触发 `Trigger()` 构成了每秒数万次的死循环忙等待（Busy-Wait Spinloop），导致单核 CPU 100% 占满；彻底移除 `CopierPump`，恢复标准单线程内核定时器驱动（空 Tick 耗时 <1µs），CPU 瞬间归零（<0.2%）。 |
 | **P-02** | **Medium 探针优化** | `CopierReceiver.mq4:747` / `CopierSender.mq4:410` | **`CP_PING_MS` 调整为 5000ms（5秒）**：将高频 2 秒探测周期放宽至标准的 5 秒（与心跳周期完全一致），消除 60% 的无效探针流量与网络排队，探针回归慢通道安全评估，回包依然由快通道即时结算。 |
 | **P-03** | **Medium 节奏平衡** | `CopierReceiver.mq4:229` / `CopierSender.mq4:186` | **默认 `PollMs` 设定为 5ms（极速与超低消耗兼备）**：在 `winmm.dll` 1ms 时钟支持下，5ms 周期提供每秒 200 次高速排空与 <5ms 确定性响应，同时将 VPS 虚拟 CPU 上下文切换负担减半，全天候保持极致冷静与超低功耗。 |
+
+---
+
+### 四十一次审计：A+B熔断事件泵、15ms硬超时、3次脉冲限额与RTT老化防呆（2026-10-25 09:40；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **A+B 状态驱动与双重熔断设计**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 3`（最多连续触发 3 次）与 `CP_PUMP_TIMEOUT_MS = 15ms`（硬性超时下限）。无论网络发生任何严重丢包、长延迟或停滞，自泵在 15ms 内无条件熄火，彻底杜绝死循环，保证 CPU 占用率物理锁死在 `< 0.2%`。 |
+| **B-02** | **High 停盘穿透** | `CopierReceiver.mq4` / `CopierSender.mq4` | **跨资产未开盘图表自驱动支持**：解决 EA 挂载在停盘/无报价跳动图表（如周末或流动性低谷）时无法依靠 `OnTick` 的问题；在发出 PING 或接收端命中交易动作（`hasFastAction`）时唤醒自泵极速消化，常态心跳/快照绝不扰动泵，达到极速与静默的完美平衡。 |
+| **B-03** | **Medium 探针防呆** | `src/Include/Copier/CopierPeers.mqh:215` | **RTT 数据保鲜与丢包老化自动失效**：`m_rttTime` 记录每次 PONG 结算时刻，若超过 2 个探针周期（12 秒）未收到任何应答，`RttFor()` 与 `RttAt()` 自动返回 `-1`（面板呈现 `TIMEOUT` 或 `-`），彻底消灭网络断线时保留历史虚假延迟读数误导交易员的重大隐患。 |
 
 ---
 

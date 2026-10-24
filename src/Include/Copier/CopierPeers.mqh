@@ -66,6 +66,7 @@ private:
    long              m_seen[CP_MAX_PEERS];     // last message from them (ms)
    long              m_ping[CP_MAX_PEERS];     // outstanding probe (ms), 0 = none
    long              m_rtt[CP_MAX_PEERS];      // last round trip (ms), -1 unknown
+   long              m_rttTime[CP_MAX_PEERS];  // when RTT was measured (ms)
    //--- When this slot was first created, in monotonic ms. Only used to tell
    //--- "we have just met this peer and its first PONG is still in flight"
    //--- apart from "this peer has never answered at all" - which read
@@ -83,6 +84,7 @@ private:
       m_seen[i]=0;
       m_ping[i]=0;
       m_rtt[i]=-1;
+      m_rttTime[i]=0;
       m_note[i]="";
       m_first[i]=0;
      }
@@ -178,6 +180,7 @@ public:
       if(m_ping[i]==0 || m_ping[i]!=ms) return false;
       m_rtt[i]=CopierNowMs()-ms;
       if(m_rtt[i]<0) m_rtt[i]=0;
+      m_rttTime[i]=m_seen[i];
       m_ping[i]=0;
       return true;
      }
@@ -211,17 +214,22 @@ public:
       return m_name[i];
      }
 
-   //--- Last round trip in ms, or -1 if no echo has come back yet.
+   //--- Last round trip in ms, or -1 if no echo has come back yet or if stale (>12s).
    long              RttAt(const int i) const
      {
       if(i<0 || i>=CP_MAX_PEERS) return -1;
+      if(m_rtt[i]>=0 && m_rttTime[i]>0 && (CopierNowMs()-m_rttTime[i]>12000))
+         return -1; // Invalidate stale RTT if no PONG received for > 2 probe cycles
       return m_rtt[i];
      }
 
    long              RttFor(const string name) const
      {
       int i=Find(name);
-      return (i<0)?-1:m_rtt[i];
+      if(i<0) return -1;
+      if(m_rtt[i]>=0 && m_rttTime[i]>0 && (CopierNowMs()-m_rttTime[i]>12000))
+         return -1; // Invalidate stale RTT
+      return m_rtt[i];
      }
 
    //--- How long since this peer was last heard from, in ms. A peer never

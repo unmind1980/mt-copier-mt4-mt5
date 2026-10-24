@@ -34,6 +34,9 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierPeers.mqh>
 #include <Copier/CopierPanel.mqh>
 #include <Copier/CopierCurveKey.mqh>
+#include <Copier/CopierPump.mqh>
+
+CopierEventPump g_pump;
 
 //--- identity / transport -------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -909,6 +912,7 @@ int OnInit()
      }
    g_panel.Init("cpsnd",10,20,430);
    RebuildSnapshotPayload();
+   g_pump.Init();
    g_log.Info("sender "+SenderId()+" listening on port "+(string)g_effectivePort
               +(g_isAutoPort ? " (AutoPort active)" : " (manual port)")
               +" (one socket, both streams) ssid="+g_ssid
@@ -919,6 +923,7 @@ int OnInit()
 
 void OnDeinit(const int reason)
   {
+   g_pump.Disarm();
    EventKillTimer();
    timeEndPeriod(1);
 
@@ -988,6 +993,7 @@ void CheckPeers()
          string pn=g_peers.NameAt(k);
          if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
+      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    //--- The HUB is probed on its own channel.
@@ -1015,6 +1021,7 @@ void CheckPeers()
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
       g_peers.ProbeSent(g_hubPeerName,now);
+      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    //--- REG/HBT2. The hub's node table is built from these and NOTHING else -
@@ -1480,6 +1487,7 @@ void OnTimer()
          CopierKvGet(se.payload,"FROM",pfrom);
          if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
            {
+            g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
             if(g_once.ShouldEmit("rtt|"+pfrom))
                g_log.Info("link to "+pfrom+" measured: "
                           +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -1527,8 +1535,10 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0)
-               g_peers.PongBack(hfrom,CopierParseLong(hms));
+            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
+              {
+               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+              }
             continue;
            }
          if(he.type==CP_T_WHO)
@@ -1912,8 +1922,10 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0)
-               g_peers.PongBack(hfrom,CopierParseLong(hms));
+            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
+              {
+               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+              }
             continue;
            }
          //--- WHO: the hub has lost its node table - it restarted, and the
@@ -2007,6 +2019,20 @@ void OnTick()
      {
       s_lastFastScanMs=now;
       OnTimer();
+     }
+  }
+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+   if(g_pump.OnEvent(id))
+     {
+      OnTimer();
+      // Bounded re-trigger: only pump if armed, within 15ms limit, and under burst cap
+      if(g_pump.IsActive())
+         g_pump.Trigger();
      }
   }
 //+------------------------------------------------------------------+
