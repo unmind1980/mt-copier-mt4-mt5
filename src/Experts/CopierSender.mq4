@@ -1987,10 +1987,9 @@ void OnTimer()
         }
      }
 
-   //--- 9) peers and the panel. Last, so the numbers shown are the ones this
-   //--- pass just settled on rather than the previous tick's.
-   CheckPeers();
+   //--- 9) peers and the panel. Panel update BEFORE CheckPeers so GDI rendering never blocks/delays PING round-trip
    UpdatePanel();
+   CheckPeers();
 
    g_log.Tick();
   }

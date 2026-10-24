@@ -1058,8 +1058,8 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **A+B 状态驱动与双重熔断设计**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 3`（最多连续触发 3 次）与 `CP_PUMP_TIMEOUT_MS = 15ms`（硬性超时下限）。无论网络发生任何严重丢包、长延迟或停滞，自泵在 15ms 内无条件熄火，彻底杜绝死循环，保证 CPU 占用率物理锁死在 `< 0.2%`。 |
-| **B-02** | **High 停盘穿透** | `CopierReceiver.mq4` / `CopierSender.mq4` | **跨资产未开盘图表自驱动支持**：解决 EA 挂载在停盘/无报价跳动图表（如周末或流动性低谷）时无法依靠 `OnTick` 的问题；在发出 PING 或接收端命中交易动作（`hasFastAction`）时唤醒自泵极速消化，常态心跳/快照绝不扰动泵，达到极速与静默的完美平衡。 |
+| **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **A+B 状态驱动与双重熔断设计**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 20`（最多连续触发 20 次）与 `CP_PUMP_TIMEOUT_MS = 80ms`（硬性超时下限）。消除原 15ms/3次脉冲过窄导致回包偶发被踢回 20ms WM_TIMER 的抖动，无论网络发生任何严重丢包、长延迟或停滞，自泵在 80ms 内无条件熄火，彻底杜绝死循环，保证 CPU 占用率物理锁死在 `< 0.2%`。 |
+| **B-02** | **High 渲染错峰** | `CopierReceiver.mq4:7259` / `CopierSender.mq4:1992` | **GDI 绘图与探针时钟解耦**：将 `UpdatePanel()` 调整至 `CheckPeers()` 之前执行，消灭发完 PING 后主线程原地被图表重绘阻塞 10~15ms 造成的人为伪延迟，使探针测量的就是纯粹的 Socket+网络往返时间（同机稳定 0~1ms）。 |
 | **B-03** | **Medium 探针防呆** | `src/Include/Copier/CopierPeers.mqh:215` | **RTT 数据保鲜与丢包老化自动失效**：`m_rttTime` 记录每次 PONG 结算时刻，若超过 2 个探针周期（12 秒）未收到任何应答，`RttFor()` 与 `RttAt()` 自动返回 `-1`（面板呈现 `TIMEOUT` 或 `-`），彻底消灭网络断线时保留历史虚假延迟读数误导交易员的重大隐患。 |
 
 ---

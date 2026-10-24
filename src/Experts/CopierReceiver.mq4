@@ -7255,9 +7255,9 @@ void OnTimer()
       if(dueDetail) g_forcePosReport=false;
      }
 
-   //--- peers and the panel, last so the figures shown are this pass's
-   CheckPeers();
+   //--- Panel update BEFORE CheckPeers so GDI rendering never blocks/delays PING round-trip
    UpdatePanel();
+   CheckPeers();
 
    g_log.Tick();
   }
