@@ -157,7 +157,7 @@ Socket::isReceiveMore(bool&)   // == ZMQ_RCVMORE
 - 信封：`V=1|SID=<id>|SSID=<session>|SEQ=<n>|TS=<server s>|MS=<monotonic ms>|T=<TYPE>|P=<payload>`
 - `SID` 是路由键；receiver 对不认识的 SID **静默丢弃**。
 - `SSID` 每次 `OnInit` 重生成 → **中枢必须原样透传**，否则每次中枢重启都会让所有 receiver 重新同步。
-- 频率：`SNAP` 全量推送最短间隔 15s（`SnapshotSeconds`，按需补发另计）/ `HBT` 5s（`HeartbeatSeconds`）/ `STAT` 收据 1s（`SyncHeartbeatSeconds`）+ 摘要 5s + 详细列表与监控报告 60s；`PING` 每 10s（`CP_PING_MS`）/`PONG` 应答。
+- 频率：`SNAP` 全量推送最短间隔 15s（`SnapshotSeconds`，按需补发另计）/ `HBT` 5s（`HeartbeatSeconds`）/ `STAT` 收据 1s（`SyncHeartbeatSeconds`）+ 摘要 5s + 详细列表与监控报告 60s；`PING` 每 5s（`CP_PING_MS`）/`PONG` 应答。
 - 容量：`CP_MAX_SENDERS 100`、`CP_MAX_PEERS 100`、`CP_MAX_POSITIONS 2048`。三者不是同一回事：发送/接收上限对齐终端图表上限（MT5 `maxcharts`，默认约 100），持仓表独立。超过上限不再静默截断——`copier.ini` 声明数超过 `CP_MAX_SENDERS` 或编号跳号都会打 ERROR 指名。资源成本与推导见 `README.md` 的「Capacity」章节。
 - 对端表以**账户号**为键（两端共用）。
 

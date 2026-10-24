@@ -194,7 +194,7 @@ look maintained when it is not.
 
 ### Logging: only the unusual
 
-Routine traffic is **counted, not printed**. `PING` fires every 10 s per peer
+Routine traffic is **counted, not printed**. `PING` fires every 5 s per peer
 (the EAs' `CP_PING_MS`) and `HBT2` every 5 s per node; printing them buries
 everything that is *not*
 routine, and an operator who cannot see the signal stops reading the log
