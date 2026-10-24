@@ -41,6 +41,9 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierRisk.mqh>
 #include <Copier/CopierTransport.mqh>
 #include <Copier/CopierCurveKey.mqh>
+#include <Copier/CopierPump.mqh>
+
+CopierEventPump g_pump;
 
 //--- configuration --------------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -5880,6 +5883,7 @@ void RouteMessage(const CopierEnv &e,const int stream)
            {
             if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
               {
+               g_pump.Disarm();
                if(g_once.ShouldEmit("rtt|"+pfrom))
                   g_log.Info("link to "+pfrom+" measured: "
                              +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -5954,6 +5958,7 @@ void RouteMessage(const CopierEnv &e,const int stream)
       if((pto==(string)CopierAccountLogin() || (g_hubOn && pto==(string)g_nid)) && StringLen(pfrom)>0
          && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
+         g_pump.Disarm();
          //--- first successful measurement: the only line that distinguishes
          //--- "the link is fine" from "both ends answer and nobody records it"
          if(g_once.ShouldEmit("rtt|"+pfrom))
@@ -6376,11 +6381,13 @@ int OnInit()
    ReportOrphanedMirrors();
 
    ClearQueue();
+   g_pump.Init();
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
+   g_pump.Disarm();
    EventKillTimer();
    timeEndPeriod(1);
    ClearQueue();
@@ -6435,48 +6442,21 @@ void OnDeinit(const int reason)
 //--- on THIS side - but it is what makes the round-trip number exist at all,
 //--- and the sender needs our echo for its own panel. One mechanism, both
 //--- directions, rather than each side guessing differently.
-void CheckPeers()
+void CheckPeersPing(const long now)
   {
-   long now=CopierNowMs();
-   //--- IN CENTRAL MODE, DO NOT PROBE.
-   //---
-   //--- The probe exists to measure the round trip to a sender. Through the hub
-   //--- that is impossible: the reply would have to travel back UP the central
-   //--- channel, and the hub CONSUMES every '@' topic rather than routing it.
-   //--- So the answer can never arrive.
-   //---
-   //--- This used to be merely useless - the probe went out as a single frame
-   //--- and the hub discarded it without a trace. Once the uplink was fixed to
-   //--- two frames it became ACTIVELY BAD: the probe now arrives, is counted as
-   //--- control, and earns a PONG from the hub addressed to nobody useful.
-   //--- Measured on a four-node hub: 2 PINGs a second of pure noise, half the
-   //--- entire control rate.
-   //---
-   //--- The silence detection below still runs, and that is the part that
-   //--- matters here - noticing a sender that has gone quiet is exactly what
-   //--- the central channel is for.
    if(!g_hubOn && now-g_lastPingMs>=CP_PING_MS)
      {
       g_lastPingMs=now;
       CopierSendStatus(CP_T_PING,
                        CopierPayloadPing(now,(string)CopierAccountLogin()));
-      //--- FROM names us so the sender can attribute the reply, and the
-      //--- sender's own PING carries ITS account, which the Seen() at the top
-      //--- of HandleMessage already records.
-      //---
-      //--- RECORD the probe against every peer: PongBack() only accepts an
-      //--- echo matching a probe still outstanding, so without this the round
-      //--- trip is never measured and the panel sits on "connected" forever
-      //--- while both ends answer each other correctly.
       for(int k=0;k<CP_MAX_PEERS;k++)
         {
          string pn=g_peers.NameAt(k);
          if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
         }
+      g_pump.ArmFast(500);
      }
 
-   //--- In Central mode, probe the Hub link directly on its own channel.
-   //--- The Hub replies with PONG to @<nid>, measuring the round-trip latency.
    if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
      {
       g_lastHubPingMs=now;
@@ -6491,7 +6471,14 @@ void CheckPeers()
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
       g_peers.ProbeSent(g_hubPeerName,now);
+      g_pump.ArmFast(500);
      }
+  }
+
+void CheckPeers()
+  {
+   long now=CopierNowMs();
+   CheckPeersPing(now);
 
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
@@ -6762,6 +6749,7 @@ void OnTimer()
    //--- from previous ticks.
    int n=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
    long now=CopierNowMs();
+   CheckPeersPing(now);
    if(n>=CP_DRAIN_MAX && g_once.ShouldEmit("drainfull"))
       g_log.Warn("drain hit the per-tick bound of "+(string)CP_DRAIN_MAX
                  +" message(s) - there is more waiting, so the EA is falling"
@@ -6832,32 +6820,19 @@ void OnTimer()
          RouteMessage(s_envs[i],CP_STREAM_EVENTS);
         }
 
-      //--- In Central mode, probe the Hub link directly on its own channel.
-      //--- PING probe is sent from fast-path to maintain up-to-date RTT without 100ms slow-lane delay.
-      if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
-        {
-         g_lastHubPingMs=now;
-         CopierEnv he;
-         he.v=CP_PROTO_V;
-         he.sid=(string)g_nid;
-         he.ssid=(string)CopierAccountLogin();
-         he.seq=++g_statusSeq;
-         he.ts=CopierServerTime();
-         he.ms=now;
-         he.type=CP_T_PING;
-         he.payload=CopierPayloadPing(now,(string)g_nid);
-         g_tp.SendUp("@hub",CopierEncodeEnv(he));
-         g_peers.ProbeSent(g_hubPeerName,now);
-        }
-
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
       if(hasFastAction)
         {
+         g_pump.ArmFast(1000);
          for(int i=0;i<g_nSenders;i++)
            {
             if(!g_stale[i] && g_ready[i]) ConvergeSender(i);
            }
          ExecuteQueue();
+        }
+      else
+        {
+         g_pump.ArmFast(50);
         }
      }
 
@@ -7305,6 +7280,19 @@ void OnTick()
      {
       s_lastFastTickMs=now;
       OnTimer();
+     }
+  }
+
+void OnChartEvent(const int id,
+                  const long &lparam,
+                  const double &dparam,
+                  const string &sparam)
+  {
+   if(g_pump.OnEvent(id))
+     {
+      OnTimer();
+      if(g_pump.IsActive())
+         g_pump.Trigger();
      }
   }
 //+------------------------------------------------------------------+
