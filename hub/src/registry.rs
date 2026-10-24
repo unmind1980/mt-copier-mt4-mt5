@@ -472,9 +472,25 @@ impl Registry {
         if self.nodes.len() >= MAX_NODES {
             self.evict(now);
             if self.nodes.len() >= MAX_NODES {
-                if let Some(oldest_key) = self.nodes.iter().min_by_key(|(_, n)| n.last_seen).map(|(k, _)| k.clone()) {
+                // Priority 1: Evict oldest Offline node first
+                // Priority 2: Evict oldest Stale node
+                // Priority 3: Fall back to oldest Online node
+                let cand_key = self
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| n.liveness(now) == Liveness::Offline)
+                    .min_by_key(|(_, n)| n.last_seen)
+                    .or_else(|| {
+                        self.nodes
+                            .iter()
+                            .filter(|(_, n)| n.liveness(now) == Liveness::Stale)
+                            .min_by_key(|(_, n)| n.last_seen)
+                    })
+                    .or_else(|| self.nodes.iter().min_by_key(|(_, n)| n.last_seen))
+                    .map(|(k, _)| k.clone());
+
+                if let Some(oldest_key) = cand_key {
                     self.nodes.remove(&oldest_key);
-                    self.evicted += 1;
                     self.capacity_evicted.push(oldest_key);
                 }
             }

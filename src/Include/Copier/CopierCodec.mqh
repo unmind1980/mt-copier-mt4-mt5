@@ -554,6 +554,7 @@ string CopierPayloadOpen(const CopierPos &p)
             +CP_SEP_KV+"OPN="+CopierFmtDouble(p.openPx,CP_DIGITS_PX)
             +CP_SEP_KV+"SL="+CopierFmtDouble(p.sl,CP_DIGITS_PX)
             +CP_SEP_KV+"TP="+CopierFmtDouble(p.tp,CP_DIGITS_PX)
+            +CP_SEP_KV+"MAGIC="+(string)p.magic
             +CP_SEP_KV+"OTS="+(string)p.openTime;
    //--- appended only for a pending entry, for the same reason the record
    //--- does it: a market event stays byte-identical, and k=v parsers ignore
@@ -582,6 +583,7 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.sl      =CopierKvGetDouble(payload,"SL",0.0);
    p.tp      =CopierKvGetDouble(payload,"TP",0.0);
    p.openTime=CopierKvGetLong(payload,"OTS",0);
+   p.magic   =CopierKvGetLong(payload,"MAGIC",0);
    if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
    //--- EVERY field is written, including the ones a market event does not
    //--- carry. A struct field left unset would inherit whatever was in that
@@ -641,9 +643,11 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    p.uid="";
    if(!CopierKvGet(payload,"UID",p.uid)) return false;
    if(StringLen(p.uid)!=CP_UID_LEN || !CopierUidValid(p.uid)) return false;
-   p.openPx=CopierKvGetDouble(payload,"OPN",0.0);
-   p.sl    =CopierKvGetDouble(payload,"SL",0.0);
-   p.tp    =CopierKvGetDouble(payload,"TP",0.0);
+   string opnStr="", slStr="", tpStr="";
+   if(!CopierKvGet(payload,"OPN",opnStr) || !CopierKvGet(payload,"SL",slStr) || !CopierKvGet(payload,"TP",tpStr)) return false;
+   p.openPx=StringToDouble(opnStr);
+   p.sl    =StringToDouble(slStr);
+   p.tp    =StringToDouble(tpStr);
    if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
    return true;
   }

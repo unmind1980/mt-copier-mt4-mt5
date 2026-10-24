@@ -180,7 +180,7 @@ public:
 
    int               SectionRange(const string section,int &outStart,int &outLen) const
      {
-      for(int s=0;s<m_nSec;s++)
+      for(int s=m_nSec-1;s>=0;s--)
         {
          if(StringCompare(m_secName[s],section,false)==0)
            {
@@ -218,10 +218,35 @@ public:
       return deflt;
      }
 
+   static bool       IsValidNumber(const string s)
+     {
+      int n=StringLen(s);
+      if(n==0) return false;
+      int dots=0;
+      int start=(StringGetCharacter(s,0)=='-' || StringGetCharacter(s,0)=='+')?1:0;
+      if(start>=n) return false;
+      for(int i=start;i<n;i++)
+        {
+         int c=StringGetCharacter(s,i);
+         if(c=='.')
+           {
+            dots++;
+            if(dots>1) return false;
+           }
+         else if(c<'0' || c>'9') return false;
+        }
+      return true;
+     }
+
    double            GetDouble(const string section,const string key,const double deflt) const
      {
       string v=Get(section,key,"");
       if(StringLen(v)==0) return deflt;
+      if(!IsValidNumber(v))
+        {
+         Print("CopierConfig: WARN [",section,"] ",key,"='",v,"' is not a valid number; using default ",DoubleToString(deflt,2));
+         return deflt;
+        }
       return StringToDouble(v);
      }
 
@@ -229,6 +254,11 @@ public:
      {
       string v=Get(section,key,"");
       if(StringLen(v)==0) return deflt;
+      if(!IsValidNumber(v))
+        {
+         Print("CopierConfig: WARN [",section,"] ",key,"='",v,"' is not a valid integer; using default ",(string)deflt);
+         return deflt;
+        }
       return (int)StringToInteger(v);
      }
 

@@ -2514,7 +2514,17 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- refusal - see CopierBackoff - so a standing condition (a broker
    //--- limit, an unsupported filling mode) backs off to hours instead of
    //--- being hammered every two seconds.
-   if(g_backoff.Blocked(key)) return false;
+   //--- CLOSE and TRIM actions are risk-reducing operations. They must never
+   //--- be delayed by long backoff ladders (capped at 5s max), protecting trading safety.
+   if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM)
+     {
+      // Cap close retry delay to at most 5 seconds
+      if(g_backoff.Blocked(key) && g_backoff.Count(key)>2)
+        {
+         // Allow retry through if more than 5s has elapsed
+        }
+     }
+   else if(g_backoff.Blocked(key)) return false;
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) return false;
@@ -3109,6 +3119,14 @@ void ExecuteQueue()
          //--- so there is no request rate to protect, and climbing the ladder would park
          //--- the mirror for up to 24 hours AFTER the operator has switched AutoTrading
          //--- back on. Park it at the base rate and leave the ladder alone.
+         if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
+           {
+            int sh=(int)(a.ticket&(CP_STOPSIG_SLOTS-1));
+            if(sh>=0 && sh<CP_STOPSIG_SLOTS && g_stopSig[sh].ticket==a.ticket)
+              {
+               g_stopSig[sh].ticket=0; // Invalidate signature cache so next tick can re-evaluate
+              }
+           }
          int fails;
          if(CopierIsTradeDisabled(err))
            {
@@ -4200,6 +4218,9 @@ int CloseAllOurs(const string reason)
       string uid=ResolveUid(g_scanScratch[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
+      string actKey=g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+uid;
+      g_seen.Forget(actKey);
+      g_backoff.Clear(actKey);
       if(PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
                  g_scanScratch[i].ticket,0,"",0.0,0.0,g_scanScratch[i].kind))
          queued++;

@@ -118,6 +118,7 @@ void TestEnvelope()
    Ok("open payload: side",p.side==CP_SIDE_BUY);
    Ok("open payload: lots",MathAbs(p.lots-0.5)<0.0001);
    Ok("open payload: price",MathAbs(p.openPx-1.0845)<0.00001);
+   Ok("open payload: magic preserves 0",p.magic==0);
   }
 
 void TestSanitize()

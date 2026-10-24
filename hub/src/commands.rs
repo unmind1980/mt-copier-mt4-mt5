@@ -628,9 +628,9 @@ impl Inner {
             now_secs.saturating_sub(c.ts) <= max_age_secs
         });
         self.in_flight.retain(|id| self.commands.contains_key(id));
-        let active_nodes: std::collections::HashSet<&str> =
-            self.commands.values().map(|c| c.node.as_str()).collect();
-        self.seq.retain(|node, _| active_nodes.contains(node.as_str()));
+        // Note: Do NOT prune self.seq - the per-node sequence counter must remain monotonic
+        // across terminal command aging so newly minted command IDs never collide with
+        // an ID the node still remembers, preventing false deduplication idempotency drops.
         before - self.commands.len()
     }
 }
@@ -690,10 +690,11 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64) {
     let mut commands: HashMap<String, Command> = HashMap::new();
     let mut seq: HashMap<String, u64> = HashMap::new();
     let mut torn = 0u64;
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
         Err(_) => return (commands, seq, torn),
     };
+    let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
