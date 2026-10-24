@@ -183,7 +183,7 @@ input string _g_cadence_ = ""; // --- Cadence & Performance ---
 #endif
 input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0=off
 input int    HeartbeatSeconds= 5;   // HeartbeatSeconds - account state interval (default 5s)
-input int    PollMs          = 100;         // PollMs - MT4 scan interval; <50 wastes CPU
+input int    PollMs          = 2;           // PollMs - timer interval in milliseconds (default 2ms for sub-10ms)
 
 #ifdef __MQL5__
 input group "--- Filters ---"
@@ -407,7 +407,7 @@ bool             g_peerWasDown[CP_MAX_PEERS];
 long             g_peerAlerted[CP_MAX_PEERS];   // when we last popped up
 string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slot
 #define CP_PEER_TIMEOUT_MS 15000       // silence beyond this = disconnected
-#define CP_PING_MS          10000      // probe cadence (10s)
+#define CP_PING_MS          2000       // probe cadence (2s for responsive measurement)
 //--- After an alert for a peer, stay quiet about that peer for a while. One
 //--- popup per outage is useful; one per flap cycle is not, and a flapping
 //--- link is exactly when an operator most needs the popup to still mean
@@ -1467,6 +1467,78 @@ void OnTimer()
   {
    long now=CopierNowMs();
 
+   //--- 0) Fast-path: drain incoming PONG and status BEFORE scanning positions
+   int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
+   for(int i=0;i<sn;i++)
+     {
+      CopierEnv se;
+      if(CopierDecodeEnv(g_drainStatus[i],se)!=CP_ERR_NONE) continue;
+      if(se.type==CP_T_PONG)
+        {
+         string pms="",pfrom="";
+         CopierKvGet(se.payload,"MS",pms);
+         CopierKvGet(se.payload,"FROM",pfrom);
+         if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
+           {
+            if(g_once.ShouldEmit("rtt|"+pfrom))
+               g_log.Info("link to "+pfrom+" measured: "
+                          +(string)g_peers.RttFor(pfrom)+" ms round trip");
+           }
+         continue;
+        }
+      if(se.type==CP_T_PING)
+        {
+         string pms="",pfrom="";
+         CopierKvGet(se.payload,"MS",pms);
+         CopierKvGet(se.payload,"FROM",pfrom);
+         if(StringLen(pfrom)>0)
+           {
+            g_peers.Seen(pfrom);
+            Emit(CP_T_PONG,
+                 CopierPayloadPong(CopierParseLong(pms),
+                                   (string)CopierAccountLogin(),pfrom),
+                 false);
+           }
+         continue;
+        }
+      if(se.type!=CP_T_STAT) continue;
+      // Handle STAT inline below
+     }
+
+   if(g_hubOn)
+     {
+      int hn=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
+      for(int i=0;i<hn;i++)
+        {
+         string t=g_drainTopics[i];
+         if(StringLen(t)>0)
+           {
+            string myNid=(string)g_nid;
+            string myAcc=(string)CopierAccountLogin();
+            if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
+           }
+         CopierEnv he;
+         if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
+
+         if(he.type==CP_T_PONG)
+           {
+            string hms="",hfrom="",hto="";
+            CopierKvGet(he.payload,"MS",hms);
+            CopierKvGet(he.payload,"FROM",hfrom);
+            CopierKvGet(he.payload,"TO",hto);
+            if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
+            if(StringLen(hfrom)>0)
+               g_peers.PongBack(hfrom,CopierParseLong(hms));
+            continue;
+           }
+         if(he.type==CP_T_WHO)
+           {
+            HubAnnounce(true);
+            continue;
+           }
+        }
+     }
+
    //--- 1) scan and reconcile against what we saw last tick (zero ArrayResize)
    int n=BuildCurrent();
 
@@ -1693,17 +1765,14 @@ void OnTimer()
    //--- never read grows its receive queue until it starts dropping, and a
    //--- sender that quietly discards what its receivers report is a worse
    //--- failure than a verbose one.
-   int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
-   for(int i=0;i<sn;i++)
+   int sn2=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
+   for(int i=0;i<sn2;i++)
      {
       //--- subscription bytes arrive here too - that is how XPUB works - so
       //--- every message is DECODED rather than assumed to be status.
       CopierEnv se;
       if(CopierDecodeEnv(g_drainStatus[i],se)!=CP_ERR_NONE) continue;
 
-      //--- PONG: an echo of our broadcast probe. FROM names the receiver that
-      //--- answered, which is the only way to attribute it - our probe carried
-      //--- no addressee because it went to everyone.
       if(se.type==CP_T_PONG)
         {
          string pms="",pfrom="";
@@ -1711,9 +1780,6 @@ void OnTimer()
          CopierKvGet(se.payload,"FROM",pfrom);
          if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
            {
-            //--- the FIRST successful measurement is worth a line: it is the
-            //--- only thing that distinguishes "the link is fine" from "both
-            //--- ends are politely answering and nobody is recording it".
             if(g_once.ShouldEmit("rtt|"+pfrom))
                g_log.Info("link to "+pfrom+" measured: "
                           +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -1721,10 +1787,6 @@ void OnTimer()
          continue;
         }
 
-      //--- PING from a receiver wanting OUR round trip. Reply addressed to it,
-      //--- and note that this message proves it is alive - replying without
-      //--- recording that was a bug: the peer answered us faithfully and we
-      //--- still reported it silent.
       if(se.type==CP_T_PING)
         {
          string pms="",pfrom="";

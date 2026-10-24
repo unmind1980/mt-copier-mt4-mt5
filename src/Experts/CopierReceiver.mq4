@@ -226,8 +226,8 @@ input group "--- System & Display ---"
 #else
 input string _g_sys_ = ""; // --- System & Display ---
 #endif
-input int    InpPollMs               = 100;   // PollMs - timer interval in milliseconds
-int          PollMs                  = 100;
+input int    InpPollMs               = 2;     // PollMs - timer interval in milliseconds
+int          PollMs                  = 2;
 input int    InpMaxActionsPerTick    = 5;     // MaxActionsPerTick - trades executed per timer tick
 int          MaxActionsPerTick       = 5;
 input int    InpLogLevel             = 2;     // LogLevel - 0=errors 1=warnings 2=info 3=debug
@@ -744,7 +744,7 @@ string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slo
 //--- before the first heartbeat arrives.
 string           g_senderAcc[CP_MAX_SENDERS];
 #define CP_PEER_TIMEOUT_MS 15000
-#define CP_PING_MS          10000
+#define CP_PING_MS          2000
 //--- One popup per outage: see the note on the sender's copy.
 #define CP_ALERT_QUIET_MS  (5*60*1000)
 CopierTradingTimes g_hours;  // IncludeTradingTimes / DayTradingTimes, server time
@@ -1320,7 +1320,7 @@ void ApplyCommonConfig(const CopierIni &ini)
      {
       EventKillTimer();
       int p=PollMs;
-      if(p<10) p=10;
+      if(p<1) p=1;
       if(p>5000) p=5000;
       if(!EventSetMillisecondTimer(p))
         {
@@ -6761,6 +6761,7 @@ void OnTimer()
    //--- the arrays are CP_DRAIN_MAX long forever, and their tails hold frames
    //--- from previous ticks.
    int n=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
+   long now=CopierNowMs();
    if(n>=CP_DRAIN_MAX && g_once.ShouldEmit("drainfull"))
       g_log.Warn("drain hit the per-tick bound of "+(string)CP_DRAIN_MAX
                  +" message(s) - there is more waiting, so the EA is falling"
@@ -6831,6 +6832,24 @@ void OnTimer()
          RouteMessage(s_envs[i],CP_STREAM_EVENTS);
         }
 
+      //--- In Central mode, probe the Hub link directly on its own channel.
+      //--- PING probe is sent from fast-path to maintain up-to-date RTT without 100ms slow-lane delay.
+      if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
+        {
+         g_lastHubPingMs=now;
+         CopierEnv he;
+         he.v=CP_PROTO_V;
+         he.sid=(string)g_nid;
+         he.ssid=(string)CopierAccountLogin();
+         he.seq=++g_statusSeq;
+         he.ts=CopierServerTime();
+         he.ms=now;
+         he.type=CP_T_PING;
+         he.payload=CopierPayloadPing(now,(string)g_nid);
+         g_tp.SendUp("@hub",CopierEncodeEnv(he));
+         g_peers.ProbeSent(g_hubPeerName,now);
+        }
+
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
       if(hasFastAction)
         {
@@ -6847,7 +6866,6 @@ void OnTimer()
    //    Periodic maintenance, full account reconciliation, and UI.
    //=================================================================
    static long s_lastSlowMs=0;
-   long now=CopierNowMs();
    if(now-s_lastSlowMs<100) return;
    s_lastSlowMs=now;
 

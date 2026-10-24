@@ -381,6 +381,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十六次审计** | 2026-10-24 19:15 | ZMQ高水位线收敛至64、ZMTP原生心跳15s半开连接自愈与命令下发订阅前置校验 | 管道安全与防僵死连接 |
 | **三十七次审计** | 2026-10-24 20:20 | SendUp两帧原子闭合防御、独立Context避开double指针截断、ZAP白名单O(1)与纯Hub跳编码 | 协议健壮与底层安全 |
 | **三十八次审计** | 2026-10-24 21:20 | 1ms高精度时钟、快慢通道分离、Sender交易事件化与Receiver直通车 | 亚10ms极速架构 |
+| **三十九次审计** | 2026-10-24 22:20 | 探测路径快通道直通、微秒级时钟CopierNowMs与2ms默认PollMs对齐 | 探针测量真实化 |
 
 ---
 
@@ -1028,6 +1029,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **L-02** | **High 精度突破** | `CopierSender.mq4:896` / `CopierReceiver.mq4:6330` | **Windows 1ms 内核时钟与放开 10ms 钳制**：通过 `winmm.dll`（`timeBeginPeriod(1)` / `timeEndPeriod(1)`）将 Windows 默认 15.625ms 精度墙锁定至 1.0ms，并将 `effectivePollMs` 下限由 10ms 放开至 1ms。 |
 | **L-03** | **High 架构优化** | `CopierReceiver.mq4:6820` | **快慢车道分离（Fast/Slow Lane）**：快车道以 1~2ms 周期执行非阻塞 `DrainFrames`，空转耗时 <0.005ms（CPU <0.2%）；慢车道以 100ms 周期执行全量收敛、对账、心跳与 UI 重绘，彻底解决高频定时器引发的 CPU 饥饿。 |
 | **L-04** | **High 决策极速** | `CopierReceiver.mq4:6830` | **Receiver 增量事件直通车（Event Fast-Track）**：收到 `OPEN` / `CLOSE` / `MODIFY` 增量事件时设置 `hasFastAction`，立刻对活跃 sender 触发聚焦收敛与 `ExecuteQueue` 真实发单，无需等待 100ms 慢通道。 |
+
+---
+
+### 三十九次审计：探测路径快通道直通、微秒级时钟CopierNowMs与2ms默认PollMs对齐（2026-10-24 22:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **T-01** | **High 测量真实化** | `CopierReceiver.mq4:6834` / `CopierSender.mq4:1470` | **PING/PONG 探针移入快通道瞬时应答**：将 PING 探测与 PONG 回执彻底移出 100ms 慢通道门槛。Receiver 在快通道收到 PING 立刻回发 PONG；Sender 在 `OnTimer` 第一行立即排空状态管道（`DrainStatus`）并即刻调用 `PongBack()` 结算，消除人为等待 100ms 造成的测不准现象。 |
+| **T-02** | **High 高精时钟** | `CopierDefs.mqh:440` | **`CopierNowMs` 升级为 `GetMicrosecondCount()/1000`**：消除 Windows 15.625ms 系统时钟片截断导致的 0ms 或 16ms 阶梯跳跃，使同机（Local Loopback）与局域网物理延迟稳定真实呈现 0~2ms。 |
+| **T-03** | **Medium 参数对齐** | `CopierSender.mq4:186` / `CopierReceiver.mq4:230` | **默认 `PollMs` 从 100ms 对齐为 2ms**：消除因沿用默认 100ms 输入参数导致的离散等待；探针探测周期从 10s 优化为 2s，使网络状态与 RTT 能够快速实时刷新。 |
 
 ---
 

@@ -436,19 +436,13 @@ struct CopierPos
 // Platform-neutral helpers
 //=====================================================================
 // Monotonic-ish clock in milliseconds, used only for intervals inside
-// one process. NEVER used to order events across machines.
+// one process. Uses high-resolution microsecond timer where available for sub-1ms accuracy.
 long CopierNowMs()
   {
 #ifdef __MQL5__
-   return (long)GetTickCount64();
+   return (long)(GetMicrosecondCount()/1000);
 #else
-   static uint s_last=0;
-   static long s_epoch=0;
-   uint cur=GetTickCount();
-   if(cur<s_last)
-      s_epoch+=((long)1<<32);
-   s_last=cur;
-   return s_epoch+(long)cur;
+   return (long)(GetMicrosecondCount()/1000);
 #endif
   }
 
