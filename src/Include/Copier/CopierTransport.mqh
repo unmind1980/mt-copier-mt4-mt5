@@ -93,7 +93,7 @@
 //--- queue. The receiver drains at PollMs, so in practice this never fills;
 //--- it exists so a peer that goes away cannot grow the queue without bound.
 #define CP_SNDHWM 64
-#define CP_RCVHWM 1000
+#define CP_RCVHWM 64
 
 #import "libzmq.dll"
 int zmq_errno(void);
@@ -144,6 +144,10 @@ private:
       s.setReconnectInterval(100);
       s.setReconnectIntervalMax(5000);
       s.setImmediate(true);
+      //--- Native ZMTP heartbeats to promptly detect half-open TCP connections
+      //--- and reclaim dead peer send pipes within 15 seconds.
+      s.setHeartbeatInterval(5000);
+      s.setHeartbeatTimeout(15000);
       //--- The ONLY inbound-size guard libzmq enforces, and the only one that
       //--- can act before the memory is committed. CP_MAX_MSG_LEN checks the
       //--- same bound, but in the parser - by which point the frame has

@@ -176,7 +176,7 @@ mod sig {
 /// its queue is full, and that is acceptable here ONLY because a snapshot is
 /// idempotent full state: whatever is dropped is superseded within
 /// SnapshotSeconds. The hub must not be the thing that makes it worse.
-const HWM: i32 = 1000;
+const HWM: i32 = 64;
 
 /// The largest frame this hub will accept, matching the EAs' CP_MAXMSGSIZE
 /// (1 MB) so a frame the hub forwards can never be one a node would refuse.
@@ -901,6 +901,8 @@ fn main() {
         sock.set_sndhwm(HWM)?;
         sock.set_rcvhwm(HWM)?;
         sock.set_maxmsgsize(MAXMSGSIZE)?;
+        sock.set_heartbeat_ivl(5000)?;
+        sock.set_heartbeat_timeout(15000)?;
         Ok(())
     })();
     if let Err(e) = setup {
@@ -2504,6 +2506,12 @@ fn main() {
                         })),
                         "unknown",
                     );
+                    continue;
+                }
+                let nid = c.node.split_once(':').map(|(_, acc)| acc).unwrap_or(&c.node);
+                let target_sub = format!("@{}", nid);
+                if !st.subs.contains(&target_sub) {
+                    // Node is currently disconnected or has not subscribed yet; defer sending
                     continue;
                 }
                 match c.kind.as_str() {
