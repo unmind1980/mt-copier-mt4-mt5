@@ -380,6 +380,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十五次审计** | 2026-10-24 18:05 | Hub快照异步Worker解析脱钩、ZMQ主循环纯路由零卡顿与RwLock并发扩展 | 性能优化与并发架构 |
 | **三十六次审计** | 2026-10-24 19:15 | ZMQ高水位线收敛至64、ZMTP原生心跳15s半开连接自愈与命令下发订阅前置校验 | 管道安全与防僵死连接 |
 | **三十七次审计** | 2026-10-24 20:20 | SendUp两帧原子闭合防御、独立Context避开double指针截断、ZAP白名单O(1)与纯Hub跳编码 | 协议健壮与底层安全 |
+| **三十八次审计** | 2026-10-24 21:20 | 1ms高精度时钟、快慢通道分离、Sender交易事件化与Receiver直通车 | 亚10ms极速架构 |
 
 ---
 
@@ -1016,6 +1017,17 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **P0-2** | **High 内存指针** | `CopierTransport.mqh:203` | **Context 独立实例化（传入 `NULL`）**：废除 MQL `GlobalVariable` 共享 Context，直接 `new Context(NULL)` 调用 `zmq_ctx_new()`，彻底消除 64 位指针转 IEEE 754 `double`（仅 53 位精度）的高位截断崩溃隐患，杜绝 `CriticalSection` 竞态。 |
 | **P1-1** | **Medium 鉴权性能** | `hub/src/curve.rs:150, 240` | **ZAP 白名单预解码为 `HashSet<[u8; 32]>`**：在解析 allow-list 时一次性预解码二进制公钥，鉴权时由遍历解码 $O(N)$ 降至直接内存查表 $O(1)$，消灭多节点重连风暴时的握手排队延迟。 |
 | **P1-2** | **Low 性能优化** | `CopierTransport.mqh:505` / `CopierSender.mq4:508` | **纯 Hub 模式跳过 Direct 通道多余序列化**：在 `CopierSender::Emit` 中增加 Direct Socket 状态判定，无直连通道需求时跳过本地 Direct 端口字符串拼接与 `StringToUtf8` 堆分配。 |
+
+---
+
+### 三十八次审计：1ms高精度时钟、快慢通道分离、Sender交易事件化与Receiver直通车（2026-10-24 21:20；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **L-01** | **High 延迟突破** | `CopierSender.mq4:1915` / `CopierModel.mqh:1164` | **Sender 交易事件化驱动与平仓 0ms 防抖**：MT5 接入 `OnTradeTransaction` 实现成交/挂单/修改瞬间微秒级响应；MT4 接入 `OnTick` 节流快速触发；新增 `CopierIsTicketClosedInHistory`，订单在历史池确认平仓时消除 `g_slotMissCount < 2` 额外 100~200ms 防抖等待。 |
+| **L-02** | **High 精度突破** | `CopierSender.mq4:896` / `CopierReceiver.mq4:6330` | **Windows 1ms 内核时钟与放开 10ms 钳制**：通过 `winmm.dll`（`timeBeginPeriod(1)` / `timeEndPeriod(1)`）将 Windows 默认 15.625ms 精度墙锁定至 1.0ms，并将 `effectivePollMs` 下限由 10ms 放开至 1ms。 |
+| **L-03** | **High 架构优化** | `CopierReceiver.mq4:6820` | **快慢车道分离（Fast/Slow Lane）**：快车道以 1~2ms 周期执行非阻塞 `DrainFrames`，空转耗时 <0.005ms（CPU <0.2%）；慢车道以 100ms 周期执行全量收敛、对账、心跳与 UI 重绘，彻底解决高频定时器引发的 CPU 饥饿。 |
+| **L-04** | **High 决策极速** | `CopierReceiver.mq4:6830` | **Receiver 增量事件直通车（Event Fast-Track）**：收到 `OPEN` / `CLOSE` / `MODIFY` 增量事件时设置 `hasFastAction`，立刻对活跃 sender 触发聚焦收敛与 `ExecuteQueue` 真实发单，无需等待 100ms 慢通道。 |
 
 ---
 

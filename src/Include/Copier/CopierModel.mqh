@@ -1163,5 +1163,42 @@ int CopierAccountMode()
 
 bool CopierIsNettingAccount() { return CopierAccountMode()==2; }
 
+//=====================================================================
+// Check if a ticket has closed or been removed in trade history.
+// Used by Sender for immediate 0ms debounced close detection.
+//=====================================================================
+bool CopierIsTicketClosedInHistory(const long ticket)
+  {
+   if(ticket<=0) return false;
+#ifdef __MQL5__
+   if(HistorySelectByPosition((ulong)ticket))
+     {
+      int deals=HistoryDealsTotal();
+      for(int i=deals-1; i>=0; i--)
+        {
+         ulong dt=HistoryDealGetTicket(i);
+         if(dt==0) continue;
+         long entry=HistoryDealGetInteger(dt,DEAL_ENTRY);
+         if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_INOUT || entry==DEAL_ENTRY_OUT_BY)
+            return true;
+        }
+     }
+   if(HistoryOrderSelect((ulong)ticket))
+     {
+      long state=HistoryOrderGetInteger((ulong)ticket,ORDER_STATE);
+      if(state==ORDER_STATE_CANCELED || state==ORDER_STATE_EXPIRED || state==ORDER_STATE_REJECTED || state==ORDER_STATE_FILLED)
+         return true;
+     }
+   return false;
+#else
+   if(ticket>2147483647) return false;
+   if(OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_HISTORY))
+     {
+      return (OrderCloseTime()>0);
+     }
+   return false;
+#endif
+  }
+
 #endif
 //+------------------------------------------------------------------+

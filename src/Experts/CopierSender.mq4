@@ -19,6 +19,11 @@
 #property version   "1.00"
 #property description "Trade copier sender: publishes positions over ZeroMQ."
 
+#import "winmm.dll"
+int timeBeginPeriod(uint uPeriod);
+int timeEndPeriod(uint uPeriod);
+#import
+
 #include <Copier/CopierDefs.mqh>
 #include <Copier/CopierCodec.mqh>
 #include <Copier/CopierLog.mqh>
@@ -893,8 +898,9 @@ int OnInit()
                  +(string)g_nid+", which is what a hub-mode receiver would use"
                  +" as id=.)");
 
+   timeBeginPeriod(1);
    int effectivePollMs=PollMs;
-   if(effectivePollMs<10) effectivePollMs=10;
+   if(effectivePollMs<1) effectivePollMs=1;
    if(effectivePollMs>5000) effectivePollMs=5000;
    if(!EventSetMillisecondTimer(effectivePollMs))
      {
@@ -914,6 +920,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   timeEndPeriod(1);
 
    //--- remove the panel objects. Leaving them behind means a removed EA
    //--- leaves an unreadable rectangle on the chart forever, and the next
@@ -1572,7 +1579,7 @@ void OnTimer()
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
       g_slotMissCount[k]++;
-      if(g_slotMissCount[k]<2) continue; // debounce: require 2 consecutive missed scans (~200ms) to eliminate broker/terminal enumeration jitter
+      if(g_slotMissCount[k]<2 && !CopierIsTicketClosedInHistory(q.ticket)) continue; // instant 0ms close when confirmed in history
       g_slotMissCount[k]=0;
       EmitClose(q);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
@@ -1914,10 +1921,30 @@ void OnTimer()
    g_log.Tick();
   }
 
+#ifdef __MQL5__
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+  {
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD ||
+      trans.type==TRADE_TRANSACTION_POSITION ||
+      trans.type==TRADE_TRANSACTION_ORDER_ADD ||
+      trans.type==TRADE_TRANSACTION_ORDER_DELETE ||
+      trans.type==TRADE_TRANSACTION_HISTORY_ADD)
+     {
+      OnTimer();
+     }
+  }
+#endif
+
 void OnTick()
   {
-   //--- intentionally empty. MT4 has no trade events, so all work is
-   //--- done on the timer. Doing it here as well would double the CPU
-   //--- cost for zero benefit.
+   static uint s_lastFastScanMs=0;
+   uint now=GetTickCount();
+   if(now-s_lastFastScanMs>=2)
+     {
+      s_lastFastScanMs=now;
+      OnTimer();
+     }
   }
 //+------------------------------------------------------------------+

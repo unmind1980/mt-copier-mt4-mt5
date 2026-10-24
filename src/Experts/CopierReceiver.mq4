@@ -21,6 +21,11 @@
 #property version   "1.00"
 #property description "Trade copier receiver: subscribes to N senders and mirrors them."
 
+#import "winmm.dll"
+int timeBeginPeriod(uint uPeriod);
+int timeEndPeriod(uint uPeriod);
+#import
+
 #include <Copier/CopierDefs.mqh>
 #include <Copier/CopierCodec.mqh>
 #include <Copier/CopierLog.mqh>
@@ -6323,8 +6328,9 @@ int OnInit()
    //--- the data already comes down.
 
 
+   timeBeginPeriod(1);
    int effectivePollMs=PollMs;
-   if(effectivePollMs<10) effectivePollMs=10;
+   if(effectivePollMs<1) effectivePollMs=1;
    if(effectivePollMs>5000) effectivePollMs=5000;
    if(!EventSetMillisecondTimer(effectivePollMs))
      {
@@ -6376,6 +6382,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   timeEndPeriod(1);
    ClearQueue();
 
    //--- remove the panel objects: a removed EA must not leave an unreadable
@@ -6761,6 +6768,7 @@ void OnTimer()
                  +" PollMs here.");
    if(n>0)
      {
+      bool hasFastAction=false;
       //--- Conflate snapshots PER SENDER (e.sid) in arrival order in O(N) time:
       //--- Step 1: Decode each message ONCE into pre-allocated scratch arrays
       //--- Step 2: Backward pass records the latest SNAP for each sender
@@ -6818,9 +6826,30 @@ void OnTimer()
             RouteMessage(s_envs[i],CP_STREAM_SNAP);
             continue;
            }
+         if(s_envs[i].type==CP_T_OPEN || s_envs[i].type==CP_T_CLOSE || s_envs[i].type==CP_T_MODIFY)
+            hasFastAction=true;
          RouteMessage(s_envs[i],CP_STREAM_EVENTS);
         }
+
+      //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
+      if(hasFastAction)
+        {
+         for(int i=0;i<g_nSenders;i++)
+           {
+            if(!g_stale[i] && g_ready[i]) ConvergeSender(i);
+           }
+         ExecuteQueue();
+        }
      }
+
+   //=================================================================
+   // 2) SLOW LANE (100ms interval):
+   //    Periodic maintenance, full account reconciliation, and UI.
+   //=================================================================
+   static long s_lastSlowMs=0;
+   long now=CopierNowMs();
+   if(now-s_lastSlowMs<100) return;
+   s_lastSlowMs=now;
 
    //--- 1b) REG/HBT2. The hub's node table is built from these and NOTHING
    //--- else - it never probes for nodes - so this is the only reason this
@@ -6866,7 +6895,6 @@ void OnTimer()
      }
 
    //--- 2) stale detection
-   long now=CopierNowMs();
    for(int i=0;i<g_nSenders;i++)
      {
       if(g_lastMsgMs[i]==0) continue;        // never heard from it yet
@@ -7249,5 +7277,16 @@ void OnTimer()
    UpdatePanel();
 
    g_log.Tick();
+  }
+
+void OnTick()
+  {
+   static uint s_lastFastTickMs=0;
+   uint now=GetTickCount();
+   if(now-s_lastFastTickMs>=2)
+     {
+      s_lastFastTickMs=now;
+      OnTimer();
+     }
   }
 //+------------------------------------------------------------------+
