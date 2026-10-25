@@ -6,8 +6,8 @@
 #property strict
 
 #define CP_EVENT_PUMP_ID   1001
-#define CP_PUMP_BURST_MAX  20   // Max consecutive re-triggers per burst (prevents 100% CPU)
-#define CP_PUMP_TIMEOUT_MS 80   // Max lifetime of a fast burst in ms (prevents hang on packet loss)
+#define CP_PUMP_BURST_MAX  500  // Generous burst ceiling so loopback PONG (0.4-1.2ms) is never truncated prematurely
+#define CP_PUMP_TIMEOUT_MS 15   // Hard time ceiling in ms (15ms every 5s = max 0.3% CPU even if all packets dropped)
 
 class CopierEventPump
   {

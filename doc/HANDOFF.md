@@ -1058,8 +1058,8 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 | # | 级别 | 位置 | 改进与重构实现 |
 | :--- | :--- | :--- | :--- |
-| **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **A+B 状态驱动与双重熔断设计**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 20`（最多连续触发 20 次）与 `CP_PUMP_TIMEOUT_MS = 80ms`（硬性超时下限）。消除原 15ms/3次脉冲过窄导致回包偶发被踢回 20ms WM_TIMER 的抖动，无论网络发生任何严重丢包、长延迟或停滞，自泵在 80ms 内无条件熄火，彻底杜绝死循环，保证 CPU 占用率物理锁死在 `< 0.2%`。 |
-| **B-02** | **High 渲染错峰** | `CopierReceiver.mq4:7259` / `CopierSender.mq4:1992` | **GDI 绘图与探针时钟解耦**：将 `UpdatePanel()` 调整至 `CheckPeers()` 之前执行，消灭发完 PING 后主线程原地被图表重绘阻塞 10~15ms 造成的人为伪延迟，使探针测量的就是纯粹的 Socket+网络往返时间（同机稳定 0~1ms）。 |
+| **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **基于真实时钟的自泵守护窗口与防提前猝死**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 500` 与 `CP_PUMP_TIMEOUT_MS = 15ms`（硬性超时下限）。彻底根除机械 20 次脉冲在 0.3ms 内过快烧尽导致 PONG 漏接掉入 10~20ms Windows 定时器的漏洞；15ms 超时保证在 100% 丢包极端下每 5 秒最多只占 15ms（CPU < 0.3%），回包在 0.5ms 收到即 `Disarm` 瞬间关停（CPU 0.01%）。 |
+| **B-02** | **High 探针独立** | `CopierReceiver.mq4:6445, 6748, 7260` | **Receiver 探针发射移入快通道与慢通道解耦**：将 `CheckPeersPing` 移至 Fast Lane 率先执行，彻底摆脱 100ms 慢通道早退阻断与持仓对账干扰；慢通道仅保留 `CheckPeersLiveness` 掉线报警与 `UpdatePanel`，使 Receiver 与 Sender 同样具备确定性微秒级发射能力。 |
 | **B-03** | **Medium 探针防呆** | `src/Include/Copier/CopierPeers.mqh:215` | **RTT 数据保鲜与丢包老化自动失效**：`m_rttTime` 记录每次 PONG 结算时刻，若超过 2 个探针周期（12 秒）未收到任何应答，`RttFor()` 与 `RttAt()` 自动返回 `-1`（面板呈现 `TIMEOUT` 或 `-`），彻底消灭网络断线时保留历史虚假延迟读数误导交易员的重大隐患。 |
 
 ---

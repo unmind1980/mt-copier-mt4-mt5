@@ -6442,9 +6442,8 @@ void OnDeinit(const int reason)
 //--- on THIS side - but it is what makes the round-trip number exist at all,
 //--- and the sender needs our echo for its own panel. One mechanism, both
 //--- directions, rather than each side guessing differently.
-void CheckPeers()
+void CheckPeersPing(const long now)
   {
-   long now=CopierNowMs();
    if(!g_hubOn && now-g_lastPingMs>=CP_PING_MS)
      {
       g_lastPingMs=now;
@@ -6474,7 +6473,10 @@ void CheckPeers()
       g_peers.ProbeSent(g_hubPeerName,now);
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
+  }
 
+void CheckPeersLiveness(const long now)
+  {
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string nm=g_peers.NameAt(i);
@@ -6744,6 +6746,7 @@ void OnTimer()
    //--- from previous ticks.
    int n=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
    long now=CopierNowMs();
+   CheckPeersPing(now);
    if(n>=CP_DRAIN_MAX && g_once.ShouldEmit("drainfull"))
       g_log.Warn("drain hit the per-tick bound of "+(string)CP_DRAIN_MAX
                  +" message(s) - there is more waiting, so the EA is falling"
@@ -7255,9 +7258,9 @@ void OnTimer()
       if(dueDetail) g_forcePosReport=false;
      }
 
-   //--- Panel update BEFORE CheckPeers so GDI rendering never blocks/delays PING round-trip
+   //--- Panel update and peer liveness check in slow lane
    UpdatePanel();
-   CheckPeers();
+   CheckPeersLiveness(now);
 
    g_log.Tick();
   }
