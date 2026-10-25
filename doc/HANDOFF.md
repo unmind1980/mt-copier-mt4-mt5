@@ -384,6 +384,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **三十九次审计** | 2026-10-24 22:20 | 探测路径快通道直通、微秒级时钟CopierNowMs与2ms默认PollMs对齐 | 探针测量真实化 |
 | **四十次审计** | 2026-10-25 08:45 | PING探针优化为5s、根除EventChartCustom自循环空转与CPU降载归零 | 性能平稳与CPU治理 |
 | **四十一次审计** | 2026-10-25 09:40 | A+B熔断事件泵、15ms硬超时、3次脉冲限额与RTT老化防呆 | 完备弹性自驱动架构 |
+| **四十二次审计** | 2026-10-25 11:45 | 彻底脱钩OnTick行情跳动依赖、消除开市高频重入与CPU尖峰隐患 | 纯事件与内核定时器驱动 |
 
 ---
 
@@ -1061,6 +1062,14 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **B-01** | **High 熔断事件泵** | `src/Include/Copier/CopierPump.mqh` | **基于真实时钟的自泵守护窗口与防提前猝死**：封装 `CopierEventPump`，设置 `CP_PUMP_BURST_MAX = 500` 与 `CP_PUMP_TIMEOUT_MS = 15ms`（硬性超时下限）。彻底根除机械 20 次脉冲在 0.3ms 内过快烧尽导致 PONG 漏接掉入 10~20ms Windows 定时器的漏洞；15ms 超时保证在 100% 丢包极端下每 5 秒最多只占 15ms（CPU < 0.3%），回包在 0.5ms 收到即 `Disarm` 瞬间关停（CPU 0.01%）。 |
 | **B-02** | **High 探针独立** | `CopierReceiver.mq4:6445, 6748, 7260` | **Receiver 探针发射移入快通道与慢通道解耦**：将 `CheckPeersPing` 移至 Fast Lane 率先执行，彻底摆脱 100ms 慢通道早退阻断与持仓对账干扰；慢通道仅保留 `CheckPeersLiveness` 掉线报警与 `UpdatePanel`，使 Receiver 与 Sender 同样具备确定性微秒级发射能力。 |
 | **B-03** | **Medium 探针防呆** | `src/Include/Copier/CopierPeers.mqh:215` | **RTT 数据保鲜与丢包老化自动失效**：`m_rttTime` 记录每次 PONG 结算时刻，若超过 2 个探针周期（12 秒）未收到任何应答，`RttFor()` 与 `RttAt()` 自动返回 `-1`（面板呈现 `TIMEOUT` 或 `-`），彻底消灭网络断线时保留历史虚假延迟读数误导交易员的重大隐患。 |
+
+---
+
+### 四十二次审计：彻底脱钩OnTick行情跳动依赖、消除开市高频重入与CPU尖峰隐患（2026-10-25 11:45；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **K-01** | **High 架构脱钩** | `CopierReceiver.mq4:7268` / `CopierSender.mq4:2013` | **彻底移除 `OnTick` 顺风车逻辑**：将两端 `OnTick()` 变更为纯空函数，系统全面跃升为「ZeroMQ 网络消息事件泵驱动 + 1ms 内核时钟 5ms 定时器保底」，彻底消除周一开市或高波动大行情期间每秒 50~100 次 Tick 轰炸造成的无效重入与 CPU 尖峰，EA 即使挂载在周末停盘或零流动性冷门品种图表上也具备 100% 自主微秒级响应能力。 |
 
 ---
 

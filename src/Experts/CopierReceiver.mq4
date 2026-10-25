@@ -7267,13 +7267,8 @@ void OnTimer()
 
 void OnTick()
   {
-   static uint s_lastFastTickMs=0;
-   uint now=GetTickCount();
-   if(now-s_lastFastTickMs>=2)
-     {
-      s_lastFastTickMs=now;
-      OnTimer();
-     }
+   // Pure event & timer driven: zero dependency on symbol tick data.
+   // Eliminates CPU spikes during high-volatility tick bursts.
   }
 
 void OnChartEvent(const int id,

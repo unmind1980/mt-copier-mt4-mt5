@@ -2012,13 +2012,8 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
 void OnTick()
   {
-   static uint s_lastFastScanMs=0;
-   uint now=GetTickCount();
-   if(now-s_lastFastScanMs>=2)
-     {
-      s_lastFastScanMs=now;
-      OnTimer();
-     }
+   // Pure event & timer driven: zero dependency on symbol tick data.
+   // Eliminates CPU spikes during high-volatility tick bursts.
   }
 
 void OnChartEvent(const int id,
