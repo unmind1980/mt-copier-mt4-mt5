@@ -1341,6 +1341,8 @@ fn main() {
     let mut last_rcpt_prune = Instant::now();
     let mut last_known_receipt: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
+    let mut dropped_security_frames: u64 = 0;
 
     //--- Background Worker for Asynchronous Snapshot Parsing
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
@@ -1383,9 +1385,12 @@ fn main() {
                         );
                     }
                 }
+                // M-05: Avoid expensive JSON snapshot serialization when no WebSockets are connected
                 if let Some(tx) = &snap_poke {
-                    let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
-                    let _ = tx.send(body);
+                    if tx.receiver_count() > 0 {
+                        let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
+                        let _ = tx.send(body);
+                    }
                 }
             }
         })
@@ -2190,15 +2195,29 @@ fn main() {
                         let topic_str = std::str::from_utf8(topic).unwrap_or("");
                         let env_sid = envelope_hdr(&payload, "SID");
 
-                        // F-01 Security: Data topics must NEVER carry messages claiming SID="hub"
-                        if env_sid == "hub" {
-                            eprintln!("[hub] DROP spoofed data frame claiming SID=hub on topic {}", topic_str);
+                        // F-01 & H-02 Security: Data topics must NEVER carry messages claiming SID="hub" or control types (CFG/CMD)
+                        if env_sid == "hub" || ty == "CFG" || ty == "CMD" {
+                            dropped_security_frames += 1;
+                            if last_drop_warn.elapsed() >= Duration::from_secs(2) {
+                                eprintln!(
+                                    "[hub] DROP unauthorized control/hub frame (type={}, SID={}) on data topic {} (total dropped: {})",
+                                    ty, env_sid, topic_str, dropped_security_frames
+                                );
+                                last_drop_warn = Instant::now();
+                            }
                             continue;
                         }
 
                         // F-02 Security: On data topics, only SNAP (targeted repair) may have topic != SID
                         if !env_sid.is_empty() && topic_str != env_sid && ty != "SNAP" {
-                            eprintln!("[hub] DROP mismatched topic {} != SID {} for type {}", topic_str, env_sid, ty);
+                            dropped_security_frames += 1;
+                            if last_drop_warn.elapsed() >= Duration::from_secs(2) {
+                                eprintln!(
+                                    "[hub] DROP mismatched topic {} != SID {} for type {} (total dropped: {})",
+                                    topic_str, env_sid, ty, dropped_security_frames
+                                );
+                                last_drop_warn = Instant::now();
+                            }
                             continue;
                         }
 
@@ -2402,6 +2421,15 @@ fn main() {
                 for key in &forgotten {
                     last_liveness.remove(key);
                     last_cfg_pull.remove(key);
+                    if let Some((role, acc)) = key.split_once(':') {
+                        if role == "sender" {
+                            last_known_receipt.remove(acc);
+                        }
+                    }
+                }
+                // H-07: Hard capacity ceiling to prevent unbounded growth from spoofed SIDs
+                if last_known_receipt.len() > 1024 {
+                    last_known_receipt.clear();
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry
                 //--- can keep a receiver online on heartbeats alone while its

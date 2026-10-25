@@ -1016,6 +1016,17 @@ public:
       return CopierNowMs()<m_u[i];
      }
 
+   //--- Blocked with an explicit maximum cap on elapsed delay since last failure (H-04).
+   //--- Returns true only if still within the backoff window AND the elapsed time is less than capMs.
+   bool              BlockedCapped(const string key,const long capMs)
+     {
+      int i=Find(key);
+      if(i<0) return false;
+      long now=CopierNowMs();
+      if(now>=m_u[i]) return false;
+      return (now-m_t[i]<capMs);
+     }
+
    int               Count(const string key)
      {
       int i=Find(key);

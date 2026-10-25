@@ -773,6 +773,37 @@ async fn send_telegram(
     }
 }
 
+pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL must begin with http:// or https://".to_string());
+    }
+
+    let authority = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("URL cannot contain userinfo credentials".to_string());
+    }
+
+    // Handle IPv6 bracket format [fe80::...]:port or standard host:port
+    let host = if authority.starts_with('[') {
+        authority.split(']').next().unwrap_or("").trim_start_matches('[')
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+
+    let host_lower = host.to_ascii_lowercase();
+    if host_lower.starts_with("169.254.")
+        || host_lower == "metadata.google.internal"
+        || host_lower == "fd00:ec2::254"
+        || host_lower == "100.100.100.200"
+        || host_lower.starts_with("fe80:")
+        || host_lower.starts_with("fe80::")
+    {
+        return Err("URL points to prohibited cloud metadata or link-local service".to_string());
+    }
+
+    Ok(())
+}
+
 async fn send_wecom(
     client: &reqwest::Client,
     channel: &NotificationChannel,
@@ -785,6 +816,7 @@ async fn send_wecom(
     } else {
         return Err("WeCom webhook_url or key missing".to_string());
     };
+    validate_outgoing_url(&url)?;
 
     let fmt = format_alert(alert);
     let color_tag = match alert.kind {
@@ -850,6 +882,7 @@ async fn send_dingtalk(
     } else {
         return Err("DingTalk webhook_url or access_token missing".to_string());
     };
+    validate_outgoing_url(&raw_url)?;
 
     let secret = channel.config.get("secret").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -919,18 +952,7 @@ async fn send_webhook(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Webhook URL missing".to_string())?;
 
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("Webhook URL must begin with http:// or https://".to_string());
-    }
-
-    let authority = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
-    if authority.contains('@') {
-        return Err("Webhook URL cannot contain userinfo credentials".to_string());
-    }
-    let host = authority.split(':').next().unwrap_or("");
-    if host.starts_with("169.254.") || host.eq_ignore_ascii_case("metadata.google.internal") || host == "fd00:ec2::254" || host == "100.100.100.200" || host.starts_with("fe80:") {
-        return Err("Webhook URL points to prohibited cloud metadata service".to_string());
-    }
+    validate_outgoing_url(url)?;
 
     let method_str = channel
         .config

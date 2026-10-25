@@ -497,7 +497,9 @@ impl Registry {
 
     fn ensure_capacity(&mut self, now: Instant) {
         if self.nodes.len() >= MAX_NODES {
-            self.evict(now);
+            // M-08: Collect evicted nodes from evict() so side-tables are cleaned up
+            let evicted = self.evict(now);
+            self.capacity_evicted.extend(evicted);
             if self.nodes.len() >= MAX_NODES {
                 // Priority 1: Evict oldest Offline node first
                 // Priority 2: Evict oldest Stale node

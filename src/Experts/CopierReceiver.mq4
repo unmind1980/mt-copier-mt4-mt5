@@ -409,6 +409,7 @@ CopierStopSig g_stopSig[CP_STOPSIG_SLOTS];
 //--- plenty to notice that in a log; once a minute is 1440 lines a day.
 #define CP_RISK_REPORT_MS (60*60*1000)
 int     g_snapSkipped=0;             // superseded snapshots collapsed in the drain
+int     g_snapDeclFailed=0;          // snapshots rejected due to invalid N= declaration
 int     g_qDeferred=0;               // actions deferred by a full queue
 //--- Entries a WAIT gate is holding back this pass.
 //---
@@ -2543,13 +2544,10 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- being hammered every two seconds.
    //--- CLOSE and TRIM actions are risk-reducing operations. They must never
    //--- be delayed by long backoff ladders (capped at 5s max), protecting trading safety.
+   //--- H-04: Enforce BlockedCapped(5000) to eliminate 200/sec hammering while bounding retry delay to 5s.
    if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM)
      {
-      // Cap close retry delay to at most 5 seconds
-      if(g_backoff.Blocked(key) && g_backoff.Count(key)>2)
-        {
-         // Allow retry through if more than 5s has elapsed
-        }
+      if(g_backoff.BlockedCapped(key,5000)) return false;
      }
    else if(g_backoff.Blocked(key)) return false;
    //--- and a longer park for something this platform cannot place at all,
@@ -2690,7 +2688,8 @@ void ExecuteQueue()
          closeCount++;
      }
    bool isBatchClose=(closeCount>1 || g_cmdCloseAllActive || g_riskCloseAllPending);
-   int maxActions=(isBatchClose ? CP_MAX_ACTIONS : MaxActionsPerTick);
+   // M-10: Cap batch close to 64 actions per tick to avoid freezing event loop on huge backlogs
+   int maxActions=(isBatchClose ? 64 : MaxActionsPerTick);
 
    static CopierAction s_sweepFailed[CP_MAX_ACTIONS];
    int sweepCount=0;
@@ -2703,6 +2702,7 @@ void ExecuteQueue()
       CopierAction a=g_q[g_qHead];
       int err=0;
       bool ok=false;
+      bool asyncMode=false;
 
       if(a.senderIdx<0 || a.senderIdx>=g_nSenders)
         {
@@ -2980,7 +2980,7 @@ void ExecuteQueue()
             dev = MathMax(dev, 100);
 
 #ifdef __MQL5__
-         bool asyncMode = isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP);
+         asyncMode = isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP);
          if(asyncMode)
            {
             asyncBatchCount++;
@@ -2992,7 +2992,7 @@ void ExecuteQueue()
            }
          double prefetchedPx = 0.0;
 #else
-         bool asyncMode = false;
+         asyncMode = false;
          double prefetchedPx = 0.0;
          if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
            {
@@ -3016,7 +3016,13 @@ void ExecuteQueue()
          //--- stops working for TRIMs (whose key carries the target volume)
          //--- ...but NOT for MODIFY, which is idempotent - see
          //--- CopierSeenRingApplies()
+         //--- H-01: In asyncMode (MT5 OrderSendAsync), the broker has NOT confirmed the close yet.
+         //--- Never record into 10-minute g_seen at send-time, or a broker failure suppresses retry for 10 min.
+#ifdef __MQL5__
+         if(CopierSeenRingApplies(a.kind) && !asyncMode) g_seen.Add(a.key);
+#else
          if(CopierSeenRingApplies(a.kind)) g_seen.Add(a.key);
+#endif
 
          //--- A mirror now EXISTS on this account, so record it: this is what
          //--- makes a later disappearance a RESTORE rather than a first entry.
@@ -3320,19 +3326,36 @@ void ExecuteQueue()
       for(int s=0; s<sweepCount; s++)
         {
          CopierAction sa = s_sweepFailed[s];
+         // M-11: Skip symbols currently verified as market closed
+         if(g_mktClosed.Has(sa.sym)) continue;
+
          int sdev = (sa.senderIdx>=0 && sa.senderIdx<g_nSenders)?g_senderCfg[sa.senderIdx].deviationPoints:DeviationPoints;
          sdev = MathMax(sdev, 100);
          int serr = 0;
-         bool sok = CopierClosePosition(sa.ticket, sdev, serr, false, 0.0);
+         double spx = 0.0;
+#ifndef __MQL5__
+         // L-04: Prefetch price on MT4 so in-loop RefreshRates is avoided
+         int ordType = (sa.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
+         spx = (ordType==OP_BUY)?MarketInfo(sa.sym,MODE_BID):MarketInfo(sa.sym,MODE_ASK);
+#endif
+         bool sok = CopierClosePosition(sa.ticket, sdev, serr, false, spx);
          if(sok)
            {
+            // M-01: Update g_seen, g_ourCount and g_ourLots on Sweeper close success
+            if(CopierSeenRingApplies(sa.kind)) g_seen.Add(sa.key);
             g_backoff.Clear(sa.key);
-            if(sa.ordKind==CP_ORD_MARKET && g_ourCount>0) g_ourCount--;
+            if(sa.ordKind==CP_ORD_MARKET)
+              {
+               if(g_ourCount>0) g_ourCount--;
+               g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+              }
             g_mapDirty=true;
             g_log.Info("Two-Pass Sweeper: successfully closed straggler ticket "+(string)sa.ticket+" uid "+sa.uid);
            }
          else
            {
+            // M-11: Record backoff failure tracking for persistent refusal
+            g_backoff.Note(sa.key);
             g_log.Warn("Two-Pass Sweeper: straggler ticket "+(string)sa.ticket+" uid "+sa.uid+" failed second pass (err="+(string)serr+")");
            }
         }
@@ -5060,6 +5083,13 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    long sentLong=-1;
    bool declared=CopierKvGet(e.payload,"N",cnt);
    if(declared) sentLong=CopierParseLong(cnt);
+   // H-03: Reject invalid or absurdly large N= declarations (>10x max positions) to prevent overflow/wrap
+   if(!declared || sentLong<0 || sentLong>(long)CP_MAX_POSITIONS*10)
+     {
+      g_snapDeclFailed++;
+      g_log.Warn("sender "+g_sid[si]+" snapshot rejected: invalid declared count N="+cnt);
+      return;
+     }
    int sent=(int)sentLong;
 
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
@@ -5084,7 +5114,7 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //--- Returning here also leaves g_snapHash untouched, so the sender sees a
    //--- stale receipt and repairs the snapshot on its next pass.
    int expected=(sent>CP_MAX_POSITIONS)?CP_MAX_POSITIONS:sent;
-   if(!declared || n<0 || sentLong<0 || n!=expected)
+   if(n<0 || n!=expected)
      {
       //--- Rate-limited, and counted.
       //---
@@ -6102,9 +6132,13 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       return;
      }
 
-   if(e.type==CP_T_CFG)        HandleCfg(e);
-   else if(e.type==CP_T_CMD)   HandleCmd(e);
-   else if(e.type==CP_T_SNAP)  HandleSnapshot(si,e);
+   // H-02: Never accept CFG or CMD from data topics or non-hub senders (prevents cross-tenant closeall injection)
+   if(e.type==CP_T_CFG || e.type==CP_T_CMD)
+     {
+      g_log.Warn("SECURITY: rejected "+e.type+" frame from data stream / sender "+g_sid[si]+"; control frames only accepted from @hub");
+      return;
+     }
+   if(e.type==CP_T_SNAP)       HandleSnapshot(si,e);
    else if(e.type==CP_T_OPEN)  HandleOpenEvent(si,e);
    else if(e.type==CP_T_CLOSE) HandleCloseEvent(si,e);
    else if(e.type==CP_T_MODIFY) HandleModifyEvent(si,e);
@@ -6958,8 +6992,11 @@ void OnTimer()
      }
 
    //--- Background retry for closeall / risk-close if queue was full during initial batch
-   if(g_cmdCloseAllActive || g_riskCloseAllPending)
+   //--- L-01: Throttle to 50ms interval to eliminate 5ms spinning full-account position scans
+   static long s_lastCloseAllRetryMs=0;
+   if((g_cmdCloseAllActive || g_riskCloseAllPending) && now-s_lastCloseAllRetryMs>=50)
      {
+      s_lastCloseAllRetryMs=now;
       int closeFailed=0, closeTotal=0;
       int cn=CloseAllOurs("",closeFailed,closeTotal);
       if(closeTotal==0 || (closeFailed==0 && cn==closeTotal))

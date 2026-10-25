@@ -734,9 +734,18 @@ async fn readyz(State(st): State<SharedState>) -> Json<Value> {
 /// and role-gated controls must correspond to the hub binary currently served.
 async fn dashboard() -> axum::response::Response {
     let mut response = Html(DASHBOARD).into_response();
-    response.headers_mut().insert(
+    let headers = response.headers_mut();
+    headers.insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    headers.insert(
+        axum::http::header::X_FRAME_OPTIONS,
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
     );
     response
 }
@@ -825,18 +834,27 @@ async fn handle_socket(
 /// The wire format for a push. A shape the page can switch on, so a later
 /// incremental message is a new `t` rather than a change to this one.
 pub(crate) fn snapshot_text(st: &SharedState) -> String {
-    let body = {
+    // M-05: Extract required model state quickly under lock, then drop lock before final JSON serialization
+    let (uptime_secs, nodes_list, pos_list, mismatched, alerts_list, curve_val) = {
         let s = st.lock_or_recover();
         let now = Instant::now();
-        json!({
-            "hub_uptime_secs": now.saturating_duration_since(s.started).as_secs(),
-            "nodes": Value::Array(nodes_json_list(&s.reg, &s.pos, now)),
-            "positions": Value::Array(positions_json_list(&s.pos)),
-            "mismatched": s.pos.mismatched,
-            "alerts": Value::Array(s.alerts.recent_json(20)),
-            "curve": curve_json(&s),
-        })
+        (
+            now.saturating_duration_since(s.started).as_secs(),
+            nodes_json_list(&s.reg, &s.pos, now),
+            positions_json_list(&s.pos),
+            s.pos.mismatched,
+            s.alerts.recent_json(20),
+            curve_json(&s),
+        )
     };
+    let body = json!({
+        "hub_uptime_secs": uptime_secs,
+        "nodes": Value::Array(nodes_list),
+        "positions": Value::Array(pos_list),
+        "mismatched": mismatched,
+        "alerts": Value::Array(alerts_list),
+        "curve": curve_val,
+    });
     json!({ "t": "snapshot", "data": body }).to_string()
 }
 
@@ -2513,10 +2531,10 @@ async fn notifications_test(
 
     if target_channel.channel_type == "webhook" {
         if let Some(url) = target_channel.config.get("url").and_then(|u| u.as_str()) {
-            if !url.starts_with("http://") && !url.starts_with("https://") {
+            if let Err(e) = crate::notifications::validate_outgoing_url(url) {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "ok": false, "error": "webhook URL must begin with http:// or https://" })),
+                    Json(json!({ "ok": false, "error": e })),
                 )
                     .into_response();
             }

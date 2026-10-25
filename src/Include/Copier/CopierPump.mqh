@@ -53,6 +53,9 @@ public:
 
    void              Trigger()
      {
+      long now=CopierNowMs();
+      // L-15: Timeout failsafe to clear in-flight latch if custom chart event was lost
+      if(m_inFlight && now>m_fastPumpUntil) m_inFlight=false;
       if(!m_inFlight && m_chartId!=0 && IsActive())
         {
          m_inFlight=true;

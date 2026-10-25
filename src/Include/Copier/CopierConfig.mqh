@@ -369,7 +369,17 @@ long CopierResolveMagic(const string rawIniValue,bool &pinned)
    if(StringLen(rawIniValue)>0)
      {
       pinned=true;
-      return CopierParseLong(rawIniValue);
+      long m=CopierParseLong(rawIniValue);
+#ifndef __MQL5__
+      // M-02: Guard against values > 2^31-1 on MT4 (OrderSend takes signed 32-bit int)
+      if(m>2147483647 || m<0)
+        {
+         Print("[copier] WARN: magic ",rawIniValue," exceeds MT4 signed 32-bit limit (2147483647); clamped to avoid negative ticket magic.");
+         m=(m & 0x7FFFFFFF);
+         if(m==0) m=1;
+        }
+#endif
+      return m;
      }
    //--- MISSING. There is no fallback any more, deliberately.
    //---

@@ -562,6 +562,13 @@ impl UserStore {
         }
 
         // 4. Issue session
+        // M-09: Sweep expired sessions on each new session issuance and enforce hard capacity limit
+        self.sessions
+            .retain(|_, sess| now.saturating_sub(sess.seen) < SESSION_IDLE_SECS);
+        if self.sessions.len() >= 1024 {
+            self.sessions.clear();
+        }
+
         let token = random_token();
         let s = Session {
             user_id: u.id.clone(),

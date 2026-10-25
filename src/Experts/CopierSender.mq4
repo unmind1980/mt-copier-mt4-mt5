@@ -743,7 +743,12 @@ int OnInit()
      {
       for(int i=0;i<savedCount;i++)
         {
-         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
+         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic))
+           {
+            // M-04: Warn about filtered historical positions so operator is aware of possible receiver orphans
+            g_log.Warn("state restore: ignoring position ticket "+(string)saved[i].ticket+" ("+saved[i].sym+") - disallowed by current filter; receivers may hold orphan mirrors if closed while excluded");
+            continue;
+           }
          int s=g_prev.Upsert(saved[i]);
          if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
         }
@@ -753,7 +758,11 @@ int OnInit()
      {
       for(int i=0;i<savedCount;i++)
         {
-         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic)) continue;
+         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic))
+           {
+            g_log.Warn("state restore: ignoring position ticket "+(string)saved[i].ticket+" ("+saved[i].sym+") - disallowed by current filter; receivers may hold orphan mirrors if closed while excluded");
+            continue;
+           }
          int s=g_prev.Upsert(saved[i]);
          if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
         }
@@ -1237,7 +1246,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    //--- only way state moves - the floor keeps that from becoming a flood.
    //--- In bootstrap mode, we enforce only a 1s floor so newly attached peers
    //--- get their snapshot within 1s even if a prior repair was recently emitted.
-   long floorSec=(SnapshotSeconds>0)? SnapshotSeconds : 1;
+   long floorSec = isBootstrap ? 1 : ((SnapshotSeconds>0)? SnapshotSeconds : 1);
    if(g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
 
    if(StringLen(g_snapPayload)==0) return;       // nothing sent yet
@@ -1269,7 +1278,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
       Emit(CP_T_SNAP,g_snapPayload,true);
-      g_snapHash=g_latestSnapHash;
+      // L-06: Keep g_snapHash aligned with the actual cached payload re-emitted
+      g_snapHash=CopierSnapshotHash(g_snapPayload);
       NoteRecentSnapHash(g_snapHash);
       g_lastSnapMs=now;
       if(isBootstrap)
@@ -1479,6 +1489,50 @@ void BroadcastSnapshot(const long now)
    Emit(CP_T_SNAP,g_snapPayload,true);
   }
 
+void HandleSenderStat(const CopierEnv &se)
+  {
+   //--- The snapshot receipt is read BEFORE the StatusEnabled gate, and
+   //--- deliberately. That switch governs MONITORING - the equity/lots/risk
+   //--- figures on the panel - and an operator who turns monitoring off
+   //--- must not thereby disable the delivery mechanism. They are
+   //--- unrelated concerns that happen to share a message.
+   {
+    string sh="",swho="",ssid="";
+    CopierKvGet(se.payload,"H",sh);
+    CopierKvGet(se.payload,"LOGIN",swho);
+    CopierKvGet(se.payload,"SID",ssid);
+    if(SenderAnswersTo(ssid))
+       SnapTrack(swho,sh,false);
+   }
+
+   if(!StatusEnabled) return;
+
+   string login="",eq="",bl="",held="",lots="",nsend="",blocked="",risk="";
+   CopierKvGet(se.payload,"LOGIN",login);
+   CopierKvGet(se.payload,"EQ",eq);
+   CopierKvGet(se.payload,"BL",bl);
+   CopierKvGet(se.payload,"HELD",held);
+   CopierKvGet(se.payload,"LOTS",lots);
+   CopierKvGet(se.payload,"NSEND",nsend);
+   CopierKvGet(se.payload,"BLOCKED",blocked);
+   CopierKvGet(se.payload,"RISK",risk);
+
+   if(StringLen(login)>0)
+      g_peers.Seen(login);
+
+   string rk=risk;
+   if(StringLen(rk)==0 && StringLen(nsend)>0) rk="ok";
+   if(StringLen(login)>0 && StringLen(rk)>0)
+     {
+      g_peers.SetNote(login,rk);
+      if(g_once.ShouldEmit("stat|"+login+"|"+rk))
+         g_log.Info("receiver "+login+" status: equity="+eq+" balance="+bl
+                    +" held="+held+" position(s) lots="+lots
+                    +" senders="+nsend+" risk="+rk
+                    +" blocked="+blocked+" since the last report");
+     }
+  }
+
 void OnTimer()
   {
    long now=CopierNowMs();
@@ -1518,8 +1572,12 @@ void OnTimer()
            }
          continue;
         }
-      if(se.type!=CP_T_STAT) continue;
-      // Handle STAT inline below
+      // M-03: Process STAT frames arriving in first drain pass rather than silently discarding
+      if(se.type==CP_T_STAT)
+        {
+         HandleSenderStat(se);
+         continue;
+        }
      }
 
    if(g_hubOn)
@@ -1822,79 +1880,10 @@ void OnTimer()
          continue;
         }
 
-      if(se.type!=CP_T_STAT) continue;
-
-      //--- The snapshot receipt is read BEFORE the StatusEnabled gate, and
-      //--- deliberately. That switch governs MONITORING - the equity/lots/risk
-      //--- figures on the panel - and an operator who turns monitoring off
-      //--- must not thereby disable the delivery mechanism. They are
-      //--- unrelated concerns that happen to share a message.
-      {
-       string sh="",swho="",ssid="";
-       CopierKvGet(se.payload,"H",sh);
-       CopierKvGet(se.payload,"LOGIN",swho);
-       CopierKvGet(se.payload,"SID",ssid);
-       //--- A receiver may mirror several senders and reports one receipt per
-       //--- sender. Act only on the one addressed to US: a receipt naming a
-       //--- different sender says nothing about whether our state reached it.
-       if(SenderAnswersTo(ssid))
-          SnapTrack(swho,sh,false);
-      }
-
-      if(!StatusEnabled) continue;
-
-      string login="",eq="",bl="",held="",lots="",nsend="",blocked="",risk="";
-      CopierKvGet(se.payload,"LOGIN",login);
-      CopierKvGet(se.payload,"EQ",eq);
-      CopierKvGet(se.payload,"BL",bl);
-      CopierKvGet(se.payload,"HELD",held);
-      CopierKvGet(se.payload,"LOTS",lots);
-      CopierKvGet(se.payload,"NSEND",nsend);
-      CopierKvGet(se.payload,"BLOCKED",blocked);
-      CopierKvGet(se.payload,"RISK",risk);
-
-      //--- liveness, and the receiver's own view of its state, for the panel
-      if(StringLen(login)>0)
+      if(se.type==CP_T_STAT)
         {
-         //--- liveness from the status too: a peer answering PING but not
-         //--- reporting status is alive, and vice versa
-         g_peers.Seen(login);
-        }
-
-      //--- A STAT arrives in TWO SHAPES, and this code must not confuse them.
-      //---
-      //---   once a minute              -> a full monitoring report
-      //---   every SyncHeartbeatSeconds -> a RECEIPT ONLY: the snapshot hash
-      //---                                 and no figures at all
-      //---
-      //--- Both are T=STAT, and the receipt is sent far more often than the
-      //--- figures - so a receipt is usually what arrives here. Running the
-      //--- reporting path on one printed
-      //---     "receiver X status: equity= balance= held= position(s) ..."
-      //--- a line of empty numbers that reads like a broken receiver rather
-      //--- than what it is. MEASURED on a live direct-mode run, 2026-10-13.
-      //---
-      //--- SetNote is guarded for the same reason: a receipt carries no risk
-      //--- state, and writing its absent value over the last real one would
-      //--- blank the panel's risk column between reports.
-      //---
-      //--- RISK is the discriminator for the 60s full monitoring report because
-      //--- the 5s position summary carries EQ/BL without RISK, while the full
-      //--- report appends NSEND/BLOCKED/RISK together.
-      string rk=risk;
-      if(StringLen(rk)==0 && StringLen(nsend)>0) rk="ok";
-      if(StringLen(login)>0 && StringLen(rk)>0)
-        {
-         g_peers.SetNote(login,rk);
-         //--- Keyed on the account and the risk state, NOT on the figures. A
-         //--- steady receiver reports the same thing every minute, and logging
-         //--- all of it would be noise; a CHANGE in risk state is what is
-         //--- worth interrupting the log for.
-         if(g_once.ShouldEmit("stat|"+login+"|"+rk))
-            g_log.Info("receiver "+login+" status: equity="+eq+" balance="+bl
-                       +" held="+held+" position(s) lots="+lots
-                       +" senders="+nsend+" risk="+rk
-                       +" blocked="+blocked+" since the last report");
+         HandleSenderStat(se);
+         continue;
         }
      }
 

@@ -387,6 +387,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十二次审计** | 2026-10-25 11:45 | 彻底脱钩OnTick行情跳动依赖、消除开市高频重入与CPU尖峰隐患 | 纯事件与内核定时器驱动 |
 | **四十三次审计** | 2026-10-25 12:45 | 全栈审查闭环（F-01..F-17与历史遗留项）、控制面权限防御、平仓容灾与SSRF强化 | 安全闭环与架构无死角 |
 | **四十四次审计** | 2026-10-25 15:45 | MT5全异步OrderSendAsync流控并发与MT4零等待极限流水线平仓双引擎 | 大单量马丁网格平仓 |
+| **四十五次审计** | 2026-10-25 18:30 | 全面闭环第45轮深度审计（H-01..H-08、M-01..M-14与关键优化） | 资金安全、协议防线与资源收敛 |
 
 ---
 
@@ -1094,6 +1095,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **A-01** | **High 异步并发** | `CopierModel.mqh:802` / `CopierReceiver.mq4:2680, 2980` | **MT5 `OrderSendAsync` 并发与 20ms 令牌桶流控**：积压订单 $> 1$ 时自动切入异步模式；注入 100 points 出场滑点缓冲；每 10 笔订单微休眠 20ms 进行速率整形，300 笔订单 0.6 秒全量打入网络队列，彻底打破单线程逐单阻塞，实现 100ms Ping 下 1.5~2.0 秒极速平仓。 |
 | **A-02** | **High 极限流水** | `CopierModel.mqh:840` / `CopierReceiver.mq4:2685, 2990` | **MT4 零等待极限流水线**：突破 `MaxActionsPerTick=5` 人为枷锁；平仓循环内部 100% 剔除 `RefreshRates()`，采用入循环前预读行情快照；注入 100 points 宽滑点彻底消除 `138 Requote` 重新报价延迟，平仓提速 8~10 倍。 |
 | **A-03** | **High 双轮清扫** | `CopierReceiver.mq4:3310` | **Two-Pass Sweeper 双轮清扫机制**：第一轮极速紧凑打出全部单据，偶发失败单据不阻塞主循环；首轮结束后 30ms 执行第二轮刷新市价精准补刀，确保 100% 仓位彻底归零，杜绝残单遗留。 |
+
+---
+
+### 四十五次审计：全面闭环第45轮深度审计（H-01..H-08、M-01..M-14与关键优化）（2026-10-25 18:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **SEC-01** | **P0 异步平仓保护** | `CopierReceiver.mq4:3019` | **H-01 MT5 异步平仓 `g_seen` 压制解除**：异步发包时不写入 10 分钟 `g_seen`，避免 broker 偶发拒单导致长达 10 分钟重试抑制与仓位裸奔；结合 Two-Pass Sweeper 在同步确认成交后再记入 `g_seen`。 |
+| **SEC-02** | **P0 控制面注入阻断** | `CopierReceiver.mq4:6132` / `hub/src/main.rs:2200` | **H-02 数据通道拒绝控制帧（CFG/CMD）**：Receiver 彻底移除 Sender 数据流上的 `HandleCfg`/`HandleCmd` 响应分支；Hub 主循环严密拦截非 `@` 控制主题上的 CFG/CMD 与冒充 `SID=hub` 的帧，彻底杜绝恶意 Sender 跨租户注入 closeall。 |
+| **TRD-01** | **P0 误全平防线加固** | `CopierCodec.mqh:512` / `CopierReceiver.mq4:5085` | **H-03 快照 `N=` 上界防溢出与强转截断守卫**：增加 `countLong > CP_MAX_POSITIONS * 10` 上界拦截；在 `ArrayResize` 前严格执行钳位；彻底防范 $2^{32}$ 回绕导致伪造合法空快照清空镜像持仓的严重隐患。 |
+| **TRD-02** | **P0 交易风控防风暴** | `CopierReceiver.mq4:2546` / `CopierState.mqh:1020` | **H-04 激活平仓/减仓 `BlockedCapped` 退避限流**：实现 `BlockedCapped(5000)`，杜绝原先空壳分支导致对券商 API 发生每秒 200 次毫秒级重试风暴，同时将重试等待上限收敛在 5 秒以内确保风控减仓时效。 |
+| **SEC-03** | **P1 网络安全加固** | `hub/src/notifications.rs:915` / `hub/src/api.rs:2515` | **H-05 统一 SSRF 出站白名单与元数据阻断**：提炼 `validate_outgoing_url`，严密防范 IPv6 方括号与私网元数据走私；对 Webhook、企业微信、钉钉出站统一应用校验。 |
+| **RES-01** | **P1 资源防泄漏** | `hub/src/main.rs:1344, 2420` / `hub/src/registry.rs:500` | **H-07 & M-08 去重表与注册表淘汰闭环**：`ensure_capacity` 将淘汰节点收拢入 `capacity_evicted`；主循环定期清理 `last_known_receipt` 对应淘汰条目，并设 1024 硬容量上限，消除内存 DoS 隐患。 |
+| **PERF-01**| **P2 状态与性能治理** | 全栈各模块 | **M-01..M-14 全面收口**：Sweeper 补齐 `g_seen.Add` 与 `g_ourLots` 扣减并跳过休市品种（M-01, M-11）；MT4 Magic 严格做 31 位正整数保护（M-02）；Sender 提取 `HandleSenderStat` 彻底消除两段 drain 间隙丢弃 STAT/RCPT 帧（M-03）；状态恢复对被过滤持仓显著告警（M-04）；WS 快照 JSON 序列化移出共享读写锁且无客户端时跳过（M-05）；安全拦截日志 2 秒节流（M-06）；审计 reopen 失败自动自愈（M-07）；会话表定期清理并加容量上限（M-09）；批量平仓单 tick 限制 64 笔（M-10）；Sender bootstrap 修复 1 秒地板（L-05）；后台 closeall 50ms 节流消除高频空转（L-01）；Dashboard 响应头注入 CSP 等安全头（L-18）。 |
 
 ---
 

@@ -402,8 +402,9 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
       return false;
      }
    int cmd=(int)pt;
+   int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
    int ticket=OrderSend(sym,cmd,p.lots,px,deviationPoints,sl,tp,cmt,
-                        (int)magic,(datetime)p.pexpire,clrNONE);
+                        safeMagic,(datetime)p.pexpire,clrNONE);
    if(ticket<0)
      {
       outErr=GetLastError();
@@ -757,7 +758,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    double px=0.0;
    if(!CopierGetPrice(sym,side,px)) { outErr=-2; return false; }
    int cmd=(side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
-   int ticket=OrderSend(sym,cmd,lots,px,deviationPoints,sl,tp,comment,(int)magic,0,clrNONE);
+   int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
+   int ticket=OrderSend(sym,cmd,lots,px,deviationPoints,sl,tp,comment,safeMagic,0,clrNONE);
    if(ticket<0)
      {
       outErr=GetLastError();
@@ -769,7 +771,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          RefreshRates();
          if(CopierGetPrice(sym,side,px))
            {
-            ticket=OrderSend(sym,cmd,lots,px,deviationPoints,0.0,0.0,comment,(int)magic,0,clrNONE);
+            ticket=OrderSend(sym,cmd,lots,px,deviationPoints,0.0,0.0,comment,safeMagic,0,clrNONE);
             if(ticket>=0)
               {
                outErr=0;

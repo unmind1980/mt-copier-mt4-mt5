@@ -509,9 +509,15 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
    string n="";
    if(!CopierKvGet(payload,"N",n)) return -1;
    long countLong=CopierParseLong(n);
-   if(countLong<0) return -1;
+   // H-03: Hard upper bound and negative check to prevent int truncation to 0 (e.g. 2^32 wrapping)
+   if(countLong<0 || countLong>(long)CP_MAX_POSITIONS*10) return -1;
    if(countLong==0) return 0;                 // legitimately empty: "N=0;R=" or "N=0"
    int count=(int)countLong;
+   if(count>maxOut)
+     {
+      Print("[copier] WARN: Snapshot N="+(string)countLong+" exceeds maxOut "+(string)maxOut+"; clamping.");
+      count=maxOut;         // clamp before resizing to protect memory
+     }
 
    int cap=ArraySize(out);
    if(ArrayIsDynamic(out) && cap<count)
@@ -520,11 +526,6 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
       cap=count;
      }
    if(count>cap) count=cap;
-   if(count>maxOut)
-     {
-      Print("[copier] WARN: Snapshot N="+(string)countLong+" exceeds maxOut "+(string)maxOut+"; clamping.");
-      count=maxOut;         // never trust the wire
-     }
 
    string recs="";
    if(!CopierKvGet(payload,"R",recs) || StringLen(recs)==0) return -1;

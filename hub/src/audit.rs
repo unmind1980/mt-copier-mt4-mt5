@@ -498,10 +498,26 @@ impl Audit {
         let mut line = serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string());
         line.push('\n');
 
+        // M-07: If audit is enabled but file handle was lost (e.g. rotation reopen failed), try to heal
+        if self.enabled && inner.file.is_none() {
+            if let Ok(fresh) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .read(true)
+                .open(&self.path)
+            {
+                inner.current_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+                inner.file = Some(fresh);
+            }
+        }
+
         let Some(f) = inner.file.as_mut() else {
-            // Disabled: still advance `seq` so the caller's view is consistent,
+            // Disabled or failed to open: still advance `seq` so the caller's view is consistent,
             // and count it so "the audit is off" is visible in the totals.
             inner.seq = seq;
+            if self.enabled {
+                inner.failed += 1;
+            }
             return seq;
         };
 
