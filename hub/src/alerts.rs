@@ -349,42 +349,45 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
 
         //--- risk: entries the receiver's risk gates are blocking right now.
         //--- M6: BLOCKED is reported per minute by receiver. Alert when > 0, rate-limited by silence::RISK (300s).
-        if n.blocked > 0 {
-            let a = Alert {
-                ts: now,
-                kind: "risk.blocked",
-                severity: Severity::Warning,
-                node: n.key.clone(),
-                detail: json!({ "blocked_entries": n.blocked }),
-            };
-            if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
-                s.alerts.push(a.clone());
-                fired.push(a);
-            }
-        }
-
-        //--- risk: a limit actually TRIPPED (the receiver flattened or is
-        //--- flattening - CopierRisk's BlockKey names which one).
-        //--- State-aware: alert on new trip condition and rearm on return to "ok".
-        let prev_trip = s.alerts.last_risk_tripped.get(&n.key).cloned().unwrap_or_default();
-        if !n.risk.is_empty() && n.risk != "ok" {
-            if n.risk != prev_trip {
+        //--- R47-29: Suppress risk alerts if node is not Online to avoid repeated alerts from frozen offline state
+        if n.liveness(instant_now) == crate::registry::Liveness::Online {
+            if n.blocked > 0 {
                 let a = Alert {
                     ts: now,
-                    kind: "risk.tripped",
-                    severity: Severity::Critical,
+                    kind: "risk.blocked",
+                    severity: Severity::Warning,
                     node: n.key.clone(),
-                    detail: json!({ "trip": n.risk }),
+                    detail: json!({ "blocked_entries": n.blocked }),
                 };
                 if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
-                    s.alerts.last_risk_tripped.insert(n.key.clone(), n.risk.clone());
                     s.alerts.push(a.clone());
                     fired.push(a);
                 }
             }
-        } else if (n.risk == "ok" || n.risk.is_empty()) && !prev_trip.is_empty() {
-            s.alerts.last_risk_tripped.remove(&n.key);
-            s.alerts.rearm("risk.tripped", &n.key);
+
+            //--- risk: a limit actually TRIPPED (the receiver flattened or is
+            //--- flattening - CopierRisk's BlockKey names which one).
+            //--- State-aware: alert on new trip condition and rearm on return to "ok".
+            let prev_trip = s.alerts.last_risk_tripped.get(&n.key).cloned().unwrap_or_default();
+            if !n.risk.is_empty() && n.risk != "ok" {
+                if n.risk != prev_trip {
+                    let a = Alert {
+                        ts: now,
+                        kind: "risk.tripped",
+                        severity: Severity::Critical,
+                        node: n.key.clone(),
+                        detail: json!({ "trip": n.risk }),
+                    };
+                    if s.alerts.allow(a.kind, &n.key, now, silence::RISK) {
+                        s.alerts.last_risk_tripped.insert(n.key.clone(), n.risk.clone());
+                        s.alerts.push(a.clone());
+                        fired.push(a);
+                    }
+                }
+            } else if (n.risk == "ok" || n.risk.is_empty()) && !prev_trip.is_empty() {
+                s.alerts.last_risk_tripped.remove(&n.key);
+                s.alerts.rearm("risk.tripped", &n.key);
+            }
         }
     }
 

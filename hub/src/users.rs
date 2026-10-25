@@ -46,7 +46,7 @@ pub const SESSION_IDLE_SECS: u64 = 12 * 3600;
 
 /// PBKDF2 rounds for the password hash. Cheap enough at login (4096 SHA-256
 /// blocks is sub-millisecond) and 4096x the work for an offline guesser.
-const HASH_ROUNDS: u32 = 4096;
+pub const HASH_ROUNDS: u32 = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -321,20 +321,41 @@ impl UserStore {
             .map(|u| u.pass.clone())
     }
 
+    fn sweep_and_enforce_session_cap(&mut self, now: u64) {
+        self.sessions
+            .retain(|_, sess| now.saturating_sub(sess.seen) < SESSION_IDLE_SECS);
+        if self.sessions.len() >= 1024 {
+            // R47-13: Evict oldest session (LRU) instead of clearing all sessions
+            if let Some(oldest_tok) = self
+                .sessions
+                .iter()
+                .min_by_key(|(_, sess)| sess.seen)
+                .map(|(tok, _)| tok.clone())
+            {
+                self.sessions.remove(&oldest_tok);
+            }
+        }
+    }
+
     /// Mint a session for an id whose password was ALREADY verified outside
     /// the lock. Re-reads the user here (the world may have changed during
     /// the hashing) and refuses when the user is gone or now disabled - a
     /// session is never minted for someone who may no longer have one.
     pub fn mint_session(&mut self, id: &str, now: u64) -> Result<(String, Session), String> {
-        let u = self
-            .users
-            .iter()
-            .find(|u| u.id == id && !u.disabled)
-            .ok_or_else(|| "invalid credentials".to_string())?;
+        let (user_id, role) = {
+            let u = self
+                .users
+                .iter()
+                .find(|u| u.id == id && !u.disabled)
+                .ok_or_else(|| "invalid credentials".to_string())?;
+            (u.id.clone(), u.role)
+        };
+        // R47-13: Enforce session sweep and LRU capacity cap on both legacy and challenge-response logins
+        self.sweep_and_enforce_session_cap(now);
         let token = random_token();
         let s = Session {
-            user_id: u.id.clone(),
-            role: u.role,
+            user_id,
+            role,
             seen: now,
         };
         self.sessions.insert(token.clone(), s.clone());
@@ -474,10 +495,19 @@ impl UserStore {
         }
         self.guard.prune(now);
 
-        // NM-08: Protect nonce table from per-user denial-of-service
+        // R47-12: If this user already has active nonces, cap at 16 by evicting their oldest nonce
+        // This prevents an unauthenticated attacker from locking out targeted users.
         let user_nonces = self.auth_nonces.values().filter(|(uid, _)| uid == user_id).count();
         if user_nonces >= 16 {
-            return None;
+            if let Some(oldest_nonce) = self
+                .auth_nonces
+                .iter()
+                .filter(|(_, (uid, _))| uid == user_id)
+                .min_by_key(|(_, (_, exp))| *exp)
+                .map(|(k, _)| k.clone())
+            {
+                self.auth_nonces.remove(&oldest_nonce);
+            }
         }
 
         let (salt, rounds) = if let Some(u) = self.users.iter().find(|u| u.id == user_id && !u.disabled) {
@@ -567,22 +597,9 @@ impl UserStore {
             return Err("invalid credentials".to_string());
         }
 
-        // 4. Issue session
-        // M-09: Sweep expired sessions on each new session issuance and enforce hard capacity limit
-        self.sessions
-            .retain(|_, sess| now.saturating_sub(sess.seen) < SESSION_IDLE_SECS);
-        if self.sessions.len() >= 1024 {
-            self.sessions.clear();
-        }
-
-        let token = random_token();
-        let s = Session {
-            user_id: u.id.clone(),
-            role: u.role,
-            seen: now,
-        };
-        self.sessions.insert(token.clone(), s.clone());
-        Ok((token, s))
+        let user_id = u.id.clone();
+        // 4. Issue session (centralized in mint_session with sweep and LRU eviction)
+        self.mint_session(&user_id, now)
     }
 
     pub fn logout(&mut self, token: &str) {

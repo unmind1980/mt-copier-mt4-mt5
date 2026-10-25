@@ -603,25 +603,29 @@ impl Audit {
                         break;
                     }
                     if let Ok(f) = File::open(&archive_p) {
-                        let mut decoder = GzDecoder::new(f);
-                        let mut gz_text = String::new();
-                        if decoder.read_to_string(&mut gz_text).is_ok() {
-                            let mut archive_recs: Vec<Value> = Vec::new();
-                            for line in gz_text.lines() {
+                        let decoder = GzDecoder::new(f);
+                        let reader = std::io::BufReader::new(decoder);
+                        use std::io::BufRead;
+                        let mut archive_recs: Vec<Value> = Vec::new();
+                        for line_res in reader.lines() {
+                            if let Ok(line) = line_res {
                                 if line.trim().is_empty() {
                                     continue;
                                 }
-                                if let Ok(v) = serde_json::from_str::<Value>(line) {
+                                if let Ok(v) = serde_json::from_str::<Value>(&line) {
                                     stats.lines += 1;
                                     let s = v["seq"].as_u64().unwrap_or(0);
                                     if s > since && s < oldest_active_seq {
                                         archive_recs.push(v);
+                                        if archive_recs.len() + out.len() >= limit * 2 {
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                            archive_recs.extend(out);
-                            out = archive_recs;
                         }
+                        archive_recs.extend(out);
+                        out = archive_recs;
                     }
                 }
             }

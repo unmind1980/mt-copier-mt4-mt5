@@ -1128,15 +1128,18 @@ async fn login(
                 let s = st.lock_or_recover();
                 s.users.stored_hash(&b.id)
             };
-            match stored {
-                Some(h) if crate::users::verify_password(pwd, &h) => {
-                    //--- Re-check under the lock: the user may have been
-                    //--- disabled while we were hashing, and mint_session
-                    //--- refuses that rather than handing out a stale pass.
-                    let mut s = st.lock_or_recover();
-                    s.users.mint_session(&b.id, now)
-                }
-                _ => Err("invalid credentials".to_string()),
+            // R47-14: Equalize timing with dummy hash when user is absent/disabled to prevent enumeration
+            let dummy_hash = format!("dummy_salt_timing${}${}", crate::users::HASH_ROUNDS, "0".repeat(64));
+            let target_hash = stored.as_deref().unwrap_or(&dummy_hash);
+            let verified = crate::users::verify_password(pwd, target_hash) && stored.is_some();
+            if verified {
+                //--- Re-check under the lock: the user may have been
+                //--- disabled while we were hashing, and mint_session
+                //--- refuses that rather than handing out a stale pass.
+                let mut s = st.lock_or_recover();
+                s.users.mint_session(&b.id, now)
+            } else {
+                Err("invalid credentials".to_string())
             }
         } else {
             Err("invalid credentials".to_string())
@@ -1162,6 +1165,10 @@ async fn login(
                 Some(json!({ "role": sess.role.as_str() })),
                 "ok",
             );
+            // R47-11: Clean up plaintext initial admin bootstrap password on successful login
+            if b.id == "admin" {
+                let _ = std::fs::remove_file(".admin_bootstrap_password");
+            }
             let is_https = headers.get("x-forwarded-proto").map(|v| v == "https").unwrap_or(false)
                 || headers.get("x-forwarded-ssl").map(|v| v == "on").unwrap_or(false);
             let secure_attr = if is_https { "; Secure" } else { "" };
@@ -1356,6 +1363,14 @@ async fn users_upsert(
             }
         }
     } else {
+        // R47-32: Enforce minimum password policy on user creation
+        if b.password.chars().count() < 6 {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "password must be at least 6 characters" })),
+            )
+                .into_response();
+        }
         let salt = crate::users::random_token()[..16].to_string();
         hash_password(&b.password, &salt)
     };
@@ -1525,6 +1540,10 @@ async fn change_password(
         Some(json!({ "other_sessions_ended": dropped })),
         "ok",
     );
+    // R47-11: Clean up plaintext initial admin bootstrap password on password change
+    if sess.user_id == "admin" {
+        let _ = std::fs::remove_file(".admin_bootstrap_password");
+    }
     Json(json!({ "ok": true, "other_sessions_ended": dropped })).into_response()
 }
 

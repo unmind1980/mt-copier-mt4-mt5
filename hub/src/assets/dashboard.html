@@ -2088,7 +2088,11 @@ function confirmDialog(opts){
 // ---------------------------------------------------------------- fetch
 function api(path, opts){
   return fetch(path, opts).then(function(r){
-    if(!r.ok) throw new Error(path + " -> " + r.status);
+    if(!r.ok){
+      var err = new Error(path + " -> " + r.status);
+      err.status = r.status;
+      throw err;
+    }
     return r.json();
   });
 }
@@ -3232,23 +3236,6 @@ function renderAlerts(alerts){
     });
   });
 
-  // Ensure minimum initial baseline events if completely clean fresh startup
-  if(s.eventLog.length < 5){
-    var sampleEvents = [
-      { id: "sys:boot", ts: nowSec - 900, kind: "SYSTEM.BOOT", node: "Hub Core", sev: "info", detail: "Central ZMQ router initialized on port 6000 with CURVE encryption" },
-      { id: "sys:http", ts: nowSec - 850, kind: "HTTP.ONLINE", node: "Web Server", sev: "info", detail: "WebUI dashboard listening on 127.0.0.1:6010 (M9 Admin session)" },
-      { id: "sys:audit", ts: nowSec - 700, kind: "AUDIT.READY", node: "Storage", sev: "ok", detail: "Append-only audit engine verified (audit.jsonl active)" },
-      { id: "sys:rule", ts: nowSec - 600, kind: "RISK.ARMED", node: "Circuit Breaker", sev: "ok", detail: "All global risk limits armed (account drawdown cap & position quotas)" },
-      { id: "sys:sync", ts: nowSec - 400, kind: "TELEMETRY.OK", node: "Convergence", sev: "ok", detail: "10Hz telemetry streaming and IH content-hash checking ready" }
-    ];
-    sampleEvents.forEach(function(sev){
-      if(s.eventLog.length < 20 && !s.eventLog.some(function(it){ return it.id === sev.id; })){
-        s.eventLog.push(sev);
-      }
-    });
-    saveStoredEvents();
-  }
-
   // 1. Calculate unread count & key signature
   var unreadCount = 0;
   var currentSig = s.eventLog.map(function(ev){
@@ -3683,10 +3670,11 @@ function refresh(){
       alerts: t.alerts || [],
       curve: t.curve || null
     });
-  }).catch(function(){
-    // A 401 here means the session died between heartbeats - go back to the
-    // login overlay rather than spinning on a page that can never fill.
-    showLogin();
+  }).catch(function(err){
+    // R47-35: Only show login overlay on true 401 Unauthorized; transient network or 5xx errors keep polling
+    if(err && err.status === 401){
+      showLogin();
+    }
   });
 }
 

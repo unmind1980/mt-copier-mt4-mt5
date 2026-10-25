@@ -832,6 +832,16 @@ void TestDedup()
       CopierPreferSurvivor(a,b,0.10)!=CopierPreferSurvivor(b,a,0.10));
    Ok("dedup: age rule is antisymmetric",
       CopierPreferSurvivor(c,d,-1.0)!=CopierPreferSurvivor(d,c,-1.0));
+
+   // NM-01: UidIndex raw string array indexing test
+   string qUids[2];
+   qUids[0]="AAAA1111";
+   qUids[1]="BBBB2222";
+   CopierUidIndex qIdx;
+   qIdx.BuildFromStrings(qUids,2);
+   Ok("uidindex: FindInStrings hit",qIdx.FindInStrings(qUids,"AAAA1111")==0);
+   Ok("uidindex: FindInStrings hit 2",qIdx.FindInStrings(qUids,"BBBB2222")==1);
+   Ok("uidindex: FindInStrings miss",qIdx.FindInStrings(qUids,"CCCC3333")==-1);
   }
 
 //=====================================================================

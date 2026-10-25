@@ -389,6 +389,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十四次审计** | 2026-10-25 15:45 | MT5全异步OrderSendAsync流控并发与MT4零等待极限流水线平仓双引擎 | 大单量马丁网格平仓 |
 | **四十五次审计** | 2026-10-25 18:30 | 全面闭环第45轮深度审计（H-01..H-08、M-01..M-14与关键优化） | 资金安全、协议防线与资源收敛 |
 | **四十六次审计** | 2026-10-25 20:30 | 全面闭环第46轮增量复审（NH-01..NH-06高危、NM-01..NM-14中危与低危优化） | 算法健壮、零等待哈希化与全栈闭环 |
+| **四十七次审计** | 2026-10-25 22:30 | 全面闭环第47轮深度审计（R47-01..R47-35高/中/低危35项全面加固） | 执行原语、状态防护、权限安全与全栈收敛 |
 
 ---
 
@@ -1124,6 +1125,21 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **ALG-01** | **P1 不变量熵空间** | `CopierDefs.mqh:914` | **NH-05 CopierNewUid 算法重构**：彻底废除 `MathRand()%32` LCG 低 5 位周期性碰撞缺陷，改用高精度单调时间戳、账户登录号、自增序列号与 FNV-1a 混淆扩散，提取 8 个完全独立的雪崩位段，恢复满格 $32^8 \approx 1.1 \times 10^{12}$ 熵空间，单测验证 200 个连续生成 0 碰撞。 |
 | **NET-01** | **P1 非阻塞通讯保障** | `CopierTransport.mqh:428` | **NH-06 SendUp 第二帧非阻塞发送**：将第二帧 `send` 的阻塞标志改为 `dontwait=true`，当 Hub 掉线或网络不可达时立即返回 false 而非无限挂起，彻底杜绝 ZMQ_IMMEDIATE=1 模式下卡死 EA 主线程的严重隐患。 |
 | **PERF-01**| **P2 算法与哈希优化** | 全栈各模块 | **NM-01..NM-14 & NL-01..06 全面收口**：`queuedCloseOrTrim` 使用 `CopierUidIndex` 哈希实现真正 $O(N+Q)$ 检索（NM-01）；`ScanAndResolveAccountPositions` 引入 ticket 开放寻址哈希消除移位时的 $O(n^2)$ 线性回扫（NM-02）；解压前增加 `CP_Z85_MAX` 64KB 输入前置拦截防止内存炸弹（NM-03）；`dueDetail` 纳入发送门条件保障面板仓位明细持续上报（NM-04）；报价年龄表槽位扩至 256 防止多品种周末停盘判定失效（NM-05）；`OnTradeTransaction` 改为只置脏标志并触发自泵，消灭单笔订单 6~7 次全量扫描（NM-06）；`CopierDecodeEnv` 改用一趟扫描找分隔符，消除动态数组与字符串临时分配（NM-07）；`create_nonce` 增加每用户上限防止免认证 DoS 阻断全员登录（NM-08）；`CopierSanitize` 增加快速检查，正常品种 0 次 StringReplace（NM-09）；配置重载仅清空 OPEN 动作保留未平仓动作（NM-10）；`g_sweepFailed` 改为文件级全局并在 Sweeper 结束后清空字符串引用（NM-11）；`snap_tx queue full` 告警增加 2 秒去抖限流（NM-12）；交易时段缓存放宽至 1 秒窗口且槽位扩至 64（NM-13）；SSID 变化时清零 `g_snapRejectStreak`（NM-14）；日亏基准缺失与紧急止损取价失败显式告警（NL-01, NL-02）；`CopierNid(0)` 统一防呆（NL-03）；`last_known_receipt` 超限仅 retain 有效节点（NL-04）；直连模式下无条件拦截非法 `SID=hub` 伪造帧（NL-06）。 |
+
+---
+
+### 四十七次审计：全面闭环第47轮深度审计（R47-01..R47-35高/中/低危35项全面加固）（2026-10-25 22:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **EXEC-01** | **P0 执行原语** | `CopierModel.mqh:652` | **R47-01 MT4 SELECT_BY_TICKET 补 OrderCloseTime()!=0 守卫**：彻底解决 MT4 `SELECT_BY_TICKET` 忽略 pool 参数、导致已平仓历史单仍返回 true 的核心缺陷；5 处 "already gone" 守卫恢复正常，杜绝向历史单发 OrderClose/OrderModify 导致的报错与退避污染。 |
+| **EXEC-02** | **P0 挂单保护** | `CopierModel.mqh:1068` | **R47-02 CopierClosePartial 传递 isPending 拒绝挂单**：改用 3 参 resolver 捕获 `isPending`，对未成交挂单返回 `outErr=-4`（unsupported），消除 MT5 挂单部分平仓假成功导致的无限重复派发与两端手数背离。 |
+| **TRD-01** | **P0 确认防抖** | `CopierSender.mq4:284, 1737` | **R47-03 平仓确认窗口改用 CopierNowMs 毫秒时间窗**：增加 `g_slotMissMs` 数组，历史未确认平仓时强制等待 $\ge 2000\text{ms}$ 防抖，彻底杜绝快速 PollMs (5ms) 下 2 个 tick (10ms) 瞬时扫描抖动引发的错误市价平仓与重新开仓。 |
+| **TRD-02** | **P0 人工保护** | `CopierReceiver.mq4:3858-3905` | **R47-04 DedupLocal 内环补齐 IgnoreUids 守卫**：在重复组统计、survivor 选举与 DEDUP 动作入队三个循环全面补齐 `g_ignore`/`g_senderIgnore` 校验，彻底阻断 DedupLocal 误平操作员接管仓位的隐患。 |
+| **SEC-01** | **P1 系统安全** | `hub/src/curve.rs:142, 296, 380` / `hub/src/main.rs:1326` | **R47-08~11 CURVE 密钥与运维安全加固**：`CopierCurveKey.mqh` 增加文件共享标志与 `.bak` 备份，文件被占用时保留旧密钥拒绝误轮换；Hub 私钥及 `.admin_bootstrap_password` 权限收紧为 0600，admin 登录/改密后自动清理明文文件；ZAP DENY/ALLOW 日志 2 秒节流；`curve_clients.txt` 采用 `.tmp` + rename 原子写入。 |
+| **SEC-02** | **P1 会话防线** | `hub/src/users.rs:328, 480` / `hub/src/api.rs:1132, 1360` | **R47-12~14 & R47-32 认证安全与防枚举**：`create_nonce` 超 16 条自动 LRU 淘汰该用户最旧 nonce，防范无认证反向 DoS 锁定登录；`mint_session` 统一会话清理与 LRU 驱逐（废除 clear() 踢全员）；遗留登录对不存在用户跑满 4096 轮哑盐消除时序枚举；管理员建号密码强制 $\ge 6$ 字符下限。 |
+| **SEC-03** | **P1 消息转义** | `hub/src/notifications.rs:260, 910` | **R47-15 DingTalk 通道 Markdown 转义**：实现 `markdown_escape`，对标题、节点名、状态和详情全面转义，阻断节点端注入格式与点击钓鱼。 |
+| **STB-01** | **P2/P3 全栈治理** | 全栈各模块 | **R47-05~07, 16~35 全面收口**：`ExecuteQueue` 增加 `!g_acctScanned` 守卫（R47-05）；快车道前置 `RefreshRisk` 消除风控陈旧计数（R47-06）；Converge 平仓仅在 `PushAction` 成功后 forget stops/peak（R47-07）；MT4 部分平仓链仅在 5 跳耗尽时告警（R47-16）；`UpdateAt` 补 UID 长度校验并清理无用变量（R47-17）；止调节流仅在入队成功后打点（R47-18）；修正券商限额警告文案（R47-19）；删除死变量 `g_epSnap`（R47-20）；`AcquireInstanceLock` 回读校验防 TOCTOU（R47-21）；`SnapTrack` 驱逐时输出告警（R47-22）；Sender PONG 应答传 `centralToo=false`（R47-23）；删除无用 `g_tradeDirty`（R47-24）；`ensure_capacity` 消除 `evicted` 双重累加并记录真实 liveness（R47-25）；`on_reg` 保护非空 VER（R47-26）；解决 z85 pad 0.055% 歧义（R47-27）；CFGR 打印 10 秒限流（R47-28）；仅对 Online 节点评估风险告警（R47-29）；Hub poll 错误增加退避（R47-31）；Dashboard 移除伪造样本事件（R47-33）；审计归档流式解压（R47-34）；Dashboard 仅 401 触发登录浮层（R47-35）。 |
 
 ---
 

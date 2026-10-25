@@ -64,6 +64,16 @@ pub enum Liveness {
     Offline,
 }
 
+impl Liveness {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Liveness::Online => "online",
+            Liveness::Stale => "stale",
+            Liveness::Offline => "offline",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Node {
     /// `ROLE:ACC` - the plan's D3. The role is part of the key because one
@@ -317,7 +327,10 @@ impl Registry {
         //--- First sight of this key, as opposed to a re-registration.
         let is_new = !self.nodes.contains_key(&key_of(role, acc));
         let e = self.entry(role, acc, now);
-        e.ver = ver.to_string();
+        // R47-26: An empty VER must not blank out an already known version
+        if !ver.is_empty() {
+            e.ver = ver.to_string();
+        }
         //--- An empty NAME must not wipe one we already have: a node that
         //--- registered with a name and later re-registers without one (an
         //--- older build, a stripped config) would otherwise lose it.
@@ -497,9 +510,14 @@ impl Registry {
 
     fn ensure_capacity(&mut self, now: Instant) {
         if self.nodes.len() >= MAX_NODES {
-            // M-08: Collect evicted nodes from evict() so side-tables are cleaned up
-            let evicted = self.evict(now);
-            self.capacity_evicted.extend(evicted);
+            // R47-25: Inline retain to avoid double-counting self.evicted
+            self.nodes.retain(|k, n| {
+                let keep = now.saturating_duration_since(n.last_seen) < EVICT_AFTER;
+                if !keep {
+                    self.capacity_evicted.push(k.clone());
+                }
+                keep
+            });
             if self.nodes.len() >= MAX_NODES {
                 // Priority 1: Evict oldest Offline node first
                 // Priority 2: Evict oldest Stale node

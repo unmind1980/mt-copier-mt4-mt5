@@ -649,6 +649,8 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
 #else
    if(identifier<=0 || identifier>2147483647) return false;
    if(!OrderSelect((int)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
+   // R47-01: OrderSelect by ticket ignores pool in MT4; closed orders in history must return false
+   if(OrderCloseTime()!=0) return false;
    ticket=identifier;
    int t=(int)OrderType();
    isPending=(t!=OP_BUY && t!=OP_SELL);
@@ -1063,10 +1065,18 @@ bool CopierClosePartial(const long identifier,const double lots,
    if(lots<=0.0) return true;
 
    long ticket=0;
-   if(!CopierResolveCloseTicket(identifier,ticket))
+   bool isPending=false;
+   // R47-02: Use 3-arg resolver to capture isPending
+   if(!CopierResolveCloseTicket(identifier,ticket,isPending))
      {
       outErr=0;            // already gone
       return true;
+     }
+
+   if(isPending)
+     {
+      outErr=-4;           // R47-02: partial close of pending orders is unsupported
+      return false;
      }
 
 #ifdef __MQL5__

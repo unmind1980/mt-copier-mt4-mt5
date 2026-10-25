@@ -140,6 +140,11 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
     //--- user store use: a crash mid-write must not leave half a keypair.
     let tmp = path.with_extension("keys.tmp");
     std::fs::write(&tmp, &text).map_err(|e| format!("{}: {}", tmp.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
 
     Ok((HubKeys { public, secret }, true))
@@ -293,7 +298,9 @@ pub fn append_learned_key(path: &Path, z85: &str) -> Result<bool, String> {
             .map(|d| d.as_secs())
             .unwrap_or(0)
     ));
-    std::fs::write(path, text).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let tmp = path.with_extension("txt.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("{}: {}", tmp.display(), e))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
     Ok(true)
 }
 
@@ -376,6 +383,8 @@ pub fn spawn_zap_handler(
         }
 
         let mut denied: u64 = 0;
+        let mut last_deny_log = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        let mut suppressed_denies: u64 = 0;
         loop {
             //--- 7 frames: version, request_id, domain, address, identity,
             //--- mechanism, credentials.
@@ -397,10 +406,16 @@ pub fn spawn_zap_handler(
             //--- exists for.
             let (code, text, user): (&str, &str, Vec<u8>) = if mechanism != "CURVE" {
                 denied += 1;
-                println!(
-                    "[hub] ZAP DENY  a {} client tried to connect to a CURVE hub",
-                    if mechanism.is_empty() { "plaintext" } else { mechanism.as_str() }
-                );
+                suppressed_denies += 1;
+                if last_deny_log.elapsed() >= std::time::Duration::from_secs(2) {
+                    println!(
+                        "[hub] ZAP DENY  a {} client tried to connect to a CURVE hub ({} denied in window, {} total)",
+                        if mechanism.is_empty() { "plaintext" } else { mechanism.as_str() },
+                        suppressed_denies, denied
+                    );
+                    last_deny_log = std::time::Instant::now();
+                    suppressed_denies = 0;
+                }
                 ("400", "this hub requires CURVE", Vec::new())
             } else {
                 let key = describe_credential(&cred);
@@ -423,7 +438,7 @@ pub fn spawn_zap_handler(
                                 clients_path.display(),
                                 e
                             ),
-                        }
+                            }
                         l.add_key(&key);
                     }
                     if known {
@@ -435,10 +450,15 @@ pub fn spawn_zap_handler(
                     ("200", "OK", cred.clone())
                 } else {
                     denied += 1;
-                    println!(
-                        "[hub] ZAP DENY  unknown client key {} ({} denied so far)",
-                        key, denied
-                    );
+                    suppressed_denies += 1;
+                    if last_deny_log.elapsed() >= std::time::Duration::from_secs(2) {
+                        println!(
+                            "[hub] ZAP DENY  unknown client key {} ({} denied in window, {} total)",
+                            key, suppressed_denies, denied
+                        );
+                        last_deny_log = std::time::Instant::now();
+                        suppressed_denies = 0;
+                    }
                     drop(l);
                     ("400", "key is not on this hub's allow-list", Vec::new())
                 }

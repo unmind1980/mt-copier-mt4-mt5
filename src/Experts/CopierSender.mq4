@@ -281,6 +281,7 @@ int              g_prevSlotScratch[CP_MAX_POSITIONS];
 int              g_slotStamp[CP_MAX_POSITIONS];   // index: slot in g_prev
 int              g_rowStamp[CP_MAX_POSITIONS];    // index: row in this tick
 int              g_slotMissCount[CP_MAX_POSITIONS];// consecutive ticks slot was missing from scan
+long             g_slotMissMs[CP_MAX_POSITIONS];   // R47-03: timestamp when slot first went missing
 double           g_openLots[CP_MAX_POSITIONS];    // initial lots at position opening
 int              g_stampGen=1;
 
@@ -732,6 +733,7 @@ int OnInit()
    g_prev.Clear();
    ArrayInitialize(g_openLots,0.0);
    ArrayInitialize(g_slotMissCount,0);
+   ArrayInitialize(g_slotMissMs,0);
 
    //--- restore UID<->ticket mapping so a restart does not re-announce
    //--- positions that are already open (which would double them up)
@@ -1145,22 +1147,7 @@ void SnapTrack(const string who,const string reported,const bool isFromHub=false
 
    long now=CopierNowMs();
    int idx=SnapStaleIndex(who);
-   if(idx>=0) g_snapIsHub[idx]=isFromHub;
-   //--- Table full: this peer is past CP_MAX_STALE_PEERS distinct receipt
-   //--- senders. Skipping the tracking is a degradation, not a failure - the
-   //--- periodic SnapshotSeconds broadcast still reaches it. Tracking it in
-   //--- somebody else's slot would be a WRONG answer for both peers, which is
-   //--- strictly worse than an untracked one.
-   if(idx<0)
-     {
-      if(g_once.ShouldEmit("snapstale|full"))
-         g_log.Warn("receipt tracking table is full ("+(string)CP_MAX_STALE_PEERS
-                    +" peers); receipt "+(string)who+" is not tracked, so no"
-                    +" targeted repair for it - it still gets the periodic"
-                    +" SnapshotSeconds broadcast. Raise CP_MAX_STALE_PEERS if"
-                    +" this persists.");
-      return;
-     }
+   g_snapIsHub[idx]=isFromHub;
 
    //--- cadence, measured from the receipts themselves. Smoothed by halving
    //--- so one delayed heartbeat does not redefine "slow" for the next window.
@@ -1314,6 +1301,8 @@ int SnapStaleIndex(const string who)
         {
          if(g_snapRcptMs[i]<g_snapRcptMs[oldest]) oldest=i;
         }
+      if(g_snapStaleN[oldest]>0 && g_once.ShouldEmit("snapstale_evict|"+g_snapStaleWho[oldest]))
+         g_log.Warn("R47-22: receipt tracking table full; evicting peer "+g_snapStaleWho[oldest]+" (stale run "+(string)g_snapStaleN[oldest]+") to track "+who);
       n=oldest;
      }
 
@@ -1536,12 +1525,6 @@ void HandleSenderStat(const CopierEnv &se)
 void OnTimer()
   {
    long now=CopierNowMs();
-#ifdef __MQL5__
-   if(g_tradeDirty)
-     {
-      g_tradeDirty=false;
-     }
-#endif
 
    //--- 0) Fast-path: drain incoming PONG and status BEFORE scanning positions
    int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
@@ -1571,10 +1554,11 @@ void OnTimer()
          if(StringLen(pfrom)>0)
            {
             g_peers.Seen(pfrom);
+            // R47-23: Pass centralToo=false for direct PONG echo responses
             Emit(CP_T_PONG,
                  CopierPayloadPong(CopierParseLong(pms),
                                    (string)CopierAccountLogin(),pfrom),
-                 false);
+                 false, false);
            }
          continue;
         }
@@ -1662,6 +1646,7 @@ void OnTimer()
         {
          g_slotStamp[slot]=g_stampGen;
          g_slotMissCount[slot]=0;
+         g_slotMissMs[slot]=0;
          bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false;
          double prevLots=0.0;
          int prevKind=0;
@@ -1729,13 +1714,18 @@ void OnTimer()
       if(g_slotStamp[k]==g_stampGen)
         {
          g_slotMissCount[k]=0;
+         g_slotMissMs[k]=0;
          continue;
         }
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
       g_slotMissCount[k]++;
-      if(g_slotMissCount[k]<2 && !CopierIsTicketClosedInHistory(q.ticket)) continue; // instant 0ms close when confirmed in history
+      if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
+      // R47-03: Instant 0ms close when confirmed in history; otherwise enforce >=2000ms debounce
+      // window (protects against transient scan enumeration misses under fast PollMs=5)
+      if(!CopierIsTicketClosedInHistory(q.ticket) && (now-g_slotMissMs[k]<2000)) continue;
       g_slotMissCount[k]=0;
+      g_slotMissMs[k]=0;
       EmitClose(q);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
       g_stateDirty=true;
@@ -1878,10 +1868,11 @@ void OnTimer()
          if(StringLen(pfrom)>0)
            {
             g_peers.Seen(pfrom);
+            // R47-23: Pass centralToo=false for direct PONG echo responses
             Emit(CP_T_PONG,
                  CopierPayloadPong(CopierParseLong(pms),
                                    (string)CopierAccountLogin(),pfrom),
-                 false);
+                 false, false);
            }
          continue;
         }
@@ -1999,7 +1990,6 @@ void OnTimer()
   }
 
 #ifdef __MQL5__
-bool g_tradeDirty=false;
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
@@ -2010,8 +2000,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       trans.type==TRADE_TRANSACTION_ORDER_DELETE ||
       trans.type==TRADE_TRANSACTION_HISTORY_ADD)
      {
-      // NM-06: Set dirty flag and pulse high-priority pump instead of re-entering full OnTimer 6-7 times
-      g_tradeDirty=true;
+      // R47-24: Pulse high-priority pump directly without dead dirty-flag variable
       g_pump.Trigger();
      }
   }

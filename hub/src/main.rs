@@ -1322,6 +1322,11 @@ fn main() {
                 } else {
                     let pw_file = users_path.parent().unwrap_or(std::path::Path::new(".")).join(".admin_bootstrap_password");
                     let _ = std::fs::write(&pw_file, format!("{}\n", pw));
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&pw_file, std::fs::Permissions::from_mode(0o600));
+                    }
                     println!("[hub] M9 first run: created user 'admin'. Initial password written to:");
                     println!("[hub]     {} (delete after first login)", pw_file.display());
                     println!("[hub]     (or pass MTC_ADMIN_PASSWORD env var on launch)");
@@ -1344,6 +1349,7 @@ fn main() {
     let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
     let mut dropped_security_frames: u64 = 0;
     let mut last_snapq_warn = Instant::now() - Duration::from_secs(10);
+    let mut last_cfgr_print: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
 
     //--- Background Worker for Asynchronous Snapshot Parsing
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
@@ -1978,18 +1984,30 @@ fn main() {
                                 format!("{}:{}", crole, cacc)
                             };
                             if args.writes {
+                                let should_log = match last_cfgr_print.get(&key) {
+                                    Some(t) => t.elapsed() >= Duration::from_secs(10),
+                                    None => true,
+                                };
                                 match cfg.current(&key) {
                                     Some(r) => {
                                         let c = cmds.issue_cfg(&key, r.rev, "", "");
-                                        println!(
-                                            "[hub] {} asked for its config - queued {} (rev {})",
-                                            key, c.id, r.rev
-                                        );
+                                        if should_log {
+                                            last_cfgr_print.insert(key.clone(), Instant::now());
+                                            println!(
+                                                "[hub] {} asked for its config - queued {} (rev {})",
+                                                key, c.id, r.rev
+                                            );
+                                        }
                                     }
-                                    None => println!(
-                                        "[hub] {} asked for its config but this hub has none",
-                                        key
-                                    ),
+                                    None => {
+                                        if should_log {
+                                            last_cfgr_print.insert(key.clone(), Instant::now());
+                                            println!(
+                                                "[hub] {} asked for its config but this hub has none",
+                                                key
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2291,7 +2309,10 @@ fn main() {
                     }
                 }
             }
-            Err(e) => eprintln!("[hub] poll failed: {}", e),
+            Err(e) => {
+                eprintln!("[hub] poll failed: {}", e);
+                std::thread::sleep(Duration::from_millis(POLL_MS as u64));
+            }
         }
 
         if args.stats_every > 0.0 && last_stats.elapsed().as_secs_f64() >= args.stats_every {
@@ -2425,6 +2446,7 @@ fn main() {
                 for key in &forgotten {
                     last_liveness.remove(key);
                     last_cfg_pull.remove(key);
+                    last_cfgr_print.remove(key);
                     if let Some((role, acc)) = key.split_once(':') {
                         if role == "sender" {
                             last_known_receipt.remove(acc);
@@ -2501,12 +2523,12 @@ fn main() {
                     }
                 }
                 for key in forgotten {
-                    last_liveness.remove(&key);
+                    let prev_live = last_liveness.remove(&key).unwrap_or(Liveness::Offline);
                     audit.record(
                         "", "",
                         "node.evicted",
                         &key,
-                        Some(serde_json::json!({ "liveness": "offline" })),
+                        Some(serde_json::json!({ "liveness": prev_live.as_str() })),
                         None,
                         "ok",
                     );

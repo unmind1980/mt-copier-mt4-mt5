@@ -155,21 +155,20 @@ private:
 
    int               FileFlags(const int extra,const int rw) const
      {
-      //--- FILE_COMMON when asked for; the flag is the same constant in
-      //--- both builds, so no #ifdef is needed here.
-      if(m_common) return rw|FILE_TXT|FILE_ANSI|FILE_COMMON|extra;
-      return rw|FILE_TXT|FILE_ANSI|extra;
+      // R47-08: Add FILE_SHARE_READ and FILE_SHARE_WRITE so file isn't blocked by concurrent readers
+      int flags=rw|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE|extra;
+      if(m_common) flags|=FILE_COMMON;
+      return flags;
      }
 
    bool              WriteFile(const string pub,const string sec,
                                const string why)
      {
-      //--- Delete first: FileOpen with FILE_WRITE alone truncates, but a
-      //--- file left open by an editor would then fail to open at all, and
-      //--- the failure would look like "could not generate a key".
-      //--- Deleting first makes the replacement atomic from the reader's
-      //--- point of view - either the old file is gone or the new one is
-      //--- complete, never a half-written key.
+      // R47-08: Backup existing key file to .bak before replacing
+      if(FileIsExist(m_path, m_common?FILE_COMMON:0))
+        {
+         FileCopy(m_path, m_common?FILE_COMMON:0, m_path+".bak", m_common?FILE_COMMON:0);
+        }
       FileDelete(m_path, m_common?FILE_COMMON:0);
 
       int h=FileOpen(m_path,FileFlags(0,FILE_WRITE));
@@ -286,11 +285,20 @@ public:
          return CP_KEY_READ;
         }
 
-      //--- Either nothing is there or what is there is unusable. Distinguish
-      //--- the two ONLY for the message: the action is the same.
-      int probe=FileOpen(m_path,FileFlags(0,FILE_READ));
-      bool existed=false;
-      if(probe!=INVALID_HANDLE) { existed=true; FileClose(probe); }
+      // R47-08: If the file exists but could not be opened (e.g. transient lock or AV scan),
+      // preserve the existing file to avoid silently regenerating and disconnecting CURVE links.
+      bool existed=FileIsExist(m_path, m_common?FILE_COMMON:0);
+      if(existed)
+        {
+         int probe=FileOpen(m_path,FileFlags(0,FILE_READ));
+         if(probe==INVALID_HANDLE)
+           {
+            if(CheckPointer(log)!=POINTER_INVALID)
+               log.Error("CURVE key: "+m_path+" exists but could not be opened (locked/busy). Preserving key file.");
+            return CP_KEY_FAILED;
+           }
+         FileClose(probe);
+        }
 
       if(!Z85::generateKeyPair(pub,sec))
         {

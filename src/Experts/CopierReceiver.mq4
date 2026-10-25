@@ -295,7 +295,6 @@ CopierIgnore         g_senderIgnore[CP_MAX_SENDERS];
 
 string  g_sid[CP_MAX_SENDERS];
 string  g_epEvents[CP_MAX_SENDERS];
-string  g_epSnap[CP_MAX_SENDERS];
 string  g_serverKey[CP_MAX_SENDERS];
 //--- This receiver's OWN public key, loaded from the key file at startup and
 //--- never typed - see CopierCurveKey.mqh. Kept in a global so the log line
@@ -1718,7 +1717,6 @@ bool LoadConfigForHub()
       g_sid[i]=ini.Get(sec,"id","");
       //--- cleared, NOT read - see the note above
       g_epEvents[i] ="";
-      g_epSnap[i]   ="";
       g_serverKey[i]="";
       g_suffix[i]   =ini.Get(sec,"suffix","");
 
@@ -1866,7 +1864,8 @@ string ResolveUid(const CopierPos &p)
       if(g_recKnown.GetByTicket(from,prev)) return prev.uid;
 #ifndef __MQL5__
       long curFrom=from;
-      for(int hops=0;hops<5;hops++)
+      int hops=0;
+      for(;hops<5;hops++)
         {
          if(!OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
          long prevFrom=CopierMt4FromTicket(OrderComment());
@@ -1874,7 +1873,8 @@ string ResolveUid(const CopierPos &p)
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
          curFrom=prevFrom;
         }
-      if(g_once.ShouldEmit("recvfromhops|"+(string)p.ticket))
+      // R47-16: Only warn if the loop actually exhausted all 5 hops without resolving
+      if(hops>=5 && g_once.ShouldEmit("recvfromhops|"+(string)p.ticket))
          g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket);
 #endif
      }
@@ -2123,6 +2123,12 @@ bool AcquireInstanceLock()
         }
      }
    SetLockChartId(name,myChart);
+   // R47-21: Verify atomic acquisition against concurrent chart startup races
+   if(GetLockChartId(name)!=myChart)
+     {
+      g_log.Error("Failed to acquire lock "+name+": concurrent instance claimed lock first. Refusing to start.");
+      return false;
+     }
    g_lockAcquired=true;
    return true;
   }
@@ -2407,7 +2413,7 @@ void ReportBrokerLimits()
    //--- is a configuration fact, not a runtime bug.
    if(g_brokerOrdLimit>0 && g_brokerOrdLimit<CP_MAX_POSITIONS)
       g_log.Warn("this broker allows only "+(string)g_brokerOrdLimit
-                 +" pending order(s) while the copier's table holds "
+                 +" pending + open order(s) combined while the copier's table holds "
                  +(string)CP_MAX_POSITIONS+". A sender holding more working"
                  +" orders than that cannot be mirrored in full: the excess"
                  +" is skipped before it is sent, so nothing is refused. The"
@@ -2863,6 +2869,12 @@ void ExecuteQueue()
       //--- allows the entry through the normal path.
       if(a.kind==CP_ACT_OPEN)
         {
+         // R47-05: Defend against unpopulated account positions before initial scan completes
+         if(!g_acctScanned)
+           {
+            ShiftQueue();
+            continue;
+           }
          string why="";
          if(!g_risk.AllowOpen(a.lots,g_ourCount,g_ourLots,0,0.0,why))
            {
@@ -3779,7 +3791,6 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(g_senderCfg[si].stopsThrottleSeconds>0 && g_stLastMs[oi]>=0
          && nowMs-g_stLastMs[oi]<(long)g_senderCfg[si].stopsThrottleSeconds*1000)
          return;
-      g_stLastMs[oi]=nowMs;
      }
 
    //--- the target stops are part of the dedup key: a SECOND change to a
@@ -3798,22 +3809,26 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                           wantSl,wantTp,
                           local.kind,local.ptype,actPPrice,actPStop,actPExp);
 
-   //--- Action queued: only record signature when successfully pushed to throttle until broker applies
-   if(pushed && local.ticket!=0)
+   //--- Action queued: only record signature and throttle timestamp when successfully pushed
+   if(pushed)
      {
-      g_stopSig[sh].ticket=local.ticket;
-      g_stopSig[sh].epoch=g_stOvEpoch;
-      g_stopSig[sh].v[0]=desired.sl;
-      g_stopSig[sh].v[1]=desired.tp;
-      g_stopSig[sh].v[2]=desired.openPx;
-      g_stopSig[sh].v[3]=local.sl;
-      g_stopSig[sh].v[4]=local.tp;
-      g_stopSig[sh].v[5]=local.pprice;
-      g_stopSig[sh].v[6]=local.pstop;
-      g_stopSig[sh].v[7]=(double)local.pexpire;
-      g_stopSig[sh].v[8]=desired.pprice;
-      g_stopSig[sh].v[9]=desired.pstop;
-      g_stopSig[sh].v[10]=(double)desired.pexpire;
+      if(oi>=0) g_stLastMs[oi]=nowMs; // R47-18: Consume throttle window only on successful queue push
+      if(local.ticket!=0)
+        {
+         g_stopSig[sh].ticket=local.ticket;
+         g_stopSig[sh].epoch=g_stOvEpoch;
+         g_stopSig[sh].v[0]=desired.sl;
+         g_stopSig[sh].v[1]=desired.tp;
+         g_stopSig[sh].v[2]=desired.openPx;
+         g_stopSig[sh].v[3]=local.sl;
+         g_stopSig[sh].v[4]=local.tp;
+         g_stopSig[sh].v[5]=local.pprice;
+         g_stopSig[sh].v[6]=local.pstop;
+         g_stopSig[sh].v[7]=(double)local.pexpire;
+         g_stopSig[sh].v[8]=desired.pprice;
+         g_stopSig[sh].v[9]=desired.pstop;
+         g_stopSig[sh].v[10]=(double)desired.pexpire;
+        }
      }
   }
 
@@ -3858,6 +3873,8 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
       for(int k=i;k<ln;k++)
         {
          if(drop[k]!=0) continue;
+         // R47-04: Exclude operator-ignored UIDs in group counting
+         if(g_ignore.Has(loc[k].uid) || (si>=0 && si<g_nSenders && g_senderIgnore[si].Has(loc[k].uid))) continue;
          if(loc[k].uid==loc[i].uid) groupN++;
         }
       if(groupN<2) continue;
@@ -3893,6 +3910,8 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
       for(int k=i+1;k<ln;k++)
         {
          if(drop[k]!=0) continue;
+         // R47-04: Exclude operator-ignored UIDs in survivor selection
+         if(g_ignore.Has(loc[k].uid) || (si>=0 && si<g_nSenders && g_senderIgnore[si].Has(loc[k].uid))) continue;
          if(loc[k].uid!=loc[i].uid) continue;
          if(CopierPreferSurvivor(loc[k],loc[keep],want)) keep=k;
         }
@@ -3900,6 +3919,8 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
       for(int k=i;k<ln;k++)
         {
          if(drop[k]!=0) continue;
+         // R47-04: Exclude operator-ignored UIDs from drop and dedup action push
+         if(g_ignore.Has(loc[k].uid) || (si>=0 && si<g_nSenders && g_senderIgnore[si].Has(loc[k].uid))) continue;
          if(loc[k].uid!=loc[i].uid) continue;
          if(k==keep) continue;
 
@@ -5104,10 +5125,13 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
-                 0,"",0.0,0.0,g_locScratch[i].kind);
-      ForgetSenderPeakLots(g_locScratch[i].uid);
-      StopsForget(g_locScratch[i].uid);
+      // R47-07: Only forget peak lots and stops if the close action was successfully queued
+      if(PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
+                 0,"",0.0,0.0,g_locScratch[i].kind))
+        {
+         ForgetSenderPeakLots(g_locScratch[i].uid);
+         StopsForget(g_locScratch[i].uid);
+        }
      }
   }
 
@@ -7098,6 +7122,7 @@ void OnTimer()
       if(hasFastAction)
         {
          g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
+         RefreshRisk();    // R47-06: Update account position risk counts before fast-track converge & execute
          for(int i=0;i<g_nSenders;i++)
            {
             if(!g_stale[i] && g_ready[i]) ConvergeSender(i);

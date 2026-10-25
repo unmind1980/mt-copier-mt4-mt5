@@ -137,7 +137,6 @@ public:
      {
       m_tkValid=false;
       ArrayInitialize(m_tkSlot,0);
-      int n=0;
       for(int i=0;i<CP_MAX_POSITIONS;i++)
         {
          if(!SlotValid(i)) continue;
@@ -151,7 +150,6 @@ public:
               {
                m_tkSlot[k]=i+1;
                m_tkHash[k]=h;
-               n++;
                placed=true;
                break;
               }
@@ -349,7 +347,8 @@ public:
 
    bool              UpdateAt(const int i,const CopierPos &p)
      {
-      if(i<0 || i>=CP_MAX_POSITIONS) return false;
+      // R47-17: Validate UID length so slot cannot become used with malformed UID
+      if(i<0 || i>=CP_MAX_POSITIONS || StringLen(p.uid)!=CP_UID_LEN) return false;
       bool wasValid=SlotValid(i);
       m_p[i]=p;
       m_p[i].used=true;

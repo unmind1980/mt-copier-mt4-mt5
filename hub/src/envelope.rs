@@ -109,10 +109,22 @@ const MAX_DECOMPRESSED_LEN: u64 = 4 * 1024 * 1024; // 4 MiB protection against Z
 pub fn decompress_field(field_bytes: &[u8]) -> String {
     if field_bytes.starts_with(b"1:") {
         let rest = &field_bytes[2..];
-        let (pad, z85_slice) = if rest.len() >= 2 && rest[1] == b':' && rest[0] >= b'0' && rest[0] <= b'3' {
-            ((rest[0] - b'0') as usize, &rest[2..])
-        } else {
-            (0, rest)
+        // R47-27: Resolve z85 pad prefix ambiguity.
+        // If rest is already a multiple of 5, it cannot have a 2-byte prefix.
+        let (pad, z85_slice) = {
+            let s_raw = std::str::from_utf8(rest).map(|s| s.trim()).unwrap_or("");
+            if s_raw.len() % 5 == 0 {
+                (0, rest)
+            } else if rest.len() >= 2 && rest[1] == b':' && rest[0] >= b'0' && rest[0] <= b'3' {
+                let s_prefixed = std::str::from_utf8(&rest[2..]).map(|s| s.trim()).unwrap_or("");
+                if s_prefixed.len() % 5 == 0 {
+                    ((rest[0] - b'0') as usize, &rest[2..])
+                } else {
+                    (0, rest)
+                }
+            } else {
+                (0, rest)
+            }
         };
         if let Ok(z85_str) = std::str::from_utf8(z85_slice) {
             if let Ok(mut raw_bytes) = zmq::z85_decode(z85_str.trim()) {

@@ -264,6 +264,21 @@ pub fn html_escape(s: &str) -> String {
     out
 }
 
+// R47-15: Markdown special character escaping for DingTalk channel to prevent formatting/link injection
+pub fn markdown_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | '*' | '_' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '!' | '`' | '<' | '>' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Byte slices on a &str are a panic waiting for a multibyte secret.
 /// `&s[..4]` and `&s[len-4..]` are only valid on char boundaries, and the
 /// first token containing ONE non-ASCII character made the API thread
@@ -908,7 +923,11 @@ async fn send_dingtalk(
         - **Target**: `{}`\n\
         - **Time**: {}\n\
         - **Detail**: {}",
-        fmt.title, fmt.severity_badge, fmt.node, fmt.time_str, fmt.detail_summary
+        markdown_escape(&fmt.title),
+        markdown_escape(&fmt.severity_badge),
+        markdown_escape(&fmt.node),
+        markdown_escape(&fmt.time_str),
+        markdown_escape(&fmt.detail_summary)
     );
 
     let payload = json!({
