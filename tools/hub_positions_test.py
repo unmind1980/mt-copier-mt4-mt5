@@ -131,7 +131,7 @@ def main():
     # targeted repair has. It must land on the SENDER's row.
     p2 = snap([rec("DDDD", "GBPUSD", 1, "0.25000000")], receipt="beefbeef")
     sender.send_multipart([RECV_NID.encode(), env(SID, "SNAP", p2, seq=8)])
-    time.sleep(1.6)               # a stats window must pass
+    time.sleep(2.5)               # a stats window must pass
 
     hub.terminate()
     try:

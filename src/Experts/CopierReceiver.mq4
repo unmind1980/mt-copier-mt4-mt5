@@ -2680,9 +2680,25 @@ void ExecuteQueue()
    ArrayInitialize(sHeldBase,0);
    ArrayInitialize(sHeldBaseLots,0.0);
    ArrayInitialize(sHeldBaseKnown,false);
+
+   //--- Assess if this is a Batch Close operation (e.g. Martingale/Grid basket exit, or closeall, or >1 close queued)
+   int closeCount=0;
+   for(int qi=0; qi<g_qn; qi++)
+     {
+      int qk=g_q[g_qHead+qi].kind;
+      if(qk==CP_ACT_CLOSE || qk==CP_ACT_TRIM || qk==CP_ACT_DEDUP)
+         closeCount++;
+     }
+   bool isBatchClose=(closeCount>1 || g_cmdCloseAllActive || g_riskCloseAllPending);
+   int maxActions=(isBatchClose ? CP_MAX_ACTIONS : MaxActionsPerTick);
+
+   static CopierAction s_sweepFailed[CP_MAX_ACTIONS];
+   int sweepCount=0;
+   int asyncBatchCount=0;
+
    //--- `skipped` bounds a full rotation, so a queue in which EVERY action is
    //--- blocked does not spin through itself ten times a second.
-   while(g_qn>0 && done<MaxActionsPerTick && skipped<=g_qn)
+   while(g_qn>0 && done<maxActions && skipped<=g_qn)
      {
       CopierAction a=g_q[g_qHead];
       int err=0;
@@ -2958,13 +2974,40 @@ void ExecuteQueue()
       else
         {
          int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         // Exit Slippage Buffer: in batch close mode, dynamically expand slippage tolerance to 100 points (10 pips)
+         // to absorb book micro-ticks and prevent 10004 / 138 Requote rejections
+         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
+            dev = MathMax(dev, 100);
+
+#ifdef __MQL5__
+         bool asyncMode = isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP);
+         if(asyncMode)
+           {
+            asyncBatchCount++;
+            if((asyncBatchCount % 10) == 0)
+              {
+               // Token-Bucket Pacing: 20ms pause every 10 orders to protect broker rate limit
+               Sleep(20);
+              }
+           }
+         double prefetchedPx = 0.0;
+#else
+         bool asyncMode = false;
+         double prefetchedPx = 0.0;
+         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
+           {
+            int ordType = (a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
+            prefetchedPx = (ordType==OP_BUY)?MarketInfo(a.sym,MODE_BID):MarketInfo(a.sym,MODE_ASK);
+           }
+#endif
+
          if(a.kind==CP_ACT_TRIM)
             ok=CopierClosePartial(a.ticket,a.lots,a.sym,a.side,
                                   g_magic[a.senderIdx],
                                   CopierCommentForUid(a.uid,a.senderTicket),
                                   dev,err);
          else
-            ok=CopierClosePosition(a.ticket,dev,err);
+            ok=CopierClosePosition(a.ticket,dev,err,asyncMode,prefetchedPx);
         }
 
       if(ok)
@@ -3082,6 +3125,12 @@ void ExecuteQueue()
         }
       else
         {
+         // Two-Pass Sweeper: record failed batch close action for immediate second-pass retry
+         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && sweepCount<CP_MAX_ACTIONS)
+           {
+            s_sweepFailed[sweepCount++]=a;
+           }
+
          //--- Park this action briefly. A failed action is shifted off the
          //--- queue and its key is never recorded as done, so converge
          //--- re-derives it on the very next pass - ten times a second,
@@ -3258,6 +3307,35 @@ void ExecuteQueue()
         }
       ShiftQueue();
       done++;
+     }
+
+   //--- Two-Pass Sweeper: for batch close operations (Martingale/Grid exits),
+   //--- immediately perform a clean second sweep for any straggler orders that failed the fast pass
+   if(isBatchClose && sweepCount > 0)
+     {
+#ifndef __MQL5__
+      RefreshRates();
+#endif
+      Sleep(30);
+      for(int s=0; s<sweepCount; s++)
+        {
+         CopierAction sa = s_sweepFailed[s];
+         int sdev = (sa.senderIdx>=0 && sa.senderIdx<g_nSenders)?g_senderCfg[sa.senderIdx].deviationPoints:DeviationPoints;
+         sdev = MathMax(sdev, 100);
+         int serr = 0;
+         bool sok = CopierClosePosition(sa.ticket, sdev, serr, false, 0.0);
+         if(sok)
+           {
+            g_backoff.Clear(sa.key);
+            if(sa.ordKind==CP_ORD_MARKET && g_ourCount>0) g_ourCount--;
+            g_mapDirty=true;
+            g_log.Info("Two-Pass Sweeper: successfully closed straggler ticket "+(string)sa.ticket+" uid "+sa.uid);
+           }
+         else
+           {
+            g_log.Warn("Two-Pass Sweeper: straggler ticket "+(string)sa.ticket+" uid "+sa.uid+" failed second pass (err="+(string)serr+")");
+           }
+        }
      }
   }
 
