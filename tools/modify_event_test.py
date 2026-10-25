@@ -66,12 +66,22 @@ def parse_modify(payload):
             kv[k] = v
     if not kv.get("UID"):
         return None
-    return {
-        "uid": kv["UID"],
-        "opn": float(kv.get("OPN", 0.0)),
-        "sl": float(kv.get("SL", 0.0)),
-        "tp": float(kv.get("TP", 0.0)),
-    }
+    if "OPN" not in kv or "SL" not in kv or "TP" not in kv:
+        return None
+    try:
+        opn = float(kv["OPN"])
+        sl = float(kv["SL"])
+        tp = float(kv["TP"])
+        if opn < 0.0 or sl < 0.0 or tp < 0.0:
+            return None
+        return {
+            "uid": kv["UID"],
+            "opn": opn,
+            "sl": sl,
+            "tp": tp,
+        }
+    except ValueError:
+        return None
 
 
 class Stops:

@@ -116,8 +116,10 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
         };
         if let Ok(z85_str) = std::str::from_utf8(z85_slice) {
             if let Ok(mut raw_bytes) = zmq::z85_decode(z85_str.trim()) {
-                if pad > 0 && raw_bytes.len() >= pad {
-                    raw_bytes.truncate(raw_bytes.len() - pad);
+                if pad > 0 && pad <= 3 && raw_bytes.len() >= pad {
+                    if raw_bytes[raw_bytes.len() - pad..].iter().all(|&b| b == 0) {
+                        raw_bytes.truncate(raw_bytes.len() - pad);
+                    }
                 }
                 // Check if this is a PKZIP container (MQL CryptEncode CRYPT_ARCH_ZIP output)
                 if raw_bytes.starts_with(b"PK\x03\x04") && raw_bytes.len() >= 30 {
@@ -126,16 +128,17 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                     let extra_len = u16::from_le_bytes(raw_bytes[28..30].try_into().unwrap_or([0; 2])) as usize;
                     let data_start = 30 + name_len + extra_len;
                     if data_start <= raw_bytes.len() {
-                        let mut data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
+                        let data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
                             data_start + comp_size
                         } else {
-                            raw_bytes.len()
-                        };
-                        for sig in [b"PK\x01\x02", b"PK\x07\x08", b"PK\x05\x06"] {
-                            if let Some(pos) = raw_bytes[data_start..data_end].windows(4).position(|w| w == sig) {
-                                data_end = data_start + pos;
+                            let mut end = raw_bytes.len();
+                            for sig in [b"PK\x01\x02", b"PK\x07\x08", b"PK\x05\x06"] {
+                                if let Some(pos) = raw_bytes[data_start..end].windows(4).position(|w| w == sig) {
+                                    end = data_start + pos;
+                                }
                             }
-                        }
+                            end
+                        };
                         let compressed_slice = &raw_bytes[data_start..data_end];
                         let mut buf = Vec::new();
                         let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);

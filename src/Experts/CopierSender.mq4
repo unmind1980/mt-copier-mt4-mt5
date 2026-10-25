@@ -186,7 +186,7 @@ input string _g_cadence_ = ""; // --- Cadence & Performance ---
 #endif
 input int    SnapshotSeconds = 15;          // SnapshotSeconds - baseline push interval; 0=off
 input int    HeartbeatSeconds= 5;   // HeartbeatSeconds - account state interval (default 5s)
-input int    PollMs          = 5;           // PollMs - timer interval in milliseconds (default 5ms for sub-10ms)
+input int    PollMs          = 5;           // PollMs - timer interval in milliseconds
 
 #ifdef __MQL5__
 input group "--- Filters ---"
@@ -337,6 +337,7 @@ bool IsRecentSnapHash(const string h)
 //--- hash does not move, so only the receiver that was actually behind is
 //--- affected. Content changes are the periodic broadcast's job, not this one.
 string           g_snapPayload="";
+string           g_latestSnapPayload="";
 //--- Receive buffers for the per-tick drains, allocated ONCE.
 //---
 //--- Both drain paths used to declare their arrays inside OnTimer, so the
@@ -383,6 +384,7 @@ long             g_snapStaleMs[CP_MAX_STALE_PEERS];
 long             g_snapRcptMs[CP_MAX_STALE_PEERS];
 long             g_snapIntMs[CP_MAX_STALE_PEERS];
 long             g_snapRepairMs[CP_MAX_STALE_PEERS];
+bool             g_snapIsHub[CP_MAX_STALE_PEERS];
 int              g_snapStaleCount=0;
 
 //--- peers, latency probes and the on-chart panel -------------------
@@ -1128,12 +1130,13 @@ void CheckPeers()
 //--- when it reports quickly (<= 2s apart), one when it already reports slowly
 //--- enough that waiting for a second would only add delay. That is the rule
 //--- agreed for Q4 in doc/SNAPSHOT-DEMAND-PLAN.md.
-void SnapTrack(const string who,const string reported)
+void SnapTrack(const string who,const string reported,const bool isFromHub=false)
   {
    if(StringLen(who)==0) return;
 
    long now=CopierNowMs();
    int idx=SnapStaleIndex(who);
+   if(idx>=0) g_snapIsHub[idx]=isFromHub;
    //--- Table full: this peer is past CP_MAX_STALE_PEERS distinct receipt
    //--- senders. Skipping the tracking is a degradation, not a failure - the
    //--- periodic SnapshotSeconds broadcast still reaches it. Tracking it in
@@ -1235,8 +1238,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    //--- In bootstrap mode, we enforce only a 1s floor so newly attached peers
    //--- get their snapshot within 1s even if a prior repair was recently emitted.
    long floorSec=(SnapshotSeconds>0)? SnapshotSeconds : 1;
-   if(!isBootstrap && g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
-   if(isBootstrap && g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<1000) return;
+   if(g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
 
    if(StringLen(g_snapPayload)==0) return;       // nothing sent yet
 
@@ -1245,7 +1247,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    g_snapStaleN[idx]=0;                          // fresh evidence for the next one
    g_snapStaleMs[idx]=now;
 
-   if(g_hubOn)
+   bool toHub=(g_hubOn && g_snapIsHub[idx]);
+   if(toHub)
      {
       long rnid=CopierNid(CopierParseLong(who));
       EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
@@ -1310,6 +1313,7 @@ int SnapStaleIndex(const string who)
    g_snapRcptMs[n]=0;
    g_snapIntMs[n]=0;
    g_snapRepairMs[n]=0;
+   g_snapIsHub[n]=false;
    return n;
   }
 
@@ -1455,9 +1459,13 @@ void RebuildSnapshotPayload()
       double initLots=(slot>=0)?g_openLots[slot]:dense[i].lots;
       dense[i].lots=BroadcastLots(dense[i].lots,initLots);
      }
-   g_snapPayload=CopierEncodeSnapshot(dense,dn);
-   g_latestSnapHash=CopierSnapshotHash(g_snapPayload);
-   if(StringLen(g_snapHash)==0 || SnapshotSeconds<=0) g_snapHash=g_latestSnapHash;
+   g_latestSnapPayload=CopierEncodeSnapshot(dense,dn);
+   g_latestSnapHash=CopierSnapshotHash(g_latestSnapPayload);
+   if(StringLen(g_snapPayload)==0 || StringLen(g_snapHash)==0 || SnapshotSeconds<=0)
+     {
+      g_snapPayload=g_latestSnapPayload;
+      g_snapHash=g_latestSnapHash;
+     }
    NoteRecentSnapHash(g_latestSnapHash);
   }
 
@@ -1465,6 +1473,7 @@ void BroadcastSnapshot(const long now)
   {
    g_lastSnapMs=now;
    RebuildSnapshotPayload();
+   g_snapPayload=g_latestSnapPayload;
    g_snapHash=g_latestSnapHash;
    NoteRecentSnapHash(g_snapHash);
    Emit(CP_T_SNAP,g_snapPayload,true);
@@ -1829,7 +1838,7 @@ void OnTimer()
        //--- sender. Act only on the one addressed to US: a receipt naming a
        //--- different sender says nothing about whether our state reached it.
        if(SenderAnswersTo(ssid))
-          SnapTrack(swho,sh);
+          SnapTrack(swho,sh,false);
       }
 
       if(!StatusEnabled) continue;
@@ -1972,7 +1981,7 @@ void OnTimer()
             CopierKvGet(he.payload,"H",rh);
             CopierKvGet(he.payload,"SID",rsid);
             if(SenderAnswersTo(rsid))
-               SnapTrack(rwho,rh);
+               SnapTrack(rwho,rh,true);
             continue;
            }
 

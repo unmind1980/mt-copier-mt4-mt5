@@ -291,13 +291,16 @@ impl ConfigStore {
 
     /// The body of one specific revision, read from the file.
     fn revision_body(&self, node: &str, rev: u64) -> Option<String> {
-        let bytes = std::fs::read(&self.path).ok()?;
-        let text = String::from_utf8_lossy(&bytes);
-        for line in text.lines() {
-            if line.trim().is_empty() {
+        use std::io::BufRead;
+        let file = std::fs::File::open(&self.path).ok()?;
+        let reader = std::io::BufReader::new(file);
+        for line_res in reader.lines() {
+            let line = line_res.ok()?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
                 continue;
             }
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
                 if v["node"].as_str() == Some(node) && v["rev"].as_u64() == Some(rev) {
                     return v["ini"].as_str().map(|s| s.to_string());
                 }
@@ -316,22 +319,28 @@ impl ConfigStore {
     /// (`GET .../config/revision/{rev}`), which reads the file once for one
     /// row instead of once for all of them.
     pub fn history(&self, node: &str, limit: usize) -> Vec<Value> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
+        use std::io::BufRead;
+        let file = match std::fs::File::open(&self.path) {
+            Ok(f) => f,
             Err(_) => return Vec::new(),
         };
-        let text = String::from_utf8_lossy(&bytes);
+        let reader = std::io::BufReader::new(file);
         let mut out: Vec<Value> = Vec::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
+        for line_res in reader.lines() {
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
                 continue;
             }
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
                 if v["node"].as_str() != Some(node) {
                     continue;
                 }
                 // The body is large and a history list does not need it.
-                let mut brief = v.clone();
+                let mut brief = v;
                 if let Some(o) = brief.as_object_mut() {
                     let n = o
                         .get("ini")

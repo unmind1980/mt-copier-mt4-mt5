@@ -229,7 +229,7 @@ input group "--- System & Display ---"
 #else
 input string _g_sys_ = ""; // --- System & Display ---
 #endif
-input int    InpPollMs               = 5;     // PollMs - timer interval in milliseconds (default 5ms for sub-10ms)
+input int    InpPollMs               = 5;     // PollMs - timer interval in milliseconds
 int          PollMs                  = 5;
 input int    InpMaxActionsPerTick    = 5;     // MaxActionsPerTick - trades executed per timer tick
 int          MaxActionsPerTick       = 5;
@@ -718,6 +718,9 @@ string          g_cfgAck="";            // the ACK body to repeat for a duplicat
 string          g_cmdId="";             // the last command id we answered
 string          g_cmdAck="";            // the ACK body to repeat for a duplicate id
 bool            g_cmdPaused=false;      // set by CMD pause / closeall, cleared by resume
+bool            g_cmdCloseAllActive=false; // true while closeall is actively queueing/draining
+string          g_cmdCloseAllId="";     // command ID for active closeall
+bool            g_riskCloseAllPending=false; // true while risk close-all is queueing/draining
 long            g_lastCfgrMs=0;         // when we last asked the hub for a config
                                         // NOT reset on a WHO reply - same reason as
                                         // the sender; see its declaration.
@@ -1962,14 +1965,25 @@ void RiskPeakLoad()
                   |FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE) return;              // first run: no peak yet
    double peak=0.0;
+   long savedDay=0;
+   double savedDayEquity=0.0;
    while(!FileIsEnding(h))
      {
       string line=CopierTrim(FileReadString(h));
       if(StringLen(line)==0) continue;
       string v="";
       if(CopierKvGet(line,"PEAK",v)) peak=StringToDouble(v);
+      if(CopierKvGet(line,"DAY",v)) savedDay=(long)StringToInteger(v);
+      if(CopierKvGet(line,"DAY_EQUITY",v)) savedDayEquity=StringToDouble(v);
      }
    FileClose(h);
+   long currentDay=CopierServerDayStart();
+   if(savedDay==currentDay && savedDayEquity>0.0)
+     {
+      g_riskDay=savedDay;
+      g_riskDayStartEquity=savedDayEquity;
+      g_log.Info("day start equity baseline restored from "+RiskPeakPath()+": "+DoubleToString(savedDayEquity,2));
+     }
    if(peak<=0.0) return;
    g_risk.SeedPeak(peak);
    if(g_risk.PeakEquity()>peak+0.005)
@@ -2006,6 +2020,11 @@ void RiskPeakSave(const bool force)
      }
    FileWrite(h,"V=1");
    FileWrite(h,"PEAK="+DoubleToString(peak,2));
+   if(g_riskDay>0 && g_riskDayStartEquity>0.0)
+     {
+      FileWrite(h,"DAY="+(string)g_riskDay);
+      FileWrite(h,"DAY_EQUITY="+DoubleToString(g_riskDayStartEquity,2));
+     }
    FileFlush(h);
    FileClose(h);
   }
@@ -4159,11 +4178,19 @@ void RefreshRisk()
 
    long now=CopierNowMs();
    long dayStart=CopierServerDayStart();
-   if(dayStart!=g_riskDay || now-g_lastRealizedMs>60000)
+   if(dayStart!=g_riskDay)
      {
       g_riskDay=dayStart;
       g_lastRealizedMs=now;
-      g_riskDayStartEquity=CopierAccountBalance()-CopierRealizedToday(dayStart);
+      // Day rolled over while running: capture exact opening equity
+      g_riskDayStartEquity=CopierAccountEquity();
+      RiskPeakSave(true);
+     }
+   else if(g_riskDayStartEquity<=0.0 || now-g_lastRealizedMs>60000)
+     {
+      g_lastRealizedMs=now;
+      if(g_riskDayStartEquity<=0.0)
+         g_riskDayStartEquity=CopierAccountBalance()-CopierRealizedToday(dayStart);
      }
    g_risk.ObserveAt(CopierAccountEquity(),dayStart/86400,g_riskDayStartEquity);
    //--- Persist the peak so a terminal restart cannot re-base the drawdown
@@ -4215,10 +4242,12 @@ void PendingOpens(int &count,double &lots)
 //--- seen-ring, backoff and failure parking all apply unchanged.
 //--- Returns how many closes were queued. Shared by the risk switch and by
 //--- the hub's closeall command (M5b); the reason string is only for the log.
-int CloseAllOurs(const string reason)
+int CloseAllOurs(const string reason,int &failedCount,int &totalMatching)
   {
    int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
    int queued=0;
+   failedCount=0;
+   totalMatching=0;
    for(int i=0;i<an;i++)
      {
       int si=MagicToSender(g_scanScratch[i].magic);
@@ -4226,6 +4255,7 @@ int CloseAllOurs(const string reason)
       string uid=ResolveUid(g_scanScratch[i]);
       if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
+      totalMatching++;
       string actKey=g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+uid;
       g_seen.Forget(actKey);
       g_backoff.Clear(actKey);
@@ -4233,17 +4263,28 @@ int CloseAllOurs(const string reason)
                  g_scanScratch[i].ticket,0,"",0.0,0.0,g_scanScratch[i].kind))
          queued++;
       else
+        {
+         failedCount++;
          g_log.Error("CloseAll: failed to queue close action for ticket "+(string)g_scanScratch[i].ticket+" uid "+uid);
+        }
      }
    if(StringLen(reason)>0)
       g_log.Error(reason+" - queueing closes for "+(string)queued
-                 +" of our position(s)");
+                 +" of our "+(string)totalMatching+" position(s)"+((failedCount>0)?(" ("+(string)failedCount+" queue full failed)"):""));
    return queued;
+  }
+
+int CloseAllOurs(const string reason)
+  {
+   int failed=0, total=0;
+   return CloseAllOurs(reason,failed,total);
   }
 
 void RiskCloseEverything()
   {
-   CloseAllOurs("RiskCloseAllOnTrip is on");
+   int failed=0, total=0;
+   CloseAllOurs("RiskCloseAllOnTrip is on",failed,total);
+   if(failed>0) g_riskCloseAllPending=true;
   }
 
 //--- Convert a timestamp the SENDER reported into our own timebase.
@@ -5495,14 +5536,24 @@ void HandleCmd(const CopierEnv &e)
       //--- flatten", resume is the way back.
       g_cmdPaused=true;
       CmdStateSave();
-      int n=CloseAllOurs("CMD "+id+": CLOSEALL from the hub");
+      int failed=0, total=0;
+      int n=CloseAllOurs("CMD "+id+": CLOSEALL from the hub",failed,total);
       g_cmdId=id;
-      g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+      if(failed==0)
+        {
+         g_cmdCloseAllActive=false;
+         g_cmdCloseAllId="";
+         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+         g_log.Warn("CMD "+id+": closeall queued "+(string)n+" close(s); receiver paused. RESUME re-enables opening.");
+        }
+      else
+        {
+         g_cmdCloseAllActive=true;
+         g_cmdCloseAllId=id;
+         g_cmdAck="ID="+id+";OK=0;REASON=queue_full_queued_"+(string)n+"_of_"+(string)total+";REV="+(string)g_cfgRev;
+         g_log.Error("CMD "+id+": closeall queued "+(string)n+" of "+(string)total+" ("+(string)failed+" queue full) - continuing background retry");
+        }
       SendCfgAck(g_cmdAck);
-      g_log.Warn("CMD "+id+": closeall queued "+(string)n+" close(s); the"
-                 +" receiver also paused itself - leaving the sender's"
-                 +" desired set mirrored would re-open everything. RESUME"
-                 +" re-enables opening.");
       return;
      }
 
@@ -5818,9 +5869,15 @@ void HandleHeartbeat(const int si,const CopierEnv &e)
 bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
   {
    //--- a new session id means the sender restarted: throw away our idea
-   //--- of its state and resync from the next snapshot
+   //--- of its state and resync from the next snapshot.
+   //--- Security guard (F-02): a sender restart ONLY occurs on snapshot stream, never on trade events.
    if(g_ssidSeen[si]!=e.ssid)
      {
+      if(stream==CP_STREAM_EVENTS && StringLen(g_ssidSeen[si])>0)
+        {
+         g_log.Warn("SECURITY F-02: sender "+g_sid[si]+" event carries unexpected SSID '"+e.ssid+"' vs '"+g_ssidSeen[si]+"' - DISCARDED");
+         return false;
+        }
       g_ssidSeen[si]=e.ssid;
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
       g_lastSeq[si][CP_STREAM_SNAP]=-1;
@@ -5842,35 +5899,18 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
    return true;
   }
 
-void RouteMessage(const CopierEnv &e,const int stream)
+void RouteMessage(const string topic,const CopierEnv &e,const int stream)
   {
-   //--- THE HUB'S OWN MESSAGES, before the per-sender lookup below.
-   //---
-   //--- That lookup drops anything whose SID is not a configured sender, and
-   //--- the hub's SID is "hub" - so EVERY hub-addressed frame would be
-   //--- discarded here without a trace. WHO was exempted when it was the only
-   //--- such frame; M4b added CFG and M5b added CMD without extending the
-   //--- exemption, and BOTH were silently eaten by this lookup - found live
-   //--- when the first real CMD never reached the receiver while a wire probe
-   //--- showed the hub publishing it correctly, and the config-push half of
-   //--- M4b had the same latent break because no real CFG had ever been
-   //--- pushed (every CFG test drove the handler directly, not this router).
-   //--- Route by SID FIRST: hub control is not per-sender and must not be
-   //--- routed as if it were. Hub frames also skip the per-sender sequence
-   //--- guard on purpose - each carries its own idempotency key (§5.4), and
-   //--- a hub frame is not evidence that any SENDER is alive.
+   //--- F-01: Control frames claiming to be from "hub" must arrive strictly on control channels (@all, @nid, @acc)
    if(e.sid=="hub")
      {
+      if(g_hubOn && (StringLen(topic)==0 || StringSubstr(topic,0,1)!="@"))
+        {
+         g_log.Warn("SECURITY F-01: frame claiming SID=hub received on non-control topic '"+topic+"' - DISCARDED");
+         return;
+        }
       if(e.type==CP_T_WHO)
         {
-         //--- The hub lost its node table (it restarted) and is asking
-         //--- everyone to say who they are. Answering is the entire job -
-         //--- and it is why this node subscribed to @all.
-         //---
-         //--- ONE REG, and the counter is deliberately NOT reset. Resetting
-         //--- it would re-arm the REG burst every 60s for as long as the hub
-         //--- runs, because the sweep is unconditional. Same reasoning as
-         //--- the sender; see the longer note there.
          HubAnnounce(true);
         }
       else if(e.type==CP_T_PONG)
@@ -5896,6 +5936,16 @@ void RouteMessage(const CopierEnv &e,const int stream)
          g_log.Info("central channel: hub sent "+e.type
                     +" (no receiver action for it)");
       return;
+     }
+
+   //--- F-02: Targeted repair topic (<myNid>) is strictly for SNAP frames
+   if(g_hubOn && (topic==(string)g_nid || topic==(string)CopierAccountLogin()))
+     {
+      if(e.type!=CP_T_SNAP)
+        {
+         g_log.Warn("SECURITY F-02: non-SNAP type '"+e.type+"' from SID "+e.sid+" on targeted repair topic '"+topic+"' - DISCARDED");
+         return;
+        }
      }
 
    int si=SenderIndexById(e.sid);
@@ -5984,7 +6034,7 @@ void RouteMessage(const CopierEnv &e,const int stream)
    else                        g_log.Verbose("ignoring type "+e.type);
   }
 
-void HandleMessage(const string msg,const int stream)
+void HandleMessage(const string topic,const string msg,const int stream)
   {
    CopierEnv e;
    int err=CopierDecodeEnv(msg,e);
@@ -6007,7 +6057,7 @@ void HandleMessage(const string msg,const int stream)
                  +" head=\""+StringSubstr(msg,0,60)+"\"");
       return;
      }
-   RouteMessage(e,stream);
+   RouteMessage(topic,e,stream);
   }
 
 //=====================================================================
@@ -6799,7 +6849,7 @@ void OnTimer()
          if(s_errs[i]==-999) continue;
          if(s_errs[i]!=CP_ERR_NONE)
            {
-            HandleMessage(g_drainMsgs[i],CP_STREAM_EVENTS);
+            HandleMessage(g_drainTopics[i],g_drainMsgs[i],CP_STREAM_EVENTS);
             continue;
            }
          if(s_envs[i].type==CP_T_SNAP)
@@ -6809,12 +6859,12 @@ void OnTimer()
                g_snapSkipped++;
                continue;
               }
-            RouteMessage(s_envs[i],CP_STREAM_SNAP);
+            RouteMessage(g_drainTopics[i],s_envs[i],CP_STREAM_SNAP);
             continue;
            }
          if(s_envs[i].type==CP_T_OPEN || s_envs[i].type==CP_T_CLOSE || s_envs[i].type==CP_T_MODIFY)
             hasFastAction=true;
-         RouteMessage(s_envs[i],CP_STREAM_EVENTS);
+         RouteMessage(g_drainTopics[i],s_envs[i],CP_STREAM_EVENTS);
         }
 
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
@@ -6827,6 +6877,24 @@ void OnTimer()
            }
          ExecuteQueue();
         }
+     }
+
+   //--- Background retry for closeall / risk-close if queue was full during initial batch
+   if(g_cmdCloseAllActive || g_riskCloseAllPending)
+     {
+      int closeFailed=0, closeTotal=0;
+      int cn=CloseAllOurs("",closeFailed,closeTotal);
+      if(closeTotal==0 || (closeFailed==0 && cn==closeTotal))
+        {
+         if(g_cmdCloseAllActive && StringLen(g_cmdCloseAllId)>0)
+           {
+            SendCfgAck("ID="+g_cmdCloseAllId+";OK=1;REV="+(string)g_cfgRev);
+            g_cmdCloseAllId="";
+           }
+         g_cmdCloseAllActive=false;
+         g_riskCloseAllPending=false;
+        }
+      ExecuteQueue();
      }
 
    //=================================================================

@@ -1070,6 +1070,7 @@ struct LoginBody {
 
 async fn login(
     axum::extract::State(st): axum::extract::State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(b): Json<LoginBody>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -1143,13 +1144,16 @@ async fn login(
                 Some(json!({ "role": sess.role.as_str() })),
                 "ok",
             );
+            let is_https = headers.get("x-forwarded-proto").map(|v| v == "https").unwrap_or(false)
+                || headers.get("x-forwarded-ssl").map(|v| v == "on").unwrap_or(false);
+            let secure_attr = if is_https { "; Secure" } else { "" };
             (
                 axum::http::StatusCode::OK,
                 [(
                     axum::http::header::SET_COOKIE,
                     format!(
-                        "mtc_session={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}",
-                        token, SESSION_IDLE_SECS
+                        "mtc_session={}; HttpOnly; Path=/; SameSite=Strict; Max-Age={}{}",
+                        token, SESSION_IDLE_SECS, secure_attr
                     ),
                 )],
                 Json(json!({ "user": sess.user_id, "role": sess.role.as_str() })),
@@ -1602,6 +1606,7 @@ pub fn spawn(
             rt.block_on(async move {
                 let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel::<crate::alerts::Alert>();
                 let http_client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
                     .timeout(std::time::Duration::from_secs(crate::notifications::HTTP_TIMEOUT_SECS))
                     .build()
                     .unwrap_or_default();
@@ -2519,6 +2524,7 @@ async fn notifications_test(
     }
 
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .unwrap_or_default();

@@ -139,6 +139,15 @@ impl Positions {
             snaps: 0,
             items: Vec::new(),
         });
+
+        // F-11: If parsing failed completely on a non-empty declared snapshot (e.g. corrupted decompression),
+        // preserve the previous view rather than falsely reporting 0 positions to the operator.
+        if v.declared.map_or(false, |dec| dec > 0) && v.records == 0 && e.count > 0 {
+            e.updated = now;
+            e.snaps += 1;
+            return;
+        }
+
         e.count = v.records;
         e.lots = v.lots;
         e.symbols = v.symbols;
@@ -233,7 +242,7 @@ impl Positions {
 /// Lots with the trailing zeros trimmed, so a line of them stays readable and
 /// two runs that mean the same thing render the same way.
 pub fn lots_str(l: f64) -> String {
-    let s = format!("{:.2}", l);
+    let s = format!("{:.4}", l);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 

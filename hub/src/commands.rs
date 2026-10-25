@@ -1081,15 +1081,25 @@ mod tests {
         let p = tmp("compact");
         {
             let s = CommandStore::open(&p).unwrap();
-            for i in 0..5 {
+            for _ in 0..5 {
                 let c = s.issue_op("receiver:1", "pause", "", "op", "");
                 s.ack(&c.id, true, 0, "");
-                let _ = i;
             }
             let _ = s.issue_op("receiver:1", "resume", "", "op", "");
         }
         let before = std::fs::read_to_string(&p).unwrap();
         assert!(before.lines().count() > 6, "expected one line per transition");
+
+        // F-17: Explicitly invoke compact_journal to test compaction
+        // Drop CommandStore first so the open file handle is closed on Windows
+        let commands = {
+            let s = CommandStore::open(&p).unwrap();
+            let inner = s.inner.lock().unwrap();
+            inner.commands.clone()
+        };
+        compact_journal(&p, &commands).unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(after.lines().count(), 6, "compacted journal must have 1 line per surviving command");
 
         let s = CommandStore::open(&p).unwrap();
         let (total, pending, _) = s.stats();

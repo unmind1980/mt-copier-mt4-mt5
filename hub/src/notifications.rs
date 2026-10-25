@@ -923,8 +923,12 @@ async fn send_webhook(
         return Err("Webhook URL must begin with http:// or https://".to_string());
     }
 
-    let host = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("").split(':').next().unwrap_or("");
-    if host == "169.254.169.254" || host.eq_ignore_ascii_case("metadata.google.internal") || host == "fd00:ec2::254" {
+    let authority = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("Webhook URL cannot contain userinfo credentials".to_string());
+    }
+    let host = authority.split(':').next().unwrap_or("");
+    if host.starts_with("169.254.") || host.eq_ignore_ascii_case("metadata.google.internal") || host == "fd00:ec2::254" || host == "100.100.100.200" || host.starts_with("fe80:") {
         return Err("Webhook URL points to prohibited cloud metadata service".to_string());
     }
 

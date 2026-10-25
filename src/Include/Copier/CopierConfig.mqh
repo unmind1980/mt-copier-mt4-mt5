@@ -223,6 +223,7 @@ public:
       int n=StringLen(s);
       if(n==0) return false;
       int dots=0;
+      int digits=0;
       int start=(StringGetCharacter(s,0)=='-' || StringGetCharacter(s,0)=='+')?1:0;
       if(start>=n) return false;
       for(int i=start;i<n;i++)
@@ -233,9 +234,26 @@ public:
             dots++;
             if(dots>1) return false;
            }
-         else if(c<'0' || c>'9') return false;
+         else if(c>='0' && c<='9') digits++;
+         else return false;
         }
-      return true;
+      return (digits>0);
+     }
+
+   static bool       IsValidInteger(const string s)
+     {
+      int n=StringLen(s);
+      if(n==0) return false;
+      int digits=0;
+      int start=(StringGetCharacter(s,0)=='-' || StringGetCharacter(s,0)=='+')?1:0;
+      if(start>=n) return false;
+      for(int i=start;i<n;i++)
+        {
+         int c=StringGetCharacter(s,i);
+         if(c>='0' && c<='9') digits++;
+         else return false;
+        }
+      return (digits>0);
      }
 
    double            GetDouble(const string section,const string key,const double deflt) const
@@ -254,7 +272,7 @@ public:
      {
       string v=Get(section,key,"");
       if(StringLen(v)==0) return deflt;
-      if(!IsValidNumber(v))
+      if(!IsValidInteger(v))
         {
          Print("CopierConfig: WARN [",section,"] ",key,"='",v,"' is not a valid integer; using default ",(string)deflt);
          return deflt;

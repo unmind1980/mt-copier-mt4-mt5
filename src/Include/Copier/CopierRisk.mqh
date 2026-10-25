@@ -49,9 +49,8 @@ double CopierLossTripLevel(const double baseline,const double pct)
   {
    if(!MathIsValidNumber(baseline) || baseline<=0.0) return 0.0;
    if(!MathIsValidNumber(pct) || pct<=0.0)      return 0.0;   // switch off: no level
-   double safePct=pct;
-   if(safePct>=100.0) safePct=99.9; // clamp to prevent trip level <= 0 which disables trigger
-   return baseline*(1.0-safePct/100.0);
+   if(pct>=100.0) return 0.0; // 100% loss trips only on complete wipeout (equity <= 0)
+   return baseline*(1.0-pct/100.0);
   }
 
 //=====================================================================
@@ -69,7 +68,7 @@ bool CopierLossExceeded(const double equity,const double baseline,const double p
    if(!MathIsValidNumber(equity) || !MathIsValidNumber(baseline) || !MathIsValidNumber(pct)) return false;
    if(pct<=0.0)      return false;   // switch off
    if(baseline<=0.0) return false;   // nothing to measure from
-   if(pct>=100.0 && equity<=0.0) return true; // complete wipeout
+   if(pct>=100.0)    return (equity<=0.0); // complete wipeout
    return (equity<=CopierLossTripLevel(baseline,pct));
   }
 

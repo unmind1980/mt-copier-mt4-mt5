@@ -974,9 +974,9 @@ private:
          if(StringLen(m_k[k])>0) InsertHash(k,HashOf(m_k[k]));
      }
 
-   //--- Empty slot if there is one; otherwise evict the entry that is
-   //--- parked longest, since it is the one whose ladder has climbed
-   //--- highest and therefore the least likely to be retried soon anyway.
+   //--- Empty slot if there is one; otherwise evict the entry with the
+   //--- shortest park time (m_u smallest), protecting keys with long
+   //--- backoff ladders from being evicted and triggering retry storms (H-02).
    int               FreeSlot()
      {
       for(int i=0;i<CP_BACKOFF_SLOTS;i++)

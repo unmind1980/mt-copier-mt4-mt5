@@ -502,6 +502,7 @@ impl UserStore {
     /// Record a failed login. Returns how long the caller should wait before
     /// answering - a delay, not a lockout, for the reasons on `LoginGuard`.
     pub fn note_login_failure(&mut self, id: &str, now: u64) -> u64 {
+        self.guard.prune(now);
         self.guard.note_failure(id, now)
     }
 

@@ -392,6 +392,12 @@ string CopierDecompressField(const string field)
            }
          if(decompLen>0)
            {
+            // Protect against decompression bombs: cap at 4 MiB (matches Rust Hub)
+            if(decompLen > 4*1024*1024)
+              {
+               Print("CopierCodec: WARN decompressed length ",decompLen," exceeds 4MB limit - rejected");
+               return "";
+              }
             return CharArrayToString(decomp,0,decompLen,CP_UTF8);
            }
         }
@@ -595,7 +601,6 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.pstop   =CopierKvGetDouble(payload,"PSTOP",0.0);
    p.pexpire =CopierKvGetLong(payload,"PEXP",0);
    if(p.pprice<0.0 || p.pstop<0.0) return false;
-   p.magic   =0;
    p.cmt     ="";
    p.used    =true;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;

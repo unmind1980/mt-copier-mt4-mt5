@@ -129,25 +129,34 @@ fi
 # that proves "this machine can still build what ships".
 echo
 echo "== hub release build =="
-if bash "$REPO/hub/build.sh" --release 2>&1 | grep -E "built:|^error|CreateProcess"; then
-  :
-else
+hub_build_out=$(bash "$REPO/hub/build.sh" --release 2>&1)
+res=$?
+echo "$hub_build_out" | grep -E "built:" || true
+if [[ $res -ne 0 ]] || echo "$hub_build_out" | grep -Eq "error:|CreateProcess"; then
+  echo "$hub_build_out"
+  echo "hub release build FAILED ($res)"
   rc=1
 fi
 
 echo
 echo "== hub unit tests =="
-if bash "$REPO/hub/build.sh" --test 2>&1 | grep -E "test result|FAILED"; then
-  :
-else
+hub_test_out=$(bash "$REPO/hub/build.sh" --test 2>&1)
+res=$?
+echo "$hub_test_out" | grep -E "test result:" || true
+if [[ $res -ne 0 ]] || echo "$hub_test_out" | grep -Eq "FAILED"; then
+  echo "$hub_test_out"
+  echo "hub unit tests FAILED ($res)"
   rc=1
 fi
 
 echo
 echo "== EA build (four terminals) =="
-if bash "$HERE/build.sh" 2>&1 | grep -E "ALL GREEN|file\(s\) with errors"; then
-  :
-else
+ea_build_out=$(bash "$HERE/build.sh" 2>&1)
+res=$?
+echo "$ea_build_out" | grep -E "ALL GREEN" || true
+if [[ $res -ne 0 ]] || echo "$ea_build_out" | grep -Eq "[1-9][0-9]* (file\(s\) with errors|problem\(s\) across)"; then
+  echo "$ea_build_out"
+  echo "EA build FAILED ($res)"
   rc=1
 fi
 

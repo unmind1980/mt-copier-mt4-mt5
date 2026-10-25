@@ -416,8 +416,35 @@ impl Registry {
         held_items: Option<Vec<ReceiverPositionItem>>,
         wait_items: Option<Vec<ReceiverWaitItem>>,
     ) {
+        self.note_stat_at(
+            role, acc, blocked, risk, held, held_lots, orphaned, wait_total, wait_lots,
+            wait_queued, wait_delayed, wait_mkt, equity, balance, held_items, wait_items,
+            Instant::now(),
+        );
+    }
+
+    pub fn note_stat_at(
+        &mut self,
+        role: &str,
+        acc: &str,
+        blocked: u32,
+        risk: &str,
+        held: Option<u32>,
+        held_lots: f64,
+        orphaned: Option<u32>,
+        wait_total: Option<u32>,
+        wait_lots: f64,
+        wait_queued: Option<u32>,
+        wait_delayed: Option<u32>,
+        wait_mkt: Option<u32>,
+        equity: Option<f64>,
+        balance: Option<f64>,
+        held_items: Option<Vec<ReceiverPositionItem>>,
+        wait_items: Option<Vec<ReceiverWaitItem>>,
+        now: Instant,
+    ) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
-            e.last_seen = Instant::now();
+            e.last_seen = now;
             if !risk.is_empty() {
                 e.blocked = blocked;
                 e.risk = risk.to_string();

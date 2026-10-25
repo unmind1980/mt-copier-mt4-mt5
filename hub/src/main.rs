@@ -2186,6 +2186,22 @@ fn main() {
                         //--- frame. A blocking send only fails here when the
                         //--- context is terminating, so the honest response is to
                         //--- stop rather than to keep writing into a torn message.
+                        let ty = envelope_type(&payload);
+                        let topic_str = std::str::from_utf8(topic).unwrap_or("");
+                        let env_sid = envelope_hdr(&payload, "SID");
+
+                        // F-01 Security: Data topics must NEVER carry messages claiming SID="hub"
+                        if env_sid == "hub" {
+                            eprintln!("[hub] DROP spoofed data frame claiming SID=hub on topic {}", topic_str);
+                            continue;
+                        }
+
+                        // F-02 Security: On data topics, only SNAP (targeted repair) may have topic != SID
+                        if !env_sid.is_empty() && topic_str != env_sid && ty != "SNAP" {
+                            eprintln!("[hub] DROP mismatched topic {} != SID {} for type {}", topic_str, env_sid, ty);
+                            continue;
+                        }
+
                         let fwd_res = sock.send(topic, zmq::SNDMORE).and_then(|_| sock.send(payload, 0));
                         if let Err(e) = fwd_res {
                             eprintln!(
@@ -2198,8 +2214,6 @@ fn main() {
                             continue;
                         }
 
-                        let ty = envelope_type(&payload);
-                        let topic_str = std::str::from_utf8(topic).unwrap_or("");
                         st.note_forward(topic_str, &ty);
 
                         //--- M3 POSITION VIEW - read-only, and deliberately
@@ -2222,8 +2236,15 @@ fn main() {
                             };
 
                             if should_dispatch {
-                                last_known_receipt.insert(sid.clone(), new_receipt);
-                                let _ = snap_tx.try_send((sid, snap_payload.to_vec(), pos_now));
+                                match snap_tx.try_send((sid.clone(), snap_payload.to_vec(), pos_now)) {
+                                    Ok(_) => {
+                                        last_known_receipt.insert(sid.clone(), new_receipt);
+                                    }
+                                    Err(_) => {
+                                        // F-07: Queue is full: do NOT advance last_known_receipt so next frame can retry
+                                        eprintln!("[hub] WARN snap_tx queue full; snapshot parse deferred for {}", sid);
+                                    }
+                                }
                             } else {
                                 // Touch timestamp in positions without blocking for full parse
                                 let mut s = shared.lock_or_recover();

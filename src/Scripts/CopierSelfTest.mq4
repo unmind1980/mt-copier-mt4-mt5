@@ -654,6 +654,9 @@ void TestConfig()
    FileWrite(h,"snap=tcp://10.0.0.5:5556");
    FileWrite(h,"lotmode=fixed");
    FileWrite(h,"lotparam=0.25");
+   FileWrite(h,"badint=3.9");
+   FileWrite(h,"goodint=42");
+   FileWrite(h,"dotonly=.");
    FileWrite(h,"symbol.GOLD=XAUUSD");
    FileWrite(h,"[sender1]");
    FileWrite(h,"id=icmarkets");
@@ -666,10 +669,13 @@ void TestConfig()
    OkStr("config: trims value",ini.Get("sender0","id"),"alpari01");
    OkStr("config: string value",ini.Get("sender0","events"),"tcp://10.0.0.5:5555");
    OkDbl("config: double value",ini.GetDouble("sender0","lotparam",0.0),0.25,0.0001);
+   OkInt("config: GetInt rejects float",ini.GetInt("sender0","badint",10),10);
+   OkInt("config: GetInt accepts integer",ini.GetInt("sender0","goodint",10),42);
+   OkDbl("config: GetDouble rejects dot-only",ini.GetDouble("sender0","dotonly",1.5),1.5,0.0001);
    OkStr("config: default when absent",ini.Get("sender1","snap","none"),"none");
-   //--- 8 real k=v entries in the fixture above (the comment line and the
+   //--- 11 real k=v entries in the fixture above (the comment line and the
    //--- two section headers are not entries)
-   OkInt("config: total entries parsed",ini.Count(),8);
+   OkInt("config: total entries parsed",ini.Count(),11);
 
    int found=0;
    for(int k=0;k<ini.Count();k++)
@@ -1084,6 +1090,12 @@ void TestRiskThresholds()
          CopierLossTripLevel(10000.0,0.0),0.0,0.0000001);
    OkDbl("risk: trip level with no baseline is 0",
          CopierLossTripLevel(0.0,5.0),0.0,0.0000001);
+   OkDbl("risk: trip level at 100% loss is 0",
+         CopierLossTripLevel(10000.0,100.0),0.0,0.0000001);
+   Ok("risk: 100% loss does not trip on 1.0 equity",
+      !CopierLossExceeded(1.0,10000.0,100.0));
+   Ok("risk: 100% loss trips on 0.0 equity",
+      CopierLossExceeded(0.0,10000.0,100.0));
    //--- the boundary the switch USES and the boundary it QUOTES must be the
    //--- same number, which is the point of expressing one in terms of the
    //--- other rather than computing them separately
@@ -1443,6 +1455,12 @@ void TestPendingCodec()
       CopierPendingNeedsStop(CP_PEND_BUYSTOPLIMIT));
    Ok("pending: a plain limit does not",
       !CopierPendingNeedsStop(CP_PEND_BUYLIMIT));
+
+   //--- F-03: verify open payload preserves magic
+   string openPayload=CopierPayloadOpen(m);
+   CopierPos openPos;
+   Ok("open: payload decodes",CopierPayloadOpenParse(openPayload,openPos));
+   Ok("open: magic is preserved (F-03)",openPos.magic==770000);
   }
 
 //=====================================================================
