@@ -59,7 +59,8 @@
 //+------------------------------------------------------------------+
 //--- One-second cache. This is called from the converge loop for every
 //--- desired position, and the answer can only change at a session boundary.
-#define CP_SESS_CACHE 16
+//--- NM-13: Expand cache slots to 64 and test with a 1-second window.
+#define CP_SESS_CACHE 64
 string g_sessKey[CP_SESS_CACHE];
 long   g_sessAt[CP_SESS_CACHE];
 bool   g_sessVal[CP_SESS_CACHE];
@@ -72,7 +73,8 @@ bool CopierInTradingSession(const string sym)
    long now=CopierServerTime();
    for(int i=0;i<CP_SESS_CACHE;i++)
      {
-      if(g_sessKey[i]==sym && g_sessAt[i]==now) return g_sessVal[i];
+      // NM-13: 1-second window matching CopierSymbolQuoteAgeMs
+      if(g_sessKey[i]==sym && now-g_sessAt[i]<1) return g_sessVal[i];
      }
 
    //--- decomposed by arithmetic: TimeHour/TimeMinute are not portable, and
@@ -155,7 +157,8 @@ bool CopierInTradingSession(const string sym)
 // is itself the signal that the market reopened: the next pass after the feed
 // resumes sees a fresh symbol and the entry goes through.
 //+------------------------------------------------------------------+
-#define CP_SYMFRESH_SLOTS 32
+// NM-05: Expand slots from 32 to 256 to cover multi-source environments (>32 symbols)
+#define CP_SYMFRESH_SLOTS 256
 string   g_sfKey[CP_SYMFRESH_SLOTS];
 datetime g_sfQuote[CP_SYMFRESH_SLOTS];
 long     g_sfChangedMs[CP_SYMFRESH_SLOTS];
@@ -234,9 +237,12 @@ long CopierSymbolQuoteAgeMs(const string sym)
       slot=g_sfHead;
       g_sfHead++;
       if(g_sfHead>=CP_SYMFRESH_SLOTS) g_sfHead=0;
+      bool wasUsed=(StringLen(g_sfKey[slot])>0);
       g_sfKey[slot]=sym;
       g_sfQuote[slot]=0;
-      g_sfChangedMs[slot]=now;
+      // NM-05: If replacing an existing slot, set changedMs to 0 so it relies on clockAge
+      // instead of resetting age to 0. First-ever seen slots still get 'now' grace period.
+      g_sfChangedMs[slot]=wasUsed?0:now;
      }
 
    datetime qt=CopierSymbolQuoteTime(sym);

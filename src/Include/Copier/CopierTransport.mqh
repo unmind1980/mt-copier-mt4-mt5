@@ -418,17 +418,16 @@ public:
    //--- the payload frame stays byte-identical to the single-frame form the
    //--- direct channel uses, so ONE parser serves both paths.
    //---
-   //--- Guaranteed envelope closure: Frame 0 checks HWM non-blockingly.
-   //--- Once Frame 0 enters the pipe, Frame 1 MUST complete the multipart envelope
-   //--- so the socket is never left mid-message (which would corrupt subsequent messages).
+   //--- NH-06: Non-blocking envelope dispatch.
+   //--- Both Frame 0 and Frame 1 use DONTWAIT (true) so an offline Hub or full HWM
+   //--- never hangs the main EA thread under ZMQ_IMMEDIATE=1.
    bool              SendUp(const string topic,const string payload)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       if(!m_sub.sendMore(topic,true)) { m_errno=CopierZmqErrno(); return false; }
-      if(!m_sub.send(payload,false))
+      if(!m_sub.send(payload,true))
         {
          m_errno=CopierZmqErrno();
-         m_sub.send("",false); // Defensively close torn multipart envelope
          return false;
         }
       return true;

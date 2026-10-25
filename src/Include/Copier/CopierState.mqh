@@ -818,6 +818,45 @@ public:
         }
       return -1;
      }
+
+   // NM-01: Hash index builder for raw UID string arrays (used by queuedCloseOrTrim)
+   void              BuildFromStrings(const string &arr[],const int count)
+     {
+      Clear();
+      for(int i=0;i<count;i++)
+        {
+         string uid=arr[i];
+         if(StringLen(uid)!=CP_UID_LEN) continue;
+         uint hf=HashOf(uid);
+         int  s=(int)(hf&m_mask);
+         for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+           {
+            int k=(int)((s+p)&m_mask);
+            if(m_slot[k]==0)
+              {
+               m_slot[k]=i+1;
+               m_hash[k]=hf;
+               m_n++;
+               break;
+              }
+            if(m_hash[k]==hf && arr[m_slot[k]-1]==uid) break;
+           }
+        }
+     }
+
+   int               FindInStrings(const string &arr[],const string uid) const
+     {
+      if(StringLen(uid)!=CP_UID_LEN || m_n<=0) return -1;
+      uint hf=HashOf(uid);
+      int  s=(int)(hf&m_mask);
+      for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+        {
+         int k=(int)((s+p)&m_mask);
+         if(m_slot[k]==0) return -1;
+         if(m_hash[k]==hf && arr[m_slot[k]-1]==uid) return m_slot[k]-1;
+        }
+      return -1;
+     }
   };
 
 #define CP_BACKOFF_SLOTS 256   // distinct keys remembered; oldest evicted

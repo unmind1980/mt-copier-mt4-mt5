@@ -160,6 +160,10 @@ void TestSnapshot()
    Ok("snapshot: empty encodes to N=0",StringFind(empty,"N=0")==0);
    Ok("snapshot: empty decodes to 0",n0==0);
 
+   // NH-02: Conflicting payload where N=0 is claimed but R= carries real records must be rejected (-1)
+   int nBadZero = CopierDecodeSnapshot("N=0;R=0:AAAA1111,1,EURUSD,1,0.50,1.0845,0,0,0,1780000000;H=12345678",out,CP_MAX_POSITIONS);
+   Ok("snapshot: reject N=0 when R carries records",nBadZero==-1);
+
    //--- never trust the wire: a huge N must not overrun the buffer
    CopierPos small[];
    ArrayResize(small,2);
@@ -236,6 +240,19 @@ void TestUid()
    //--- broker mangled / truncated comment must NOT yield a false uid
    Ok("uid: rejects foreign comment",CopierUidFromComment("from #12345")=="");
    Ok("uid: rejects truncated comment",CopierUidFromComment("tc|AB")=="");
+
+   // NH-05: UID generator diversity test
+   int uidCollisions=0;
+   string sampleUids[200];
+   for(int ui=0;ui<200;ui++)
+     {
+      sampleUids[ui]=CopierNewUid();
+      for(int uj=0;uj<ui;uj++)
+        {
+         if(sampleUids[uj]==sampleUids[ui]) uidCollisions++;
+        }
+     }
+   OkInt("uid: 200 consecutive UIDs have 0 collisions",uidCollisions,0);
   }
 
 void TestNid()
@@ -249,6 +266,9 @@ void TestNid()
    Ok("nid: 9-digit accounts pass through",CopierNid(123456789)==123456789);
    Ok("nid: it is stable for the same input",
       CopierNid(1234567890)==CopierNid(1234567890));
+
+   // NL-03: Account 0 never returns magic 0 (manual trades)
+   Ok("nid: account 0 does NOT return 0",CopierNid(0)!=0);
 
    //--- the LAST nine, not the first: a broker's account numbers share a
    //--- leading prefix and differ in the trailing serial, so the last nine

@@ -374,6 +374,9 @@ public:
       if(m_ddTripped)    return DrawdownWhy(eq);
       return "";
      }
+
+   double            DailyLossPct() const { return m_lim.dailyLossPct; }
+   double            MaxDrawdownPct() const { return m_lim.maxDrawdownPct; }
   };
 
 #endif

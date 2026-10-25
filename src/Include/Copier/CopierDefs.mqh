@@ -116,6 +116,7 @@
 //--- the peer instead of buffering anything. Same number, one layer earlier,
 //--- so the two cannot drift apart.
 #define CP_MAXMSGSIZE      CP_MAX_MSG_LEN
+#define CP_Z85_MAX         65536   // NM-03: Max compressed Z85 string length (64 KB) to bound decompression allocations
 
 //=====================================================================
 // ZMQ CURVE key sizes.
@@ -659,11 +660,25 @@ string CopierNormalizeEndpoint(const string ep)
 // supplied string (symbol, comment). Also truncates.
 string CopierSanitize(string s,const int maxLen)
   {
-   s=CopierReplaceAll(s,CP_SEP_FIELD,"_");
-   s=CopierReplaceAll(s,CP_SEP_KV,"_");
-   s=CopierReplaceAll(s,CP_SEP_REC,"_");
-   s=CopierReplaceAll(s,CP_SEP_ITEM,"_");
-   s=CopierReplaceAll(s,"=","_");
+   // NM-09: Fast check - if string has no forbidden separators and satisfies length,
+   // return immediately with zero reallocations.
+   int n=StringLen(s);
+   if(n<=0) return s;
+   bool need=false;
+   for(int i=0;i<n;i++)
+     {
+      ushort c=StringGetCharacter(s,i);
+      if(c=='|' || c==';' || c=='~' || c==',' || c=='=') { need=true; break; }
+     }
+   if(!need && n<=maxLen) return s;
+   if(need)
+     {
+      s=CopierReplaceAll(s,CP_SEP_FIELD,"_");
+      s=CopierReplaceAll(s,CP_SEP_KV,"_");
+      s=CopierReplaceAll(s,CP_SEP_REC,"_");
+      s=CopierReplaceAll(s,CP_SEP_ITEM,"_");
+      s=CopierReplaceAll(s,"=","_");
+     }
    if(StringLen(s)>maxLen) s=StringSubstr(s,0,maxLen);
    return s;
   }
@@ -911,26 +926,25 @@ string CopierFmtDouble(const double v,const int digits)
 //=====================================================================
 // UID generation
 //=====================================================================
+// NH-05: Robust UID generator.
+// Avoids MSVC LCG low-5-bit cycle defect (MathRand()%32) by mixing
+// 64-bit monotonic time, account number, sequential counter, and FNV-1a
+// cross-bit avalanche diffusion to achieve full 32^8 (1.1e12) entropy space.
 string CopierNewUid()
   {
-   static bool s_seeded=false;
-   static uint s_counter=0;
-   s_counter++;
-   if(!s_seeded)
-     {
-      uint seed=(uint)(CopierNowMs()&0x7FFFFFFF)
-                ^ (uint)CopierAccountLogin()
-                ^ (uint)TimeLocal()
-                ^ (uint)TimeCurrent()
-                ^ (uint)ChartID();
-      MathSrand((int)seed);
-      s_seeded=true;
-     }
+   static uint s_seq=0;
+   s_seq++;
+   long t=CopierNowMs();
+   long acc=CopierAccountLogin();
+   long mix = t ^ (acc<<17) ^ ((long)s_seq * (long)0x9E3779B97F4A7C15);
+   uint h = (uint)CopierHash32((string)mix+"|"+(string)t+"|"+(string)s_seq+"|"+(string)acc);
+   uint h2 = (uint)CopierHash32((string)h+"|uid_salt_2");
+
    string s="";
    for(int i=0;i<CP_UID_LEN;i++)
      {
-      int idx=(MathRand()+(int)s_counter)%32;
-      s+=StringSubstr(CP_UID_ALPHA,idx,1);
+      uint nib = (h >> (i*4)) ^ (h2 >> (i*3)) ^ (uint)(mix >> (i*7));
+      s += StringSubstr(CP_UID_ALPHA, (int)(nib & 31), 1);
      }
    return s;
   }
@@ -998,7 +1012,9 @@ string CopierCommentForUid(const string uid,const long senderTicket=0)
 // startup, loudly. See ReportMagicConfig() in the receiver.
 long CopierNid(const long account)
   {
-   if(account < 0) return -account;          // defensive; accounts are positive
+   // NL-03: Ensure non-positive accounts (e.g. unlogged terminal account 0)
+   // never return 0, protecting the "magic 0 = manual trade" invariant.
+   if(account <= 0) return 999999998;
    if(account < 1000000000) return account;
 
    long nid=account % 1000000000;

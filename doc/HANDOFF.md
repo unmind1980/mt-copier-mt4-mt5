@@ -388,6 +388,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十三次审计** | 2026-10-25 12:45 | 全栈审查闭环（F-01..F-17与历史遗留项）、控制面权限防御、平仓容灾与SSRF强化 | 安全闭环与架构无死角 |
 | **四十四次审计** | 2026-10-25 15:45 | MT5全异步OrderSendAsync流控并发与MT4零等待极限流水线平仓双引擎 | 大单量马丁网格平仓 |
 | **四十五次审计** | 2026-10-25 18:30 | 全面闭环第45轮深度审计（H-01..H-08、M-01..M-14与关键优化） | 资金安全、协议防线与资源收敛 |
+| **四十六次审计** | 2026-10-25 20:30 | 全面闭环第46轮增量复审（NH-01..NH-06高危、NM-01..NM-14中危与低危优化） | 算法健壮、零等待哈希化与全栈闭环 |
 
 ---
 
@@ -1109,6 +1110,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **SEC-03** | **P1 网络安全加固** | `hub/src/notifications.rs:915` / `hub/src/api.rs:2515` | **H-05 统一 SSRF 出站白名单与元数据阻断**：提炼 `validate_outgoing_url`，严密防范 IPv6 方括号与私网元数据走私；对 Webhook、企业微信、钉钉出站统一应用校验。 |
 | **RES-01** | **P1 资源防泄漏** | `hub/src/main.rs:1344, 2420` / `hub/src/registry.rs:500` | **H-07 & M-08 去重表与注册表淘汰闭环**：`ensure_capacity` 将淘汰节点收拢入 `capacity_evicted`；主循环定期清理 `last_known_receipt` 对应淘汰条目，并设 1024 硬容量上限，消除内存 DoS 隐患。 |
 | **PERF-01**| **P2 状态与性能治理** | 全栈各模块 | **M-01..M-14 全面收口**：Sweeper 补齐 `g_seen.Add` 与 `g_ourLots` 扣减并跳过休市品种（M-01, M-11）；MT4 Magic 严格做 31 位正整数保护（M-02）；Sender 提取 `HandleSenderStat` 彻底消除两段 drain 间隙丢弃 STAT/RCPT 帧（M-03）；状态恢复对被过滤持仓显著告警（M-04）；WS 快照 JSON 序列化移出共享读写锁且无客户端时跳过（M-05）；安全拦截日志 2 秒节流（M-06）；审计 reopen 失败自动自愈（M-07）；会话表定期清理并加容量上限（M-09）；批量平仓单 tick 限制 64 笔（M-10）；Sender bootstrap 修复 1 秒地板（L-05）；后台 closeall 50ms 节流消除高频空转（L-01）；Dashboard 响应头注入 CSP 等安全头（L-18）。 |
+
+---
+
+### 四十六次审计：全面闭环第46轮增量复审（NH-01..NH-06高危、NM-01..NM-14中危与低危优化）（2026-10-25 20:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **TRD-01** | **P0 交易退避保护** | `CopierReceiver.mq4:4360, 7112` | **NH-01 CloseAllOurs 退避链修复与后台节流**：禁止在循环中无条件清空 `g_backoff` 与 `g_seen`，仅在初次带 reason 显式全平请求时重置；重试节流由 50ms 调整为 1000ms（1秒）；仅在队列真满（`g_qn>=CP_MAX_ACTIONS`）时计入 `failedCount` 并对报错限流，杜绝每秒 20 次重试风暴与日志刷屏。 |
+| **TRD-02** | **P0 误全平绝对防线** | `CopierReceiver.mq4:5188` / `CopierCodec.mqh:516` | **NH-02 快照 H= 完整性校验与空仓反篡改**：接收端用收到原始载荷重新计算 `CopierHash32` 并严格比对随帧携带的 `H=`，字节翻转即刻丢弃并告警；`CopierDecodeSnapshot` 拦截 N=0 但携带 `R=` 记录的冲突包，彻底堵死快照损坏导致伪造合法空仓引发的误全平风险。 |
+| **TRD-03** | **P0 交易滑点解耦** | `CopierReceiver.mq4:2715, 3004` | **NH-03 isBatchClose 判定门槛提升与滑点解耦**：将日常正常平仓与大单量批量结单解耦；只有在紧急全平（`g_cmdCloseAllActive || g_riskCloseAllPending`）或队列积压 $\ge 8$ 笔真批量马丁网格平仓时才放大滑点容差至 100 点，普通单笔或少量平仓严格维持用户配置的原生滑点。 |
+| **TRD-04** | **P1 在途防重复发包** | `CopierReceiver.mq4:2535, 3020` | **NH-04 MT5 异步平仓在途抑制环（g_inflight）**：引入 1 秒短期在途抑制环 `g_inflight`，在 `asyncMode` 发送成功后自动 park 1 秒；`PushAction` 对在途键快速短路返回，彻底消除发包到服务器回执到达期间每 5ms 重复派生数十次异步平仓请求的风暴。 |
+| **ALG-01** | **P1 不变量熵空间** | `CopierDefs.mqh:914` | **NH-05 CopierNewUid 算法重构**：彻底废除 `MathRand()%32` LCG 低 5 位周期性碰撞缺陷，改用高精度单调时间戳、账户登录号、自增序列号与 FNV-1a 混淆扩散，提取 8 个完全独立的雪崩位段，恢复满格 $32^8 \approx 1.1 \times 10^{12}$ 熵空间，单测验证 200 个连续生成 0 碰撞。 |
+| **NET-01** | **P1 非阻塞通讯保障** | `CopierTransport.mqh:428` | **NH-06 SendUp 第二帧非阻塞发送**：将第二帧 `send` 的阻塞标志改为 `dontwait=true`，当 Hub 掉线或网络不可达时立即返回 false 而非无限挂起，彻底杜绝 ZMQ_IMMEDIATE=1 模式下卡死 EA 主线程的严重隐患。 |
+| **PERF-01**| **P2 算法与哈希优化** | 全栈各模块 | **NM-01..NM-14 & NL-01..06 全面收口**：`queuedCloseOrTrim` 使用 `CopierUidIndex` 哈希实现真正 $O(N+Q)$ 检索（NM-01）；`ScanAndResolveAccountPositions` 引入 ticket 开放寻址哈希消除移位时的 $O(n^2)$ 线性回扫（NM-02）；解压前增加 `CP_Z85_MAX` 64KB 输入前置拦截防止内存炸弹（NM-03）；`dueDetail` 纳入发送门条件保障面板仓位明细持续上报（NM-04）；报价年龄表槽位扩至 256 防止多品种周末停盘判定失效（NM-05）；`OnTradeTransaction` 改为只置脏标志并触发自泵，消灭单笔订单 6~7 次全量扫描（NM-06）；`CopierDecodeEnv` 改用一趟扫描找分隔符，消除动态数组与字符串临时分配（NM-07）；`create_nonce` 增加每用户上限防止免认证 DoS 阻断全员登录（NM-08）；`CopierSanitize` 增加快速检查，正常品种 0 次 StringReplace（NM-09）；配置重载仅清空 OPEN 动作保留未平仓动作（NM-10）；`g_sweepFailed` 改为文件级全局并在 Sweeper 结束后清空字符串引用（NM-11）；`snap_tx queue full` 告警增加 2 秒去抖限流（NM-12）；交易时段缓存放宽至 1 秒窗口且槽位扩至 64（NM-13）；SSID 变化时清零 `g_snapRejectStreak`（NM-14）；日亏基准缺失与紧急止损取价失败显式告警（NL-01, NL-02）；`CopierNid(0)` 统一防呆（NL-03）；`last_known_receipt` 超限仅 retain 有效节点（NL-04）；直连模式下无条件拦截非法 `SID=hub` 伪造帧（NL-06）。 |
 
 ---
 

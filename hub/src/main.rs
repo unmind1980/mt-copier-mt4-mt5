@@ -1343,6 +1343,7 @@ fn main() {
         std::collections::HashMap::new();
     let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
     let mut dropped_security_frames: u64 = 0;
+    let mut last_snapq_warn = Instant::now() - Duration::from_secs(10);
 
     //--- Background Worker for Asynchronous Snapshot Parsing
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
@@ -2260,8 +2261,11 @@ fn main() {
                                         last_known_receipt.insert(sid.clone(), new_receipt);
                                     }
                                     Err(_) => {
-                                        // F-07: Queue is full: do NOT advance last_known_receipt so next frame can retry
-                                        eprintln!("[hub] WARN snap_tx queue full; snapshot parse deferred for {}", sid);
+                                        // F-07 & NM-12: Queue is full: do NOT advance last_known_receipt, with 2s warn rate limiting
+                                        if last_snapq_warn.elapsed() >= Duration::from_secs(2) {
+                                            last_snapq_warn = Instant::now();
+                                            eprintln!("[hub] WARN snap_tx queue full; snapshot parse deferred for {}", sid);
+                                        }
                                     }
                                 }
                             } else {
@@ -2427,9 +2431,9 @@ fn main() {
                         }
                     }
                 }
-                // H-07: Hard capacity ceiling to prevent unbounded growth from spoofed SIDs
+                // H-07 & NL-04: Retain only senders currently registered instead of blunt clear()
                 if last_known_receipt.len() > 1024 {
-                    last_known_receipt.clear();
+                    last_known_receipt.retain(|acc, _| s.reg.get(&format!("sender:{}", acc)).is_some());
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry
                 //--- can keep a receiver online on heartbeats alone while its

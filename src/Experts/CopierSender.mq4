@@ -1536,6 +1536,12 @@ void HandleSenderStat(const CopierEnv &se)
 void OnTimer()
   {
    long now=CopierNowMs();
+#ifdef __MQL5__
+   if(g_tradeDirty)
+     {
+      g_tradeDirty=false;
+     }
+#endif
 
    //--- 0) Fast-path: drain incoming PONG and status BEFORE scanning positions
    int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
@@ -1993,6 +1999,7 @@ void OnTimer()
   }
 
 #ifdef __MQL5__
+bool g_tradeDirty=false;
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
@@ -2003,7 +2010,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       trans.type==TRADE_TRANSACTION_ORDER_DELETE ||
       trans.type==TRADE_TRANSACTION_HISTORY_ADD)
      {
-      OnTimer();
+      // NM-06: Set dirty flag and pulse high-priority pump instead of re-entering full OnTimer 6-7 times
+      g_tradeDirty=true;
+      g_pump.Trigger();
      }
   }
 #endif

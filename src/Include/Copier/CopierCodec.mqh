@@ -62,36 +62,38 @@ string CopierEncodeEnv(const CopierEnv &e)
 
 int CopierDecodeEnv(const string msg,CopierEnv &e)
   {
-   if(StringLen(msg)<=0 || StringLen(msg)>CP_MAX_MSG_LEN) return CP_ERR_TRUNCATED;
+   int len=StringLen(msg);
+   if(len<=0 || len>CP_MAX_MSG_LEN) return CP_ERR_TRUNCATED;
 
    //--- payload is always last and may legally contain ';' '~' ',' but
    //--- never '|' (we sanitise symbols/comments at the edges).
    int p=StringFind(msg,CP_SEP_FIELD+"P=");
    if(p<0) return CP_ERR_BAD_ENVELOPE;
 
-   string head=StringSubstr(msg,0,p);
-   e.payload=StringSubstr(msg,p+StringLen(CP_SEP_FIELD+"P="));
+   e.payload=StringSubstr(msg,p+3); // StringLen("|P=") == 3
 
-   string parts[];
-   int n=StringSplit(head,StringGetCharacter(CP_SEP_FIELD,0),parts);
-
+   // NM-07: Single-pass zero-allocation header scanner replaces StringSplit(parts[])
    e.v=0; e.sid=""; e.ssid=""; e.seq=0; e.ts=0; e.ms=0; e.type="";
-   for(int i=0;i<n;i++)
+   int start=0;
+   while(start<p)
      {
-      int eq=StringFind(parts[i],"=");
-      if(eq<=0) continue;
-      string k=StringSubstr(parts[i],0,eq);
-      string v=StringSubstr(parts[i],eq+1);
-      if(k=="V")         e.v=(int)StringToInteger(v);
-      else if(k=="SID")  e.sid=v;
-      else if(k=="SSID") e.ssid=v;
-      else if(k=="SEQ")  e.seq=CopierParseLong(v);
-      else if(k=="TS")   e.ts=CopierParseLong(v);
-      //--- 64-bit parse: a tick count passes 2^31 after ~25 days of uptime and
-      //--- StringToInteger would wrap on MQL4, turning the delay arithmetic
-      //--- into noise on a VPS that has simply been up a long time.
-      else if(k=="MS")   e.ms=CopierParseLong(v);
-      else if(k=="T")    e.type=v;
+      int nextSep=StringFind(msg,CP_SEP_FIELD,start);
+      if(nextSep<0 || nextSep>p) nextSep=p;
+      int eq=StringFind(msg,"=",start);
+      if(eq>start && eq<nextSep)
+        {
+         string k=StringSubstr(msg,start,eq-start);
+         string v=StringSubstr(msg,eq+1,nextSep-eq-1);
+         if(k=="V")         e.v=(int)StringToInteger(v);
+         else if(k=="SID")  e.sid=v;
+         else if(k=="SSID") e.ssid=v;
+         else if(k=="SEQ")  e.seq=CopierParseLong(v);
+         else if(k=="TS")   e.ts=CopierParseLong(v);
+         //--- 64-bit parse: tick count passes 2^31 after ~25 days of uptime
+         else if(k=="MS")   e.ms=CopierParseLong(v);
+         else if(k=="T")    e.type=v;
+        }
+      start=nextSep+1;
      }
    if(e.v!=CP_PROTO_V) return CP_ERR_BAD_VERSION;
    if(StringLen(e.sid)==0 || StringLen(e.type)==0) return CP_ERR_BAD_ENVELOPE;
@@ -366,6 +368,12 @@ string CopierDecompressField(const string field)
         {
          z85Str=StringSubstr(field,2);
         }
+      // NM-03: Guard against decompression bombs before allocating decomp buffers
+      if(StringLen(z85Str) > CP_Z85_MAX)
+        {
+         Print("CopierCodec: WARN compressed field len ",StringLen(z85Str)," exceeds CP_Z85_MAX - rejected");
+         return "";
+        }
       uchar comp[];
       if(Z85::decode(z85Str,comp))
         {
@@ -511,7 +519,16 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
    long countLong=CopierParseLong(n);
    // H-03: Hard upper bound and negative check to prevent int truncation to 0 (e.g. 2^32 wrapping)
    if(countLong<0 || countLong>(long)CP_MAX_POSITIONS*10) return -1;
-   if(countLong==0) return 0;                 // legitimately empty: "N=0;R=" or "N=0"
+   if(countLong==0)
+     {
+      // NH-02: If N=0 is claimed but R= carries record data, payload is corrupted/contradictory; reject
+      string recsCheck="";
+      if(CopierKvGet(payload,"R",recsCheck) && StringLen(recsCheck)>0)
+        {
+         if(recsCheck!="0:" && recsCheck!="1:") return -1;
+        }
+      return 0; // legitimately empty: "N=0;R=" or "N=0"
+     }
    int count=(int)countLong;
    if(count>maxOut)
      {

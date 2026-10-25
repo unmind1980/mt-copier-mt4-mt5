@@ -722,6 +722,8 @@ bool            g_cmdPaused=false;      // set by CMD pause / closeall, cleared 
 bool            g_cmdCloseAllActive=false; // true while closeall is actively queueing/draining
 string          g_cmdCloseAllId="";     // command ID for active closeall
 bool            g_riskCloseAllPending=false; // true while risk close-all is queueing/draining
+CopierSeenRing  g_inflight;             // NH-04: in-flight 1s suppression for asyncMode
+CopierAction    g_sweepFailed[CP_MAX_ACTIONS]; // NM-11: file-global sweep array
 long            g_lastCfgrMs=0;         // when we last asked the hub for a config
                                         // NOT reset on a WHO reply - same reason as
                                         // the sender; see its declaration.
@@ -2531,6 +2533,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- on every converge pass, NOT by the "already done" ring - see
    //--- CopierSeenRingApplies() for the pilot failure this caused
    if(CopierSeenRingApplies(kind) && g_seen.Has(key)) return false;
+   if(g_inflight.Has(key)) return false; // NH-04: in-flight suppression for async execution
    //--- An action that just FAILED is parked briefly, so a refused request is
    //--- not repeated ten times a second forever.
    //---
@@ -2636,6 +2639,30 @@ void ClearQueue()
    g_qHead=0;
   }
 
+// NM-10: Clear queue on config reload while preserving risk-reducing actions (CLOSE/TRIM/DEDUP/MODIFY)
+void ClearQueueExceptRiskReducing()
+  {
+   int w=0;
+   for(int i=0;i<g_qn;i++)
+     {
+      int idx=g_qHead+i;
+      CopierAction a=g_q[idx];
+      if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP || a.kind==CP_ACT_MODIFY)
+        {
+         if(w!=i) g_q[g_qHead+w]=a;
+         w++;
+        }
+      else
+        {
+         g_q[idx].uid="";
+         g_q[idx].sym="";
+         g_q[idx].key="";
+        }
+     }
+   g_qn=w;
+   if(g_qn<=0) g_qHead=0;
+  }
+
 double PipSize(const CopierSymInfo &si)
   {
    //--- the digits-based pip rule used to live here; it is now the single
@@ -2687,11 +2714,11 @@ void ExecuteQueue()
       if(qk==CP_ACT_CLOSE || qk==CP_ACT_TRIM || qk==CP_ACT_DEDUP)
          closeCount++;
      }
-   bool isBatchClose=(closeCount>1 || g_cmdCloseAllActive || g_riskCloseAllPending);
+   bool isEmergencyExit=(g_cmdCloseAllActive || g_riskCloseAllPending);
+   bool isBatchClose=(isEmergencyExit || closeCount>=8);
    // M-10: Cap batch close to 64 actions per tick to avoid freezing event loop on huge backlogs
    int maxActions=(isBatchClose ? 64 : MaxActionsPerTick);
 
-   static CopierAction s_sweepFailed[CP_MAX_ACTIONS];
    int sweepCount=0;
    int asyncBatchCount=0;
 
@@ -2947,11 +2974,15 @@ void ExecuteQueue()
            {
             int e2=0;
             sl=CopierEmergencySl(a.sym,a.side,0.0,emSL,si,e2);
+            if(e2!=0 && g_once.ShouldEmit("em_sl_fail|"+a.sym))
+               g_log.Warn("NL-02: EmergencySL configured but could not be computed for "+a.sym+" (err="+(string)e2+") - opening without SL");
            }
          if(emTP>0.0)
            {
             int e2=0;
             tp=CopierEmergencyTp(a.sym,a.side,0.0,emTP,si,e2);
+            if(e2!=0 && g_once.ShouldEmit("em_tp_fail|"+a.sym))
+               g_log.Warn("NL-02: EmergencyTP configured but could not be computed for "+a.sym+" (err="+(string)e2+") - opening without TP");
            }
          //--- the comment carries the UID (functional identity) and the
          //--- sender's ticket (so the two orders can be matched by eye)
@@ -2974,9 +3005,9 @@ void ExecuteQueue()
       else
         {
          int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
-         // Exit Slippage Buffer: in batch close mode, dynamically expand slippage tolerance to 100 points (10 pips)
-         // to absorb book micro-ticks and prevent 10004 / 138 Requote rejections
-         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
+         // NH-03: Exit Slippage Buffer is applied ONLY to emergency exits or true bulk martingale/grid exits (>=8 actions),
+         // preventing routine 2-action closes from suffering 100 points (10 pips) slippage.
+         if((isEmergencyExit || closeCount>=8) && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
             dev = MathMax(dev, 100);
 
 #ifdef __MQL5__
@@ -3016,10 +3047,11 @@ void ExecuteQueue()
          //--- stops working for TRIMs (whose key carries the target volume)
          //--- ...but NOT for MODIFY, which is idempotent - see
          //--- CopierSeenRingApplies()
-         //--- H-01: In asyncMode (MT5 OrderSendAsync), the broker has NOT confirmed the close yet.
-         //--- Never record into 10-minute g_seen at send-time, or a broker failure suppresses retry for 10 min.
+         //--- H-01 & NH-04: In asyncMode, broker confirmation is pending.
+         //--- Park in 1s g_inflight instead of 10m g_seen to suppress duplicate re-triggers while avoiding lockouts.
 #ifdef __MQL5__
-         if(CopierSeenRingApplies(a.kind) && !asyncMode) g_seen.Add(a.key);
+         if(asyncMode) g_inflight.Add(a.key);
+         else if(CopierSeenRingApplies(a.kind)) g_seen.Add(a.key);
 #else
          if(CopierSeenRingApplies(a.kind)) g_seen.Add(a.key);
 #endif
@@ -3134,7 +3166,7 @@ void ExecuteQueue()
          // Two-Pass Sweeper: record failed batch close action for immediate second-pass retry
          if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && sweepCount<CP_MAX_ACTIONS)
            {
-            s_sweepFailed[sweepCount++]=a;
+            g_sweepFailed[sweepCount++]=a;
            }
 
          //--- Park this action briefly. A failed action is shifted off the
@@ -3325,7 +3357,7 @@ void ExecuteQueue()
       Sleep(30);
       for(int s=0; s<sweepCount; s++)
         {
-         CopierAction sa = s_sweepFailed[s];
+         CopierAction sa = g_sweepFailed[s];
          // M-11: Skip symbols currently verified as market closed
          if(g_mktClosed.Has(sa.sym)) continue;
 
@@ -3358,6 +3390,13 @@ void ExecuteQueue()
             g_backoff.Note(sa.key);
             g_log.Warn("Two-Pass Sweeper: straggler ticket "+(string)sa.ticket+" uid "+sa.uid+" failed second pass (err="+(string)serr+")");
            }
+        }
+      // NM-11: Release string references held by sweep array
+      for(int sc=0; sc<sweepCount; sc++)
+        {
+         g_sweepFailed[sc].uid="";
+         g_sweepFailed[sc].sym="";
+         g_sweepFailed[sc].key="";
         }
      }
   }
@@ -3969,6 +4008,11 @@ bool      g_acctScanned=false;
 //--- rebuild rather than a construction.
 CopierUidIndex g_locIdx;
 CopierUidIndex g_desIdx;
+CopierUidIndex g_qCloseIdx; // NM-01: Hash index for queuedCloseOrTrim
+
+// NM-02: Ticket hash index for g_posCache to replace O(n^2) linear scan when order shifts
+static int  s_posCacheTkSlot[CP_TICKIDX_SLOTS];
+static uint s_posCacheTkHash[CP_TICKIDX_SLOTS];
 
 int ScanAndResolveAccountPositions()
   {
@@ -3997,6 +4041,30 @@ int ScanAndResolveAccountPositions()
    g_acctAllPosCount=an;
    g_acctScanned=true;
 
+   if(!forceFullScan && g_posCacheCount>0)
+     {
+      ArrayInitialize(s_posCacheTkSlot,0);
+      for(int c=0;c<g_posCacheCount;c++)
+        {
+         long tk=g_posCache[c].ticket;
+         uint h=(uint)(tk ^ (tk>>32));
+         h=((h>>16)^h)*0x45d9f3b;
+         h=((h>>16)^h)*0x45d9f3b;
+         h=(h>>16)^h;
+         int s=(int)(h&(CP_TICKIDX_SLOTS-1));
+         for(int p=0;p<CP_TICKIDX_SLOTS;p++)
+           {
+            int k=(s+p)&(CP_TICKIDX_SLOTS-1);
+            if(s_posCacheTkSlot[k]==0)
+              {
+               s_posCacheTkSlot[k]=c+1;
+               s_posCacheTkHash[k]=h;
+               break;
+              }
+           }
+        }
+     }
+
    for(int i=0;i<an;i++)
      {
       int matchIdx=-1;
@@ -4022,27 +4090,39 @@ int ScanAndResolveAccountPositions()
               }
            }
 
-         //--- Prediction 2: Order shifted; search linearly only if same-index missed
-         if(matchIdx<0)
+         //--- NM-02: Prediction 2: O(1) hash probe replaces O(n^2) quadratic linear re-scan
+         if(matchIdx<0 && g_posCacheCount>0)
            {
-            for(int c=0;c<g_posCacheCount;c++)
+            long tk=g_rawScratch[i].ticket;
+            uint h=(uint)(tk ^ (tk>>32));
+            h=((h>>16)^h)*0x45d9f3b;
+            h=((h>>16)^h)*0x45d9f3b;
+            h=(h>>16)^h;
+            int s=(int)(h&(CP_TICKIDX_SLOTS-1));
+            for(int p=0;p<CP_TICKIDX_SLOTS;p++)
               {
-               if(g_posCache[c].ticket==g_rawScratch[i].ticket
-                  && g_posCache[c].magic==g_rawScratch[i].magic
-                  && g_posCache[c].side==g_rawScratch[i].side
-                  && g_posCache[c].kind==g_rawScratch[i].kind
-                  && g_posCache[c].ptype==g_rawScratch[i].ptype
-                  && g_posCache[c].openTime==g_rawScratch[i].openTime
-                  && g_posCache[c].pexpire==g_rawScratch[i].pexpire
-                  && g_posCache[c].lots==g_rawScratch[i].lots
-                  && g_posCache[c].openPx==g_rawScratch[i].openPx
-                  && g_posCache[c].sl==g_rawScratch[i].sl
-                  && g_posCache[c].tp==g_rawScratch[i].tp
-                  && g_posCache[c].pprice==g_rawScratch[i].pprice
-                  && g_posCache[c].pstop==g_rawScratch[i].pstop)
+               int k=(s+p)&(CP_TICKIDX_SLOTS-1);
+               if(s_posCacheTkSlot[k]==0) break;
+               if(s_posCacheTkHash[k]==h)
                  {
-                  matchIdx=c;
-                  break;
+                  int c=s_posCacheTkSlot[k]-1;
+                  if(g_posCache[c].ticket==g_rawScratch[i].ticket
+                     && g_posCache[c].magic==g_rawScratch[i].magic
+                     && g_posCache[c].side==g_rawScratch[i].side
+                     && g_posCache[c].kind==g_rawScratch[i].kind
+                     && g_posCache[c].ptype==g_rawScratch[i].ptype
+                     && g_posCache[c].openTime==g_rawScratch[i].openTime
+                     && g_posCache[c].pexpire==g_rawScratch[i].pexpire
+                     && g_posCache[c].lots==g_rawScratch[i].lots
+                     && g_posCache[c].openPx==g_rawScratch[i].openPx
+                     && g_posCache[c].sl==g_rawScratch[i].sl
+                     && g_posCache[c].tp==g_rawScratch[i].tp
+                     && g_posCache[c].pprice==g_rawScratch[i].pprice
+                     && g_posCache[c].pstop==g_rawScratch[i].pstop)
+                    {
+                     matchIdx=c;
+                     break;
+                    }
                  }
               }
            }
@@ -4294,6 +4374,11 @@ void RefreshRisk()
          g_riskDayStartEquity=CopierAccountBalance()-CopierRealizedToday(dayStart);
      }
    g_risk.ObserveAt(CopierAccountEquity(),dayStart/86400,g_riskDayStartEquity);
+   // NL-01: Warn if daily loss guard is enabled but baseline cannot be measured
+   if(g_riskDayStartEquity<=0.0 && g_risk.DailyLossPct()>0.0 && g_once.ShouldEmit("risk_day_baseline_zero"))
+     {
+      g_log.Warn("NL-01: daily loss guard inactive because day-start equity baseline is <= 0");
+     }
    //--- Persist the peak so a terminal restart cannot re-base the drawdown
    //--- switch. Internally throttled to once a minute; a rising peak that is
    //--- lost to a crash understates the baseline by that minute's gain, which
@@ -4358,15 +4443,25 @@ int CloseAllOurs(const string reason,int &failedCount,int &totalMatching)
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
       totalMatching++;
       string actKey=g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+uid;
-      g_seen.Forget(actKey);
-      g_backoff.Clear(actKey);
+      // NH-01: Clear backoff/seen ONLY on the initial explicit closeall request (StringLen(reason)>0).
+      // Background retry passes leave backoff intact so repeated broker errors back off to 5s intervals.
+      if(StringLen(reason)>0)
+        {
+         g_seen.Forget(actKey);
+         g_backoff.Clear(actKey);
+        }
       if(PushAction(si,CP_ACT_CLOSE,uid,g_scanScratch[i].sym,g_scanScratch[i].side,g_scanScratch[i].lots,
                  g_scanScratch[i].ticket,0,"",0.0,0.0,g_scanScratch[i].kind))
          queued++;
       else
         {
-         failedCount++;
-         g_log.Error("CloseAll: failed to queue close action for ticket "+(string)g_scanScratch[i].ticket+" uid "+uid);
+         // NH-01: Only count as true queue failure if queue is actually saturated
+         if(g_qn>=CP_MAX_ACTIONS)
+           {
+            failedCount++;
+            if(g_once.ShouldEmit("closeall_qfull|"+uid))
+               g_log.Error("CloseAll: action queue full for ticket "+(string)g_scanScratch[i].ticket+" uid "+uid);
+           }
         }
      }
    if(StringLen(reason)>0)
@@ -4494,7 +4589,7 @@ void ConvergeSender(const int si)
    PendingOpensForSender(si,sPendCount,sPendLots);
 
    //--- Pre-scan queued CLOSE and TRIM actions for this sender once per tick,
-   //--- reducing worst-case O(N * Q) string comparisons across 2048 desired positions to O(N + Q).
+   //--- NM-01: Built into g_qCloseIdx hash table to achieve true O(N + Q) lookup.
    static string queuedCloseOrTrim[CP_MAX_ACTIONS];
    int queuedCloseOrTrimCount=0;
    if(g_qn>0)
@@ -4508,6 +4603,7 @@ void ConvergeSender(const int si)
            }
         }
      }
+   g_qCloseIdx.BuildFromStrings(queuedCloseOrTrim,queuedCloseOrTrimCount);
 
    //--- desired but not mirrored -> open
    for(int i=0;i<g_desiredCount[si];i++)
@@ -4524,11 +4620,8 @@ void ConvergeSender(const int si)
          //--- and for TRIM only when volume has actually converged to the desired level.
          //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
          //--- causes duplicate execution on the next tick.
-         bool hasQueued=false;
-         for(int q=0;q<queuedCloseOrTrimCount;q++)
-           {
-            if(queuedCloseOrTrim[q]==d.uid) { hasQueued=true; break; }
-           }
+         //--- NM-01: O(1) hash probe replaces nested O(N*Q) linear loop
+         bool hasQueued=(g_qCloseIdx.FindInStrings(queuedCloseOrTrim,d.uid)>=0);
          if(!hasQueued)
            {
             double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
@@ -5092,6 +5185,25 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    int sent=(int)sentLong;
 
+   // NH-02: Wire payload integrity check using receiver-computed hash against wire H=
+   string hOnWire="";
+   if(CopierKvGet(e.payload,"H",hOnWire) && StringLen(hOnWire)==8)
+     {
+      int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
+      if(hPos>0)
+        {
+         string body=StringSubstr(e.payload,0,hPos);
+         string hCalc=CopierHashHex(CopierHash32(body));
+         if(hCalc!=hOnWire)
+           {
+            g_snapRejectStreak[si]++;
+            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
+                        +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
+            return;
+           }
+        }
+     }
+
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
    //---
    //--- The sender declares its own count in N=. If the number of records we
@@ -5497,7 +5609,7 @@ void HandleCfg(const CopierEnv &e)
      }
 
    int added=ResubscribeSenders(beforeSid,beforeN);
-   ClearQueue();
+   ClearQueueExceptRiskReducing();
 
    //--- Warnings, counted the way §10 asks: a magic change orphans positions.
    int warnings=0;
@@ -5998,6 +6110,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
          if(StringLen(g_desired[base+d].uid)>0) StopsForget(g_desired[base+d].uid);
         }
       g_stOvEpoch++;
+      g_snapRejectStreak[si]=0; // NM-14: Clear reject streak on sender restart so failure diagnosis is not biased by prior session
       g_log.Info("sender "+g_sid[si]+" new session "+e.ssid+" -> resync");
      }
    //--- per-stream watermark: a snapshot must never invalidate an event
@@ -6012,7 +6125,8 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
    //--- F-01: Control frames claiming to be from "hub" must arrive strictly on control channels (@all, @nid, @acc)
    if(e.sid=="hub")
      {
-      if(g_hubOn && (StringLen(topic)==0 || StringSubstr(topic,0,1)!="@"))
+      // NL-06: Apply F-01 unconditionally so direct mode cannot be injected with spoofed SID=hub on data topics
+      if(StringLen(topic)==0 || StringSubstr(topic,0,1)!="@")
         {
          g_log.Warn("SECURITY F-01: frame claiming SID=hub received on non-control topic '"+topic+"' - DISCARDED");
          return;
@@ -6193,6 +6307,7 @@ int OnInit()
      }
    if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
+   g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode
    //--- g_backoff carries its own per-key deadline; there is no single TTL
    //--- to set, which is the whole point of it.
    g_unsupported.SetTtlMs(CP_UNSUPPORTED_MS);
@@ -6992,9 +7107,9 @@ void OnTimer()
      }
 
    //--- Background retry for closeall / risk-close if queue was full during initial batch
-   //--- L-01: Throttle to 50ms interval to eliminate 5ms spinning full-account position scans
+   //--- NH-01: Throttle to 1000ms interval to eliminate high-frequency spinning full-account position scans
    static long s_lastCloseAllRetryMs=0;
-   if((g_cmdCloseAllActive || g_riskCloseAllPending) && now-s_lastCloseAllRetryMs>=50)
+   if((g_cmdCloseAllActive || g_riskCloseAllPending) && now-s_lastCloseAllRetryMs>=1000)
      {
       s_lastCloseAllRetryMs=now;
       int closeFailed=0, closeTotal=0;
@@ -7337,7 +7452,8 @@ void OnTimer()
    bool dueSummary=(g_forcePosReport || (g_lastSummaryMs==0) || (now-g_lastSummaryMs>=5000));
    bool dueDetail =(g_hubOn && (g_forcePosReport || (g_lastPosDetailMs==0) || (now-g_lastPosDetailMs>=60000)));
 
-   if(dueStatus || dueSync || dueSummary || g_forcePosReport)
+   // NM-04: Include dueDetail in transmission gate
+   if(dueStatus || dueSync || dueSummary || dueDetail || g_forcePosReport)
      {
       if(dueStatus) g_lastStatusMs=now;
       if(dueSync || g_forcePosReport) g_lastSyncMs=now;

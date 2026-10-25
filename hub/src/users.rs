@@ -474,6 +474,12 @@ impl UserStore {
         }
         self.guard.prune(now);
 
+        // NM-08: Protect nonce table from per-user denial-of-service
+        let user_nonces = self.auth_nonces.values().filter(|(uid, _)| uid == user_id).count();
+        if user_nonces >= 16 {
+            return None;
+        }
+
         let (salt, rounds) = if let Some(u) = self.users.iter().find(|u| u.id == user_id && !u.disabled) {
             let parts: Vec<&str> = u.pass.split('$').collect();
             if parts.len() == 3 {
