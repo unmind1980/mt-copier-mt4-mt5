@@ -606,7 +606,8 @@ impl Audit {
                         let decoder = GzDecoder::new(f);
                         let reader = std::io::BufReader::new(decoder);
                         use std::io::BufRead;
-                        let mut archive_recs: Vec<Value> = Vec::new();
+                        let mut archive_recs: std::collections::VecDeque<Value> = std::collections::VecDeque::new();
+                        let max_archive_needed = limit.saturating_sub(out.len());
                         for line_res in reader.lines() {
                             if let Ok(line) = line_res {
                                 if line.trim().is_empty() {
@@ -616,16 +617,26 @@ impl Audit {
                                     stats.lines += 1;
                                     let s = v["seq"].as_u64().unwrap_or(0);
                                     if s > since && s < oldest_active_seq {
-                                        archive_recs.push(v);
-                                        if archive_recs.len() + out.len() >= limit * 2 {
-                                            break;
+                                        if since == 0 {
+                                            // R48-08: Sliding window: keep only the latest records from archive
+                                            if archive_recs.len() >= max_archive_needed {
+                                                archive_recs.pop_front();
+                                            }
+                                            archive_recs.push_back(v);
+                                        } else {
+                                            // Forward pagination: take first matching records
+                                            archive_recs.push_back(v);
+                                            if archive_recs.len() >= max_archive_needed {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                        archive_recs.extend(out);
-                        out = archive_recs;
+                        let mut combined: Vec<Value> = archive_recs.into();
+                        combined.extend(out);
+                        out = combined;
                     }
                 }
             }

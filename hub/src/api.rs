@@ -834,19 +834,20 @@ async fn handle_socket(
 /// The wire format for a push. A shape the page can switch on, so a later
 /// incremental message is a new `t` rather than a change to this one.
 pub(crate) fn snapshot_text(st: &SharedState) -> String {
-    // M-05: Extract required model state quickly under lock, then drop lock before final JSON serialization
-    let (uptime_secs, nodes_list, pos_list, mismatched, alerts_list, curve_val) = {
+    // M-05 & R48-10: Extract state and clone positions under lock; construct heavy JSON AST outside lock
+    let now = Instant::now();
+    let (uptime_secs, nodes_list, pos_clone, mismatched, alerts_list, curve_val) = {
         let s = st.lock_or_recover();
-        let now = Instant::now();
         (
             now.saturating_duration_since(s.started).as_secs(),
             nodes_json_list(&s.reg, &s.pos, now),
-            positions_json_list(&s.pos),
+            s.clone_view(),
             s.pos.mismatched,
             s.alerts.recent_json(20),
             curve_json(&s),
         )
     };
+    let pos_list = positions_json_list(&pos_clone);
     let body = json!({
         "hub_uptime_secs": uptime_secs,
         "nodes": Value::Array(nodes_list),

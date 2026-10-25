@@ -816,6 +816,51 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
         return Err("URL points to prohibited cloud metadata or link-local service".to_string());
     }
 
+    // R48-04: Enforce comprehensive SSRF protection against loopback and RFC 1918 private networks
+    let allow_local = std::env::var("MTC_ALLOW_LOCAL_WEBHOOK").is_ok();
+    if !allow_local {
+        if host_lower == "localhost"
+            || host_lower == "127.0.0.1"
+            || host_lower == "0.0.0.0"
+            || host_lower == "::1"
+            || host_lower.starts_with("127.")
+        {
+            return Err("URL points to prohibited localhost or loopback address".to_string());
+        }
+
+        if host_lower.starts_with("10.")
+            || host_lower.starts_with("192.168.")
+            || (host_lower.starts_with("172.") && {
+                let parts: Vec<&str> = host_lower.split('.').collect();
+                if parts.len() >= 2 {
+                    parts[1].parse::<u8>().map(|b| b >= 16 && b <= 31).unwrap_or(false)
+                } else {
+                    false
+                }
+            })
+        {
+            return Err("URL points to prohibited private network address".to_string());
+        }
+
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            if ip.is_loopback() || ip.is_unspecified() {
+                return Err("URL points to prohibited loopback or unspecified IP".to_string());
+            }
+            match ip {
+                std::net::IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() => {
+                    return Err("URL points to prohibited private or link-local IPv4".to_string());
+                }
+                std::net::IpAddr::V6(v6) => {
+                    let segs = v6.segments();
+                    if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xffc0) == 0xfe80 {
+                        return Err("URL points to prohibited private or link-local IPv6".to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1353,5 +1398,26 @@ mod tests {
         assert_eq!(m_drift.len(), 0, "Ordinary warning must still be filtered out by critical channel");
 
         let _ = fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn validate_outgoing_url_ssrf_protection() {
+        // Disallow metadata and link-local
+        assert!(validate_outgoing_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(validate_outgoing_url("http://metadata.google.internal/computeMetadata/v1").is_err());
+        assert!(validate_outgoing_url("http://[fe80::1]:8080/hook").is_err());
+        // Disallow loopback and private networks by default
+        assert!(validate_outgoing_url("http://127.0.0.1:8080/hook").is_err());
+        assert!(validate_outgoing_url("http://localhost:8080/hook").is_err());
+        assert!(validate_outgoing_url("http://10.0.0.1/hook").is_err());
+        assert!(validate_outgoing_url("http://192.168.1.1/hook").is_err());
+        assert!(validate_outgoing_url("http://172.16.0.1/hook").is_err());
+        assert!(validate_outgoing_url("http://172.31.255.255/hook").is_err());
+        // Disallow userinfo
+        assert!(validate_outgoing_url("http://admin:secret@example.com/hook").is_err());
+        // Allow valid public urls
+        assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").is_ok());
+        assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").is_ok());
+        assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").is_ok());
     }
 }

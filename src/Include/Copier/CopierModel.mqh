@@ -267,9 +267,17 @@ double CopierRealizedToday(const long dayStart)
   }
 
 //--- midnight of the current server day, in server time
+//--- R48-05: Use TimeToStruct to find local calendar day start, avoiding UTC modulo offset errors
 long CopierServerDayStart()
   {
-   return (CopierServerTime()/86400)*86400;
+   datetime now=(datetime)CopierServerTime();
+   if(now<=0) return 0;
+   MqlDateTime dt;
+   TimeToStruct(now,dt);
+   dt.hour=0;
+   dt.min=0;
+   dt.sec=0;
+   return (long)StructToTime(dt);
   }
 
 //=====================================================================
@@ -1075,7 +1083,7 @@ bool CopierClosePartial(const long identifier,const double lots,
 
    if(isPending)
      {
-      outErr=-4;           // R47-02: partial close of pending orders is unsupported
+      outErr=-5;           // R48-01: distinct error: partial close of pending orders is unsupported by broker API
       return false;
      }
 

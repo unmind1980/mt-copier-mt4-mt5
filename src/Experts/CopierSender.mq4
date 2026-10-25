@@ -1460,12 +1460,11 @@ void RebuildSnapshotPayload()
      }
    g_latestSnapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_latestSnapPayload);
-   if(StringLen(g_snapPayload)==0 || StringLen(g_snapHash)==0 || SnapshotSeconds<=0)
-     {
-      g_snapPayload=g_latestSnapPayload;
-      g_snapHash=g_latestSnapHash;
-     }
-   NoteRecentSnapHash(g_latestSnapHash);
+   // R48-09: Synchronize g_snapPayload and g_snapHash so targeted repairs and bootstraps
+   // carry the true up-to-date state when positions change between routine broadcasts.
+   g_snapPayload=g_latestSnapPayload;
+   g_snapHash=g_latestSnapHash;
+   NoteRecentSnapHash(g_snapHash);
   }
 
 void BroadcastSnapshot(const long now)

@@ -75,6 +75,7 @@ def main():
         return 2
 
     os.environ["MTC_ADMIN_PASSWORD"] = "hub-test-pass"
+    os.environ["MTC_ALLOW_LOCAL_WEBHOOK"] = "1"
     cmds = os.path.join(HERE, "_hub_notif_cmds.jsonl")
     audit = os.path.join(HERE, "_hub_notif_audit.jsonl")
     users = os.path.join(HERE, "_hub_notif_users.json")

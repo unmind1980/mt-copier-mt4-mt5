@@ -385,6 +385,7 @@ pub fn spawn_zap_handler(
         let mut denied: u64 = 0;
         let mut last_deny_log = std::time::Instant::now() - std::time::Duration::from_secs(10);
         let mut suppressed_denies: u64 = 0;
+        let mut last_allow_log: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
         loop {
             //--- 7 frames: version, request_id, domain, address, identity,
             //--- mechanism, credentials.
@@ -441,10 +442,20 @@ pub fn spawn_zap_handler(
                             }
                         l.add_key(&key);
                     }
-                    if known {
-                        println!("[hub] ZAP ALLOW {}", key);
-                    } else {
-                        println!("[hub] ZAP ALLOW {} (learn mode - not on the list yet)", key);
+                    let should_log_allow = match last_allow_log.get(&key) {
+                        Some(t) => t.elapsed() >= std::time::Duration::from_secs(2),
+                        None => true,
+                    };
+                    if should_log_allow {
+                        last_allow_log.insert(key.clone(), std::time::Instant::now());
+                        if last_allow_log.len() > 1024 {
+                            last_allow_log.clear();
+                        }
+                        if known {
+                            println!("[hub] ZAP ALLOW {}", key);
+                        } else {
+                            println!("[hub] ZAP ALLOW {} (learn mode - not on the list yet)", key);
+                        }
                     }
                     drop(l);
                     ("200", "OK", cred.clone())

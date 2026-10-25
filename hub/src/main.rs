@@ -1403,10 +1403,14 @@ fn main() {
         })
         .expect("cannot spawn snap-worker thread");
 
+    let mut consecutive_poll_errors: u32 = 0;
     while !EXIT.load(Ordering::SeqCst) {
         match sock.poll(zmq::POLLIN, POLL_MS) {
-            Ok(0) => {} // timeout - nothing to do, fall through to stats
+            Ok(0) => {
+                consecutive_poll_errors = 0;
+            } // timeout - nothing to do, fall through to stats
             Ok(_) => {
+                consecutive_poll_errors = 0;
                 let parts = match sock.recv_multipart(zmq::DONTWAIT) {
                     Ok(p) => p,
                     //--- raced away between poll and recv; not an error
@@ -2310,8 +2314,13 @@ fn main() {
                 }
             }
             Err(e) => {
-                eprintln!("[hub] poll failed: {}", e);
+                consecutive_poll_errors += 1;
+                eprintln!("[hub] poll failed ({} consecutive): {}", consecutive_poll_errors, e);
                 std::thread::sleep(Duration::from_millis(POLL_MS as u64));
+                if consecutive_poll_errors >= 10 {
+                    eprintln!("[hub] FATAL: poll failed 10 consecutive times ({}) - exiting for supervisor restart", e);
+                    EXIT.store(true, Ordering::SeqCst);
+                }
             }
         }
 

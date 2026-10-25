@@ -2534,6 +2534,28 @@ void TestBackoff()
    Ok("backoff: long future-parked key is protected against eviction",bf.Blocked("critical_24h"));
   }
 
+void TestR47R48Regressions()
+  {
+   long dummyTicket=0;
+   bool dummyPending=false;
+   Ok("model: resolve ticket 0 returns false",!CopierResolveCloseTicket(0,dummyTicket,dummyPending));
+   Ok("model: resolve negative ticket returns false",!CopierResolveCloseTicket(-1,dummyTicket,dummyPending));
+
+   int outErr=0;
+   Ok("model: close partial lots 0 returns true",CopierClosePartial(12345,0.0,"EURUSD",CP_SIDE_BUY,123,"",10,outErr));
+
+   long dayStart=CopierServerDayStart();
+   Ok("model: dayStart is non-negative",dayStart>=0);
+   if(dayStart>0)
+     {
+      MqlDateTime dt;
+      TimeToStruct((datetime)dayStart,dt);
+      Ok("model: dayStart has hour 0",dt.hour==0);
+      Ok("model: dayStart has min 0",dt.min==0);
+      Ok("model: dayStart has sec 0",dt.sec==0);
+     }
+  }
+
 //+------------------------------------------------------------------+
 void OnStart()
   {
@@ -2592,6 +2614,7 @@ void OnStart()
    TestKvSuffixCollision();
    TestProfitTarget();
    TestTradingTimes();
+   TestR47R48Regressions();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

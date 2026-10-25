@@ -390,6 +390,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十五次审计** | 2026-10-25 18:30 | 全面闭环第45轮深度审计（H-01..H-08、M-01..M-14与关键优化） | 资金安全、协议防线与资源收敛 |
 | **四十六次审计** | 2026-10-25 20:30 | 全面闭环第46轮增量复审（NH-01..NH-06高危、NM-01..NM-14中危与低危优化） | 算法健壮、零等待哈希化与全栈闭环 |
 | **四十七次审计** | 2026-10-25 22:30 | 全面闭环第47轮深度审计（R47-01..R47-35高/中/低危35项全面加固） | 执行原语、状态防护、权限安全与全栈收敛 |
+| **四十八次审计** | 2026-10-26 09:30 | 全面闭环第48轮深度审计（R48-01..R48-15高/中/低危15项全面修复） | 挂单TRIM解耦、快照强校验、SSRF防线与时区基准修复 |
 
 ---
 
@@ -1140,6 +1141,24 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **SEC-02** | **P1 会话防线** | `hub/src/users.rs:328, 480` / `hub/src/api.rs:1132, 1360` | **R47-12~14 & R47-32 认证安全与防枚举**：`create_nonce` 超 16 条自动 LRU 淘汰该用户最旧 nonce，防范无认证反向 DoS 锁定登录；`mint_session` 统一会话清理与 LRU 驱逐（废除 clear() 踢全员）；遗留登录对不存在用户跑满 4096 轮哑盐消除时序枚举；管理员建号密码强制 $\ge 6$ 字符下限。 |
 | **SEC-03** | **P1 消息转义** | `hub/src/notifications.rs:260, 910` | **R47-15 DingTalk 通道 Markdown 转义**：实现 `markdown_escape`，对标题、节点名、状态和详情全面转义，阻断节点端注入格式与点击钓鱼。 |
 | **STB-01** | **P2/P3 全栈治理** | 全栈各模块 | **R47-05~07, 16~35 全面收口**：`ExecuteQueue` 增加 `!g_acctScanned` 守卫（R47-05）；快车道前置 `RefreshRisk` 消除风控陈旧计数（R47-06）；Converge 平仓仅在 `PushAction` 成功后 forget stops/peak（R47-07）；MT4 部分平仓链仅在 5 跳耗尽时告警（R47-16）；`UpdateAt` 补 UID 长度校验并清理无用变量（R47-17）；止调节流仅在入队成功后打点（R47-18）；修正券商限额警告文案（R47-19）；删除死变量 `g_epSnap`（R47-20）；`AcquireInstanceLock` 回读校验防 TOCTOU（R47-21）；`SnapTrack` 驱逐时输出告警（R47-22）；Sender PONG 应答传 `centralToo=false`（R47-23）；删除无用 `g_tradeDirty`（R47-24）；`ensure_capacity` 消除 `evicted` 双重累加并记录真实 liveness（R47-25）；`on_reg` 保护非空 VER（R47-26）；解决 z85 pad 0.055% 歧义（R47-27）；CFGR 打印 10 秒限流（R47-28）；仅对 Online 节点评估风险告警（R47-29）；Hub poll 错误增加退避（R47-31）；Dashboard 移除伪造样本事件（R47-33）；审计归档流式解压（R47-34）；Dashboard 仅 401 触发登录浮层（R47-35）。 |
+
+---
+
+### 四十八次审计：全面闭环第48轮深度审计（R48-01..R48-15高/中/低危15项全面修复）（2026-10-26 09:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **EXEC-01** | **P0 挂单TRIM解耦** | `CopierModel.mqh:1078` / `CopierReceiver.mq4:3206, 3220` | **R48-01 挂单减仓错误码解耦与解除15分钟误封锁**：`CopierClosePartial` 挂单拒绝分配独立错误码 `outErr=-5`；`ExecuteQueue` 仅对建仓动作（`CP_ACT_OPEN`）的 `-4` 写入 `g_unsupported`，TRIM 动作输出挂单无法 partial close 告警并安全跳过，彻底杜绝挂单减仓被静默锁定 15 分钟与手数背离。 |
+| **SEC-01** | **P0 误全平绝对防线** | `CopierReceiver.mq4:5213-5226` | **R48-02 快照 H= 校验强制 Fail-Closed 防线**：严格要求快照必须携带合法的 8 字符 `H=` 并匹配接收端重算哈希，缺失或被破坏直接拒绝应用快照，彻底堵死攻击者或截断信包通过不带 `H=` 绕过哈希防线诱发误全平清仓的漏洞。 |
+| **SEC-02** | **P0 认证防DoS** | `hub/src/users.rs:502` | **R48-03 Nonce 驱逐在途保护防反向 DoS 锁定**：单用户在途 Nonce 上限 16 条，且满额驱逐仅限已存活 $\ge 2$ 秒的旧 nonce；处于 2 秒在途窗口内的挑战受绝对保护，彻底杜绝攻击者并发恶意请求刷掉管理员正在运算哈希的合法 Nonce。 |
+| **SEC-03** | **P0 系统安全** | `hub/src/notifications.rs:818-854` / `tools/hub_notifications_test.py:78` | **R48-04 Webhook/告警 SSRF 深度防御**：`validate_outgoing_url` 增加对 Localhost (127.0.0.1, 0.0.0.0, ::1)、RFC 1918 私网网段 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) 及 IPv6 Link-Local/Unique-Local 地址的强制阻断，同时在测试脚本设置 `MTC_ALLOW_LOCAL_WEBHOOK` 隔离测试通道。 |
+| **FIN-01** | **P1 风控时区基准** | `CopierModel.mqh:271` / `CopierSymbol.mqh:82` | **R48-05 & R48-07 日起点与交易时段 TimeToStruct 修复**：废除裸除 86400 的 UTC 取模算术，改用 `TimeToStruct` 提取券商服务器当地日的午夜 `00:00:00` 及 `secOfDay` / `day_of_week`，彻底消除非 UTC+0（如 EET 夏令时 UTC+3）券商在午夜长达 2~3 小时的日亏损与交易时段判定错位。 |
+| **FIN-02** | **P1 盘中出入金跟踪** | `CopierReceiver.mq4:4406` | **R48-06 盘中出入金基准动态平滑校准**：解除 `g_riskDayStartEquity<=0` 的死锁，允许每 60 秒根据最新的 `Balance - RealizedToday` 动态平滑更新开盘净权益基准，彻底消除交易员盘中出金后触发虚假日亏损熔断的隐患。 |
+| **AUD-01** | **P1 审计归档读取** | `hub/src/audit.rs:608-629` | **R48-08 审计归档 since=0 滑动窗口修复**：当 `since == 0` 时采用 `VecDeque` 滑动窗口保留紧邻 active 文件的最新归档记录，彻底消除顺序读取提前 break 导致返回远古记录与最新记录畸形拼接的断层 bug。 |
+| **TRD-01** | **P1 快照同步保证** | `CopierSender.mq4:1465` | **R48-09 RebuildSnapshotPayload 同步更新 g_snapPayload**：持仓变动重新构建快照时同步更新 `g_snapPayload` 与 `g_snapHash`，确保定向 Repair 和 Bootstrap 发送的始终是当前真实的最新状态。 |
+| **PERF-01**| **P1 锁内大对象移出** | `hub/src/api.rs:837-849` | **R48-10 WebSocket 广播 JSON AST 构造移出互斥锁**：锁内仅执行 `clone_view()` 进行轻量结构体拷贝，数千订单的 `serde_json::Value` 递归构建彻底移到全局锁外，消灭 ZMQ 主路由线程的毫秒级微停顿。 |
+| **KEY-01** | **P1 密钥防误轮换** | `CopierCurveKey.mqh:111, 214, 254, 287` | **R48-11 区分密钥文件锁定与损坏消除 TOCTOU 竞态**：新增 `CP_KEY_LOCKED` 错误码；文件存在但打开失败或 DLL derive 失败时坚决拒绝覆盖原文件，彻底根除杀软/备份瞬时持锁导致的误轮换断链。 |
+| **STB-01** | **P2/P3 全栈治理** | 全栈各模块 | **R48-12..15 全面收口**：ZAP ALLOW 增加 2 秒去抖限流（R48-12）；主循环 poll 错误累计 10 次退出以触发外部 Supervisor 自动重启（R48-13）；`CopierSelfTest.mq4` 补充 `TestR47R48Regressions` 核心回归用例（R48-14）；精简历史废弃注释与死变量（R48-15）。 |
 
 ---
 

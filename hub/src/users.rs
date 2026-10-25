@@ -495,18 +495,22 @@ impl UserStore {
         }
         self.guard.prune(now);
 
-        // R47-12: If this user already has active nonces, cap at 16 by evicting their oldest nonce
-        // This prevents an unauthenticated attacker from locking out targeted users.
+        // R47-12 & R48-03: Per-user nonce capacity and race-invalidation protection.
+        // Cap at 16 per user. When saturated, only evict nonces that have survived past
+        // the 2-second in-flight protection window, guaranteeing legitimate user logins
+        // are never invalidated mid-hash by concurrent attacker floods.
         let user_nonces = self.auth_nonces.values().filter(|(uid, _)| uid == user_id).count();
         if user_nonces >= 16 {
-            if let Some(oldest_nonce) = self
+            let evictable = self
                 .auth_nonces
                 .iter()
-                .filter(|(_, (uid, _))| uid == user_id)
+                .filter(|(_, (uid, exp))| uid == user_id && *exp <= now + ttl_secs.saturating_sub(2))
                 .min_by_key(|(_, (_, exp))| *exp)
-                .map(|(k, _)| k.clone())
-            {
-                self.auth_nonces.remove(&oldest_nonce);
+                .map(|(k, _)| k.clone());
+            if let Some(oldest) = evictable {
+                self.auth_nonces.remove(&oldest);
+            } else {
+                return None;
             }
         }
 

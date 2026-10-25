@@ -77,10 +77,12 @@ bool CopierInTradingSession(const string sym)
       if(g_sessKey[i]==sym && now-g_sessAt[i]<1) return g_sessVal[i];
      }
 
-   //--- decomposed by arithmetic: TimeHour/TimeMinute are not portable, and
-   //--- 0=Sunday matches ENUM_DAY_OF_WEEK.
-   int secOfDay=(int)(now%86400);
-   int dow=(int)((((long)now/86400)+4)%7);
+   //--- R48-07: Use TimeToStruct to obtain local broker day-of-week and seconds from midnight,
+   //--- aligning with SymbolInfoSessionTrade's broker session offsets.
+   MqlDateTime dt;
+   TimeToStruct((datetime)now,dt);
+   int secOfDay=dt.hour*3600 + dt.min*60 + dt.sec;
+   int dow=dt.day_of_week;
 
    bool anySession=false;
    bool inside=false;

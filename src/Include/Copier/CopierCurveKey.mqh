@@ -107,7 +107,8 @@ enum CP_KEY_RESULT
    CP_KEY_READ     = 0,   //--- existing, valid file was loaded
    CP_KEY_CREATED  = 1,   //--- no file; a new keypair was generated
    CP_KEY_REPLACED = 2,   //--- file existed but was unusable; regenerated
-   CP_KEY_FAILED   = 3    //--- could not produce a keypair at all
+   CP_KEY_FAILED   = 3,   //--- could not produce a keypair at all
+   CP_KEY_LOCKED   = 4    //--- R48-11: file exists but is locked or DLL transiently unavailable
   };
 
 class CopierCurveKey
@@ -209,8 +210,13 @@ private:
    CP_KEY_RESULT     LoadFile(string &pub,string &sec)
      {
       pub=""; sec="";
+      bool existed=FileIsExist(m_path, m_common?FILE_COMMON:0);
       int h=FileOpen(m_path,FileFlags(0,FILE_READ));
-      if(h==INVALID_HANDLE) return CP_KEY_FAILED;
+      if(h==INVALID_HANDLE)
+        {
+         m_lastErr=GetLastError();
+         return existed ? CP_KEY_LOCKED : CP_KEY_FAILED;
+        }
 
       string magic=FileReadString(h);
       if(CopierTrim(magic)!=CP_KEY_LINE_MAGIC)
@@ -245,7 +251,7 @@ private:
       if(StringLen(derived)==0)
         {
          // DLL derive failed (not necessarily corrupt file) - keep existing file and fail safely
-         return CP_KEY_FAILED;
+         return CP_KEY_LOCKED;
         }
       if(derived!=pub) return CP_KEY_FAILED;
 
@@ -285,20 +291,16 @@ public:
          return CP_KEY_READ;
         }
 
-      // R47-08: If the file exists but could not be opened (e.g. transient lock or AV scan),
-      // preserve the existing file to avoid silently regenerating and disconnecting CURVE links.
-      bool existed=FileIsExist(m_path, m_common?FILE_COMMON:0);
-      if(existed)
+      // R47-08 & R48-11: If the file exists but was locked or DLL derive failed,
+      // fail safely without regenerating and destroying the existing keypair.
+      if(r==CP_KEY_LOCKED)
         {
-         int probe=FileOpen(m_path,FileFlags(0,FILE_READ));
-         if(probe==INVALID_HANDLE)
-           {
-            if(CheckPointer(log)!=POINTER_INVALID)
-               log.Error("CURVE key: "+m_path+" exists but could not be opened (locked/busy). Preserving key file.");
-            return CP_KEY_FAILED;
-           }
-         FileClose(probe);
+         if(CheckPointer(log)!=POINTER_INVALID)
+            log.Error("CURVE key: "+m_path+" exists but could not be opened/derived (locked/busy). Preserving key file.");
+         return CP_KEY_FAILED;
         }
+
+      bool existed=FileIsExist(m_path, m_common?FILE_COMMON:0);
 
       if(!Z85::generateKeyPair(pub,sec))
         {

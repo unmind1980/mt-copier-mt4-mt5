@@ -3203,7 +3203,8 @@ void ExecuteQueue()
          //---
          //--- The key carries the entry kind, so the market open that follows
          //--- the fill is a different key and is not suppressed at all.
-         if(err==-4)
+         //--- R48-01: Only open actions encountering unsupported order types are recorded in g_unsupported
+         if(err==-4 && a.kind==CP_ACT_OPEN)
            {
             g_unsupported.Add(a.key);
             if(g_onceFail.ShouldEmit("unsupported|"+g_sid[a.senderIdx]+"|"+a.uid))
@@ -3214,6 +3215,18 @@ void ExecuteQueue()
                           +((string)(CP_UNSUPPORTED_MS/60000))+" min; if it"
                           +" FILLS on the sender it becomes an ordinary"
                           +" position and WILL be mirrored.");
+            ShiftQueue();
+            done++;
+            continue;
+           }
+
+         // R48-01: Pending order volume modification is unsupported by broker API (err=-5).
+         // Shift queue without putting into g_unsupported 15-minute lock.
+         if(err==-5)
+           {
+            if(g_onceFail.ShouldEmit("pending_trim|"+g_sid[a.senderIdx]+"|"+a.uid))
+               g_log.Warn("cannot partial close pending order for uid "+a.uid+" ticket "+(string)a.ticket
+                          +" - broker API does not support partial close of pending orders");
             ShiftQueue();
             done++;
             continue;
@@ -4391,8 +4404,11 @@ void RefreshRisk()
    else if(g_riskDayStartEquity<=0.0 || now-g_lastRealizedMs>60000)
      {
       g_lastRealizedMs=now;
-      if(g_riskDayStartEquity<=0.0)
-         g_riskDayStartEquity=CopierAccountBalance()-CopierRealizedToday(dayStart);
+      // R48-06: Periodically recalibrate baseline from balance and today's realized P&L
+      // so intraday deposits or withdrawals do not trigger false daily-loss circuit breaks.
+      double derivedBase=CopierAccountBalance()-CopierRealizedToday(dayStart);
+      if(derivedBase>0.0)
+         g_riskDayStartEquity=derivedBase;
      }
    g_risk.ObserveAt(CopierAccountEquity(),dayStart/86400,g_riskDayStartEquity);
    // NL-01: Warn if daily loss guard is enabled but baseline cannot be measured
@@ -5209,23 +5225,29 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    int sent=(int)sentLong;
 
-   // NH-02: Wire payload integrity check using receiver-computed hash against wire H=
+   // NH-02 & R48-02: Fail-closed wire payload integrity check using receiver-computed hash against wire H=
    string hOnWire="";
-   if(CopierKvGet(e.payload,"H",hOnWire) && StringLen(hOnWire)==8)
+   if(!CopierKvGet(e.payload,"H",hOnWire) || StringLen(hOnWire)!=8)
      {
-      int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
-      if(hPos>0)
-        {
-         string body=StringSubstr(e.payload,0,hPos);
-         string hCalc=CopierHashHex(CopierHash32(body));
-         if(hCalc!=hOnWire)
-           {
-            g_snapRejectStreak[si]++;
-            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
-                        +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
-            return;
-           }
-        }
+      g_snapDeclFailed++;
+      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" missing or malformed H= field; rejected to prevent false close-all.");
+      return;
+     }
+   int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
+   if(hPos<=0)
+     {
+      g_snapDeclFailed++;
+      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
+      return;
+     }
+   string body=StringSubstr(e.payload,0,hPos);
+   string hCalc=CopierHashHex(CopierHash32(body));
+   if(hCalc!=hOnWire)
+     {
+      g_snapRejectStreak[si]++;
+      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
+                  +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
+      return;
      }
 
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
