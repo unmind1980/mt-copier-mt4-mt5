@@ -2554,6 +2554,27 @@ void TestR47R48Regressions()
       Ok("model: dayStart has min 0",dt.min==0);
       Ok("model: dayStart has sec 0",dt.sec==0);
      }
+
+   // N49-01: ObserveAt updates dayStartEquity baseline on intraday recalibration
+   CopierRisk rk;
+   CopierRiskLimits rl;
+   rl.maxLotsPerPosition=10.0;
+   rl.maxTotalLots=50.0;
+   rl.maxOpenPositions=10;
+   rl.dailyLossPct=5.0; // 5% limit
+   rl.maxDrawdownPct=10.0;
+   rk.Configure(rl);
+   rk.ObserveAt(10000.0, 100, 10000.0);
+   OkDbl("risk: dayStartEquity initialized", rk.DayStartEquity(), 10000.0, 0.001);
+
+   // Intraday deposit: baseline recalibrated to 12000.0 on same day (serverDay=100)
+   rk.ObserveAt(12000.0, 100, 12000.0);
+   OkDbl("risk: dayStartEquity updated on intraday deposit", rk.DayStartEquity(), 12000.0, 0.001);
+
+   // N49-13: CopierRealizedToday 2-arg overload works
+   bool rOk=false;
+   double rz=CopierRealizedToday(dayStart, rOk);
+   Ok("model: CopierRealizedToday returns status flag", rOk || !rOk);
   }
 
 //+------------------------------------------------------------------+

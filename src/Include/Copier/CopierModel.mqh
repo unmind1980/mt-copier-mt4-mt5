@@ -228,16 +228,19 @@ bool CopierGetClosePrice(const string sym,const int side,double &px)
 //
 // Walks history, so the caller must not call it per tick - once a minute
 // and on a day change is plenty.
+//--- N49-13: Returns outOk=false when HistorySelect fails (e.g. broker history unavailable)
+//--- to prevent fail-open baseline wipeout in RefreshRisk.
 //=====================================================================
-double CopierRealizedToday(const long dayStart)
+double CopierRealizedToday(const long dayStart,bool &outOk)
   {
+   outOk=true;
    double sum=0.0;
 #ifdef __MQL5__
    datetime from=(datetime)dayStart;
    //--- the upper bound must be in the future: HistorySelect excludes
    //--- anything at or after it, and deals are stamped with server time
    datetime to=(datetime)(CopierServerTime()+86400);
-   if(!HistorySelect(from,to)) return 0.0;
+   if(!HistorySelect(from,to)) { outOk=false; return 0.0; }
    int n=HistoryDealsTotal();
    for(int i=0;i<n;i++)
      {
@@ -264,6 +267,12 @@ double CopierRealizedToday(const long dayStart)
      }
 #endif
    return sum;
+  }
+
+double CopierRealizedToday(const long dayStart)
+  {
+   bool ok=true;
+   return CopierRealizedToday(dayStart,ok);
   }
 
 //--- midnight of the current server day, in server time

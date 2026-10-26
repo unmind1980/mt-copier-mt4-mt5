@@ -391,6 +391,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十六次审计** | 2026-10-25 20:30 | 全面闭环第46轮增量复审（NH-01..NH-06高危、NM-01..NM-14中危与低危优化） | 算法健壮、零等待哈希化与全栈闭环 |
 | **四十七次审计** | 2026-10-25 22:30 | 全面闭环第47轮深度审计（R47-01..R47-35高/中/低危35项全面加固） | 执行原语、状态防护、权限安全与全栈收敛 |
 | **四十八次审计** | 2026-10-26 09:30 | 全面闭环第48轮深度审计（R48-01..R48-15高/中/低危15项全面修复） | 挂单TRIM解耦、快照强校验、SSRF防线与时区基准修复 |
+| **四十九次审计** | 2026-10-26 11:30 | 全面闭环第49轮深度审计（N49-01..N49-16全方位闭环整改） | 风控基准刷新、挂单减仓收敛、全局防DoS与零锁并发 |
 
 ---
 
@@ -1159,6 +1160,24 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **PERF-01**| **P1 锁内大对象移出** | `hub/src/api.rs:837-849` | **R48-10 WebSocket 广播 JSON AST 构造移出互斥锁**：锁内仅执行 `clone_view()` 进行轻量结构体拷贝，数千订单的 `serde_json::Value` 递归构建彻底移到全局锁外，消灭 ZMQ 主路由线程的毫秒级微停顿。 |
 | **KEY-01** | **P1 密钥防误轮换** | `CopierCurveKey.mqh:111, 214, 254, 287` | **R48-11 区分密钥文件锁定与损坏消除 TOCTOU 竞态**：新增 `CP_KEY_LOCKED` 错误码；文件存在但打开失败或 DLL derive 失败时坚决拒绝覆盖原文件，彻底根除杀软/备份瞬时持锁导致的误轮换断链。 |
 | **STB-01** | **P2/P3 全栈治理** | 全栈各模块 | **R48-12..15 全面收口**：ZAP ALLOW 增加 2 秒去抖限流（R48-12）；主循环 poll 错误累计 10 次退出以触发外部 Supervisor 自动重启（R48-13）；`CopierSelfTest.mq4` 补充 `TestR47R48Regressions` 核心回归用例（R48-14）；精简历史废弃注释与死变量（R48-15）。 |
+
+---
+
+### 四十九次审计：全面闭环第49轮深度审计（N49-01..N49-16全方位闭环整改）（2026-10-26 11:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **FIN-01** | **P0 资金风控** | `CopierRisk.mqh:216` / `CopierReceiver.mq4:4410` | **N49-01 & N49-13 日亏基准动态刷新链路打通与失败防护**：`ObserveAt` 支持盘中 `dayStartEquity` 动态更新，`SetDayStartEquity` 显式同步基准；`RefreshRisk` 记录 `DAY_BALANCE`，通过出入金净现金流平滑校准开盘基准；`CopierRealizedToday` 增加 `outOk` 标志，历史查询失败时保持基准不动，杜绝 fail-open 抹平亏损。 |
+| **TRD-01** | **P0 资金一致性** | `CopierReceiver.mq4:4756` | **N49-02 挂单减量自动撤单重挂收敛**：在 `ConvergeSender` 中捕获 `PENDING vs PENDING` 手数变化（`|lots - targetLots| >= lotStep`），自动通过撤单（`CP_ACT_CLOSE`）与重挂（`CP_ACT_OPEN`）实现挂单减量，杜绝挂单手数长期背离与成交后超额开仓。 |
+| **SEC-01** | **P0 认证防DoS** | `hub/src/users.rs:160, 498` / `hub/src/api.rs:1046, 1193` | **N49-03 认证全局防爆与挑战端点限流**：`note_login_failure` 区分轻重哈希，轻量 proof 失败不计入全局 CPU 防爆计数，阻断攻击者通过 40 次廉价请求使全员封锁 10 秒；`auth_nonce` 增加每 IP 25 req/s 速率限制。 |
+| **PERF-01**| **P1 零锁并发** | `hub/src/api.rs:330, 836` | **N49-04 节点持仓嵌套 JSON 彻底移出互斥锁**：锁内仅执行 `reg.sorted()` 与 `pos.clone_view()` 轻量克隆，遍历数千订单生成 `serde_json::Value` 彻底移至锁外，彻底消灭 ZMQ 交易路由线程的微停顿。 |
+| **PERF-02**| **P1 状态环维护** | `CopierReceiver.mq4:7415` | **N49-05 g_inflight 纳入 60 秒定期过期清理**：将 `g_inflight.PruneExpired()` 补齐至定期维护列表，防止 4096 槽占用列表退化导致每次 `PushAction` 遍历 4096 槽严重拖慢主线程。 |
+| **SEC-02** | **P1 SSRF深度防御** | `hub/src/notifications.rs:818-865` | **N49-06 阻断 IPv4-mapped IPv6 与内网解析域名**：`validate_outgoing_url` 解析目标 IP，阻断 `[::ffff:127.0.0.1]`、`nip.io`、`localtest.me` 及回环/私网解析结果，彻底加固 Webhook 出站通道。 |
+| **PRT-01** | **P1 协议健壮** | `CopierReceiver.mq4:6143, 6273` | **N49-07 & N49-14 区分真实重启与同账号自拷贝放行**：`AcceptSeq` 校验消息若到达自 sender 专属主题，允许事件流触发正常会话 resync；F-02 定向主题守卫豁免 `e.sid == g_nid` 的自拷贝流量，消除错误拦截与假安全警告。 |
+| **PERF-03**| **P1 快速收敛优化** | `CopierReceiver.mq4:7225-7240` | **N49-08 快车道仅收敛事件来源 sender**：`hasFastAction` 标记命中 sender，仅对产生 OPEN/CLOSE/MODIFY 的 sender 立即执行 `ConvergeSender`，彻底消除 100 倍的无效全量收敛放大。 |
+| **PERF-04**| **P1 协议心跳轻量化** | `hub/src/api.rs:827` | **N49-09 WebSocket 心跳改发轻量 Ping 帧**：15 秒 WS 心跳改用标准 2 字节 `Message::Ping`，替代每个连接全量序列化快照的大型消耗。 |
+| **ACC-01** | **P1 记账一致性** | `CopierReceiver.mq4:3113, 3410` | **N49-10 撤挂单扣减挂单与总仓位手数**：成功撤销挂单时同步扣减 `g_ourPending`、`g_ourCount` 与 `g_ourLots`，消除 100ms 窗口内风控额度虚高导致的拒单。 |
+| **STB-01** | **P2/P3 边角治理** | 全栈各模块 | **N49-11..16 全面收口**：`positions.rs` 仅在显式声明 N=0 时清零视图（N49-11）；`CP_SNDHWM`/`RCVHWM` 提升至 256 吸收 74+ 订单突发（N49-12）；Sender 中枢补发重置广播时钟与哈希对齐（N49-15）；`g_qCloseIdx` 在空队列时快速短路（N49-16）；`CopierSelfTest.mq4` 补充 R47/R48/R49 回归测试用例。 |
 
 ---
 

@@ -213,6 +213,11 @@ public:
          //--- this" switch, cleared by a human reloading the EA.
          m_dailyTripped=false;
         }
+      else if(dayStartEquity>0.0 && MathAbs(dayStartEquity-m_dayStartEquity)>0.001)
+        {
+         // N49-01: Update m_dayStartEquity when recalibrated intraday
+         m_dayStartEquity=dayStartEquity;
+        }
 
       if(equity>m_peakEquity) m_peakEquity=equity;
 
@@ -377,6 +382,7 @@ public:
 
    double            DailyLossPct() const { return m_lim.dailyLossPct; }
    double            MaxDrawdownPct() const { return m_lim.maxDrawdownPct; }
+   void              SetDayStartEquity(const double eq) { if(eq>0.0) m_dayStartEquity=eq; }
   };
 
 #endif

@@ -792,6 +792,7 @@ int             g_ourPending=0;
 long            g_lastRealizedMs=0;      // CopierRealizedToday walks history
 long            g_riskDay=0;             // server day the baseline belongs to
 double          g_riskDayStartEquity=0.0;
+double          g_riskDayStartBalance=0.0;
 CopierPosTable  g_recKnown;  // UID <-> identifier, because the comment is
                              // destroyed by a partial close on MT5
 //--- Symbols the broker has just told us are CLOSED.
@@ -1970,6 +1971,7 @@ void RiskPeakLoad()
    double peak=0.0;
    long savedDay=0;
    double savedDayEquity=0.0;
+   double savedDayBalance=0.0;
    while(!FileIsEnding(h))
      {
       string line=CopierTrim(FileReadString(h));
@@ -1978,6 +1980,7 @@ void RiskPeakLoad()
       if(CopierKvGet(line,"PEAK",v)) peak=StringToDouble(v);
       if(CopierKvGet(line,"DAY",v)) savedDay=(long)StringToInteger(v);
       if(CopierKvGet(line,"DAY_EQUITY",v)) savedDayEquity=StringToDouble(v);
+      if(CopierKvGet(line,"DAY_BALANCE",v)) savedDayBalance=StringToDouble(v);
      }
    FileClose(h);
    long currentDay=CopierServerDayStart();
@@ -1985,6 +1988,8 @@ void RiskPeakLoad()
      {
       g_riskDay=savedDay;
       g_riskDayStartEquity=savedDayEquity;
+      g_riskDayStartBalance=(savedDayBalance>0.0)?savedDayBalance:savedDayEquity;
+      g_risk.SetDayStartEquity(savedDayEquity);
       g_log.Info("day start equity baseline restored from "+RiskPeakPath()+": "+DoubleToString(savedDayEquity,2));
      }
    if(peak<=0.0) return;
@@ -2027,6 +2032,7 @@ void RiskPeakSave(const bool force)
      {
       FileWrite(h,"DAY="+(string)g_riskDay);
       FileWrite(h,"DAY_EQUITY="+DoubleToString(g_riskDayStartEquity,2));
+      FileWrite(h,"DAY_BALANCE="+DoubleToString(g_riskDayStartBalance,2));
      }
    FileFlush(h);
    FileClose(h);
@@ -3099,6 +3105,7 @@ void ExecuteQueue()
            {
             if(a.ordKind==CP_ORD_MARKET)
               {
+               if(g_ourPositions>0) g_ourPositions--;
                if(g_ourCount>0) g_ourCount--;
                g_ourLots=MathMax(0.0,g_ourLots-a.lots);
                if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
@@ -3106,6 +3113,18 @@ void ExecuteQueue()
                   //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
                   //--- position is closed before an open lands in the same tick, these may become negative;
                   //--- they are safely floored at 0 via MathMax at the risk gate (line 2809).
+                  sAddedCount[a.senderIdx]--;
+                  sAddedLots[a.senderIdx]-=a.lots;
+                 }
+              }
+            else if(a.ordKind==CP_ORD_PENDING)
+              {
+               // N49-10: Pending order deletion reduces pending count and total count/lots
+               if(g_ourPending>0) g_ourPending--;
+               if(g_ourCount>0) g_ourCount--;
+               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+                 {
                   sAddedCount[a.senderIdx]--;
                   sAddedLots[a.senderIdx]-=a.lots;
                  }
@@ -3403,6 +3422,13 @@ void ExecuteQueue()
             g_backoff.Clear(sa.key);
             if(sa.ordKind==CP_ORD_MARKET)
               {
+               if(g_ourPositions>0) g_ourPositions--;
+               if(g_ourCount>0) g_ourCount--;
+               g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+              }
+            else if(sa.ordKind==CP_ORD_PENDING)
+              {
+               if(g_ourPending>0) g_ourPending--;
                if(g_ourCount>0) g_ourCount--;
                g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
               }
@@ -4397,18 +4423,44 @@ void RefreshRisk()
      {
       g_riskDay=dayStart;
       g_lastRealizedMs=now;
-      // Day rolled over while running: capture exact opening equity
+      // Day rolled over while running: capture exact opening equity and balance
       g_riskDayStartEquity=CopierAccountEquity();
+      g_riskDayStartBalance=CopierAccountBalance();
+      g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
      }
    else if(g_riskDayStartEquity<=0.0 || now-g_lastRealizedMs>60000)
      {
       g_lastRealizedMs=now;
-      // R48-06: Periodically recalibrate baseline from balance and today's realized P&L
-      // so intraday deposits or withdrawals do not trigger false daily-loss circuit breaks.
-      double derivedBase=CopierAccountBalance()-CopierRealizedToday(dayStart);
-      if(derivedBase>0.0)
-         g_riskDayStartEquity=derivedBase;
+      // N49-01 & N49-13: Recalibrate baseline dynamically on intraday cash flow
+      // Guarded by rOk so history fetch failures keep existing baseline instead of wiping to 0.
+      bool rOk=false;
+      double realized=CopierRealizedToday(dayStart,rOk);
+      if(rOk)
+        {
+         double curBal=CopierAccountBalance();
+         if(g_riskDayStartEquity<=0.0)
+           {
+            double derivedBase=curBal-realized;
+            if(derivedBase>0.0)
+              {
+               g_riskDayStartEquity=derivedBase;
+               g_riskDayStartBalance=curBal;
+               g_risk.SetDayStartEquity(derivedBase);
+              }
+           }
+         else
+           {
+            if(g_riskDayStartBalance<=0.0) g_riskDayStartBalance=curBal;
+            double cashFlow=(curBal-realized)-g_riskDayStartBalance;
+            if(MathAbs(cashFlow)>0.01)
+              {
+               g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
+               g_riskDayStartBalance=curBal;
+               g_risk.SetDayStartEquity(g_riskDayStartEquity);
+              }
+           }
+        }
      }
    g_risk.ObserveAt(CopierAccountEquity(),dayStart/86400,g_riskDayStartEquity);
    // NL-01: Warn if daily loss guard is enabled but baseline cannot be measured
@@ -4640,7 +4692,10 @@ void ConvergeSender(const int si)
            }
         }
      }
-   g_qCloseIdx.BuildFromStrings(queuedCloseOrTrim,queuedCloseOrTrimCount);
+   if(queuedCloseOrTrimCount>0)
+      g_qCloseIdx.BuildFromStrings(queuedCloseOrTrim,queuedCloseOrTrimCount);
+   else
+      g_qCloseIdx.Clear();
 
    //--- desired but not mirrored -> open
    for(int i=0;i<g_desiredCount[si];i++)
@@ -4720,6 +4775,28 @@ void ConvergeSender(const int si)
            }
 
          g_fillGraceRing.Forget(g_sid[si]+":fillgrace:"+d.uid);
+
+         // N49-02: Pending order volume adjustment (cancel + re-place)
+         // MetaTrader broker APIs cannot modify volume on existing pending orders.
+         if(d.kind==CP_ORD_PENDING && g_locScratch[li].kind==CP_ORD_PENDING)
+           {
+            double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
+            CopierSymInfo si2;
+            if(CopierGetSymbolInfo(g_locScratch[li].sym,si2) && targetLots>0.0 && si2.lotStep>0.0)
+              {
+               if(MathAbs(g_locScratch[li].lots-targetLots)>=si2.lotStep*0.999999)
+                 {
+                  g_log.Info("uid "+d.uid+" pending order volume changed ("
+                             +DoubleToString(g_locScratch[li].lots,2)+" -> "+DoubleToString(targetLots,2)
+                             +"); cancelling and re-placing pending order");
+                  g_reopenExpected.Add(g_sid[si]+":"+d.uid);
+                  PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                             g_locScratch[li].lots,g_locScratch[li].ticket,
+                             0,"",0.0,0.0,g_locScratch[li].kind);
+                  continue;
+                 }
+              }
+           }
 
          QueueModifyIfNeeded(si,d,g_locScratch[li]);
          QueueTrimIfNeeded(si,d,g_locScratch[li]);
@@ -6132,17 +6209,21 @@ void HandleHeartbeat(const int si,const CopierEnv &e)
   }
 
 //--- returns false when the message must be discarded
-bool AcceptSeq(const int si,const CopierEnv &e,const int stream)
+bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string topic)
   {
    //--- a new session id means the sender restarted: throw away our idea
    //--- of its state and resync from the next snapshot.
-   //--- Security guard (F-02): a sender restart ONLY occurs on snapshot stream, never on trade events.
+   //--- Security guard (F-02 & N49-07): If an event carries a new SSID, allow resync if
+   //--- the event arrived on the sender's authentic data topic (or direct mode), avoiding false SECURITY discards.
    if(g_ssidSeen[si]!=e.ssid)
      {
       if(stream==CP_STREAM_EVENTS && StringLen(g_ssidSeen[si])>0)
         {
-         g_log.Warn("SECURITY F-02: sender "+g_sid[si]+" event carries unexpected SSID '"+e.ssid+"' vs '"+g_ssidSeen[si]+"' - DISCARDED");
-         return false;
+         if(g_hubOn && topic!=g_sid[si] && topic!=g_senderAcc[si] && topic!=(string)g_nid)
+           {
+            g_log.Warn("SECURITY F-02: sender "+g_sid[si]+" event carries unexpected SSID '"+e.ssid+"' vs '"+g_ssidSeen[si]+"' on topic '"+topic+"' - DISCARDED");
+            return false;
+           }
         }
       g_ssidSeen[si]=e.ssid;
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
@@ -6206,8 +6287,10 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       return;
      }
 
-   //--- F-02: Targeted repair topic (<myNid>) is strictly for SNAP frames
-   if(g_hubOn && (topic==(string)g_nid || topic==(string)CopierAccountLogin()))
+   //--- F-02 & N49-14: Targeted repair topic (<myNid>) is strictly for SNAP frames from other senders.
+   //--- In self-copy mode, sender NID equals my NID; do not drop legitimate self-copy events.
+   if(g_hubOn && (topic==(string)g_nid || topic==(string)CopierAccountLogin())
+      && e.sid!=(string)g_nid && e.sid!=(string)CopierAccountLogin())
      {
       if(e.type!=CP_T_SNAP)
         {
@@ -6286,7 +6369,7 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       return;
      }
 
-   if(!AcceptSeq(si,e,stream))
+   if(!AcceptSeq(si,e,stream,topic))
      {
       g_dropped[si]++;
       return;
@@ -7077,7 +7160,6 @@ void OnTimer()
                  +" PollMs here.");
    if(n>0)
      {
-      bool hasFastAction=false;
       //--- Conflate snapshots PER SENDER (e.sid) in arrival order in O(N) time:
       //--- Step 1: Decode each message ONCE into pre-allocated scratch arrays
       //--- Step 2: Backward pass records the latest SNAP for each sender
@@ -7117,6 +7199,9 @@ void OnTimer()
            }
         }
 
+      bool hasFastAction=false;
+      bool fastSender[CP_MAX_SENDERS];
+      ArrayInitialize(fastSender,false);
       for(int i=0;i<n;i++)
         {
          if(s_errs[i]==-999) continue;
@@ -7136,18 +7221,23 @@ void OnTimer()
             continue;
            }
          if(s_envs[i].type==CP_T_OPEN || s_envs[i].type==CP_T_CLOSE || s_envs[i].type==CP_T_MODIFY)
+           {
             hasFastAction=true;
+            int fsi=SenderIndexById(s_envs[i].sid);
+            if(fsi>=0 && fsi<CP_MAX_SENDERS) fastSender[fsi]=true;
+           }
          RouteMessage(g_drainTopics[i],s_envs[i],CP_STREAM_EVENTS);
         }
 
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
+      //--- N49-08: Only converge senders that actually received trade events in this batch (avoids 100x amplification)
       if(hasFastAction)
         {
          g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
          RefreshRisk();    // R47-06: Update account position risk counts before fast-track converge & execute
          for(int i=0;i<g_nSenders;i++)
            {
-            if(!g_stale[i] && g_ready[i]) ConvergeSender(i);
+            if(fastSender[i] && !g_stale[i] && g_ready[i]) ConvergeSender(i);
            }
          ExecuteQueue();
         }
@@ -7352,6 +7442,7 @@ void OnTimer()
       g_unsupported.PruneExpired();
       g_mktClosed.PruneExpired();
       g_fillDropped.PruneExpired();
+      g_inflight.PruneExpired(); // N49-05: Sweep expired in-flight entries to prevent ring slot accumulation
      }
 
    //--- 5) converge every sender, then execute queued actions serially

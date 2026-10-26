@@ -103,6 +103,8 @@ pub struct UserStore {
     /// same reason: a restart should not be able to LOCK an operator out,
     /// and a persisted counter is a weapon an attacker can aim at a name.
     guard: LoginGuard,
+    /// Per-IP rate limiting on auth_nonce requests: ip -> (count, window_start)
+    nonce_ip_rates: HashMap<String, (u32, u64)>,
     /// Where the users live. The hub passes --users; the tests pass their own
     /// so a test hub never writes (or misses) the real one.
     path: std::path::PathBuf,
@@ -156,14 +158,18 @@ impl LoginGuard {
 
     /// Record a failure and return how long the caller should wait before
     /// answering. The wait is applied OUTSIDE any lock (it is an async sleep).
-    fn note_failure(&mut self, id: &str, now: u64) -> u64 {
-        if now.saturating_sub(self.global.1) > FAIL_WINDOW_SECS {
-            self.global = (0, now);
-        }
-        self.global.0 = self.global.0.saturating_add(1);
-        if self.global.0 >= FAILS_GLOBAL_MAX {
-            self.blocked_until = now + GLOBAL_BLOCK_SECS;
-            self.global = (0, now);
+    /// N49-03: `is_hash_heavy` protects against CPU hash flooding without allowing
+    /// cheap proof failures to trigger global lockout.
+    fn note_failure(&mut self, id: &str, now: u64, is_hash_heavy: bool) -> u64 {
+        if is_hash_heavy {
+            if now.saturating_sub(self.global.1) > FAIL_WINDOW_SECS {
+                self.global = (0, now);
+            }
+            self.global.0 = self.global.0.saturating_add(1);
+            if self.global.0 >= FAILS_GLOBAL_MAX {
+                self.blocked_until = now + GLOBAL_BLOCK_SECS;
+                self.global = (0, now);
+            }
         }
 
         let e = self
@@ -209,6 +215,7 @@ impl UserStore {
             sessions: HashMap::new(),
             auth_nonces: HashMap::new(),
             guard: LoginGuard::default(),
+            nonce_ip_rates: HashMap::new(),
             path: std::path::PathBuf::from(USERS_PATH),
         }
     }
@@ -226,6 +233,7 @@ impl UserStore {
                         sessions: HashMap::new(),
                         auth_nonces: HashMap::new(),
                         guard: LoginGuard::default(),
+                        nonce_ip_rates: HashMap::new(),
                         path: path.to_path_buf(),
                     });
                 }
@@ -236,6 +244,7 @@ impl UserStore {
                     sessions: HashMap::new(),
                     auth_nonces: HashMap::new(),
                     guard: LoginGuard::default(),
+                    nonce_ip_rates: HashMap::new(),
                     path: path.to_path_buf(),
                 })
             }
@@ -244,6 +253,7 @@ impl UserStore {
                 sessions: HashMap::new(),
                 auth_nonces: HashMap::new(),
                 guard: LoginGuard::default(),
+                nonce_ip_rates: HashMap::new(),
                 path: path.to_path_buf(),
             }),
             Err(e) => Err(format!("{}: {}", path.display(), e)),
@@ -482,12 +492,36 @@ impl UserStore {
     /// The cap is the whole point of the Option: this endpoint is
     /// unauthenticated, so without it a loop of requests grows the map faster
     /// than the 10-second expiry drains it.
+    #[allow(dead_code)]
     pub fn create_nonce(
         &mut self,
         user_id: &str,
         now: u64,
         ttl_secs: u64,
     ) -> Option<(String, String, u32)> {
+        self.create_nonce_with_ip(user_id, now, ttl_secs, "default")
+    }
+
+    pub fn create_nonce_with_ip(
+        &mut self,
+        user_id: &str,
+        now: u64,
+        ttl_secs: u64,
+        ip: &str,
+    ) -> Option<(String, String, u32)> {
+        // N49-03: Rate limit nonce requests per client IP (max 25/sec)
+        if ip != "default" {
+            self.nonce_ip_rates.retain(|_, (_, start)| now.saturating_sub(*start) <= 2);
+            let rate = self.nonce_ip_rates.entry(ip.to_string()).or_insert((0, now));
+            if now.saturating_sub(rate.1) >= 1 {
+                *rate = (0, now);
+            }
+            rate.0 = rate.0.saturating_add(1);
+            if rate.0 > 25 {
+                return None;
+            }
+        }
+
         // Prune expired nonces
         self.auth_nonces.retain(|_, (_, exp)| *exp > now);
         if self.auth_nonces.len() >= MAX_PENDING_NONCES {
@@ -541,9 +575,9 @@ impl UserStore {
 
     /// Record a failed login. Returns how long the caller should wait before
     /// answering - a delay, not a lockout, for the reasons on `LoginGuard`.
-    pub fn note_login_failure(&mut self, id: &str, now: u64) -> u64 {
+    pub fn note_login_failure(&mut self, id: &str, now: u64, is_hash_heavy: bool) -> u64 {
         self.guard.prune(now);
-        self.guard.note_failure(id, now)
+        self.guard.note_failure(id, now, is_hash_heavy)
     }
 
     /// Record a successful login: the name's counter goes back to zero.
@@ -1153,16 +1187,16 @@ mod tests {
         let now = 5_000_000u64;
         // The first few failures cost nothing.
         for i in 0..FAILS_PER_NAME_BEFORE_DELAY {
-            assert_eq!(s.note_login_failure("alice", now), 0, "failure {}", i);
+            assert_eq!(s.note_login_failure("alice", now, true), 0, "failure {}", i);
         }
-        let d1 = s.note_login_failure("alice", now);
-        let d2 = s.note_login_failure("alice", now);
+        let d1 = s.note_login_failure("alice", now, true);
+        let d2 = s.note_login_failure("alice", now, true);
         assert!(d1 > 0 && d2 > d1, "the delay did not escalate: {} then {}", d1, d2);
         // A different name is unaffected - the delay is per name.
-        assert_eq!(s.note_login_failure("bob", now), 0);
+        assert_eq!(s.note_login_failure("bob", now, true), 0);
 
         s.note_login_success("alice");
-        assert_eq!(s.note_login_failure("alice", now), 0, "success did not reset the count");
+        assert_eq!(s.note_login_failure("alice", now, true), 0, "success did not reset the count");
     }
 
     /// A global flood is refused outright, and the refusal expires.
@@ -1172,7 +1206,7 @@ mod tests {
         let now = 7_000_000u64;
         assert_eq!(s.login_blocked(now), None);
         for i in 0..FAILS_GLOBAL_MAX {
-            s.note_login_failure(&format!("name{}", i), now);
+            s.note_login_failure(&format!("name{}", i), now, true);
         }
         let wait = s.login_blocked(now).expect("the flood was not refused");
         assert!(wait <= GLOBAL_BLOCK_SECS);

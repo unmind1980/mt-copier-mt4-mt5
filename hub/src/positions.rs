@@ -140,9 +140,9 @@ impl Positions {
             items: Vec::new(),
         });
 
-        // F-11: If parsing failed completely on a non-empty declared snapshot (e.g. corrupted decompression),
-        // preserve the previous view rather than falsely reporting 0 positions to the operator.
-        if v.declared.map_or(false, |dec| dec > 0) && v.records == 0 && e.count > 0 {
+        // F-11 & N49-11: If parsing yielded 0 records on a snapshot without explicit N=0 declaration
+        // (e.g. corrupted decompression or truncated missing N=), preserve the previous view rather than falsely clearing to 0.
+        if v.records == 0 && e.count > 0 && v.declared != Some(0) {
             e.updated = now;
             e.snaps += 1;
             return;

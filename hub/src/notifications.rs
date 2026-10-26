@@ -816,7 +816,7 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
         return Err("URL points to prohibited cloud metadata or link-local service".to_string());
     }
 
-    // R48-04: Enforce comprehensive SSRF protection against loopback and RFC 1918 private networks
+    // R48-04 & N49-06: Enforce comprehensive SSRF protection against loopback, IPv4-mapped, and RFC 1918 private networks
     let allow_local = std::env::var("MTC_ALLOW_LOCAL_WEBHOOK").is_ok();
     if !allow_local {
         if host_lower == "localhost"
@@ -824,6 +824,10 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
             || host_lower == "0.0.0.0"
             || host_lower == "::1"
             || host_lower.starts_with("127.")
+            || host_lower.ends_with(".localhost")
+            || host_lower.ends_with(".local")
+            || host_lower.ends_with(".nip.io")
+            || host_lower == "localtest.me"
         {
             return Err("URL points to prohibited localhost or loopback address".to_string());
         }
@@ -842,21 +846,45 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
             return Err("URL points to prohibited private network address".to_string());
         }
 
-        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let check_single_ip = |ip: std::net::IpAddr| -> Result<(), String> {
             if ip.is_loopback() || ip.is_unspecified() {
                 return Err("URL points to prohibited loopback or unspecified IP".to_string());
             }
             match ip {
-                std::net::IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() => {
-                    return Err("URL points to prohibited private or link-local IPv4".to_string());
+                std::net::IpAddr::V4(v4) => {
+                    if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
+                        return Err("URL points to prohibited private or link-local IPv4".to_string());
+                    }
                 }
                 std::net::IpAddr::V6(v6) => {
                     let segs = v6.segments();
                     if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xffc0) == 0xfe80 {
                         return Err("URL points to prohibited private or link-local IPv6".to_string());
                     }
+                    if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
+                        let v4 = std::net::Ipv4Addr::new(
+                            (segs[6] >> 8) as u8,
+                            (segs[6] & 0xff) as u8,
+                            (segs[7] >> 8) as u8,
+                            (segs[7] & 0xff) as u8,
+                        );
+                        if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
+                            return Err("URL points to prohibited IPv4-mapped private or loopback".to_string());
+                        }
+                    }
                 }
-                _ => {}
+            }
+            Ok(())
+        };
+
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            check_single_ip(ip)?;
+        }
+
+        use std::net::ToSocketAddrs;
+        if let Ok(addrs) = format!("{}:80", host).to_socket_addrs() {
+            for addr in addrs {
+                check_single_ip(addr.ip())?;
             }
         }
     }
@@ -1409,6 +1437,8 @@ mod tests {
         // Disallow loopback and private networks by default
         assert!(validate_outgoing_url("http://127.0.0.1:8080/hook").is_err());
         assert!(validate_outgoing_url("http://localhost:8080/hook").is_err());
+        assert!(validate_outgoing_url("http://[::ffff:127.0.0.1]:8080/hook").is_err());
+        assert!(validate_outgoing_url("http://localtest.me/hook").is_err());
         assert!(validate_outgoing_url("http://10.0.0.1/hook").is_err());
         assert!(validate_outgoing_url("http://192.168.1.1/hook").is_err());
         assert!(validate_outgoing_url("http://172.16.0.1/hook").is_err());

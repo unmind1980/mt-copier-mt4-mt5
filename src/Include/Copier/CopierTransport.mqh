@@ -92,8 +92,9 @@
 //--- newest one will still get through" guarantee once everything shares one
 //--- queue. The receiver drains at PollMs, so in practice this never fills;
 //--- it exists so a peer that goes away cannot grow the queue without bound.
-#define CP_SNDHWM 64
-#define CP_RCVHWM 64
+//--- N49-12: Queue depth aligned with CP_MAX_ACTIONS 256 to absorb 74+ order bursts safely
+#define CP_SNDHWM 256
+#define CP_RCVHWM 256
 
 #import "libzmq.dll"
 int zmq_errno(void);

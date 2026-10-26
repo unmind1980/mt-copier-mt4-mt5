@@ -1248,7 +1248,9 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
      {
       long rnid=CopierNid(CopierParseLong(who));
       EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
-      NoteRecentSnapHash(g_latestSnapHash);
+      g_snapHash=CopierSnapshotHash(g_snapPayload);
+      NoteRecentSnapHash(g_snapHash);
+      g_lastSnapMs=now; // N49-15: Reset routine broadcast timer on targeted repair to prevent immediate redundant broadcast
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot to new receiver "+who+" (NID "
                     +IntegerToString(rnid)+") on first contact");

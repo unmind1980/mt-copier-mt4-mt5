@@ -327,26 +327,12 @@ fn trim_lots(l: f64) -> String {
 /// changed is a row nobody can track.
 ///
 /// Both callers now come through here, so they cannot drift apart again.
-fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> {
-    reg.sorted()
+fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> Vec<Value> {
+    nodes
         .iter()
         .map(|n| {
             let mut j = node_json(n, now);
             //--- The NODES table's POS column, for BOTH roles:
-            //---
-            //--- A sender carries what the hub has seen it hold (the join that
-            //--- makes the column real: the data has been in the hub since M3
-            //--- and the column was reading a field no node list ever
-            //--- included).
-            //---
-            //--- A receiver carries what IT reports holding in its STAT
-            //--- (HELD=/LOTS=/ORPHAN=). The hub is a transparent proxy and
-            //--- never sees a receiver's account, so this is the honest
-            //--- account-local report: held mirrors plus unmatched tagged
-            //--- positions the receiver detected itself.
-            //---
-            //--- `null` for either role means "nothing to report yet", which
-            //--- is not an error, and is shown as a dash rather than a 0.
             let pv = if n.role == Role::Sender {
                 pos.view_for(&n.acc)
                     .map(|v| {
@@ -390,6 +376,11 @@ fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> 
             j
         })
         .collect()
+}
+
+fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> {
+    let nodes: Vec<Node> = reg.sorted().into_iter().cloned().collect();
+    nodes_json_list_from_nodes(&nodes, pos, now)
 }
 
 /// EVERY sender's position view as JSON, ordered by account.
@@ -823,7 +814,8 @@ async fn handle_socket(
                 }
             }
             _ = beat.tick() => {
-                if socket.send(Message::Text(snapshot_text(&st))).await.is_err() {
+                // N49-09: Send lightweight WebSocket Ping keepalive instead of heavy full snapshot re-serialization
+                if socket.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
                 }
             }
@@ -834,19 +826,21 @@ async fn handle_socket(
 /// The wire format for a push. A shape the page can switch on, so a later
 /// incremental message is a new `t` rather than a change to this one.
 pub(crate) fn snapshot_text(st: &SharedState) -> String {
-    // M-05 & R48-10: Extract state and clone positions under lock; construct heavy JSON AST outside lock
+    // M-05 & R48-10 & N49-04: Extract state and clone data under lock;
+    // construct all JSON ASTs completely outside the shared lock.
     let now = Instant::now();
-    let (uptime_secs, nodes_list, pos_clone, mismatched, alerts_list, curve_val) = {
+    let (uptime_secs, reg_nodes, pos_clone, mismatched, alerts_list, curve_val) = {
         let s = st.lock_or_recover();
         (
             now.saturating_duration_since(s.started).as_secs(),
-            nodes_json_list(&s.reg, &s.pos, now),
+            s.reg.sorted().into_iter().cloned().collect::<Vec<_>>(),
             s.clone_view(),
             s.pos.mismatched,
             s.alerts.recent_json(20),
             curve_json(&s),
         )
     };
+    let nodes_list = nodes_json_list_from_nodes(&reg_nodes, &pos_clone, now);
     let pos_list = positions_json_list(&pos_clone);
     let body = json!({
         "hub_uptime_secs": uptime_secs,
@@ -1044,15 +1038,22 @@ struct NonceBody {
 
 /// `POST /api/v1/auth/nonce` - request a short-lived nonce for challenge-response login.
 async fn auth_nonce(
+    headers: axum::http::HeaderMap,
     axum::extract::State(st): axum::extract::State<SharedState>,
     Json(b): Json<NonceBody>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let now = unix_secs();
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
     let created = {
         let mut s = st.lock_or_recover();
-        // 10-second single-use challenge window
-        s.users.create_nonce(&b.id, now, 10)
+        // 10-second single-use challenge window with IP rate limiting
+        s.users.create_nonce_with_ip(&b.id, now, 10, &client_ip)
     };
     let Some((nonce, salt, rounds)) = created else {
         //--- The hub is already holding as many live challenges as it will.
@@ -1188,9 +1189,10 @@ async fn login(
         }
         // Deliberately does NOT say whether the id exists.
         Err(_) => {
+            let is_heavy = b.password.is_some();
             let (delay_ms, audit) = {
                 let mut s = st.lock_or_recover();
-                let d = s.users.note_login_failure(&b.id, now);
+                let d = s.users.note_login_failure(&b.id, now, is_heavy);
                 (d, Arc::clone(&s.audit))
             };
             audit.record(
