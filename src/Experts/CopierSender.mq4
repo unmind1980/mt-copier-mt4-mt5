@@ -1231,9 +1231,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    //--- Q5: at most one repair per receiver per SnapshotSeconds. When
    //--- SnapshotSeconds is 0 the periodic broadcast is off, so repairs are the
    //--- only way state moves - the floor keeps that from becoming a flood.
-   //--- In bootstrap mode, we enforce only a 1s floor so newly attached peers
-   //--- get their snapshot within 1s even if a prior repair was recently emitted.
-   long floorSec = isBootstrap ? 1 : ((SnapshotSeconds>0)? SnapshotSeconds : 1);
+   long floorSec = (SnapshotSeconds>0)? SnapshotSeconds : 1;
    if(g_snapRepairMs[idx]>0 && now-g_snapRepairMs[idx]<floorSec*1000) return;
 
    if(StringLen(g_snapPayload)==0) return;       // nothing sent yet
@@ -1250,7 +1248,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
       g_snapHash=CopierSnapshotHash(g_snapPayload);
       NoteRecentSnapHash(g_snapHash);
-      g_lastSnapMs=now; // N49-15: Reset routine broadcast timer on targeted repair to prevent immediate redundant broadcast
+      // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
+      // to this single receiver. Other receivers on the hub have not received this frame.
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot to new receiver "+who+" (NID "
                     +IntegerToString(rnid)+") on first contact");
@@ -1462,11 +1461,16 @@ void RebuildSnapshotPayload()
      }
    g_latestSnapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_latestSnapPayload);
-   // R48-09: Synchronize g_snapPayload and g_snapHash so targeted repairs and bootstraps
-   // carry the true up-to-date state when positions change between routine broadcasts.
-   g_snapPayload=g_latestSnapPayload;
-   g_snapHash=g_latestSnapHash;
-   NoteRecentSnapHash(g_snapHash);
+   // MQL-03: RebuildSnapshotPayload only updates the latest local payload.
+   // Only update g_snapPayload and NoteRecentSnapHash when no snapshot has ever been sent
+   // or periodic broadcast is disabled, preventing unbroadcast local states from crowding out
+   // the broadcast hash in g_recentSnapHashes[4].
+   if(StringLen(g_snapPayload)==0 || StringLen(g_snapHash)==0 || SnapshotSeconds<=0)
+     {
+      g_snapPayload=g_latestSnapPayload;
+      g_snapHash=g_latestSnapHash;
+      NoteRecentSnapHash(g_snapHash);
+     }
   }
 
 void BroadcastSnapshot(const long now)

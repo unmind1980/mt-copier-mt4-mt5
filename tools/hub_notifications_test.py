@@ -269,6 +269,17 @@ def main():
         )
         check("13. POST /api/v1/notifications/test returns 200", st == 200 and body.get("ok"))
 
+        # 9b. Test Webhook dispatch with masked config from UI edit modal (HUB-04)
+        WebhookHandler.received_requests.clear()
+        hook_c = channels.get(hook_id, {})
+        st_m, body_m = js(
+            "POST",
+            "/api/v1/notifications/test",
+            {"channel": hook_c},
+            c=token,
+        )
+        check("13b. POST /api/v1/notifications/test with masked channel returns 200 (HUB-04)", st_m == 200 and body_m.get("ok"))
+
         # Wait up to 3s for local receiver to handle dispatched test alert
         received = False
         for _ in range(30):

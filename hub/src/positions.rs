@@ -282,24 +282,30 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
     for rec in body.split(|b| *b == b'~') {
         if v.records >= MAX_RECORDS {
             break;
-        }        let sym = latin1(rec_field(rec, 2));
+        }
+        // HUB-08: Single-pass iterator over comma-separated fields instead of 15x repeated scans
+        let mut it = rec.split(|b| *b == b',');
+        let f0 = it.next().unwrap_or(b"");
+        let f1 = it.next().unwrap_or(b"");
+        let f2 = it.next().unwrap_or(b"");
+        let sym = latin1(f2);
         if sym.is_empty() {
             continue; // a record without a symbol is not a position
         }
-        let uid = latin1(rec_field(rec, 0));
-        let ticket = parse_u64(rec_field(rec, 1));
-        let side = parse_i8(rec_field(rec, 3));
-        let lots = parse_f64(rec_field(rec, 4));
-        let open_px = parse_f64(rec_field(rec, 5));
-        let sl = parse_f64(rec_field(rec, 6));
-        let tp = parse_f64(rec_field(rec, 7));
-        let magic = parse_i64(rec_field(rec, 8));
-        let open_time = parse_u64(rec_field(rec, 9));
-        let kind = parse_i32(rec_field(rec, 10));
-        let ptype = parse_i32(rec_field(rec, 11));
-        let pprice = parse_f64(rec_field(rec, 12));
-        let pstop = parse_f64(rec_field(rec, 13));
-        let pexpire = parse_u64(rec_field(rec, 14));
+        let uid = latin1(f0);
+        let ticket = parse_u64(f1);
+        let side = parse_i8(it.next().unwrap_or(b""));
+        let lots = parse_f64(it.next().unwrap_or(b""));
+        let open_px = parse_f64(it.next().unwrap_or(b""));
+        let sl = parse_f64(it.next().unwrap_or(b""));
+        let tp = parse_f64(it.next().unwrap_or(b""));
+        let magic = parse_i64(it.next().unwrap_or(b""));
+        let open_time = parse_u64(it.next().unwrap_or(b""));
+        let kind = parse_i32(it.next().unwrap_or(b""));
+        let ptype = parse_i32(it.next().unwrap_or(b""));
+        let pprice = parse_f64(it.next().unwrap_or(b""));
+        let pstop = parse_f64(it.next().unwrap_or(b""));
+        let pexpire = parse_u64(it.next().unwrap_or(b""));
         let effective_open_px = if kind == 1 && open_px == 0.0 && pprice > 0.0 {
             pprice
         } else {
@@ -367,6 +373,7 @@ fn value_span(p: &[u8], key: &[u8]) -> Option<(usize, usize)> {
 }
 
 /// The `idx`-th `,`-separated field of one record, or empty.
+#[allow(dead_code)]
 fn rec_field(rec: &[u8], idx: usize) -> &[u8] {
     let mut n = 0usize;
     let mut start = 0usize;

@@ -46,7 +46,7 @@ RE_EXEC_OPEN = re.compile(
 RE_EXEC_CLOSE = re.compile(
     r"^exec (?:close|partial-close|remove-duplicate) (\S+) ([0-9A-Z]{8})(?: senderTkt=(-?\d+))? (\S+) lots=([0-9.]+)$")
 RE_SEND_OPEN = re.compile(
-    r"^open ([0-9A-Z]{8}) tkt=(-?\d+) (\S+) side=(-?\d+) lots=([0-9.]+)$")
+    r"^open ([0-9A-Z]{8}) tkt=(-?\d+) (\S+) side=(-?\d+)(?: (?:market|place-pending \S+ \S+))? lots=([0-9.]+)(?: sl=\S+ tp=\S+)?$")
 RE_SEND_CLOSE = re.compile(r"^close ([0-9A-Z]{8}) tkt=(-?\d+) (\S+)$")
 
 RE_RESYNC = re.compile(r"^sender (\S+) new session (\S+) -> resync$")
@@ -56,7 +56,7 @@ RE_TRADE_FAIL = re.compile(r"^trade failed sender=(\S+) uid=([0-9A-Z]{8})")
 RE_LOT_REJECT = re.compile(r"^lot sizing rejected ([0-9A-Z]{8}) (\S+)")
 RE_SYM_SKIP = re.compile(r"symbol (\S+) -> (\S+) not offered by this broker")
 RE_UNKNOWN_SYM = re.compile(r"^unknown symbol (\S+), dropping ([0-9A-Z]{8})$")
-RE_LISTEN = re.compile(r"^sender (\S+) listening events=(\d+) snap=(\d+) ssid=(\S+)$")
+RE_LISTEN = re.compile(r"^sender (\S+) listening (?:events=(\d+) snap=(\d+)|on port \d+.*?) ssid=(\S+)")
 RE_RECV_UP = re.compile(r"^receiver up, (\d+) sender\(s\)")
 RE_RESTORED = re.compile(r"^restored (\d+) position\(s\) from state$")
 RE_NOCONF = re.compile(r"^cannot read (\S+) from MQL")
@@ -256,8 +256,10 @@ def analyse(events):
         if mo:
             u = rec(mo.group(2))
             u["closes"] += 1
-            u["sym"] = u["sym"] or mo.group(3)
-            u["lots"] = u["lots"] or mo.group(4)
+            if mo.group(3):
+                u["senderTkt"] = u["senderTkt"] or mo.group(3)
+            u["sym"] = u["sym"] or mo.group(4)
+            u["lots"] = u["lots"] or mo.group(5)
             u["state"] = "closed"
             u["last"] = e.ts
             u["src"].add("receiver")
@@ -598,8 +600,9 @@ def discover():
         if not os.path.isdir(files):
             continue
         found += sorted(glob.glob(os.path.join(files, "copier_*.log")))
+        found += sorted(glob.glob(os.path.join(files, "copier_*.log.*")))
         found += sorted(glob.glob(os.path.join(files, "copier_sender_*.st")))
-        found += sorted(glob.glob(os.path.join(files, "copier_receiver.st")))
+        found += sorted(glob.glob(os.path.join(files, "copier_receiver*.st")))
     return found
 
 

@@ -471,7 +471,7 @@ def main():
         print("== 9. the retry ladder is finite ==")
         st, d = js("GET", "/api/v1/commands")
         check("every command has a state from the known set",
-              all(c["state"] in ("pending", "acked", "rejected", "unknown")
+              all(c["state"] in ("pending", "acked", "rejected", "unknown", "superseded")
                   for c in d.get("commands", [])),
               str(sorted({c["state"] for c in d.get("commands", [])})))
 

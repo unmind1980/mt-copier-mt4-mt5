@@ -588,12 +588,21 @@ impl Audit {
             }
         }
 
-        // 2. If active file records alone do not satisfy `limit`, inspect recent
-        // compressed archives so a recent rotation does not leave the dashboard empty.
-        if out.len() < limit {
+        // 2. Inspect compressed archives if needed.
+        // For since == 0: inspect archives when active file records do not satisfy `limit`.
+        // For since > 0: inspect archives whenever active file's oldest seq is greater than `since + 1`
+        // or total records do not satisfy `limit`, ensuring forward pagination across archives never skips records.
+        let oldest_active_seq = out.first().and_then(|r| r["seq"].as_u64()).unwrap_or(u64::MAX);
+        let need_archive = if since == 0 {
+            out.len() < limit
+        } else {
+            oldest_active_seq > since.saturating_add(1) || out.len() < limit
+        };
+
+        if need_archive {
             self.wait_for_rotation();
-            let oldest_active_seq = out.first().and_then(|r| r["seq"].as_u64()).unwrap_or(u64::MAX);
-            if oldest_active_seq > since.saturating_add(1) {
+            if since == 0 {
+                // When since == 0: backwards inspection from newest archive .1.gz to oldest
                 for idx in 1..=self.max_backups {
                     if out.len() >= limit {
                         break;
@@ -616,20 +625,12 @@ impl Audit {
                                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
                                     stats.lines += 1;
                                     let s = v["seq"].as_u64().unwrap_or(0);
-                                    if s > since && s < oldest_active_seq {
-                                        if since == 0 {
-                                            // R48-08: Sliding window: keep only the latest records from archive
-                                            if archive_recs.len() >= max_archive_needed {
-                                                archive_recs.pop_front();
-                                            }
-                                            archive_recs.push_back(v);
-                                        } else {
-                                            // Forward pagination: take first matching records
-                                            archive_recs.push_back(v);
-                                            if archive_recs.len() >= max_archive_needed {
-                                                break;
-                                            }
+                                    if s > 0 && s < oldest_active_seq {
+                                        // Sliding window: keep only the latest records from archive
+                                        if archive_recs.len() >= max_archive_needed {
+                                            archive_recs.pop_front();
                                         }
+                                        archive_recs.push_back(v);
                                     }
                                 }
                             }
@@ -639,6 +640,38 @@ impl Audit {
                         out = combined;
                     }
                 }
+            } else {
+                // HUB-03: When since > 0: inspect archives in chronological order (oldest to newest)
+                // so forward pagination across rotations collects all consecutive records.
+                let mut archive_recs: Vec<Value> = Vec::new();
+                for idx in (1..=self.max_backups).rev() {
+                    let archive_p = self.archive_path(idx);
+                    if !archive_p.exists() {
+                        continue;
+                    }
+                    if let Ok(f) = File::open(&archive_p) {
+                        let decoder = GzDecoder::new(f);
+                        let reader = std::io::BufReader::new(decoder);
+                        use std::io::BufRead;
+                        for line_res in reader.lines() {
+                            if let Ok(line) = line_res {
+                                if line.trim().is_empty() {
+                                    continue;
+                                }
+                                if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                                    stats.lines += 1;
+                                    let s = v["seq"].as_u64().unwrap_or(0);
+                                    if s > since && s < oldest_active_seq {
+                                        archive_recs.push(v);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                archive_recs.sort_by_key(|r| r["seq"].as_u64().unwrap_or(0));
+                archive_recs.extend(out);
+                out = archive_recs;
             }
         }
 

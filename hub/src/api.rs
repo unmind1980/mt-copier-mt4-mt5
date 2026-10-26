@@ -1167,9 +1167,10 @@ async fn login(
                 Some(json!({ "role": sess.role.as_str() })),
                 "ok",
             );
-            // R47-11: Clean up plaintext initial admin bootstrap password on successful login
+            // HUB-07: Clean up plaintext initial admin bootstrap password on successful login
             if b.id == "admin" {
-                let _ = std::fs::remove_file(".admin_bootstrap_password");
+                let s = st.lock_or_recover();
+                s.users.cleanup_bootstrap_password();
             }
             let is_https = headers.get("x-forwarded-proto").map(|v| v == "https").unwrap_or(false)
                 || headers.get("x-forwarded-ssl").map(|v| v == "on").unwrap_or(false);
@@ -1399,7 +1400,13 @@ async fn users_upsert(
         if !b.password.is_empty() || b.disabled {
             s.users.drop_other_sessions(&b.id, None);
         }
-        let _ = s.users.save();
+        if let Err(e) = s.users.save() {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to save users: {}", e) })),
+            )
+                .into_response();
+        }
         Arc::clone(&s.audit)
     };
     audit.record(
@@ -1427,8 +1434,11 @@ async fn users_delete(
         let mut s = st.lock_or_recover();
         match s.users.remove(&id) {
             Ok(()) => {
-                let _ = s.users.save();
-                Ok(Arc::clone(&s.audit))
+                if let Err(e) = s.users.save() {
+                    Err(format!("failed to save users: {}", e))
+                } else {
+                    Ok(Arc::clone(&s.audit))
+                }
             }
             Err(e) => Err(e),
         }
@@ -1516,11 +1526,14 @@ async fn change_password(
         match s.users.set_password_hashed(&sess.user_id, new_hash) {
             Err(e) => Err(e),
             Ok(()) => {
-                let _ = s.users.save();
-                //--- The old credential is gone, so every session it minted
-                //--- should be too - except this one, which the caller is
-                //--- still using.
-                Ok(s.users.drop_other_sessions(&sess.user_id, Some(&tok.0)))
+                if let Err(e) = s.users.save() {
+                    Err(format!("failed to save users: {}", e))
+                } else {
+                    //--- The old credential is gone, so every session it minted
+                    //--- should be too - except this one, which the caller is
+                    //--- still using.
+                    Ok(s.users.drop_other_sessions(&sess.user_id, Some(&tok.0)))
+                }
             }
         }
     };
@@ -1543,9 +1556,10 @@ async fn change_password(
         Some(json!({ "other_sessions_ended": dropped })),
         "ok",
     );
-    // R47-11: Clean up plaintext initial admin bootstrap password on password change
+    // HUB-07: Clean up plaintext initial admin bootstrap password on password change
     if sess.user_id == "admin" {
-        let _ = std::fs::remove_file(".admin_bootstrap_password");
+        let s = st.lock_or_recover();
+        s.users.cleanup_bootstrap_password();
     }
     Json(json!({ "ok": true, "other_sessions_ended": dropped })).into_response()
 }
@@ -1941,6 +1955,13 @@ async fn rollback_node_config(
     }
 
     let id = normalise_node(&id);
+    if !id.starts_with("receiver:") {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "only receivers accept configs", "node": id })),
+        )
+            .into_response();
+    }
     let writes = st.lock_or_recover().writes;
     if !writes {
         return (
@@ -1973,6 +1994,13 @@ async fn rollback_node_config(
             )
                 .into_response()
         }
+        Err(crate::config::StoreError::Disabled) => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "config store is disabled (--config none)", "node": id })),
+            )
+                .into_response()
+        }
         Err(e) => {
             return (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1999,6 +2027,8 @@ async fn rollback_node_config(
             "rolled_back_to": to_rev,
             "rev": r.rev,
             "command_id": cmd.id,
+            "poll": format!("/api/v1/commands/{}", cmd.id),
+            "state": cmd.state,
         })),
     )
         .into_response()
@@ -2404,6 +2434,18 @@ async fn notifications_upsert(
         b.id.trim().to_string()
     };
 
+    if let Some(url) = b.config.get("url").or_else(|| b.config.get("webhook_url")).and_then(|u| u.as_str()) {
+        if !url.contains("***") {
+            if let Err(e) = crate::notifications::validate_outgoing_url(url) {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": e })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let ch = NotificationChannel {
         id: id.clone(),
         name: b.name,
@@ -2517,10 +2559,15 @@ async fn notifications_test(
             let s = st.lock_or_recover();
             let store = s.notif_store.lock_or_recover();
             if let Some(existing) = store.get(&ch.id) {
-                // If url was modified in incoming test request, do not merge secret credentials from existing channel
+                // HUB-04: If url was masked (e.g. contains '***') or identical, merge secret credentials from existing channel.
                 let orig_url = existing.config.get("url").or_else(|| existing.config.get("webhook_url"));
                 let new_url = ch.config.get("url").or_else(|| ch.config.get("webhook_url"));
-                if orig_url == new_url || new_url.is_none() {
+                let is_unmodified = match (&orig_url, &new_url) {
+                    (Some(orig), Some(new)) => orig == new || new.as_str().map(|s| s.contains("***")).unwrap_or(false),
+                    (None, None) | (_, None) => true,
+                    _ => false,
+                };
+                if is_unmodified {
                     crate::notifications::merge_unmasked_config(
                         &mut ch.config,
                         &existing.config,

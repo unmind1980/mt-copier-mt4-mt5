@@ -119,13 +119,18 @@ def main():
             http_req("POST", "/api/v1/notifications", {
                 "name": f"Channel_{i}",
                 "channel_type": "webhook",
-                "config": {"url": f"http://127.0.0.1:9999/{i}"}
+                "config": {"url": f"https://example.com/webhook/{i}"}
             }, cookie=cookie)
 
         st, audit_resp2, _ = http_req("GET", "/api/v1/audit", cookie=cookie)
         recs = audit_resp2.get("records", [])
         check("7. Audit recorded actions", len(recs) >= 6)
         check("8. Records have ascending seqs", all(recs[i]["seq"] < recs[i+1]["seq"] for i in range(len(recs)-1)))
+
+        # HUB-03: Test forward pagination with ?since=1&limit=3
+        st, audit_page, _ = http_req("GET", "/api/v1/audit?since=1&limit=3", cookie=cookie)
+        page_recs = audit_page.get("records", [])
+        check("9. Forward pagination ?since=1 returns records > 1 (HUB-03)", len(page_recs) > 0 and all(r["seq"] > 1 for r in page_recs))
 
     finally:
         proc.terminate()

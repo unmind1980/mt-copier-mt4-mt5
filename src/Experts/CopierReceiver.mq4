@@ -1011,8 +1011,15 @@ string MapSymbol(const int si,const string sym,const string suffix)
      }
    if(StringLen(suffix)>0)
      {
-      string cand=(StringSubstr(suffix,0,1)==".")?(sym+suffix):(sym+"."+suffix);
-      if(CopierSymbolExists(cand)) return cand;
+      // INC-01: Try direct concatenation first (e.g. suffix="m" -> "EURUSDm"),
+      // then dotted fallback if suffix didn't already begin with dot.
+      string cand1=sym+suffix;
+      if(CopierSymbolExists(cand1)) return cand1;
+      if(StringSubstr(suffix,0,1)!=".")
+        {
+         string cand2=sym+"."+suffix;
+         if(CopierSymbolExists(cand2)) return cand2;
+        }
      }
    return sym;
   }
@@ -3195,9 +3202,13 @@ void ExecuteQueue()
       else
         {
          // Two-Pass Sweeper: record failed batch close action for immediate second-pass retry
+         // MQL-02: Do NOT record actions that failed due to disabled trading, closed market, or unsupported types
          if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && sweepCount<CP_MAX_ACTIONS)
            {
-            g_sweepFailed[sweepCount++]=a;
+            if(!CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err) && err!=-4 && err!=-5)
+              {
+               g_sweepFailed[sweepCount++]=a;
+              }
            }
 
          //--- Park this action briefly. A failed action is shifted off the
@@ -3425,6 +3436,11 @@ void ExecuteQueue()
                if(g_ourPositions>0) g_ourPositions--;
                if(g_ourCount>0) g_ourCount--;
                g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+               if(sa.senderIdx>=0 && sa.senderIdx<CP_MAX_SENDERS)
+                 {
+                  sAddedCount[sa.senderIdx]--;
+                  sAddedLots[sa.senderIdx]-=sa.lots;
+                 }
               }
             else if(sa.ordKind==CP_ORD_PENDING)
               {
@@ -3437,8 +3453,20 @@ void ExecuteQueue()
            }
          else
            {
-            // M-11: Record backoff failure tracking for persistent refusal
-            g_backoff.Note(sa.key);
+            // MQL-02: Protect disabled trading and closed market from climbing 24h backoff ladder in Pass 2
+            if(CopierIsTradeDisabled(serr))
+              {
+               g_backoff.Park(sa.key,CP_RETRY_BACKOFF_MS);
+              }
+            else if(CopierIsMarketClosed(serr))
+              {
+               g_mktClosed.Add(sa.sym);
+               g_backoff.Park(sa.key,CP_MKTCLOSED_MS);
+              }
+            else
+              {
+               g_backoff.Note(sa.key);
+              }
             g_log.Warn("Two-Pass Sweeper: straggler ticket "+(string)sa.ticket+" uid "+sa.uid+" failed second pass (err="+(string)serr+")");
            }
         }
@@ -3681,12 +3709,16 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
         }
      }
 
+   //--- MQL-04: Determine actual inverted relationship based on real position sides
+   //--- rather than assuming local.side matches current inverttrades configuration.
+   bool actualInverted = (local.side != desired.side);
+
    //--- The sender's stops, as a distance, re-anchored on our own entry.
    double feedSl,feedTp;
-   CopierMapInvertedStops(g_senderCfg[si].inverttrades,dSl,dTp,feedSl,feedTp);
+   CopierMapInvertedStops(actualInverted,dSl,dTp,feedSl,feedTp);
 
    double wantSl,wantTp;
-   if(g_senderCfg[si].inverttrades)
+   if(actualInverted)
      {
       wantSl=CopierMirrorStopInverted(feedSl,dOpn,
                                       local.openPx,local.side,true);
@@ -3743,24 +3775,25 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- that can only ever be clamped would look like a difference on
    //--- every single tick and queue a modify forever.
    //--- For pending orders, clamp against the order's trigger/limit price, NOT live market Bid/Ask!
-   bool clamped=false;
+   bool clampedSl=false, clampedTp=false;
    if(local.kind==CP_ORD_PENDING)
      {
-      wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clamped);
-      if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
+      wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clampedSl);
+      wantTp=CopierFitStopAt(wantTp,local.side,false,anchorPx,si2,clampedTp);
+      if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
          g_log.Warn("stop for pending order "+local.uid+" "+local.sym+" was inside this"
                     +" broker's minimum distance and has been widened");
-      wantTp=CopierFitStopAt(wantTp,local.side,false,anchorPx,si2,clamped);
      }
    else
      {
-      wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clamped);
-      if(clamped && g_once.ShouldEmit("slclamp|"+local.uid))
+      wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clampedSl);
+      wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clampedTp);
+      if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
          g_log.Warn("stop for "+local.uid+" "+local.sym+" was inside this"
                     +" broker's minimum distance and has been widened; the"
                     +" mirror is now WIDER than the sender's stop");
-      wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clamped);
      }
+   bool clamped=(clampedSl || clampedTp);
 
    bool pendingDiff=false;
    if(local.kind==CP_ORD_PENDING && desired.kind==CP_ORD_PENDING)
@@ -3773,21 +3806,30 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
      {
       //--- Nothing to change: record signature so next tick can skip immediately
+      //--- MQL-01: When stop was clamped, do NOT cache in g_stopSig so when price moves away,
+      //--- the mirror automatically converges to the true un-clamped stop level.
       if(local.ticket!=0)
         {
-         g_stopSig[sh].ticket=local.ticket;
-         g_stopSig[sh].epoch=g_stOvEpoch;
-         g_stopSig[sh].v[0]=desired.sl;
-         g_stopSig[sh].v[1]=desired.tp;
-         g_stopSig[sh].v[2]=desired.openPx;
-         g_stopSig[sh].v[3]=local.sl;
-         g_stopSig[sh].v[4]=local.tp;
-         g_stopSig[sh].v[5]=local.pprice;
-         g_stopSig[sh].v[6]=local.pstop;
-         g_stopSig[sh].v[7]=(double)local.pexpire;
-         g_stopSig[sh].v[8]=desired.pprice;
-         g_stopSig[sh].v[9]=desired.pstop;
-         g_stopSig[sh].v[10]=(double)desired.pexpire;
+         if(!clamped)
+           {
+            g_stopSig[sh].ticket=local.ticket;
+            g_stopSig[sh].epoch=g_stOvEpoch;
+            g_stopSig[sh].v[0]=desired.sl;
+            g_stopSig[sh].v[1]=desired.tp;
+            g_stopSig[sh].v[2]=desired.openPx;
+            g_stopSig[sh].v[3]=local.sl;
+            g_stopSig[sh].v[4]=local.tp;
+            g_stopSig[sh].v[5]=local.pprice;
+            g_stopSig[sh].v[6]=local.pstop;
+            g_stopSig[sh].v[7]=(double)local.pexpire;
+            g_stopSig[sh].v[8]=desired.pprice;
+            g_stopSig[sh].v[9]=desired.pstop;
+            g_stopSig[sh].v[10]=(double)desired.pexpire;
+           }
+         else
+           {
+            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped stop
+           }
         }
       return;
      }
@@ -3854,19 +3896,26 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(oi>=0) g_stLastMs[oi]=nowMs; // R47-18: Consume throttle window only on successful queue push
       if(local.ticket!=0)
         {
-         g_stopSig[sh].ticket=local.ticket;
-         g_stopSig[sh].epoch=g_stOvEpoch;
-         g_stopSig[sh].v[0]=desired.sl;
-         g_stopSig[sh].v[1]=desired.tp;
-         g_stopSig[sh].v[2]=desired.openPx;
-         g_stopSig[sh].v[3]=local.sl;
-         g_stopSig[sh].v[4]=local.tp;
-         g_stopSig[sh].v[5]=local.pprice;
-         g_stopSig[sh].v[6]=local.pstop;
-         g_stopSig[sh].v[7]=(double)local.pexpire;
-         g_stopSig[sh].v[8]=desired.pprice;
-         g_stopSig[sh].v[9]=desired.pstop;
-         g_stopSig[sh].v[10]=(double)desired.pexpire;
+         if(!clamped)
+           {
+            g_stopSig[sh].ticket=local.ticket;
+            g_stopSig[sh].epoch=g_stOvEpoch;
+            g_stopSig[sh].v[0]=desired.sl;
+            g_stopSig[sh].v[1]=desired.tp;
+            g_stopSig[sh].v[2]=desired.openPx;
+            g_stopSig[sh].v[3]=local.sl;
+            g_stopSig[sh].v[4]=local.tp;
+            g_stopSig[sh].v[5]=local.pprice;
+            g_stopSig[sh].v[6]=local.pstop;
+            g_stopSig[sh].v[7]=(double)local.pexpire;
+            g_stopSig[sh].v[8]=desired.pprice;
+            g_stopSig[sh].v[9]=desired.pstop;
+            g_stopSig[sh].v[10]=(double)desired.pexpire;
+           }
+         else
+           {
+            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped stop
+           }
         }
      }
   }
@@ -4775,6 +4824,23 @@ void ConvergeSender(const int si)
            }
 
          g_fillGraceRing.Forget(g_sid[si]+":fillgrace:"+d.uid);
+
+         // MQL-04: Runtime hot-switch inverttrades check
+         int expectedSide = g_senderCfg[si].inverttrades ? -d.side : d.side;
+         if(g_locScratch[li].side != expectedSide)
+           {
+            if(!g_senderCfg[si].ignoreallexitsignals)
+              {
+               g_log.Warn("uid "+d.uid+" position side opposite to current inverttrades setting ("
+                          +((g_locScratch[li].side==CP_SIDE_BUY)?"BUY":"SELL")+" vs expected "
+                          +((expectedSide==CP_SIDE_BUY)?"BUY":"SELL")+"); closing old position to re-open");
+               g_reopenExpected.Add(g_sid[si]+":"+d.uid);
+               PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                          g_locScratch[li].lots,g_locScratch[li].ticket,
+                          0,"",0.0,0.0,g_locScratch[li].kind);
+               continue;
+              }
+           }
 
          // N49-02: Pending order volume adjustment (cancel + re-place)
          // MetaTrader broker APIs cannot modify volume on existing pending orders.
@@ -6046,6 +6112,7 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
      {
       if(g_desired[base+i].uid!=uid) continue;
       for(int k=i;k<g_desiredCount[si]-1;k++) g_desired[base+k]=g_desired[base+k+1];
+      g_desired[base+g_desiredCount[si]-1].uid="";
       g_desiredCount[si]--;
       return;
      }
@@ -6229,12 +6296,17 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
       g_lastSeq[si][CP_STREAM_SNAP]=-1;
       g_ready[si]=false;
+      int prevDesired=g_desiredCount[si];
       g_desiredCount[si]=0;
       g_lastSnapMs[si]=0;
       int base=si*CP_MAX_POSITIONS;
-      for(int d=0;d<CP_MAX_POSITIONS;d++)
+      for(int d=0;d<prevDesired;d++)
         {
-         if(StringLen(g_desired[base+d].uid)>0) StopsForget(g_desired[base+d].uid);
+         if(StringLen(g_desired[base+d].uid)>0)
+           {
+            StopsForget(g_desired[base+d].uid);
+            g_desired[base+d].uid="";
+           }
         }
       g_stOvEpoch++;
       g_snapRejectStreak[si]=0; // NM-14: Clear reject streak on sender restart so failure diagnosis is not biased by prior session

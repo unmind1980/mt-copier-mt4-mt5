@@ -424,11 +424,17 @@ public:
         {
          if(m_from[i]==sym) return m_to[i];
         }
-      //--- 2) suffix rule
+      //--- 2) suffix rule: check direct concatenation first (e.g. suffix="m" -> "EURUSDm"),
+      //--- then fallback to dotted form if not already dotted (e.g. "EURUSD.m")
       if(StringLen(m_suffix)>0)
         {
-         string cand=(StringSubstr(m_suffix,0,1)==".")?(sym+m_suffix):(sym+"."+m_suffix);
-         if(CopierSymbolExists(cand)) return cand;
+         string cand1=sym+m_suffix;
+         if(CopierSymbolExists(cand1)) return cand1;
+         if(StringSubstr(m_suffix,0,1)!=".")
+           {
+            string cand2=sym+"."+m_suffix;
+            if(CopierSymbolExists(cand2)) return cand2;
+           }
         }
       //--- 3) as-is
       return sym;

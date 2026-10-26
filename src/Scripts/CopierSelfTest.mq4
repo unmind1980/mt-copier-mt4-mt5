@@ -2575,6 +2575,11 @@ void TestR47R48Regressions()
    bool rOk=false;
    double rz=CopierRealizedToday(dayStart, rOk);
    Ok("model: CopierRealizedToday returns status flag", rOk || !rOk);
+
+   // INC-01: Symbol mapping suffix configuration
+   CopierSymbolMap sm;
+   sm.SetSuffix("m");
+   Ok("symbol: non-dotted suffix configures", sm.Suffix()=="m");
   }
 
 //+------------------------------------------------------------------+

@@ -264,6 +264,9 @@ impl ConfigStore {
         actor: &str,
         ip: &str,
     ) -> Result<Revision, StoreError> {
+        if !self.enabled {
+            return Err(StoreError::Disabled);
+        }
         let body = self.revision_body(node, to_rev).ok_or(StoreError::NotFound)?;
         let mut inner = self.inner.lock_or_recover();
         if inner.file.is_none() {
@@ -291,11 +294,23 @@ impl ConfigStore {
 
     /// The body of one specific revision, read from the file.
     fn revision_body(&self, node: &str, rev: u64) -> Option<String> {
+        // HUB-08: Check memory cache first for current revision
+        {
+            let inner = self.inner.lock_or_recover();
+            if let Some(cur) = inner.current.get(node) {
+                if cur.rev == rev {
+                    return Some(cur.ini.clone());
+                }
+            }
+        }
         use std::io::BufRead;
         let file = std::fs::File::open(&self.path).ok()?;
         let reader = std::io::BufReader::new(file);
         for line_res in reader.lines() {
-            let line = line_res.ok()?;
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;

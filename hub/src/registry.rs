@@ -182,7 +182,8 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
         return Vec::new();
     }
     let mut items = Vec::new();
-    for rec in pos_str.split('~') {
+    // HUB-06: Cap at 4096 items to prevent unbounded allocation DoS on ZMQ thread
+    for rec in pos_str.split('~').take(4096) {
         if rec.is_empty() {
             continue;
         }
@@ -231,7 +232,8 @@ pub fn parse_receiver_waitlist(wait_str: &str) -> Vec<ReceiverWaitItem> {
         return Vec::new();
     }
     let mut items = Vec::new();
-    for rec in wait_str.split('~') {
+    // HUB-06: Cap at 4096 items to prevent unbounded allocation DoS on ZMQ thread
+    for rec in wait_str.split('~').take(4096) {
         if rec.is_empty() {
             continue;
         }

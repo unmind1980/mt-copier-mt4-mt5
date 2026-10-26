@@ -188,34 +188,20 @@ public:
 
       if(!m_armed)
         {
-         m_armed=true;
          m_day=serverDay;
          m_dayStartEquity=dayStartEquity;
-         //--- RAISE, never lower. `m_peakEquity` may already hold a value
-         //--- restored from disk (see SeedPeak), and assigning `equity` here
-         //--- would throw it away - which is exactly the restart-forgives-the-
-         //--- drawdown hole this seeding exists to close.
+         if(dayStartEquity>0.0) m_armed=true; // INC-03: Only permanently arm once valid dayStartEquity is established
          if(equity>m_peakEquity) m_peakEquity=equity;
-         //--- NOTE: no early return. The first observation after a restart
-         //--- must be able to TRIP, or a receiver that comes back up while
-         //--- still below the drawdown line would sit there armed-but-quiet
-         //--- until the next tick - and on a quiet market there may not be
-         //--- one for a long time. With peak == equity (a fresh start) the
-         //--- comparison cannot trip, so nothing changes for the normal case.
         }
       else if(serverDay!=m_day)
         {
          m_day=serverDay;
          m_dayStartEquity=dayStartEquity;
-         //--- a new day clears the DAILY switch. It does NOT clear the
-         //--- drawdown one: that is measured from a session peak and
-         //--- latching it is the entire point - it is the "stop and look at
-         //--- this" switch, cleared by a human reloading the EA.
          m_dailyTripped=false;
         }
-      else if(dayStartEquity>0.0 && MathAbs(dayStartEquity-m_dayStartEquity)>0.001)
+      else if(dayStartEquity>0.0 && (m_dayStartEquity<=0.0 || MathAbs(dayStartEquity-m_dayStartEquity)>0.001))
         {
-         // N49-01: Update m_dayStartEquity when recalibrated intraday
+         // INC-03 & N49-01: Update and heal m_dayStartEquity when recalibrated intraday or after initial zero
          m_dayStartEquity=dayStartEquity;
         }
 

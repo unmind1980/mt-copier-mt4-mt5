@@ -3128,9 +3128,10 @@ function renderCockpit(nodes, pos){
       r._nameHtml = nameHtml;
     }
 
-    var pingVal = (n.ping_ms !== undefined && n.ping_ms !== null) ? (n.ping_ms + " ms") : "-";
+    var hasPing = (n.ping_ms !== undefined && n.ping_ms !== null);
+    var pingVal = hasPing ? (n.ping_ms + " ms") : "-";
     var pNum = Number(n.ping_ms);
-    var pingCls = "ping-tag " + (pNum < 150 ? "ping-ok" : (pNum <= 450 ? "ping-warn" : "ping-bad"));
+    var pingCls = "ping-tag " + (!hasPing ? "" : (pNum < 150 ? "ping-ok" : (pNum <= 450 ? "ping-warn" : "ping-bad")));
     if(r.ping.textContent !== pingVal){
       r.ping.textContent = pingVal;
       r.ping.className = pingCls;
@@ -3564,7 +3565,7 @@ function renderPositions(pos){
     var r = s.posRows[p.sid];
     if(!r) return;
     var syms = (p.symbols || []).map(function(x){
-      return esc(x.symbol) + "×" + esc(x.count) + "/" + esc(x.lots);
+      return (x.symbol || "") + "×" + (x.count || 0) + "/" + (x.lots || 0);
     }).join(" ");
     r.sd.textContent = p.sid;
     r.c.textContent = p.count;
@@ -4443,7 +4444,7 @@ function loadNotifications(){
 
 function getChannelTypeBadge(type){
   if(type === "telegram") return '<span class="chan-badge chan-tg">Telegram</span>';
-  if(type === "wecom") return '<span class="chan-badge chan-wc">WeCom</span>';
+  if(type === "wecom" || type === "wechat_work") return '<span class="chan-badge chan-wc">WeCom</span>';
   if(type === "dingtalk") return '<span class="chan-badge chan-dt">DingTalk</span>';
   if(type === "webhook") return '<span class="chan-badge chan-wh">Webhook</span>';
   return '<span class="chan-badge">' + esc(type) + '</span>';
@@ -4453,7 +4454,7 @@ function getChannelSummary(ch){
   var cfg = ch.config || {};
   if(ch.channel_type === "telegram"){
     return "chat: " + esc(cfg.chat_id || "-") + " · token: " + esc(cfg.bot_token || "-");
-  } else if(ch.channel_type === "wecom"){
+  } else if(ch.channel_type === "wecom" || ch.channel_type === "wechat_work"){
     return "key: " + esc(cfg.key || cfg.webhook_url || "-");
   } else if(ch.channel_type === "dingtalk"){
     return "token: " + esc(cfg.access_token || cfg.webhook_url || "-") + (cfg.secret ? " (signed)" : "");
@@ -5302,7 +5303,7 @@ function collectSendersFromCards(){
     sObj.daytradingtimes = val(".inp-s-daytradingtimes");
     sObj.staleseconds = val(".inp-s-staleseconds");
 
-    var origId = card.getAttribute("data-orig-id");
+    var origId = c.getAttribute("data-orig-id");
     if(cfgState.parsed && cfgState.parsed.senders){
       var match = null;
       if(origId){
@@ -5498,6 +5499,7 @@ $("cfgloadtemplate").addEventListener("click", function(){
     var ini = getDefaultIni(cfgState.target);
     $("cfgraw").value = ini;
     var parsed = parseIni(ini);
+    cfgState.parsed = parsed;
     populateCommonToForm(parsed.common);
     renderSenderCards(parsed.senders);
     $("cfgmsg").className = "opmsg";
@@ -5691,6 +5693,7 @@ $("cfgloadhist").addEventListener("click", function(){
     if(cfgState.data && cfgState.data.rev && cfgState.data.rev.ini){
       $("cfgraw").value = cfgState.data.rev.ini;
       var parsedCur = parseIni(cfgState.data.rev.ini);
+      cfgState.parsed = parsedCur;
       populateCommonToForm(parsedCur.common);
       renderSenderCards(parsedCur.senders);
       $("cfgmsg").className = "opmsg";
@@ -5721,6 +5724,7 @@ $("cfgloadhist").addEventListener("click", function(){
     }
     $("cfgraw").value = j.ini;
     var parsedHist = parseIni(j.ini);
+    cfgState.parsed = parsedHist;
     populateCommonToForm(parsedHist.common);
     renderSenderCards(parsedHist.senders);
     $("cfgmsg").className = "opmsg";

@@ -79,6 +79,7 @@ pub const STATE_PENDING: &str = "pending";
 pub const STATE_ACKED: &str = "acked";
 pub const STATE_REJECTED: &str = "rejected";
 pub const STATE_UNKNOWN: &str = "unknown";
+pub const STATE_SUPERSEDED: &str = "superseded";
 
 /// A config push. Sent as `CFG`; the ladder re-sends the stored revision.
 pub const KIND_CONFIG: &str = "config";
@@ -319,6 +320,25 @@ impl CommandStore {
     ) -> Command {
         let id = command_id_cfg(node, rev);
         let mut inner = self.inner.lock_or_recover();
+
+        // HUB-02: When issuing or reviving a config revision `rev`, mark all older
+        // in-flight pending config commands for this node as superseded.
+        let stale_ids: Vec<String> = inner
+            .commands
+            .values()
+            .filter(|cmd| cmd.node == node && cmd.kind == KIND_CONFIG && cmd.rev < rev && cmd.state == STATE_PENDING)
+            .map(|cmd| cmd.id.clone())
+            .collect();
+        for sid in stale_ids {
+            inner.in_flight.remove(&sid);
+            if let Some(sc) = inner.commands.get_mut(&sid) {
+                sc.state = STATE_SUPERSEDED.to_string();
+                sc.err = format!("superseded by rev {}", rev);
+                let s_snap = sc.clone();
+                inner.append(&s_snap);
+            }
+        }
+
         if let Some(c) = inner.commands.get_mut(&id) {
             if c.state == STATE_PENDING {
                 c.next_at = Instant::now();
@@ -558,6 +578,32 @@ impl CommandStore {
             .filter(|c| c.state == STATE_UNKNOWN && now.saturating_sub(c.ts) <= max_age_secs)
             .cloned()
             .collect()
+    }
+
+    /// Mark an in-flight command as superseded by a newer revision, removing from in_flight.
+    pub fn supersede(&self, id: &str, current_rev: u64) {
+        let mut inner = self.inner.lock_or_recover();
+        inner.in_flight.remove(id);
+        if let Some(c) = inner.commands.get_mut(id) {
+            if c.state == STATE_PENDING {
+                c.state = STATE_SUPERSEDED.to_string();
+                c.err = format!("superseded by rev {}", current_rev);
+                let snap = c.clone();
+                inner.append(&snap);
+            }
+        }
+    }
+
+    /// Defer an in-flight command when the target node is not subscribed/connected,
+    /// reverting the attempt counter consumed by due_gated so retries are not wasted.
+    pub fn defer(&self, id: &str, delay: Duration) {
+        let mut inner = self.inner.lock_or_recover();
+        if let Some(c) = inner.commands.get_mut(id) {
+            if c.state == STATE_PENDING && c.attempts > 0 {
+                c.attempts -= 1;
+                c.next_at = Instant::now() + delay;
+            }
+        }
     }
 }
 

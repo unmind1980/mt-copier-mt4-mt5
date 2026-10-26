@@ -293,6 +293,18 @@ impl UserStore {
         self.users.iter().find(|u| u.id == id)
     }
 
+    /// HUB-07: Uniform path for .admin_bootstrap_password next to users.json
+    pub fn bootstrap_password_path(&self) -> std::path::PathBuf {
+        self.path.parent().unwrap_or(std::path::Path::new(".")).join(".admin_bootstrap_password")
+    }
+
+    /// HUB-07: Delete plaintext bootstrap password file safely upon admin login or password change
+    pub fn cleanup_bootstrap_password(&self) {
+        let p = self.bootstrap_password_path();
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(".admin_bootstrap_password");
+    }
+
     /// Replace one user's password, keeping the role and disabled flag. This
     /// is the SELF-SERVICE path: any authenticated user may change their own
     /// password, and that is deliberately not an admin privilege - an

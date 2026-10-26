@@ -1320,7 +1320,7 @@ fn main() {
                     println!("[hub]     from MTC_ADMIN_PASSWORD (testing; not a back door -");
                     println!("[hub]     only the salted hash is stored).");
                 } else {
-                    let pw_file = users_path.parent().unwrap_or(std::path::Path::new(".")).join(".admin_bootstrap_password");
+                    let pw_file = store.bootstrap_password_path();
                     let _ = std::fs::write(&pw_file, format!("{}\n", pw));
                     #[cfg(unix)]
                     {
@@ -2295,7 +2295,6 @@ fn main() {
                                 let mut s = shared.lock_or_recover();
                                 s.pos.touch(&sid, pos_now);
                             }
-                            poke_pending = true;
                         }
 
                         //--- events are rare and worth seeing by default; SNAP
@@ -2595,7 +2594,9 @@ fn main() {
                 let nid = c.node.split_once(':').map(|(_, acc)| acc).unwrap_or(&c.node);
                 let target_sub = format!("@{}", nid);
                 if !st.subs.contains(&target_sub) {
-                    // Node is currently disconnected or has not subscribed yet; defer sending
+                    // HUB-02: Node is currently disconnected or has not subscribed yet;
+                    // defer sending without consuming retry ladder attempts.
+                    cmds.defer(&c.id, Duration::from_secs(2));
                     continue;
                 }
                 match c.kind.as_str() {
@@ -2619,6 +2620,9 @@ fn main() {
                                     "[hub] dropping stale CFG {} (rev {} superseded by {})",
                                     c.id, c.rev, r.rev
                                 );
+                                // HUB-02: Mark superseded in CommandStore to remove from in_flight
+                                // and prevent false command.unknown timeout alerts 82s later.
+                                cmds.supersede(&c.id, r.rev);
                             }
                             None => {}
                         }
@@ -2642,10 +2646,11 @@ fn main() {
             poke_pending = false;
             last_poke = Instant::now();
             if let Some(tx) = &poke_tx {
-                let body = std::sync::Arc::new(api::snapshot_text(&shared));
-                //--- A channel with no subscribers is the normal case for a hub
-                //--- nobody is watching; it is not worth a line.
-                let _ = tx.send(body);
+                // HUB-08: Only serialize snapshot JSON if there are active WebSocket dashboard listeners
+                if tx.receiver_count() > 0 {
+                    let body = std::sync::Arc::new(api::snapshot_text(&shared));
+                    let _ = tx.send(body);
+                }
             }
         }
 

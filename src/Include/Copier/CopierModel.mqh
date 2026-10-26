@@ -1013,6 +1013,13 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       return true;
      }
 
+   // INC-02: If the pending order has already filled and turned into an open market position,
+   // fallback to modifying stops on the market position instead of failing with 10013 / Invalid Request.
+   if(!pending)
+     {
+      return CopierModifyStops(identifier,sym,sl,tp,outErr);
+     }
+
 #ifdef __MQL5__
    MqlTradeRequest req;
    MqlTradeResult  res;

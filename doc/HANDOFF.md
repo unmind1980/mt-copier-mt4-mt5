@@ -392,6 +392,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **四十七次审计** | 2026-10-25 22:30 | 全面闭环第47轮深度审计（R47-01..R47-35高/中/低危35项全面加固） | 执行原语、状态防护、权限安全与全栈收敛 |
 | **四十八次审计** | 2026-10-26 09:30 | 全面闭环第48轮深度审计（R48-01..R48-15高/中/低危15项全面修复） | 挂单TRIM解耦、快照强校验、SSRF防线与时区基准修复 |
 | **四十九次审计** | 2026-10-26 11:30 | 全面闭环第49轮深度审计（N49-01..N49-16全方位闭环整改） | 风控基准刷新、挂单减仓收敛、全局防DoS与零锁并发 |
+| **五十次审计** | 2026-10-26 13:30 | 全面闭环第50轮深度审查（HUB-01..08、MQL-01..05、INC-01..03、TEST-01..02） | 前端崩溃根治、止损钳制收敛、快照哈希隔离与归档正向分页 |
 
 ---
 
@@ -1178,6 +1179,23 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **PERF-04**| **P1 协议心跳轻量化** | `hub/src/api.rs:827` | **N49-09 WebSocket 心跳改发轻量 Ping 帧**：15 秒 WS 心跳改用标准 2 字节 `Message::Ping`，替代每个连接全量序列化快照的大型消耗。 |
 | **ACC-01** | **P1 记账一致性** | `CopierReceiver.mq4:3113, 3410` | **N49-10 撤挂单扣减挂单与总仓位手数**：成功撤销挂单时同步扣减 `g_ourPending`、`g_ourCount` 与 `g_ourLots`，消除 100ms 窗口内风控额度虚高导致的拒单。 |
 | **STB-01** | **P2/P3 边角治理** | 全栈各模块 | **N49-11..16 全面收口**：`positions.rs` 仅在显式声明 N=0 时清零视图（N49-11）；`CP_SNDHWM`/`RCVHWM` 提升至 256 吸收 74+ 订单突发（N49-12）；Sender 中枢补发重置广播时钟与哈希对齐（N49-15）；`g_qCloseIdx` 在空队列时快速短路（N49-16）；`CopierSelfTest.mq4` 补充 R47/R48/R49 回归测试用例。 |
+
+---
+
+### 五十次审计：全面闭环第50轮深度审查（HUB-01..08、MQL-01..05、INC-01..03、TEST-01..02）（2026-10-26 13:30；全部闭环落地）
+
+| # | 级别 | 位置 | 改进与重构实现 |
+| :--- | :--- | :--- | :--- |
+| **UI-01** | **Critical 运行时崩溃** | `dashboard.html:5305, 5500, 5693` | **HUB-01 根治 collectSendersFromCards 未定义变量 card 崩溃**：将 `card` 修正为闭包形参 `c`，彻底根除切换标签页、添加发送端卡片、修改输入框与保存配置时的 `ReferenceError` 崩溃；在模板重置与历史版本加载时补齐 `cfgState.parsed` 同步赋值。 |
+| **TRD-01** | **High 止损收敛** | `CopierReceiver.mq4:3746-3765, 3776, 3858` | **MQL-01 独立判定 SL/TP 钳制与防 g_stopSig 缓存污染**：使用 `clampedSl` 与 `clampedTp` 独立记录拓宽标志；当止损处于 `clamped` 状态时禁止记入 `g_stopSig` 缓存（ticket 置 0），确保价格离开 `stopLevel` 禁区后止损自动收敛至发送端真实精确值。 |
+| **FLT-01** | **High 风控退避** | `CopierReceiver.mq4:3198, 3420, 3441` | **MQL-02 Two-Pass Sweeper 保护 AutoTrading/休市不爬退避阶梯**：Pass 1 仅在非休市、非自动交易禁用时将失败单加入 Sweeper；Pass 2 失败时针对 `CopierIsTradeDisabled` 与 `CopierIsMarketClosed` 保持基础停泊，禁止无脑爬升 24h 退避阶梯；Pass 2 平仓成功补齐 `sAddedCount`/`sAddedLots` 同步扣减。 |
+| **PRT-01** | **High 快照广播** | `CopierSender.mq4:1236, 1253, 1467` | **MQL-03 严格隔离广播快照哈希与本地重构哈希**：`RebuildSnapshotPayload` 未广播时不再更新 `g_snapHash` 与 `NoteRecentSnapHash`，防止频繁改单将广播哈希挤出 4 槽环形缓冲区导致全网误报修复；Hub 单播定向修复移除 `g_lastSnapMs=now`，防止饿死其他节点的常规广播；恢复 15s 修复防抖地板。 |
+| **SYM-01** | **High 品种映射** | `CopierSymbol.mqh:428` / `CopierReceiver.mq4:1012` | **INC-01 支持无点号后缀品种原生映射**：优先检查原样拼接的 `sym + suffix`（如 `suffix="m"` -> `"EURUSDm"`），有效时直接返回，若不存在再回退尝试带点号的 `sym + "." + suffix`，完美支持 Exness、IC Markets 等无点号账户类型。 |
+| **CMD-01** | **High 指令状态机** | `commands.rs:82, 323, 580` / `main.rs:2597, 2620` | **HUB-02 指令状态机支持 superseded 与未订阅重试递延**：引入 `STATE_SUPERSEDED` 与 `supersede` 机制，新配置版本签发或重发丢弃时即刻标记旧指令为已取代并移出 `in_flight`，彻底根除 82s 后的虚假 `command.unknown` 外部告警；未订阅节点调用 `defer` 延后重试，不空耗 attempts 阶梯。 |
+| **AUD-01** | **High 审计分页** | `hub/src/audit.rs:595-650` | **HUB-03 审计归档正向分页 since>0 跨归档全量读取与排序**：当 `since > 0` 且活跃文件最小序号 `> since + 1` 时无条件检索归档；从最旧归档到最新归档顺序收集并排序，彻底消灭跨日志轮转正向分页时的断层遗漏。 |
+| **NOT-01** | **High 通知测试** | `hub/src/api.rs:2520` | **HUB-04 通知通道编辑弹窗 Test 测试密钥还原修复**：放行包含 `***` 的脱敏 URL 进行 `merge_unmasked_config`，解决前端打开编辑弹窗点击 Test 按钮因 URL 脱敏导致无法还原密钥的 100% 失败问题；在 `notifications_upsert` 补齐 URL SSRF 校验。 |
+| **TST-01** | **High 日志分析** | `tools/logcheck.py:46, 258, 600` | **TEST-01 logcheck.py 正则捕获组与格式对齐**：修正 `RE_EXEC_CLOSE` 捕获组索引错位（group 4 为 sym，group 5 为 lots）；更新 `RE_SEND_OPEN` 与 `RE_LISTEN` 匹配当前 MQL 日志格式；`discover()` 补齐 `copier_*.log.*` 轮转文件。 |
+| **STB-01** | **Medium/Low 架构治理** | 全栈各模块 | **MQL-04..05, INC-02..03, HUB-05..08, TEST-02 全面收口**：已持仓与当前 `inverttrades` 反差时安全平仓重开（MQL-04）；挂单已成交修改止损平滑转交市价单修改（INC-02）；余额为 0 时禁止提前锁定当日风控基准（INC-03）；`rollback_node_config` 补齐 poll/state 响应并校验 receiver（HUB-05）；接收端持仓与等待列表解压增加 4096 记录上限（HUB-06）；管理员初始密码统一路径与清理、`users.save()` 错误校验（HUB-07）；`AcceptSeq` 清理空槽（MQL-05）；无 WebSocket 监听跳过快照序列化、单遍切分 `parse_snap`、前端细节（HUB-08）；测试套件覆盖增强（TEST-02）。 |
 
 ---
 
