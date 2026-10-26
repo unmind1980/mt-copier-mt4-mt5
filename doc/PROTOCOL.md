@@ -59,6 +59,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `PING`    | every 10 s on the peer channel (direct or the hub channel)                               | `MS=..;FROM=..`                                                                                              |
 | `PONG`    | in reply to a `PING`, or to a `WHO`                                                      | `MS=..;FROM=..;TO=hub`                                                                                       |
 | `CMD`     | hub → node, on operator action or automated telemetry query                                | `ID=..;OP=pause\|resume\|closeall\|reload\|reqpos\|reqcfg[;ARGS=..]`                                       |
+| `TOPOLOGY`| hub → node, on `REG` handshake on `@<nid>` control channel                                | `PRIMARY=..;STANDBY=..;EPOCH=..;ACTIVE=primary\|standby`                                                     |
 
 ### `CFG` / `ACK` / `CFGR` — config push
 

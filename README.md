@@ -46,7 +46,8 @@ src/Include/Copier/     the library (platform-neutral except CopierDefs/CopierMo
   CopierConfig.mqh        copier.ini reader
   CopierIgnore.mqh        the IgnoreUids list (per-position opt-out)
   CopierRisk.mqh          risk switches (circuit breakers)
-  CopierTransport.mqh     ZeroMQ plumbing
+  CopierTransport.mqh     ZeroMQ plumbing (with XSUB subscription replay)
+  CopierCluster.mqh       HA cluster topology & local disk persistence (copier_hub_cluster.st)
   CopierCurveKey.mqh      the CURVE keypair file (auto-generated per terminal)
 src/Experts/            CopierSender, CopierReceiver
 src/Scripts/            CopierSelfTest, CopierZmqProbe
@@ -90,6 +91,8 @@ tools/                  copier.bat   <- the Windows entry point for all of these
                                                       and gzip compression
                         reset_password.bat, reset_password.py <- one-click password
                                                       reset helper for admin
+                        ha_probe_test.py, hub_cluster_test.py, ha_chaos_test.py <- HA test suites
+                        start_dual_hubs.bat, start_primary.bat, start_standby.bat <- HA Hub launchers
                         hub_proto.py, hub_proto_test.py, hub.sh, hub.bat,
                         hubrs.bat    <- run the RUST hub (see hub/)
                         hublog.bat   <- run the hub with stdout also going to

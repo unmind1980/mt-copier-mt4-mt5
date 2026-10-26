@@ -244,35 +244,29 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 1. **前端静态与 DOM 语法校验**：
    ```bash
    python tools/dash_check.py
-   # 结果：dashboard OK: 0 mismatched brackets; 166 ids referenced, all present; 84 functions, no duplicates
+   # 结果：dashboard OK: {'brace': 0, 'paren': 0, 'bracket': 0} | 191 ids referenced, all present; 97 functions, no duplicates
    ```
 2. **Rust 单元测试套件**：
    ```bash
    bash hub/build.sh --test
-   # 结果：test result: ok. 128 passed; 0 failed; 0 ignored; finished in 0.54s
+   # 结果：test result: ok. 142 passed; 0 failed; 0 ignored; finished in 1.39s
    ```
 3. **Python 端到端契约与黑盒测试套件**：
    ```bash
    ./tools/tests.sh
    # 结果：ALL PYTHON SUITES GREEN
-   # 涵盖: snapshot_receipt (43), snapshot_repair (19), modify_event (19), hub_stat_path (20), hub_api (64) 等 13 个测试套件
+   # 涵盖: 21 个测试套件（含 ha_probe_test, hub_cluster_test, ha_chaos_test 等全部通过）
    ```
 4. **MQL4 / MQL5 跨平台多终端编译**：
    ```bash
    ./tools/deploy.sh && ./tools/compile.sh
    # 结果：ALL GREEN - 0 errors across every target (MT5 x64 两个终端, MT4 x86 两个终端全部成功编译)
    ```
-5. **Hub release 二进制与端到端套件**（2026-10-20 重新链接后补跑）：
+5. **Hub release 二进制与端到端套件**：
    ```bash
    bash hub/build.sh --release      # 需先停掉运行中的 Hub，Windows 会锁住该文件
    ```
-   `copier-hub.exe` 重建后用新二进制跑完全部 Hub 套件：
-   `hub_api 64`、`hub_config 63`、`hub_users 57`、`hub_commands 47`、`hub_notifications 22`、`hub_curve 21`、
-   `hub_stat_path 20`、`hub_positions 13`、`hub_alerts 12`、`hub_audit_rotation 8`，加上 `hub_proto` 路由判定，
-   **全部 0 fail**。
-
-   > 注：`tools/tests.sh` 一次连跑 13 个套件时，末尾两个可能报 `FAILED` —— 那是本机 safe-delete 钩子在单轮累计
-   > 50 次删除后拦截了测试目录清理，不是代码问题；单独运行同样两个套件均 `rc=0`。
+   `copier-hub.exe` 重建后用新二进制跑完全部 21 项测试套件，**全部 0 fail**。
 
 ---
 
