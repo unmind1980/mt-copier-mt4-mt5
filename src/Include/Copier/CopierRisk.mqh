@@ -184,7 +184,14 @@ public:
    void              ObserveAt(const double equity,const long serverDay,
                                const double dayStartEquity)
      {
-      if(!MathIsValidNumber(equity) || equity<=0.0) return;
+      if(!MathIsValidNumber(equity)) return;
+      // P3-6: If account equity dropped to zero or negative (complete blowout), trip immediately
+      if(equity<=0.0)
+        {
+         if(m_dayStartEquity>0.0 && !m_dailyTripped) { m_dailyTripped=true; m_justTripped=true; }
+         if(m_peakEquity>0.0 && !m_ddTripped) { m_ddTripped=true; m_justTripped=true; }
+         return;
+        }
 
       if(!m_armed)
         {

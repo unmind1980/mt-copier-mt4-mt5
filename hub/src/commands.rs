@@ -658,6 +658,10 @@ impl CommandStore {
         let updated = match inner.commands.get_mut(id) {
             None => return false,
             Some(c) => {
+                // P1-6: If command already reached terminal status, do not re-append or rewrite
+                if c.is_terminal() {
+                    return false;
+                }
                 c.state = if ok { STATE_ACKED } else { STATE_REJECTED }.to_string();
                 c.ack_at = unix_secs();
                 c.err = err.to_string();

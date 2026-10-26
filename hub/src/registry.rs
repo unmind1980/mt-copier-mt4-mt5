@@ -456,10 +456,10 @@ impl Registry {
         balance: Option<f64>,
         held_items: Option<Vec<ReceiverPositionItem>>,
         wait_items: Option<Vec<ReceiverWaitItem>>,
-        now: Instant,
+        _now: Instant,
     ) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
-            e.last_seen = now;
+            // P1-7: Only REG/HBT2 announce node liveness; STAT telemetry updates figures without resetting offline countdown
             if !risk.is_empty() {
                 e.blocked = blocked;
                 e.risk = risk.to_string();

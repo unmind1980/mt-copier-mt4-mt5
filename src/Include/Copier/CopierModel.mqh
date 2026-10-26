@@ -1231,7 +1231,8 @@ bool CopierIsTicketClosedInHistory(const long ticket)
    if(HistoryOrderSelect((ulong)ticket))
      {
       long state=HistoryOrderGetInteger((ulong)ticket,ORDER_STATE);
-      if(state==ORDER_STATE_CANCELED || state==ORDER_STATE_EXPIRED || state==ORDER_STATE_REJECTED || state==ORDER_STATE_FILLED)
+      // P2-19: ORDER_STATE_FILLED means pending order converted to market position, NOT closed/canceled
+      if(state==ORDER_STATE_CANCELED || state==ORDER_STATE_EXPIRED || state==ORDER_STATE_REJECTED)
          return true;
      }
    return false;

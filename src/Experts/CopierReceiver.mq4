@@ -2548,12 +2548,16 @@ void ReportEntryGates()
 //=====================================================================
 // Action queue
 //=====================================================================
-bool ActionQueued(const int si,const int kind,const string uid)
+bool ActionQueued(const int si,const int kind,const string uid,const string keyExtra="")
   {
    for(int i=0;i<g_qn;i++)
      {
       if(g_q[g_qHead+i].senderIdx==si && g_q[g_qHead+i].kind==kind
-         && g_q[g_qHead+i].uid==uid) return true;
+         && g_q[g_qHead+i].uid==uid)
+        {
+         // P2-20: If keyExtra distinguishes sub-actions (e.g. TRIM target lots, specific sl/tp), compare extra
+         if(StringLen(keyExtra)==0 || g_q[g_qHead+i].extra==keyExtra) return true;
+        }
      }
    return false;
   }
@@ -2602,7 +2606,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) return false;
-   if(ActionQueued(si,kind,uid)) return false;
+   if(ActionQueued(si,kind,uid,keyExtra)) return false;
    if(g_qHead+g_qn>=CP_MAX_ACTIONS)
      {
       //--- the tail hit the end of the array: reclaim the dead prefix first,
@@ -3549,6 +3553,14 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
       lots=CopierNormalizeLot(g_senderCfg[si].maxLotsPerPosition,si2);
+      // P2-22 fix: Check clamped lots against broker minLot
+      if(lots<si2.minLot)
+        {
+         rejected=true;
+         if(g_once.ShouldEmit("minlotclamp|"+g_sid[si]))
+            g_log.Warn("sender "+g_sid[si]+" clamped size "+DoubleToString(lots,2)+" is below broker minLot "+DoubleToString(si2.minLot,2)+"; order rejected");
+         return 0.0;
+        }
      }
    return lots;
   }
@@ -4744,6 +4756,9 @@ void ConvergeSender(const int si)
      {
       ln=DedupLocal(si,base,g_locScratch,ln);
       g_locIdx.Build(g_locScratch,0,ln);
+      // P2-21: Recompute sLots after deduping local positions
+      sLots=0.0;
+      for(int k=0;k<ln;k++) sLots+=g_locScratch[k].lots;
      }
 
    int    pendCount=0;
@@ -4840,13 +4855,17 @@ void ConvergeSender(const int si)
                  }
               }
 
-            g_log.Info("uid "+d.uid+" changed kind on the sender ("
-                       +(string)g_locScratch[li].kind+" -> "+(string)d.kind
-                       +"); cancelling the mirror and re-opening it");
-            g_reopenExpected.Add(g_sid[si]+":"+d.uid);
-            PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
-                       g_locScratch[li].lots,g_locScratch[li].ticket,
-                       0,"",0.0,0.0,g_locScratch[li].kind);
+            // P2-23 fix: only log when action is successfully queued
+            if(PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                          g_locScratch[li].lots,g_locScratch[li].ticket,
+                          0,"",0.0,0.0,g_locScratch[li].kind))
+              {
+               g_reopenExpected.Add(g_sid[si]+":"+d.uid);
+               if(g_once.ShouldEmit("kindchg|"+d.uid))
+                  g_log.Info("uid "+d.uid+" changed kind on the sender ("
+                             +(string)g_locScratch[li].kind+" -> "+(string)d.kind
+                             +"); cancelling the mirror and re-opening it");
+              }
             continue;
            }
 
@@ -5377,14 +5396,18 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    if(!CopierKvGet(e.payload,"H",hOnWire) || StringLen(hOnWire)!=8)
      {
       g_snapDeclFailed++;
-      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" missing or malformed H= field; rejected to prevent false close-all.");
+      g_snapRejectStreak[si]++;
+      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbad|"+g_sid[si]))
+         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" missing or malformed H= field; rejected to prevent false close-all.");
       return;
      }
    int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
    if(hPos<=0)
      {
       g_snapDeclFailed++;
-      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
+      g_snapRejectStreak[si]++;
+      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbadpos|"+g_sid[si]))
+         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
       return;
      }
    string body=StringSubstr(e.payload,0,hPos);
@@ -5392,8 +5415,9 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    if(hCalc!=hOnWire)
      {
       g_snapRejectStreak[si]++;
-      g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
-                  +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
+      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hmismatch|"+g_sid[si]))
+         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
+                     +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
       return;
      }
 

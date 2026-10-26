@@ -1308,7 +1308,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- to "" - everything. So the repair is a broadcast. That is the right
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
-      Emit(CP_T_SNAP,g_snapPayload,true);
+      // P2-25 fix: direct mode repair transmits only on direct channel, do not spam central hub
+      Emit(CP_T_SNAP,g_snapPayload,true,false);
       // L-06: Keep g_snapHash aligned with the actual cached payload re-emitted
       g_snapHash=CopierSnapshotHash(g_snapPayload);
       NoteRecentSnapHash(g_snapHash);

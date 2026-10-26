@@ -2919,7 +2919,7 @@ async fn cluster_handover_request(
             .into_response();
     }
 
-    // H-04 fix: validate from_epoch >= current local epoch
+    // H-04 & P2-2 fix: validate from_epoch >= current local epoch and verify from_hub_id
     if req.from_epoch < s.cluster.epoch() {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -2928,6 +2928,18 @@ async fn cluster_handover_request(
                 "agreed": false,
                 "new_epoch": s.cluster.epoch(),
                 "error": format!("Handover rejected: from_epoch {} is behind local epoch {}", req.from_epoch, s.cluster.epoch())
+            })),
+        )
+            .into_response();
+    }
+    if req.from_hub_id.is_empty() || req.from_hub_id == s.cluster.hub_id() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": "Handover rejected: invalid or self from_hub_id"
             })),
         )
             .into_response();

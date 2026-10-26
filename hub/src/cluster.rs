@@ -633,7 +633,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             if h_data.agreed {
                                 let audit_rec = {
                                     let mut s = st.lock_or_recover();
-                                    let new_ep = s.cluster.promote(Some(h_data.new_epoch));
+                                    // P2-1: Ensure target epoch is strictly greater than local epoch
+                                    let target_ep = if h_data.new_epoch > s.cluster.epoch() {
+                                        Some(h_data.new_epoch)
+                                    } else {
+                                        Some(s.cluster.epoch() + 1)
+                                    };
+                                    let new_ep = s.cluster.promote(target_ep);
                                     s.writes = true;
                                     println!(
                                         "[hub] ADR-10 AUTO-FAILBACK SUCCESS: Master identity recovered with epoch {}!",

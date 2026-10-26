@@ -1513,11 +1513,17 @@ fn main() {
                         );
                     }
                 }
-                // M-05: Avoid expensive JSON snapshot serialization when no WebSockets are connected
-                if let Some(tx) = &snap_poke {
-                    if tx.receiver_count() > 0 {
-                        let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
-                        let _ = tx.send(body);
+                // P1-8: Throttle snap worker broadcast by 200ms window to eliminate CPU spikes
+                static LAST_SNAP_POKE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let now_ms = unix_millis();
+                let last_ms = LAST_SNAP_POKE.load(Ordering::Relaxed);
+                if now_ms.saturating_sub(last_ms) >= POKE_MIN_MS {
+                    LAST_SNAP_POKE.store(now_ms, Ordering::Relaxed);
+                    if let Some(tx) = &snap_poke {
+                        if tx.receiver_count() > 0 {
+                            let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
+                            let _ = tx.send(body);
+                        }
                     }
                 }
             }
@@ -2690,13 +2696,17 @@ fn main() {
                         );
                     }
                 }
-                for key in forgotten {
-                    let prev_live = last_liveness.remove(&key).unwrap_or(Liveness::Offline);
+                if !forgotten.is_empty() {
+                    let count = forgotten.len();
+                    let sample: Vec<String> = forgotten.iter().take(5).cloned().collect();
+                    for key in &forgotten {
+                        last_liveness.remove(key);
+                    }
                     audit.record(
                         "", "",
                         "node.evicted",
-                        &key,
-                        Some(serde_json::json!({ "liveness": prev_live.as_str() })),
+                        &sample.join(","),
+                        Some(serde_json::json!({ "evicted_count": count, "sample": sample })),
                         None,
                         "ok",
                     );
