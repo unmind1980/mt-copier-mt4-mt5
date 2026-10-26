@@ -15,6 +15,13 @@ if not exist "%BIN%" (
     exit /b 1
 )
 
+if exist "cluster_token.txt" (
+    set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
+) else (
+    set "MTC_CLUSTER_TOKEN=mtc_shared_cluster_token_2026"
+    echo mtc_shared_cluster_token_2026> "cluster_token.txt"
+)
+
 title mt-copier Hub - [PRIMARY (6000 / 6010)]
 echo =======================================================================
 echo   Starting mt-copier PRIMARY Hub (Role: Primary)

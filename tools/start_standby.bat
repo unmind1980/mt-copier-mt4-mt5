@@ -24,6 +24,13 @@ if not exist "standby_data\curve_clients.txt" (
     )
 )
 
+if exist "cluster_token.txt" (
+    set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
+) else (
+    set "MTC_CLUSTER_TOKEN=mtc_shared_cluster_token_2026"
+    echo mtc_shared_cluster_token_2026> "cluster_token.txt"
+)
+
 title mt-copier Hub - [STANDBY (6001 / 6011)]
 echo =======================================================================
 echo   Starting mt-copier STANDBY Hub (Role: Standby)

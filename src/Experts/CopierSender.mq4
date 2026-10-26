@@ -726,7 +726,8 @@ int OnInit()
       Print("[CopierSender] ERROR: " + portErr);
       return INIT_PARAMETERS_INCORRECT;
      }
-   MathSrand((int)(CopierNowMs()%2147483647)+(int)CopierAccountLogin());
+   // P1-10 fix: Seed MathSrand with high-entropy mix of monotonic tick count, local time and login
+   MathSrand((int)(CopierNowMs() ^ (long)TimeLocal() ^ (long)CopierAccountLogin()));
    g_log.Init("sender_"+SenderId(),LogLevel);
 
    g_symFilter.Set(IncludeSymbols);

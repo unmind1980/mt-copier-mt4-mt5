@@ -31,10 +31,13 @@ public:
    //--- Arm a short-lived fast burst (capped at CP_PUMP_TIMEOUT_MS)
    void              ArmFast(const int timeoutMs=CP_PUMP_TIMEOUT_MS)
      {
+      long now=CopierNowMs();
+      // P2-18 fix: Check latch timeout before extending deadline
+      if(m_inFlight && now>m_fastPumpUntil) m_inFlight=false;
       int effectiveTimeout=timeoutMs;
       if(effectiveTimeout<=0 || effectiveTimeout>CP_PUMP_TIMEOUT_MS)
          effectiveTimeout=CP_PUMP_TIMEOUT_MS;
-      long until=CopierNowMs()+effectiveTimeout;
+      long until=now+effectiveTimeout;
       if(until>m_fastPumpUntil) m_fastPumpUntil=until;
       m_burstCount=0; // Reset burst counter for new intent
       Trigger();
@@ -44,6 +47,7 @@ public:
      {
       m_fastPumpUntil=0;
       m_burstCount=0;
+      m_inFlight=false;
      }
 
    bool              IsActive() const

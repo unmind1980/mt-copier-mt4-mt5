@@ -263,7 +263,8 @@ impl ClusterManager {
     }
 
     pub fn demote(&mut self, new_epoch: u64) {
-        self.state.epoch = new_epoch;
+        // P0-2: demote does not advance epoch past what was requested
+        self.state.epoch = new_epoch.max(self.state.epoch);
         self.state.role = "standby".to_string();
         self.continuous_online_start = None;
         let _ = self.save();
@@ -395,19 +396,19 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.peer_status = Some(remote_st.clone());
             }
 
-            // 2. Check split-brain conflict and resolve (H-10 & P1-5)
+            // 2. Check split-brain conflict and resolve (H-10 & P1-5 & P0-2)
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
                 let mut s = st.lock_or_recover();
                 let should_demote = !s.cluster.state.is_configured_primary
                     || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
                 if should_demote {
-                    let new_ep = epoch + 1;
-                    s.cluster.demote(new_ep);
+                    // P0-2 fix: demote must NOT bump epoch to prevent triggering peer ADR-04 demotion flip-flop
+                    s.cluster.demote(epoch);
                     s.writes = false;
                     s.cluster.sync_status = "conflict_demoted".to_string();
                     let audit_rec = Arc::clone(&s.audit);
                     audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
-                    println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby with epoch {}", new_ep);
+                    println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby keeping epoch {}", epoch);
                 } else {
                     s.cluster.sync_status = "conflict_master".to_string();
                     eprintln!("[hub] CLUSTER CONFLICT RESOLVED: Maintaining Primary role against peer {}", remote_st.hub_id);
@@ -415,8 +416,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 continue;
             }
 
-            // 3. Stale Primary auto-demote (ADR-04)
-            if role == "primary" && remote_st.epoch > epoch {
+            // 3. Stale Primary auto-demote (ADR-04) - only when peer is actively Primary!
+            if role == "primary" && remote_st.role == "primary" && remote_st.epoch > epoch {
                 println!(
                     "[hub] Peer {} has higher epoch ({} > {}). Demoting local Primary to Standby.",
                     peer_url, remote_st.epoch, epoch
@@ -444,14 +445,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.state.role.clone()
             };
 
-            // P1-2: Dual Standby recovery
-            if current_role == "standby" && remote_st.role == "standby" && is_cfg_primary {
-                let mut s = st.lock_or_recover();
-                let new_ep = s.cluster.promote(None);
-                s.writes = true;
-                let audit_rec = Arc::clone(&s.audit);
-                audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {}", new_ep), None, None, "ok");
-                println!("[hub] DUAL-STANDBY DETECTED: Configured primary automatically recovered Master with epoch {}", new_ep);
+            // P1-2: Dual Standby recovery - deterministic tie breaker (configured primary or lower hub_id)
+            if current_role == "standby" && remote_st.role == "standby" {
+                let should_recover = is_cfg_primary || (!remote_st.is_configured_primary && my_hub_id < remote_st.hub_id);
+                if should_recover {
+                    let mut s = st.lock_or_recover();
+                    let new_ep = s.cluster.promote(None);
+                    s.writes = true;
+                    let audit_rec = Arc::clone(&s.audit);
+                    audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {}", new_ep), None, None, "ok");
+                    println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}", new_ep);
+                }
             }
 
             if current_role == "standby" {

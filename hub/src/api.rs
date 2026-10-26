@@ -158,6 +158,7 @@ pub struct Shared {
     pub notif_store: Arc<Mutex<NotificationStore>>,
     pub notif_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::alerts::Alert>>,
     pub cluster: crate::cluster::ClusterManager,
+    pub writes_allowed: bool,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -194,6 +195,7 @@ impl Shared {
             notif_store: Arc::new(Mutex::new(NotificationStore::new(notif_path))),
             notif_tx: None,
             cluster,
+            writes_allowed: writes,
         }
     }
 
@@ -2970,8 +2972,16 @@ async fn cluster_promote(
         return deny(&st, &sess, "admin");
     }
     let mut s = st.lock_or_recover();
+    if s.cluster.is_primary() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "This node is already Primary." })),
+        )
+            .into_response();
+    }
     let new_epoch = s.cluster.promote(None);
-    s.writes = true;
+    s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
+    let current_writes = s.writes;
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
 
@@ -2979,21 +2989,21 @@ async fn cluster_promote(
         "operator",
         "",
         "cluster.promote",
-        &format!("promoted to Primary with epoch {}", new_epoch),
+        &format!("promoted to Primary with epoch {} (writes={})", new_epoch, current_writes),
         None,
         None,
         "ok",
     );
     println!(
-        "[hub] OPERATOR PROMOTE: Hub promoted to Primary with epoch {}. Write gate opened.",
-        new_epoch
+        "[hub] OPERATOR PROMOTE: Hub promoted to Primary with epoch {}. Writes={}.",
+        new_epoch, current_writes
     );
 
     Json(json!({
         "ok": true,
         "role": "primary",
         "epoch": new_epoch,
-        "writes": true
+        "writes": current_writes
     }))
     .into_response()
 }
@@ -3088,27 +3098,28 @@ async fn cluster_failback_now(
                 if h_data.agreed {
                     let mut s = st.lock_or_recover();
                     s.cluster.promote(Some(h_data.new_epoch));
-                    s.writes = true;
+                    s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
+                    let current_writes = s.writes;
                     let audit_rec = Arc::clone(&s.audit);
                     drop(s);
                     audit_rec.record(
                         "operator",
                         "",
                         "cluster.manual_failback_success",
-                        &format!("recovered Master identity with epoch {}", h_data.new_epoch),
+                        &format!("recovered Master identity with epoch {} (writes={})", h_data.new_epoch, current_writes),
                         None,
                         None,
                         "ok",
                     );
                     println!(
-                        "[hub] MANUAL FAILBACK SUCCESS: Master identity recovered with epoch {}!",
-                        h_data.new_epoch
+                        "[hub] MANUAL FAILBACK SUCCESS: Master identity recovered with epoch {}! Writes={}.",
+                        h_data.new_epoch, current_writes
                     );
                     return Json(json!({
                         "ok": true,
                         "role": "primary",
                         "epoch": h_data.new_epoch,
-                        "writes": true
+                        "writes": current_writes
                     }))
                     .into_response();
                 } else {

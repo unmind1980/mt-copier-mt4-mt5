@@ -96,7 +96,11 @@ public:
 
    void              Destroy()
      {
-      ObjectsDeleteAll(0,m_pfx);
+      // P2-17: Guard against empty m_pfx deleting all chart objects on uninitialized Destroy()
+      if(m_ready && StringLen(m_pfx)>0)
+        {
+         ObjectsDeleteAll(0,m_pfx);
+        }
       m_made=0;
       m_rows=0;
       m_ready=false;

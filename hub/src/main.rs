@@ -1786,9 +1786,12 @@ fn main() {
                                                     None => (false, 0),
                                                 };
                                                 if !throttled {
-                                                    last_cfg_pull.insert(node_key.clone(), (Instant::now(), attempts + 1));
-                                                    println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg (attempt {})", node_key, ih, attempts + 1);
-                                                    cmds.issue_op(&node_key, "reqcfg", "", "hub", "127.0.0.1");
+                                                    // P1-1: Only Primary with effective writes issues reqcfg to avoid accumulating zombie commands
+                                                    if is_prim && effective_writes {
+                                                        last_cfg_pull.insert(node_key.clone(), (Instant::now(), attempts + 1));
+                                                        println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg (attempt {})", node_key, ih, attempts + 1);
+                                                        cmds.issue_op(&node_key, "reqcfg", "", "hub", "127.0.0.1");
+                                                    }
                                                 }
                                             }
                                         }
@@ -2728,7 +2731,7 @@ fn main() {
                 let s = shared.lock_or_recover();
                 (s.writes, s.cluster.is_primary())
             };
-            if is_primary && effective_writes {
+            if is_primary {
                 for c in cmds.due_gated(Instant::now(), effective_writes) {
                     if c.state == commands::STATE_UNKNOWN {
                     let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };

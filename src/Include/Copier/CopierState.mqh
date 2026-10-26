@@ -254,7 +254,9 @@ public:
                 || MathAbs(m_p[i].pprice-cur.pprice)>0.0000001
                 || MathAbs(m_p[i].pstop-cur.pstop)>0.0000001
                 || m_p[i].ptype!=cur.ptype
-                || m_p[i].pexpire!=cur.pexpire);
+                || m_p[i].pexpire!=cur.pexpire
+                || m_p[i].sym!=cur.sym
+                || m_p[i].side!=cur.side);
       prevLots  =m_p[i].lots;
       prevKind  =m_p[i].kind;
       prevTicket=m_p[i].ticket;
@@ -374,6 +376,10 @@ public:
       m_p[i].pstop   =cur.pstop;
       m_p[i].pexpire =cur.pexpire;
       m_p[i].ticket  =cur.ticket;
+      m_p[i].sym     =cur.sym;
+      m_p[i].side    =cur.side;
+      m_p[i].magic   =cur.magic;
+      m_p[i].openTime=cur.openTime;
       if(ticketChanged) m_tkValid=false;
       return true;
      }
@@ -1211,17 +1217,17 @@ public:
 
       //--- Swap the successor over the old file. No FileCopy (not portable)
       //--- and no FileMove (not available): read the successor back and
-      //--- write it over the target in place. Opening the target FAILS
-      //--- leaves the old state as it was; opening it TRUNCATES it, so a
-      //--- crash mid-copy is caught by the END marker in Load, exactly as
-      //--- before - but a failed save no longer destroys what was there.
+      //--- write it over the target in place.
+      //--- P0-3 fix: Delete destination file first to ensure fresh clean file
+      //--- and eliminate any risk of trailing garbage or ghost positions from previous larger saves.
       int rh=FileOpen(tmp,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(rh==INVALID_HANDLE) return false;
+      FileDelete(path);
       int wh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(wh==INVALID_HANDLE)
         {
          FileClose(rh);
-         return false;                      // old file intact, tmp kept
+         return false;                      // tmp kept
         }
       bool copyOk=true;
       while(!FileIsEnding(rh))
