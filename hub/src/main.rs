@@ -71,6 +71,7 @@ mod alerts;
 mod users;
 mod api;
 mod audit;
+mod cluster;
 mod commands;
 mod config;
 mod curve;
@@ -235,6 +236,8 @@ const POLL_MS: i64 = 1000;
 struct Args {
     bind: String,
     port: u16,
+    /// HA Cluster role: "primary" (default) or "standby"
+    role: String,
     /// Where the HTTP + WebSocket half listens. DEFAULT 127.0.0.1, unlike
     /// --bind, and that difference is the whole point: the ZMQ port is where
     /// nodes connect and the plan's §19.1 makes the firewall its trust
@@ -315,12 +318,22 @@ struct Args {
     verbose: bool,
     stats_every: f64,
     duration: f64,
+    role_explicit: Option<String>,
+    cluster_peer: String,
+    cluster_token: String,
+    cluster_state: String,
+    failback_hours: f64,
+    failback_lock: bool,
+    peer_zmq: String,
+    advertise_zmq: String,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         bind: "0.0.0.0".to_string(),
         port: 6000,
+        role: "primary".to_string(),
+        role_explicit: None,
         http: "127.0.0.1:6010".to_string(),
         config: "config_revisions.jsonl".to_string(),
         commands: "commands.jsonl".to_string(),
@@ -330,16 +343,19 @@ fn parse_args() -> Result<Args, String> {
         curve_keys: "curve_hub.keys".to_string(),
         curve_clients: "curve_clients.txt".to_string(),
         curve_show: false,
-        //--- Default ON, by the owner's call (2026-10-14): every session from
-        //--- here on is a test session, and the flag was being typed every
-        //--- time anyway. The struct field's doc comment carries the full
-        //--- reasoning and the "flip it back" reminder.
         writes: true,
         notifications: "alert_channels.json".to_string(),
         audit: "audit.jsonl".to_string(),
         verbose: false,
         stats_every: 30.0,
         duration: 0.0,
+        cluster_peer: String::new(),
+        cluster_token: std::env::var("MTC_CLUSTER_TOKEN").unwrap_or_else(|_| cluster::DEFAULT_CLUSTER_TOKEN.to_string()),
+        cluster_state: cluster::DEFAULT_STATE_FILE.to_string(),
+        failback_hours: cluster::DEFAULT_FAILBACK_HOURS,
+        failback_lock: false,
+        peer_zmq: String::new(),
+        advertise_zmq: String::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -349,6 +365,46 @@ fn parse_args() -> Result<Args, String> {
                 .ok_or_else(|| format!("{} needs a value", argv[i]))
         };
         match argv[i].as_str() {
+            "--role" => {
+                let r = need(i)?.to_lowercase();
+                if r != "primary" && r != "standby" {
+                    return Err(format!("--role must be 'primary' or 'standby', got '{}'", r));
+                }
+                a.role = r.clone();
+                a.role_explicit = Some(r);
+                i += 2;
+            }
+            "--cluster-peer" | "--peer-api" => {
+                let v = need(i)?;
+                a.cluster_peer = if v == "none" { String::new() } else { v.clone() };
+                i += 2;
+            }
+            "--cluster-token" => {
+                a.cluster_token = need(i)?.clone();
+                i += 2;
+            }
+            "--cluster-state" => {
+                a.cluster_state = need(i)?.clone();
+                i += 2;
+            }
+            "--failback-hours" => {
+                a.failback_hours = need(i)?
+                    .parse()
+                    .map_err(|_| "invalid --failback-hours".to_string())?;
+                i += 2;
+            }
+            "--failback-lock" => {
+                a.failback_lock = true;
+                i += 1;
+            }
+            "--peer-zmq" => {
+                a.peer_zmq = need(i)?.clone();
+                i += 2;
+            }
+            "--advertise-zmq" => {
+                a.advertise_zmq = need(i)?.clone();
+                i += 2;
+            }
             "--bind" => {
                 a.bind = need(i)?.clone();
                 i += 2;
@@ -564,6 +620,7 @@ fn unix_millis() -> u64 {
 /// quietly absorbing Phase 2.
 struct HubState {
     seq: u64,
+    role: String,
 }
 
 /// Echo a node's probe back, on the two-frame channel.
@@ -573,14 +630,44 @@ struct HubState {
 /// envelope's own `MS` is the hub's clock and nothing reads it for a PONG.
 fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> zmq::Result<()> {
     state.seq += 1;
+    let from_tag = format!("hub:{}", state.role);
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=PONG|P=MS={};FROM=hub;TO={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=PONG|P=MS={};FROM={};TO={}",
         HUB_SSID,
         state.seq,
         unix_secs(),
         unix_millis() % 2147483647,
         ms,
+        from_tag,
         nid
+    );
+    sock.send_multipart(
+        vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
+        0,
+    )
+}
+
+/// Send cluster topology (T=TOPOLOGY) to a node on its `@<nid>` control topic.
+fn send_topology(
+    sock: &zmq::Socket,
+    nid: &str,
+    primary_ep: &str,
+    standby_ep: &str,
+    epoch: u64,
+    active_role: &str,
+    state: &mut HubState,
+) -> zmq::Result<()> {
+    state.seq += 1;
+    let env = format!(
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=TOPOLOGY|P=PRIMARY={};STANDBY={};EPOCH={};ACTIVE={}",
+        HUB_SSID,
+        state.seq,
+        unix_secs(),
+        unix_millis() % 2147483647,
+        primary_ep,
+        standby_ep,
+        epoch,
+        active_role
     );
     sock.send_multipart(
         vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
@@ -1037,7 +1124,41 @@ fn main() {
         std::process::exit(1);
     }
 
-    println!("[hub] listening on {}", endpoint);
+    let cluster_state_path = std::path::PathBuf::from(&args.cluster_state);
+    let cluster_clients_path = std::path::PathBuf::from(&args.curve_clients);
+    let cluster_mgr = match cluster::ClusterManager::load_or_create(
+        &cluster_state_path,
+        &cluster_clients_path,
+        args.role_explicit.as_deref(),
+        &args.cluster_peer,
+        &args.cluster_token,
+        args.failback_hours,
+        args.failback_lock,
+    ) {
+        Ok(cm) => cm,
+        Err(e) => {
+            eprintln!("[hub] cluster init error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let local_zmq = if !args.advertise_zmq.is_empty() {
+        args.advertise_zmq.clone()
+    } else {
+        let adv_host = if args.bind == "0.0.0.0" { "127.0.0.1" } else { &args.bind };
+        format!("tcp://{}:{}", adv_host, args.port)
+    };
+    let peer_zmq = args.peer_zmq.clone();
+
+    println!("[hub] cluster role: {} (epoch {}) | listening on {}", cluster_mgr.role(), cluster_mgr.epoch(), endpoint);
+    if !cluster_mgr.peer_url.is_empty() {
+        println!(
+            "[hub] cluster peer: {} | failback hours: {:.1}h (locked: {})",
+            cluster_mgr.peer_url,
+            cluster_mgr.state.failback_stabilization_hours,
+            cluster_mgr.state.failback_locked
+        );
+    }
     println!("[hub] EAs connect an XSUB here; the hub needs no other configuration");
     if !args.curve {
         println!("[hub] the link is PLAINTEXT (--curve off). §19.1's firewall is");
@@ -1050,7 +1171,7 @@ fn main() {
     println!();
 
     let mut st = Stats::new();
-    let mut state = HubState { seq: 0 };
+    let mut state = HubState { seq: 0, role: cluster_mgr.role().to_string() };
     //--- M2 + M3 state, and M8's view of it.
     //---
     //--- Both now live behind a mutex because the API thread reads them. That
@@ -1174,7 +1295,7 @@ fn main() {
         Some(std::path::Path::new(&args.notifications))
     };
     let shared: api::SharedState = std::sync::Arc::new(std::sync::Mutex::new(
-        api::Shared::new(args.port, audit.clone(), cfg.clone(), cmds.clone(), args.writes, notif_path),
+        api::Shared::new(args.port, audit.clone(), cfg.clone(), cmds.clone(), args.writes, notif_path, cluster_mgr),
     ));
     //--- Hand the CURVE identity (set up above, before bind) to the API so the
     //--- dashboard can show the public key - the one value every node's
@@ -1534,6 +1655,12 @@ fn main() {
                             let nid = envelope_kv(&payload, "FROM");
                             let ms = envelope_kv(&payload, "MS");
                             if !nid.is_empty() && !ms.is_empty() {
+                                {
+                                    let s = shared.lock_or_recover();
+                                    if state.role != s.cluster.state.role {
+                                        state.role = s.cluster.state.role.clone();
+                                    }
+                                }
                                 if let Err(e) = send_pong(&sock, &nid, &ms, &mut state) {
                                     eprintln!("[hub] PONG failed: {}", e);
                                 }
@@ -1546,6 +1673,7 @@ fn main() {
                         //--- that stays silent stays invisible, which is the
                         //--- right failure: silence is not a claim.
                         if ty == "REG" || ty == "HBT2" {
+                            let effective_writes = shared.lock_or_recover().writes;
                             let role = envelope_kv(&payload, "ROLE");
                             let acc = envelope_kv(&payload, "ACC");
                             if acc.is_empty() {
@@ -1599,6 +1727,25 @@ fn main() {
                                 let node_ts: i64 =
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
                                 if ty == "REG" {
+                                    // Phase 4: Send T=TOPOLOGY to node on registration
+                                    let (is_prim, cur_epoch, cur_role) = {
+                                        let s = shared.lock_or_recover();
+                                        (s.cluster.is_primary(), s.cluster.epoch(), s.cluster.role().to_string())
+                                    };
+                                    let primary_ep = if is_prim { &local_zmq } else { &peer_zmq };
+                                    let standby_ep = if is_prim { &peer_zmq } else { &local_zmq };
+                                    if !primary_ep.is_empty() || !standby_ep.is_empty() {
+                                        let _ = send_topology(
+                                            &sock,
+                                            &acc,
+                                            primary_ep,
+                                            standby_ep,
+                                            cur_epoch,
+                                            &cur_role,
+                                            &mut state,
+                                        );
+                                    }
+
                                     let name = envelope_kv(&payload, "NAME");
                                     let node_key = format!("{}:{}", role, acc);
                                     let ih = envelope_kv(&payload, "IH");
@@ -1835,7 +1982,7 @@ fn main() {
                                                 "drift",
                                             );
                                         }
-                                    } else if hub_rev > 0 && node_rev < hub_rev && args.writes {
+                                    } else if hub_rev > 0 && node_rev < hub_rev && effective_writes {
                                         if let Some(r) = cfg.current(&key) {
                                             let c = cmds.issue_cfg(&key, r.rev, "", "");
                                             let throttle_key = (key.clone(), "config.repush".to_string());
@@ -1976,6 +2123,7 @@ fn main() {
                         //--- restarted with a stale ini, or lost a push, can ask
                         //--- rather than wait for the next REG comparison.
                         if ty == "CFGR" {
+                            let effective_writes = shared.lock_or_recover().writes;
                             //--- CFGR DOES carry ACC (the plan's §5.2), because
                             //--- unlike an ACK there is no command id to derive
                             //--- the node from - the node is asking for
@@ -1987,7 +2135,7 @@ fn main() {
                             } else {
                                 format!("{}:{}", crole, cacc)
                             };
-                            if args.writes {
+                            if effective_writes {
                                 let should_log = match last_cfgr_print.get(&key) {
                                     Some(t) => t.elapsed() >= Duration::from_secs(10),
                                     None => true,
@@ -2179,7 +2327,12 @@ fn main() {
                                             None => true, // First time seen
                                         };
 
-                                        if should_relay {
+                                        let is_primary_or_takeover = {
+                                            let s = shared.lock_or_recover();
+                                            s.cluster.is_primary() || !s.cluster.is_peer_alive(Duration::from_secs(6))
+                                        };
+
+                                        if should_relay && is_primary_or_takeover {
                                             if let Err(e) =
                                                 send_receipt(&sock, &sid, &login, &h, &mut state)
                                             {
@@ -2219,6 +2372,7 @@ fn main() {
                         let env_sid = envelope_hdr(&payload, "SID");
 
                         // F-01 & H-02 Security: Data topics must NEVER carry messages claiming SID="hub" or control types (CFG/CMD)
+                        let mut skip_frame = false;
                         if env_sid == "hub" || ty == "CFG" || ty == "CMD" {
                             dropped_security_frames += 1;
                             if last_drop_warn.elapsed() >= Duration::from_secs(2) {
@@ -2228,11 +2382,11 @@ fn main() {
                                 );
                                 last_drop_warn = Instant::now();
                             }
-                            continue;
+                            skip_frame = true;
                         }
 
                         // F-02 Security: On data topics, only SNAP (targeted repair) may have topic != SID
-                        if !env_sid.is_empty() && topic_str != env_sid && ty != "SNAP" {
+                        if !skip_frame && !env_sid.is_empty() && topic_str != env_sid && ty != "SNAP" {
                             dropped_security_frames += 1;
                             if last_drop_warn.elapsed() >= Duration::from_secs(2) {
                                 eprintln!(
@@ -2241,73 +2395,69 @@ fn main() {
                                 );
                                 last_drop_warn = Instant::now();
                             }
-                            continue;
+                            skip_frame = true;
                         }
 
-                        let fwd_res = sock.send(topic, zmq::SNDMORE).and_then(|_| sock.send(payload, 0));
-                        if let Err(e) = fwd_res {
-                            eprintln!(
-                                "[hub] FATAL forward failed mid-message ({}): the socket is \
-                                 left inside a multipart message - shutting down rather \
-                                 than forwarding a torn frame",
-                                e
-                            );
-                            EXIT.store(true, Ordering::SeqCst);
-                            continue;
-                        }
+                        if !skip_frame {
+                            let fwd_res = sock.send(topic, zmq::SNDMORE).and_then(|_| sock.send(payload, 0));
+                            if let Err(e) = fwd_res {
+                                eprintln!(
+                                    "[hub] FATAL forward failed mid-message ({}): the socket is \
+                                     left inside a multipart message - shutting down rather \
+                                     than forwarding a torn frame",
+                                    e
+                                );
+                                EXIT.store(true, Ordering::SeqCst);
+                            } else {
+                                st.note_forward(topic_str, &ty);
 
-                        st.note_forward(topic_str, &ty);
+                                //--- M3 POSITION VIEW - read-only, and deliberately
+                                //--- AFTER the forward above.
+                                if ty == "SNAP" {
+                                    let sid = envelope_hdr(&payload, "SID");
+                                    let snap_payload = envelope_payload(&payload);
+                                    let new_receipt = crate::positions::extract_receipt(snap_payload);
+                                    let pos_now = Instant::now();
 
-                        //--- M3 POSITION VIEW - read-only, and deliberately
-                        //--- AFTER the forward above.
-                        //---
-                        //--- Keyed by the envelope's SID, never by the topic:
-                        //--- a targeted repair is published on the RECEIVER's
-                        //--- nid, and keying by topic would file that receiver
-                        //--- as a sender holding somebody else's positions.
-                        if ty == "SNAP" {
-                            let sid = envelope_hdr(&payload, "SID");
-                            let snap_payload = envelope_payload(&payload);
-                            let new_receipt = crate::positions::extract_receipt(snap_payload);
-                            let pos_now = Instant::now();
+                                    // Fast-path zero-lock check in local router thread state:
+                                    let should_dispatch = match last_known_receipt.get(&sid) {
+                                        Some(prev) => prev != &new_receipt || new_receipt.is_empty(),
+                                        None => true,
+                                    };
 
-                            // Fast-path zero-lock check in local router thread state:
-                            let should_dispatch = match last_known_receipt.get(&sid) {
-                                Some(prev) => prev != &new_receipt || new_receipt.is_empty(),
-                                None => true,
-                            };
-
-                            if should_dispatch {
-                                match snap_tx.try_send((sid.clone(), snap_payload.to_vec(), pos_now)) {
-                                    Ok(_) => {
-                                        last_known_receipt.insert(sid.clone(), new_receipt);
-                                    }
-                                    Err(_) => {
-                                        // F-07 & NM-12: Queue is full: do NOT advance last_known_receipt, with 2s warn rate limiting
-                                        if last_snapq_warn.elapsed() >= Duration::from_secs(2) {
-                                            last_snapq_warn = Instant::now();
-                                            eprintln!("[hub] WARN snap_tx queue full; snapshot parse deferred for {}", sid);
+                                    if should_dispatch {
+                                        match snap_tx.try_send((sid.clone(), snap_payload.to_vec(), pos_now)) {
+                                            Ok(_) => {
+                                                last_known_receipt.insert(sid.clone(), new_receipt);
+                                            }
+                                            Err(_) => {
+                                                // F-07 & NM-12: Queue is full: do NOT advance last_known_receipt, with 2s warn rate limiting
+                                                if last_snapq_warn.elapsed() >= Duration::from_secs(2) {
+                                                    last_snapq_warn = Instant::now();
+                                                    eprintln!("[hub] WARN snap_tx queue full; snapshot parse deferred for {}", sid);
+                                                }
+                                            }
                                         }
+                                    } else {
+                                        // Touch timestamp in positions without blocking for full parse
+                                        let mut s = shared.lock_or_recover();
+                                        s.pos.touch(&sid, pos_now);
                                     }
                                 }
-                            } else {
-                                // Touch timestamp in positions without blocking for full parse
-                                let mut s = shared.lock_or_recover();
-                                s.pos.touch(&sid, pos_now);
-                            }
-                        }
 
-                        //--- events are rare and worth seeing by default; SNAP
-                        //--- and HBT fire continuously and are what the stats
-                        //--- line is for
-                        if args.verbose || ty == "OPEN" || ty == "CLOSE" {
-                            let ts = String::from_utf8_lossy(topic);
-                            println!(
-                                "[hub] fwd   {:<14} T={:<5} {}",
-                                ts,
-                                ty,
-                                envelope_kv(&payload, "SYM")
-                            );
+                                //--- events are rare and worth seeing by default; SNAP
+                                //--- and HBT fire continuously and are what the stats
+                                //--- line is for
+                                if args.verbose || ty == "OPEN" || ty == "CLOSE" {
+                                    let ts = String::from_utf8_lossy(topic);
+                                    println!(
+                                        "[hub] fwd   {:<14} T={:<5} {}",
+                                        ts,
+                                        ty,
+                                        envelope_kv(&payload, "SYM")
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -2567,8 +2717,9 @@ fn main() {
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
         if last_cmd_due.elapsed() >= Duration::from_millis(500) {
             last_cmd_due = Instant::now();
-            for c in cmds.due_gated(Instant::now(), args.writes) {
-                if !args.writes && !commands::is_read_only_op(&c.op) {
+            let effective_writes = shared.lock_or_recover().writes;
+            for c in cmds.due_gated(Instant::now(), effective_writes) {
+                if !effective_writes && !commands::is_read_only_op(&c.op) {
                     continue;
                 }
                 if c.state == commands::STATE_UNKNOWN {

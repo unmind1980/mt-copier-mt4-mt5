@@ -42,6 +42,7 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierTransport.mqh>
 #include <Copier/CopierCurveKey.mqh>
 #include <Copier/CopierPump.mqh>
+#include <Copier/CopierCluster.mqh>
 
 CopierEventPump g_pump;
 
@@ -315,10 +316,8 @@ double  g_lotParam[CP_MAX_SENDERS];
 //--- threw away the entire event backlog and converged from the snapshot
 //--- alone. That is why a stalled receiver came back and opened eight
 //--- positions at once instead of following them as they happened.
-//--- [0] = events stream, [1] = snapshot stream.
-#define CP_STREAM_EVENTS 0
-#define CP_STREAM_SNAP   1
-long    g_lastSeq[CP_MAX_SENDERS][2];
+//--- [0] = events stream, [1] = snapshot stream, [2] = heartbeat stream.
+long    g_lastSeq[CP_MAX_SENDERS][CP_STREAM_COUNT];
 //--- How far the sender's server clock is ahead of ours, in seconds.
 //---
 //--- The sender reports its own broker's server time, and two brokers are
@@ -688,6 +687,8 @@ long            g_nid=0;
 //--- connect agree on what was actually dialled, and a scheme-less endpoint
 //--- never reaches the socket - where it would fail silently.
 string          g_hubEp="";
+string          g_connectedEps[CP_MAX_CLUSTER_HUBS];
+int             g_connectedEpCount=0;
 //--- When central mode came up. Used ONLY for the "subscribed but nothing has
 //--- arrived" warning, which is the one failure of this topology that is
 //--- otherwise completely silent.
@@ -1057,6 +1058,7 @@ bool LoadConfigFromInputs()
    //--- on stale desired positions from a previous sender configuration.
    g_lastSeq[0][CP_STREAM_EVENTS]=-1;
    g_lastSeq[0][CP_STREAM_SNAP]=-1;
+   g_lastSeq[0][CP_STREAM_HBT]=-1;
    g_ssidSeen[0]="";
    g_lastMsgMs[0]=0;
    g_firstMsgMs[0]=0;
@@ -1590,7 +1592,31 @@ bool LoadConfigForHub()
    InvalidateIniHash();
    g_hubOn=true;
    g_nid=CopierNid(CopierAccountLogin());
-   g_hubEp=CopierNormalizeEndpoint(HubEndpoint);   // bare IP:port gains tcp://
+   string eps[CP_MAX_CLUSTER_HUBS];
+   int nEp=CopierParseEndpoints(HubEndpoint,eps,CP_MAX_CLUSTER_HUBS);
+   if(nEp==1)
+     {
+      CopierClusterState cs;
+      if(CopierClusterCache::Load(cs))
+        {
+         string cachedTarget="";
+         if(eps[0]==cs.primary && StringLen(cs.standby)>0) cachedTarget=cs.standby;
+         else if(eps[0]==cs.standby && StringLen(cs.primary)>0) cachedTarget=cs.primary;
+         if(StringLen(cachedTarget)>0 && cachedTarget!=eps[0])
+           {
+            eps[1]=cachedTarget;
+            nEp=2;
+            g_log.Info("central channel: augmented dual endpoints from "+CP_CLUSTER_STATE_FILE+" -> added "+cachedTarget);
+           }
+        }
+     }
+   g_connectedEpCount=nEp;
+   g_hubEp="";
+   for(int k=0;k<nEp;k++)
+     {
+      g_connectedEps[k]=eps[k];
+      g_hubEp+=(k>0?";":"")+eps[k];
+     }
 
    CopierIni ini;
    if(!ini.Load(CP_INI_PATH))
@@ -1762,6 +1788,7 @@ bool LoadConfigForHub()
       //--- messages from a sender it has only just been told about.
       g_lastSeq[i][CP_STREAM_EVENTS]=-1;
       g_lastSeq[i][CP_STREAM_SNAP]=-1;
+      g_lastSeq[i][CP_STREAM_HBT]=-1;
       g_ssidSeen[i]="";
       g_lastMsgMs[i]=0;
       g_firstMsgMs[i]=0;
@@ -5653,6 +5680,44 @@ int ResubscribeSenders(const string &before[],const int beforeN)
    return added;
   }
 
+void HandleTopology(const CopierEnv &e)
+  {
+   string prim="", sec="", epStr="", actStr="";
+   CopierKvGet(e.payload,"PRIMARY",prim);
+   CopierKvGet(e.payload,"STANDBY",sec);
+   CopierKvGet(e.payload,"EPOCH",epStr);
+   CopierKvGet(e.payload,"ACTIVE",actStr);
+
+   if(StringLen(prim)==0 && StringLen(sec)==0) return;
+   if(StringLen(prim)>0) prim=CopierNormalizeEndpoint(prim);
+   if(StringLen(sec)>0)  sec=CopierNormalizeEndpoint(sec);
+   long epoch=CopierParseLong(epStr);
+
+   // Check if standby needs to be dynamically connected
+   if(StringLen(sec)>0 && sec!=prim)
+     {
+      bool already=false;
+      for(int k=0;k<g_connectedEpCount;k++)
+        {
+         if(g_connectedEps[k]==sec) { already=true; break; }
+        }
+      if(!already && g_connectedEpCount<CP_MAX_CLUSTER_HUBS)
+        {
+         if(g_tp.ConnectExtraHub(sec))
+           {
+            g_connectedEps[g_connectedEpCount++]=sec;
+            g_hubEp="";
+            for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
+            g_announceCount=0; // Reset announcement burst to register on new Hub across handshake!
+            g_log.Info("central channel: dynamically connected to standby hub at "+sec+" via TOPOLOGY (re-registration armed)");
+           }
+        }
+     }
+
+   // Persist topology cache to disk
+   CopierClusterCache::Save(prim,sec,epoch);
+  }
+
 void HandleCfg(const CopierEnv &e)
   {
    string id="",revs="",iniEsc="";
@@ -6233,6 +6298,8 @@ void HubAnnounce(const bool isReg)
    //--- entirely - unknown payload fields are skipped by design.
    e.payload+=CP_SEP_KV+"PAUSED="+(g_cmdPaused?"1":"0");
    long rtt=g_peers.RttFor(g_hubPeerName);
+   if(rtt<0) rtt=g_peers.RttFor("hub:primary");
+   if(rtt<0) rtt=g_peers.RttFor("hub:standby");
    if(rtt>=0) e.payload+=CP_SEP_KV+"PING="+(string)rtt;
    //--- The WHOLE USED TO RIDE HERE. Every REG answered the hub's 60-second
    //--- sweep with the entire escaped config - ~110 KB per receiver per minute
@@ -6295,6 +6362,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
       g_ssidSeen[si]=e.ssid;
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
       g_lastSeq[si][CP_STREAM_SNAP]=-1;
+      g_lastSeq[si][CP_STREAM_HBT]=-1;
       g_ready[si]=false;
       int prevDesired=g_desiredCount[si];
       g_desiredCount[si]=0;
@@ -6319,7 +6387,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    return true;
   }
 
-void RouteMessage(const string topic,const CopierEnv &e,const int stream)
+bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
   {
    //--- F-01: Control frames claiming to be from "hub" must arrive strictly on control channels (@all, @nid, @acc)
    if(e.sid=="hub")
@@ -6328,7 +6396,7 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       if(StringLen(topic)==0 || StringSubstr(topic,0,1)!="@")
         {
          g_log.Warn("SECURITY F-01: frame claiming SID=hub received on non-control topic '"+topic+"' - DISCARDED");
-         return;
+         return false;
         }
       if(e.type==CP_T_WHO)
         {
@@ -6351,12 +6419,13 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
               }
            }
         }
+      else if(e.type==CP_T_TOPOLOGY) HandleTopology(e);
       else if(e.type==CP_T_CFG) HandleCfg(e);
       else if(e.type==CP_T_CMD) HandleCmd(e);
       else if(g_once.ShouldEmit("hubctl|"+e.type))
          g_log.Info("central channel: hub sent "+e.type
                     +" (no receiver action for it)");
-      return;
+      return false;
      }
 
    //--- F-02 & N49-14: Targeted repair topic (<myNid>) is strictly for SNAP frames from other senders.
@@ -6367,12 +6436,12 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       if(e.type!=CP_T_SNAP)
         {
          g_log.Warn("SECURITY F-02: non-SNAP type '"+e.type+"' from SID "+e.sid+" on targeted repair topic '"+topic+"' - DISCARDED");
-         return;
+         return false;
         }
      }
 
    int si=SenderIndexById(e.sid);
-   if(si<0) return;                       // not one of ours
+   if(si<0) return false;                       // not one of ours
 
    g_lastMsgMs[si]=CopierNowMs();
    if(g_firstMsgMs[si]==0) g_firstMsgMs[si]=g_lastMsgMs[si];
@@ -6403,7 +6472,7 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       //--- The sender's PING itself is not wasted - it is broadcast for the
       //--- DIRECT receivers, which do answer, and it happens to be forwarded by
       //--- the hub to central ones as ordinary data.
-      if(g_hubOn) return;
+      if(g_hubOn) return false;
 
       string pms="",pfrom="";
       CopierKvGet(e.payload,"MS",pms);
@@ -6413,7 +6482,7 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
       CopierSendStatus(CP_T_PONG,
                        CopierPayloadPong(CopierParseLong(pms),
                                          (string)CopierAccountLogin(),pfrom));
-      return;
+      return false;
      }
    if(e.type==CP_T_PONG)
      {
@@ -6438,20 +6507,21 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
             g_log.Info("link to "+pfrom+" measured: "
                        +(string)g_peers.RttFor(pfrom)+" ms round trip");
         }
-      return;
+      return false;
      }
 
-   if(!AcceptSeq(si,e,stream,topic))
+   int effectiveStream=(e.type==CP_T_HBT)?CP_STREAM_HBT:stream;
+   if(!AcceptSeq(si,e,effectiveStream,topic))
      {
       g_dropped[si]++;
-      return;
+      return false;
      }
 
    // H-02: Never accept CFG or CMD from data topics or non-hub senders (prevents cross-tenant closeall injection)
    if(e.type==CP_T_CFG || e.type==CP_T_CMD)
      {
       g_log.Warn("SECURITY: rejected "+e.type+" frame from data stream / sender "+g_sid[si]+"; control frames only accepted from @hub");
-      return;
+      return false;
      }
    if(e.type==CP_T_SNAP)       HandleSnapshot(si,e);
    else if(e.type==CP_T_OPEN)  HandleOpenEvent(si,e);
@@ -6459,6 +6529,7 @@ void RouteMessage(const string topic,const CopierEnv &e,const int stream)
    else if(e.type==CP_T_MODIFY) HandleModifyEvent(si,e);
    else if(e.type==CP_T_HBT)   HandleHeartbeat(si,e);
    else                        g_log.Verbose("ignoring type "+e.type);
+   return true;
   }
 
 void HandleMessage(const string topic,const string msg,const int stream)
@@ -6948,7 +7019,17 @@ void CheckPeersPing(const long now)
       he.type=CP_T_PING;
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
-      g_peers.ProbeSent(g_hubPeerName,now);
+      if(g_connectedEpCount>1)
+        {
+         g_peers.ProbeSent("hub:primary",now);
+         g_peers.ProbeSent("hub:standby",now);
+         g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+        }
+      else
+        {
+         g_peers.ProbeSent(g_hubPeerName,now);
+         g_peers.ProbeSent("hub:primary",now);
+        }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
   }
@@ -7057,7 +7138,14 @@ void UpdatePanel()
    //--- +1 for the optional RISK row: it is only written when a switch is
    //--- tripped, and leaving it out of the count meant the spacer below it
    //--- vanished exactly when the panel had something important to say.
-   int np=g_peers.Count();
+   int np=0;
+   for(int i=0;i<CP_MAX_PEERS;i++)
+     {
+      string pnm=g_peers.NameAt(i);
+      if(StringLen(pnm)==0) continue;
+      if(pnm==g_hubPeerName && g_connectedEpCount>1) continue;
+      np++;
+     }
    //--- The orphan block only exists when ShowOrphanedList is on. Sizing the
    //--- panel for rows that will not be written would leave a gap at the
    //--- bottom of the background - the panel would look broken rather than
@@ -7152,8 +7240,29 @@ void UpdatePanel()
       bool down=(st==CP_PEER_DOWN);
       long rtt=g_peers.RttAt(i);
 
-      bool isHub=(nm==g_hubPeerName);
-      string line=isHub?("  HUB  "+g_hubEp+"   "):("  "+nm+"   ");
+      bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
+      // If connected to dual hubs, hide the standalone generic "hub" placeholder
+      if(nm==g_hubPeerName && g_connectedEpCount>1) continue;
+
+      string line="";
+      if(isHub)
+        {
+         string hubLabel="  HUB  ";
+         string epShown=g_hubEp;
+         if(nm=="hub:primary")
+           {
+            hubLabel="  HUB1 ";
+            if(g_connectedEpCount>0) epShown=g_connectedEps[0];
+           }
+         else if(nm=="hub:standby")
+           {
+            hubLabel="  HUB2 ";
+            if(g_connectedEpCount>1) epShown=g_connectedEps[1];
+           }
+         line=hubLabel+epShown+"   ";
+        }
+      else
+         line="  "+nm+"   ";
       if(st==CP_PEER_CONNECT)
          line+="connecting...";
       else if(down)
@@ -7252,23 +7361,73 @@ void OnTimer()
          s_isLatestSnap[i]=false;
         }
 
+      // HA-02: Conflate snapshots PER SENDER by selecting the snapshot with the MAXIMAL SEQ
+      // within the current session, immune to multi-hub arrival jitter (older Standby snapshot arriving after newer Primary snapshot).
       static string s_seenSnapSid[CP_MAX_SENDERS];
-      int seenCount=0;
-      for(int i=n-1;i>=0;i--)
+      static string s_bestSnapSsid[CP_MAX_SENDERS];
+      static long   s_bestSnapSeq[CP_MAX_SENDERS];
+      static int    s_bestSnapIdx[CP_MAX_SENDERS];
+      int snapSendersCount=0;
+
+      for(int i=0;i<n;i++)
         {
          if(s_errs[i]==CP_ERR_NONE && s_envs[i].type==CP_T_SNAP)
            {
-            bool seen=false;
-            for(int s=0;s<seenCount;s++)
+            int slot=-1;
+            for(int s=0;s<snapSendersCount;s++)
               {
-               if(s_seenSnapSid[s]==s_envs[i].sid) { seen=true; break; }
+               if(s_seenSnapSid[s]==s_envs[i].sid) { slot=s; break; }
               }
-            if(!seen)
+            if(slot<0)
               {
-               if(seenCount<CP_MAX_SENDERS) s_seenSnapSid[seenCount++]=s_envs[i].sid;
-               s_isLatestSnap[i]=true;
+               if(snapSendersCount<CP_MAX_SENDERS)
+                 {
+                  slot=snapSendersCount++;
+                  s_seenSnapSid[slot]=s_envs[i].sid;
+                  s_bestSnapSsid[slot]=s_envs[i].ssid;
+                  s_bestSnapSeq[slot]=s_envs[i].seq;
+                  s_bestSnapIdx[slot]=i;
+                 }
+              }
+            else
+              {
+               // M-01 fix: if current active session matches, prioritize active session
+               int si_match=-1;
+               for(int k=0;k<g_nSenders;k++) if(g_sid[k]==s_envs[i].sid) { si_match=k; break; }
+               string activeSsid=(si_match>=0 ? g_ssidSeen[si_match] : "");
+
+               if(s_envs[i].ssid==s_bestSnapSsid[slot])
+                 {
+                  if(s_envs[i].seq>s_bestSnapSeq[slot])
+                    {
+                     s_bestSnapSeq[slot]=s_envs[i].seq;
+                     s_bestSnapIdx[slot]=i;
+                    }
+                 }
+               else if(StringLen(activeSsid)>0 && s_envs[i].ssid==activeSsid)
+                 {
+                  // Incoming matches our active session; candidate does not -> keep active
+                  s_bestSnapSsid[slot]=s_envs[i].ssid;
+                  s_bestSnapSeq[slot]=s_envs[i].seq;
+                  s_bestSnapIdx[slot]=i;
+                 }
+               else if(StringLen(activeSsid)>0 && s_bestSnapSsid[slot]==activeSsid)
+                 {
+                  // Candidate already matches active session -> ignore foreign session
+                 }
+               else if(s_envs[i].seq>s_bestSnapSeq[slot])
+                 {
+                  s_bestSnapSsid[slot]=s_envs[i].ssid;
+                  s_bestSnapSeq[slot]=s_envs[i].seq;
+                  s_bestSnapIdx[slot]=i;
+                 }
               }
            }
+        }
+      for(int s=0;s<snapSendersCount;s++)
+        {
+         int bi=s_bestSnapIdx[s];
+         if(bi>=0 && bi<n) s_isLatestSnap[bi]=true;
         }
 
       bool hasFastAction=false;
@@ -7294,9 +7453,13 @@ void OnTimer()
            }
          if(s_envs[i].type==CP_T_OPEN || s_envs[i].type==CP_T_CLOSE || s_envs[i].type==CP_T_MODIFY)
            {
-            hasFastAction=true;
-            int fsi=SenderIndexById(s_envs[i].sid);
-            if(fsi>=0 && fsi<CP_MAX_SENDERS) fastSender[fsi]=true;
+            if(RouteMessage(g_drainTopics[i],s_envs[i],CP_STREAM_EVENTS))
+              {
+               hasFastAction=true;
+               int fsi=SenderIndexById(s_envs[i].sid);
+               if(fsi>=0 && fsi<CP_MAX_SENDERS) fastSender[fsi]=true;
+              }
+            continue;
            }
          RouteMessage(g_drainTopics[i],s_envs[i],CP_STREAM_EVENTS);
         }
@@ -7700,6 +7863,8 @@ void OnTimer()
                +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
 
             long rtt=g_peers.RttFor(g_hubPeerName);
+            if(rtt<0) rtt=g_peers.RttFor("hub:primary");
+            if(rtt<0) rtt=g_peers.RttFor("hub:standby");
             if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
 
             //--- Detailed position & waiting item lists are transmitted once a minute
@@ -7746,6 +7911,8 @@ void OnTimer()
             +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
 
          long rtt=g_peers.RttFor(g_hubPeerName);
+         if(rtt<0) rtt=g_peers.RttFor("hub:primary");
+         if(rtt<0) rtt=g_peers.RttFor("hub:standby");
          if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
 
          if(dueDetail)

@@ -101,6 +101,8 @@ int zmq_errno(void);
 #import
 int CopierZmqErrno() { return zmq_errno(); }
 
+#define CP_MAX_XSUB_SUBS 256
+
 class CopierTransport
   {
 private:
@@ -109,6 +111,8 @@ private:
    Socket           *m_pub;      // sender: XPUB - sends data, receives status
    Socket           *m_sub;      // receiver: XSUB - receives data, sends status
    int               m_errno;
+   string            m_subPrefixes[CP_MAX_XSUB_SUBS];
+   int               m_nSubPrefixes;
 
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
@@ -185,7 +189,7 @@ private:
 
 public:
                      CopierTransport():m_ctx(NULL),m_pub(NULL),m_sub(NULL),
-                     m_errno(0) {}
+                     m_errno(0),m_nSubPrefixes(0) {}
 
                     ~CopierTransport() { Close(); }
 
@@ -367,8 +371,10 @@ public:
       //--- silent ZMQ connect error - the operator sees "connected" nowhere and
       //--- "failed" nowhere either. Normalising here means every caller gets it,
       //--- rather than each EA remembering to.
-      string ep=CopierNormalizeEndpoint(endpoint);
-      if(StringLen(ep)==0) return false;
+      //--- Multi-Endpoint Support: if endpoint contains semicolon, parse all
+      string eps[CP_MAX_CLUSTER_HUBS];
+      int nEp=CopierParseEndpoints(endpoint,eps,CP_MAX_CLUSTER_HUBS);
+      if(nEp<=0) return false;
 
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
@@ -393,7 +399,30 @@ public:
            }
         }
       //--- deliberately NO \x01 here. See the note above.
-      m_sub.connect(ep);
+      //--- Connect all parsed cluster endpoints to the same XSUB socket
+      for(int k=0;k<nEp;k++)
+        {
+         m_sub.connect(eps[k]);
+        }
+      return true;
+     }
+
+   //--- Connect an additional Hub endpoint (e.g. Standby Hub discovered at runtime)
+   //--- to the existing XSUB socket, and replay all recorded subscriptions so the new pipe receives downlink.
+   bool              ConnectExtraHub(const string endpoint)
+     {
+      if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      string ep=CopierNormalizeEndpoint(endpoint);
+      if(StringLen(ep)==0) return false;
+      if(!m_sub.connect(ep)) return false;
+      // H-06: Replay all existing XSUB subscriptions over the newly connected pipe
+      for(int i=0;i<m_nSubPrefixes;i++)
+        {
+         if(StringLen(m_subPrefixes[i])>0)
+           {
+            m_sub.send("\x01"+m_subPrefixes[i],true);
+           }
+        }
       return true;
      }
 
@@ -403,12 +432,31 @@ public:
    bool              Subscribe(const string prefix)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      // Record subscription for replay on new pipes (H-06)
+      bool found=false;
+      for(int i=0;i<m_nSubPrefixes;i++)
+        {
+         if(m_subPrefixes[i]==prefix) { found=true; break; }
+        }
+      if(!found && m_nSubPrefixes<CP_MAX_XSUB_SUBS)
+        {
+         m_subPrefixes[m_nSubPrefixes++]=prefix;
+        }
       return m_sub.send("\x01"+prefix,true);
      }
 
    bool              Unsubscribe(const string prefix)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      for(int i=0;i<m_nSubPrefixes;i++)
+        {
+         if(m_subPrefixes[i]==prefix)
+           {
+            for(int j=i;j<m_nSubPrefixes-1;j++) m_subPrefixes[j]=m_subPrefixes[j+1];
+            m_nSubPrefixes--;
+            break;
+           }
+        }
       return m_sub.send("\x00"+prefix,true);
      }
 

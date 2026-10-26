@@ -340,6 +340,10 @@ impl NotificationStore {
         store
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn load(&mut self) -> io::Result<()> {
         if !self.path.exists() {
             return Ok(());

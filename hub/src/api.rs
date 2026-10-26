@@ -157,6 +157,7 @@ pub struct Shared {
     /// External notification channels (Telegram, WeCom, DingTalk, Webhook).
     pub notif_store: Arc<Mutex<NotificationStore>>,
     pub notif_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::alerts::Alert>>,
+    pub cluster: crate::cluster::ClusterManager,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -169,7 +170,10 @@ impl Shared {
         cmds: Arc<CommandStore>,
         writes: bool,
         notif_path: Option<&std::path::Path>,
+        cluster: crate::cluster::ClusterManager,
     ) -> Self {
+        let is_primary = cluster.is_primary();
+        let effective_writes = if !is_primary { false } else { writes };
         Shared {
             reg: Registry::new(),
             pos: Positions::new(),
@@ -179,7 +183,7 @@ impl Shared {
             audit,
             cfg,
             cmds,
-            writes,
+            writes: effective_writes,
             node_rev: std::collections::HashMap::new(),
             node_current_ini: std::collections::HashMap::new(),
             alerts: AlertEngine::new(),
@@ -189,6 +193,7 @@ impl Shared {
             auth_enabled: true,
             notif_store: Arc::new(Mutex::new(NotificationStore::new(notif_path))),
             notif_tx: None,
+            cluster,
         }
     }
 
@@ -566,6 +571,7 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
             //--- dashboard is exactly as safe as printing it in the log, and
             //--- saves the operator a trip to the console.
             "curve": curve_json(&s),
+            "cluster": cluster_json(&s),
             "counts": {
                 "senders": s.reg.count_by_role(Role::Sender),
                 "receivers": s.reg.count_by_role(Role::Receiver),
@@ -829,7 +835,7 @@ pub(crate) fn snapshot_text(st: &SharedState) -> String {
     // M-05 & R48-10 & N49-04: Extract state and clone data under lock;
     // construct all JSON ASTs completely outside the shared lock.
     let now = Instant::now();
-    let (uptime_secs, reg_nodes, pos_clone, mismatched, alerts_list, curve_val) = {
+    let (uptime_secs, reg_nodes, pos_clone, mismatched, alerts_list, curve_val, cluster_val) = {
         let s = st.lock_or_recover();
         (
             now.saturating_duration_since(s.started).as_secs(),
@@ -838,6 +844,7 @@ pub(crate) fn snapshot_text(st: &SharedState) -> String {
             s.pos.mismatched,
             s.alerts.recent_json(20),
             curve_json(&s),
+            cluster_json(&s),
         )
     };
     let nodes_list = nodes_json_list_from_nodes(&reg_nodes, &pos_clone, now);
@@ -849,8 +856,27 @@ pub(crate) fn snapshot_text(st: &SharedState) -> String {
         "mismatched": mismatched,
         "alerts": Value::Array(alerts_list),
         "curve": curve_val,
+        "cluster": cluster_val,
     });
     json!({ "t": "snapshot", "data": body }).to_string()
+}
+
+fn cluster_json(s: &Shared) -> Value {
+    let now = Instant::now();
+    json!({
+        "cluster_id": s.cluster.state.cluster_id,
+        "hub_id": s.cluster.state.hub_id,
+        "role": s.cluster.state.role,
+        "epoch": s.cluster.state.epoch,
+        "writes": s.writes,
+        "peer_url": s.cluster.peer_url,
+        "peer_online": s.cluster.peer_online,
+        "sync_status": s.cluster.sync_status,
+        "is_configured_primary": s.cluster.state.is_configured_primary,
+        "failback_locked": s.cluster.state.failback_locked,
+        "failback_stabilization_hours": s.cluster.state.failback_stabilization_hours,
+        "continuous_online_secs": s.cluster.continuous_online_start.map(|t| now.saturating_duration_since(t).as_secs_f64()).unwrap_or(0.0),
+    })
 }
 
 /// The CURVE state the dashboard shows: is the link encrypted, what is the
@@ -958,6 +984,18 @@ async fn require_session(
         || path == "/readyz"
     {
         return next.run(req).await;
+    }
+    //--- Cluster internal communication authentication (ADR-09):
+    //--- Authenticate via cluster_token in Authorization: Bearer <token> or X-Cluster-Token header.
+    if path.starts_with("/api/v1/cluster/") {
+        let cluster_token = st.lock_or_recover().cluster.cluster_token.clone();
+        let auth_hdr = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+        let x_hdr = req.headers().get("X-Cluster-Token").and_then(|v| v.to_str().ok());
+        let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h) == cluster_token).unwrap_or(false)
+            || x_hdr.map(|h| h == cluster_token).unwrap_or(false);
+        if token_matches {
+            return next.run(req).await;
+        }
     }
     //--- --users none: no login exists, so demanding one would make the HTTP
     //--- face unusable. Answer as an anonymous viewer instead - the role gate
@@ -1331,6 +1369,13 @@ async fn users_upsert(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
+    if !st.lock_or_recover().cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
     let role = match UserRole::parse(&b.role) {
         Some(r) => r,
         None => {
@@ -1430,6 +1475,13 @@ async fn users_delete(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
+    if !st.lock_or_recover().cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
     let removed = {
         let mut s = st.lock_or_recover();
         match s.users.remove(&id) {
@@ -1475,6 +1527,13 @@ async fn change_password(
     Json(b): Json<PasswordBody>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    if !st.lock_or_recover().cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
     if b.new.chars().count() < 8 {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -1622,6 +1681,21 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
             "/api/v1/notifications/:id",
             axum::routing::delete(notifications_delete),
         )
+        .route("/api/v1/cluster/status", get(cluster_status))
+        .route("/api/v1/cluster/sync", axum::routing::post(cluster_sync))
+        .route(
+            "/api/v1/cluster/handover-request",
+            axum::routing::post(cluster_handover_request),
+        )
+        .route("/api/v1/cluster/promote", axum::routing::post(cluster_promote))
+        .route(
+            "/api/v1/cluster/failback-lock",
+            axum::routing::post(cluster_failback_lock),
+        )
+        .route(
+            "/api/v1/cluster/failback-now",
+            axum::routing::post(cluster_failback_now),
+        )
         .layer(axum::extract::Extension(tx))
         .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))
         .with_state(st)
@@ -1690,6 +1764,9 @@ pub fn spawn(
                         }
                     }
                 });
+
+                // Spawn the HA Cluster replication & heartbeat worker
+                crate::cluster::spawn_cluster_worker(st.clone(), std::time::Duration::from_millis(1000));
 
                 let listener = match tokio::net::TcpListener::bind(&addr).await {
                     Ok(l) => l,
@@ -1833,13 +1910,22 @@ async fn put_node_config(
     //--- "who pushed this config", which is the first question anyone asks
     //--- after an incident - and M9 exists precisely so there IS a person.
     let actor = sess.user_id.clone();
-    let (writes, node_rev) = {
+    let (writes, is_primary, node_rev) = {
         let s = st.lock_or_recover();
         (
             s.writes,
+            s.cluster.is_primary(),
             s.node_rev.get(&id).copied().unwrap_or(0),
         )
     };
+
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
 
     //--- The gate. Off by default, and the refusal says why rather than just
     //--- 403-ing: an operator who set this up and forgot the flag should be
@@ -1962,7 +2048,17 @@ async fn rollback_node_config(
         )
             .into_response();
     }
-    let writes = st.lock_or_recover().writes;
+    let (writes, is_primary) = {
+        let s = st.lock_or_recover();
+        (s.writes, s.cluster.is_primary())
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
     if !writes {
         return (
             axum::http::StatusCode::FORBIDDEN,
@@ -2118,11 +2214,19 @@ async fn post_command(
     }
 
     let id = normalise_node(&id);
-    let (writes, known) = {
+    let (writes, is_primary, known) = {
         let s = st.lock_or_recover();
         let known = s.reg.nodes().iter().any(|n| n.key == id);
-        (s.writes, known)
+        (s.writes, s.cluster.is_primary(), known)
     };
+
+    if !is_read_only && !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
 
     //--- The gate. Off by default, and the refusal says why rather than just
     //--- 403-ing: an operator who set this up and forgot the flag should be
@@ -2219,7 +2323,17 @@ async fn commands_global(
     }
 
     //--- THE GATE, identical to the per-node endpoint's.
-    let writes = st.lock_or_recover().writes;
+    let (writes, is_primary) = {
+        let s = st.lock_or_recover();
+        (s.writes, s.cluster.is_primary())
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
     if !writes {
         return (
             axum::http::StatusCode::FORBIDDEN,
@@ -2427,6 +2541,13 @@ async fn notifications_upsert(
     if sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
     }
+    if !st.lock_or_recover().cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
 
     let id = if b.id.trim().is_empty() {
         format!("chan_{}_{}", unix_secs(), &crate::users::random_token()[..6])
@@ -2505,6 +2626,13 @@ async fn notifications_delete(
     use axum::response::IntoResponse;
     if sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
+    }
+    if !st.lock_or_recover().cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
     }
 
     let removed = {
@@ -2632,6 +2760,351 @@ async fn notifications_test(
         Err(err) => (
             axum::http::StatusCode::BAD_GATEWAY,
             Json(json!({ "ok": false, "error": err })),
+        )
+            .into_response(),
+    }
+}
+
+// ============================================================================
+// HA Cluster Endpoints (Phase 2)
+// ============================================================================
+
+async fn cluster_status(
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let s = st.lock_or_recover();
+    let (_, cfg_lines) = s.cfg.read_lines_from(0).unwrap_or((Vec::new(), 0));
+    let (_, cmd_lines, max_cmd_seq) = s.cmds.read_lines_from(0).unwrap_or((Vec::new(), 0, 0));
+    let users_hash = crate::cluster::file_sha256(&s.users.path());
+    let notif_hash = crate::cluster::file_sha256(&s.notif_store.lock_or_recover().path());
+    let curve_clients_hash = crate::cluster::file_sha256(&s.cluster.curve_clients_path);
+
+    let resp = crate::cluster::ClusterStatusResponse {
+        ok: true,
+        cluster_id: s.cluster.state.cluster_id.clone(),
+        hub_id: s.cluster.state.hub_id.clone(),
+        role: s.cluster.state.role.clone(),
+        epoch: s.cluster.state.epoch,
+        writes: s.writes,
+        cfg_lines,
+        cmd_lines,
+        max_cmd_seq,
+        users_hash,
+        notif_hash,
+        curve_clients_hash,
+        is_configured_primary: s.cluster.state.is_configured_primary,
+        failback_locked: s.cluster.state.failback_locked,
+        ts: unix_secs(),
+    };
+    Json(resp).into_response()
+}
+
+async fn cluster_sync(
+    State(st): State<SharedState>,
+    Json(req): Json<crate::cluster::ClusterSyncRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let s = st.lock_or_recover();
+    if !s.cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Only Primary node can serve sync requests." })),
+        )
+            .into_response();
+    }
+
+    let (cfg_delta_lines, total_cfg_lines) = s.cfg.read_lines_from(req.from_cfg_line).unwrap_or((Vec::new(), 0));
+    let (cmd_delta_lines, total_cmd_lines, max_cmd_seq) = s.cmds.read_lines_from(req.from_cmd_line).unwrap_or((Vec::new(), 0, 0));
+
+    let local_users_hash = crate::cluster::file_sha256(&s.users.path());
+    let users_content = if req.users_hash != local_users_hash {
+        std::fs::read_to_string(&s.users.path()).ok()
+    } else {
+        None
+    };
+
+    let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
+    let local_notif_hash = crate::cluster::file_sha256(&notif_p);
+    let notif_content = if req.notif_hash != local_notif_hash {
+        std::fs::read_to_string(&notif_p).ok()
+    } else {
+        None
+    };
+
+    let local_curve_hash = crate::cluster::file_sha256(&s.cluster.curve_clients_path);
+    let curve_clients_content = if req.curve_clients_hash != local_curve_hash {
+        std::fs::read_to_string(&s.cluster.curve_clients_path).ok()
+    } else {
+        None
+    };
+
+    let resp = crate::cluster::ClusterSyncResponse {
+        ok: true,
+        epoch: s.cluster.state.epoch,
+        cfg_delta_lines,
+        cmd_delta_lines,
+        users_content,
+        notif_content,
+        curve_clients_content,
+        total_cfg_lines,
+        total_cmd_lines,
+        max_cmd_seq,
+    };
+    Json(resp).into_response()
+}
+
+async fn cluster_handover_request(
+    State(st): State<SharedState>,
+    Json(req): Json<crate::cluster::HandoverRequest>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut s = st.lock_or_recover();
+
+    if !s.cluster.is_primary() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": "Local node is not Primary. Handover rejected."
+            })),
+        )
+            .into_response();
+    }
+
+    if s.cluster.state.failback_locked {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": "Failback is locked by operator."
+            })),
+        )
+            .into_response();
+    }
+
+    // H-04 fix: validate from_epoch >= current local epoch
+    if req.from_epoch < s.cluster.epoch() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": format!("Handover rejected: from_epoch {} is behind local epoch {}", req.from_epoch, s.cluster.epoch())
+            })),
+        )
+            .into_response();
+    }
+
+    // Step down atomically on current Primary before agreeing:
+    // 1. Close write gate immediately
+    s.writes = false;
+    let new_epoch = s.cluster.epoch() + 1;
+    s.cluster.demote(new_epoch);
+    let audit_rec = Arc::clone(&s.audit);
+
+    audit_rec.record(
+        "cluster",
+        "",
+        "cluster.handover_stepped_down",
+        &format!("stepped down for {} (new_epoch={})", req.from_hub_id, new_epoch),
+        None,
+        None,
+        "ok",
+    );
+    println!(
+        "[hub] ADR-10 HANDOVER: Stepped down from Primary to Standby for host {} (new_epoch={}). Write gate closed.",
+        req.from_hub_id, new_epoch
+    );
+
+    Json(crate::cluster::HandoverResponse {
+        ok: true,
+        agreed: true,
+        new_epoch,
+        error: None,
+    })
+    .into_response()
+}
+
+async fn cluster_promote(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let mut s = st.lock_or_recover();
+    let new_epoch = s.cluster.promote(None);
+    s.writes = true;
+    let audit_rec = Arc::clone(&s.audit);
+    drop(s);
+
+    audit_rec.record(
+        "operator",
+        "",
+        "cluster.promote",
+        &format!("promoted to Primary with epoch {}", new_epoch),
+        None,
+        None,
+        "ok",
+    );
+    println!(
+        "[hub] OPERATOR PROMOTE: Hub promoted to Primary with epoch {}. Write gate opened.",
+        new_epoch
+    );
+
+    Json(json!({
+        "ok": true,
+        "role": "primary",
+        "epoch": new_epoch,
+        "writes": true
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct FailbackLockBody {
+    locked: bool,
+}
+
+async fn cluster_failback_lock(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+    Json(b): Json<FailbackLockBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let mut s = st.lock_or_recover();
+    s.cluster.set_failback_lock(b.locked);
+    let audit_rec = Arc::clone(&s.audit);
+    drop(s);
+
+    audit_rec.record(
+        "operator",
+        "",
+        "cluster.failback_lock",
+        &format!("set failback_locked={}", b.locked),
+        None,
+        None,
+        "ok",
+    );
+
+    Json(json!({ "ok": true, "failback_locked": b.locked })).into_response()
+}
+
+async fn cluster_failback_now(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (peer_url, token, epoch, hub_id) = {
+        let s = st.lock_or_recover();
+        if s.cluster.is_primary() {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "This node is already Primary." })),
+            )
+                .into_response();
+        }
+        if s.cluster.peer_url.is_empty() {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "No peer URL configured." })),
+            )
+                .into_response();
+        }
+        (
+            s.cluster.peer_url.clone(),
+            s.cluster.cluster_token.clone(),
+            s.cluster.epoch(),
+            s.cluster.hub_id().to_string(),
+        )
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let handover_url = format!("{}/api/v1/cluster/handover-request", peer_url);
+    let h_req = crate::cluster::HandoverRequest {
+        from_hub_id: hub_id,
+        from_epoch: epoch,
+        is_configured_primary: true,
+        reason: "manual_failback_now".to_string(),
+    };
+
+    let resp = client
+        .post(&handover_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&h_req)
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(h_data) = r.json::<crate::cluster::HandoverResponse>().await {
+                if h_data.agreed {
+                    let mut s = st.lock_or_recover();
+                    s.cluster.promote(Some(h_data.new_epoch));
+                    s.writes = true;
+                    let audit_rec = Arc::clone(&s.audit);
+                    drop(s);
+                    audit_rec.record(
+                        "operator",
+                        "",
+                        "cluster.manual_failback_success",
+                        &format!("recovered Master identity with epoch {}", h_data.new_epoch),
+                        None,
+                        None,
+                        "ok",
+                    );
+                    println!(
+                        "[hub] MANUAL FAILBACK SUCCESS: Master identity recovered with epoch {}!",
+                        h_data.new_epoch
+                    );
+                    return Json(json!({
+                        "ok": true,
+                        "role": "primary",
+                        "epoch": h_data.new_epoch,
+                        "writes": true
+                    }))
+                    .into_response();
+                } else {
+                    return (
+                        axum::http::StatusCode::CONFLICT,
+                        Json(json!({
+                            "error": h_data.error.unwrap_or_else(|| "Peer rejected handover".to_string())
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+            (
+                axum::http::StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": "Invalid response from peer" })),
+            )
+                .into_response()
+        }
+        Ok(r) => (
+            axum::http::StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("Peer returned status {}", r.status()) })),
+        )
+            .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("Cannot connect to peer: {}", e) })),
         )
             .into_response(),
     }

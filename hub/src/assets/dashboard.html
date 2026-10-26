@@ -734,6 +734,23 @@
   .pill.live{color:var(--ok);border-color:#bbf7d0;background:var(--ok-bg)}
   .pill.poll{color:var(--warn);border-color:#fde68a;background:var(--warn-bg)}
   .pill.reconn{color:var(--warn);border-color:#f0ad4e}
+  .pill.ok{color:var(--ok);border-color:#bbf7d0;background:var(--ok-bg)}
+  .pill.warn{color:var(--warn);border-color:#fde68a;background:var(--warn-bg)}
+  .pill.bad{color:var(--bad);border-color:#fecaca;background:var(--bad-bg)}
+
+  /* Cluster Control Bar & Standby Warning */
+  .cluster-bar{background:var(--surface-header);border-bottom:1px solid var(--line);padding:9px 20px;font-size:13px;transition:all .2s ease}
+  .cluster-bar.standby{background:var(--warn-bg);border-bottom:1px solid var(--warn-border);color:var(--ink)}
+  .cluster-bar.primary{background:var(--ok-bg);border-bottom:1px solid var(--ok-border);color:var(--ink)}
+  .cluster-bar.conflict{background:var(--bad-bg);border-bottom:1px solid var(--bad-border);color:var(--bad)}
+  .cluster-banner-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;max-width:1440px;margin:0 auto}
+  .cluster-status-info{display:flex;align-items:center;gap:10px;font-weight:600}
+  .cluster-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cluster-failback-text{font-size:12px;color:var(--dim);font-weight:400;margin-left:6px}
+  .cluster-lock-label{display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;user-select:none;color:var(--text-secondary);margin-left:6px}
+  .btn-warn{background:var(--warn);color:#fff;border:1px solid rgba(0,0,0,.15);border-radius:6px;font-weight:600;cursor:pointer}
+  .btn-warn:hover{opacity:.9}
+  .cluster-standby-mode .standby-disabled{opacity:0.55;cursor:not-allowed}
 
   main{padding:20px;display:flex;flex-direction:column;gap:16px;max-width:1440px;margin:0 auto}
 
@@ -1181,6 +1198,7 @@
       <h1>mt-copier hub</h1>
       <div class="header-pills">
         <span class="pill" id="mode">connecting</span>
+        <span class="pill" id="cluster_badge" style="display:none"></span>
         <span class="pill" id="who"></span>
         <span class="pill" id="counts">-</span>
         <span class="pill" id="up">-</span>
@@ -1216,6 +1234,27 @@
     <button type="button" class="btn-sm" id="header_logout_btn">Log Out</button>
   </div>
 </header>
+
+<!-- HA Cluster Control Bar & Standby Warning Banner -->
+<div id="cluster_bar" class="cluster-bar hidden">
+  <div class="cluster-banner-inner">
+    <div class="cluster-status-info">
+      <span id="cluster_icon">🛡️</span>
+      <span id="cluster_status_text">Cluster Status</span>
+      <span id="cluster_peer_badge" class="pill">Peer: -</span>
+      <span id="cluster_failback_info" class="cluster-failback-text"></span>
+    </div>
+    <div class="cluster-actions">
+      <button type="button" class="btn-sm btn-warn" id="btn_cluster_promote" onclick="onClusterPromote()">⚡ Promote to Primary</button>
+      <button type="button" class="btn-sm" id="btn_cluster_failback_now" onclick="onClusterFailbackNow()">⚡ 立即安全回切</button>
+      <label class="cluster-lock-label" title="锁定备机为 Master，禁止自动回切">
+        <input type="checkbox" id="chk_failback_lock" onchange="onToggleFailbackLock(this.checked)">
+        <span>锁定备机为 Master</span>
+      </label>
+      <a href="#" target="_blank" class="btn-sm" id="link_peer_console" style="display:none; text-decoration:none;">🔗 跳转对端控制台</a>
+    </div>
+  </div>
+</div>
 
 <div id="view_dash" class="view-panel active">
 <main>
@@ -2089,9 +2128,16 @@ function confirmDialog(opts){
 function api(path, opts){
   return fetch(path, opts).then(function(r){
     if(!r.ok){
-      var err = new Error(path + " -> " + r.status);
-      err.status = r.status;
-      throw err;
+      return r.json().catch(function(){ return {}; }).then(function(j){
+        var msg = (j && j.error) ? j.error : (path + " -> " + r.status);
+        if(r.status === 409){
+          alert("操作受限 (409 Conflict):\n" + msg + "\n\n备用节点处于只读状态，请在主节点执行写操作，或先手动提权。");
+        }
+        var err = new Error(msg);
+        err.status = r.status;
+        err.detail = j;
+        throw err;
+      });
     }
     return r.json();
   });
@@ -2985,6 +3031,7 @@ function render(){
   updateKpiCards(nodes, pos, d);
   drawTopology(nodes);
   renderCurveKey(d.curve || null);
+  renderCluster(d.cluster || null);
   renderCockpit(nodes, pos);
   updatePosNodeSelector();
   renderPosNodeDetail();
@@ -3001,6 +3048,163 @@ function renderCurveKey(cv){
   if(code.textContent !== cv.public_key){ code.textContent = cv.public_key; }
   var note = cv.learn ? " (learn mode: new keys are added to curve_clients.txt automatically)" : "";
   box.setAttribute("title", "CURVE public key - what every node's HubPublicKey input holds." + note);
+}
+
+// Phase 3: Cluster state, Standby banner, and Failback controls
+function renderCluster(cl){
+  var badge = $("cluster_badge");
+  var bar = $("cluster_bar");
+  if(!cl){
+    if(badge) badge.style.display = "none";
+    if(bar) bar.classList.add("hidden");
+    return;
+  }
+  var isStandby = (cl.role === "standby");
+  var isConflict = (cl.sync_status === "conflict");
+
+  // Update header pill
+  if(badge){
+    badge.style.display = "inline-flex";
+    if(isConflict){
+      badge.className = "pill bad";
+      badge.textContent = "CONFLICT (E" + cl.epoch + ")";
+    } else if(isStandby){
+      badge.className = "pill warn";
+      badge.textContent = "STANDBY (E" + cl.epoch + ")";
+    } else {
+      badge.className = "pill ok";
+      badge.textContent = "PRIMARY (E" + cl.epoch + ")";
+    }
+  }
+
+  // Update cluster banner bar
+  if(bar){
+    bar.classList.remove("hidden");
+    bar.className = "cluster-bar " + (isConflict ? "conflict" : (isStandby ? "standby" : "primary"));
+    
+    $("cluster_icon").textContent = isConflict ? "❌" : (isStandby ? "⚠️" : "🛡️");
+    var roleDesc = isConflict ? "双主冲突 (Split-Brain Conflict · 已锁定)" : (isStandby ? "备用热备节点 (Standby · 只读镜像)" : "主节点 (Primary · 读写激活)");
+    $("cluster_status_text").textContent = roleDesc + " [Epoch " + cl.epoch + "]";
+
+    // Peer status indicator
+    var pBadge = $("cluster_peer_badge");
+    if(pBadge){
+      if(!cl.peer_url){
+        pBadge.textContent = "Peer: None";
+        pBadge.className = "pill";
+      } else {
+        var pOnline = cl.peer_online;
+        pBadge.textContent = "Peer: " + (pOnline ? "Online (" + (cl.sync_status || "synced") + ")" : "Offline");
+        pBadge.className = "pill " + (pOnline ? "ok" : "bad");
+      }
+    }
+
+    // Failback countdown info
+    var fbEl = $("cluster_failback_info");
+    if(fbEl){
+      if(!cl.peer_url){
+        fbEl.textContent = "";
+      } else if(cl.failback_locked){
+        fbEl.textContent = "• [自动回切已锁定]";
+      } else if(cl.is_configured_primary && isStandby){
+        var requiredSecs = (cl.failback_stabilization_hours || 24.0) * 3600;
+        var curSecs = cl.continuous_online_secs || 0;
+        var remSecs = Math.max(0, requiredSecs - curSecs);
+        var curH = (curSecs / 3600).toFixed(1);
+        var totH = (cl.failback_stabilization_hours || 24.0).toFixed(1);
+        var remH = (remSecs / 3600).toFixed(1);
+        if(remSecs <= 0){
+          fbEl.textContent = "• [主机已达标 " + curH + "h/" + totH + "h · 正在自动回切...]";
+        } else {
+          fbEl.textContent = "• [主机连续在线 " + curH + "h/" + totH + "h · 约 " + remH + " 小时后自动回切为 Master]";
+        }
+      } else {
+        fbEl.textContent = "";
+      }
+    }
+
+    // Buttons
+    var btnPromote = $("btn_cluster_promote");
+    if(btnPromote){
+      btnPromote.style.display = isStandby ? "inline-block" : "none";
+    }
+
+    var btnFailbackNow = $("btn_cluster_failback_now");
+    if(btnFailbackNow){
+      btnFailbackNow.style.display = (isStandby && cl.peer_url && cl.peer_online) ? "inline-block" : "none";
+    }
+
+    var chkLock = $("chk_failback_lock");
+    if(chkLock){
+      chkLock.checked = !!cl.failback_locked;
+    }
+
+    var linkPeer = $("link_peer_console");
+    if(linkPeer){
+      if(cl.peer_url){
+        linkPeer.style.display = "inline-block";
+        linkPeer.href = cl.peer_url;
+      } else {
+        linkPeer.style.display = "none";
+      }
+    }
+  }
+
+  // Standby mode toggle
+  var disableWrites = isStandby || isConflict || !cl.writes;
+  document.body.classList.toggle("cluster-standby-mode", disableWrites);
+}
+
+function onClusterPromote(){
+  confirmDialog({
+    title: "⚡ 接管提升为主节点 (Promote to Primary)",
+    desc: "确定要将此备用节点提升为主节点 (Primary) 吗？<br><br><b>⚠️ 严格前置要求</b>：请先确认原主节点已下线或隔离，防止产生双主冲突！",
+    danger: true,
+    confirmText: "确认提权接管",
+    cancelText: "取消"
+  }).then(function(ok){
+    if(!ok) return;
+    api("/api/v1/cluster/promote", { method: "POST" })
+      .then(function(res){
+        alert("提权成功！当前节点已升级为 Primary (Epoch " + res.epoch + ")，写闸门已激活。");
+        refresh();
+      })
+      .catch(function(e){
+        alert("提权失败: " + e.message);
+      });
+  });
+}
+
+function onClusterFailbackNow(){
+  confirmDialog({
+    title: "⚡ 立即触发安全回切 (Force Safe Failback)",
+    desc: "确定要立即向当前主节点发起安全交接握手，夺回 Master 身份吗？<br><br><b>交接保障</b>：当前主节点将先关闭写闸并降级，本机再接管为 Master，全过程零双写窗口。",
+    danger: false,
+    confirmText: "立即安全回切",
+    cancelText: "取消"
+  }).then(function(ok){
+    if(!ok) return;
+    api("/api/v1/cluster/failback-now", { method: "POST" })
+      .then(function(res){
+        alert("回切成功！当前节点已夺回 Master 身份 (Epoch " + res.epoch + ")，写闸门已激活。");
+        refresh();
+      })
+      .catch(function(e){
+        alert("回切失败: " + e.message);
+      });
+  });
+}
+
+function onToggleFailbackLock(locked){
+  api("/api/v1/cluster/failback-lock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locked: locked })
+  }).then(function(){
+    refresh();
+  }).catch(function(e){
+    alert("设置回切锁定失败: " + e.message);
+  });
 }
 
 //--- M6: the alert bar. The hub's WebSocket (and the polling fallback) put
@@ -3669,7 +3873,8 @@ function refresh(){
       positions: p,
       hub_uptime_secs: (t.counts || {}).hub_uptime_secs || 0,
       alerts: t.alerts || [],
-      curve: t.curve || null
+      curve: t.curve || null,
+      cluster: t.cluster || null
     });
   }).catch(function(err){
     // R47-35: Only show login overlay on true 401 Unauthorized; transient network or 5xx errors keep polling
@@ -3710,7 +3915,8 @@ function startWS(){
       accept({ nodes:m.data.nodes || [], positions:m.data.positions || [],
                hub_uptime_secs:m.data.hub_uptime_secs || 0,
                alerts:m.data.alerts || [],
-               curve:m.data.curve || null });
+               curve:m.data.curve || null,
+               cluster:m.data.cluster || null });
     }
   };
   ws.onclose = function(){

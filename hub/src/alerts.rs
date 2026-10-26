@@ -534,6 +534,7 @@ mod tests {
             std::sync::Arc::new(crate::commands::CommandStore::disabled()),
             false,
             None,
+            crate::cluster::ClusterManager::disabled(),
         );
         let now = 1000u64;
 

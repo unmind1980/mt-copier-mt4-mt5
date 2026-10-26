@@ -116,6 +116,11 @@ pub const OPS: [&str; 6] = [
     "pause", "resume", "closeall", "reload", "reqpos", "reqcfg",
 ];
 
+impl Command {
+    pub fn is_terminal(&self) -> bool {
+        self.state == STATE_ACKED || self.state == STATE_REJECTED || self.state == STATE_UNKNOWN || self.state == STATE_SUPERSEDED
+    }
+}
 pub fn is_known_op(op: &str) -> bool {
     OPS.contains(&op)
 }
@@ -278,6 +283,87 @@ impl CommandStore {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Read lines starting from line index `from_line` for incremental replication.
+    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize, u64)> {
+        use std::io::BufRead;
+        if !self.enabled || !self.path.exists() {
+            return Ok((Vec::new(), 0, 0));
+        }
+        let file = std::fs::File::open(&self.path)?;
+        let reader = std::io::BufReader::new(file);
+        let mut lines = Vec::new();
+        let mut total = 0;
+        let mut max_seq = 0u64;
+        for line_res in reader.lines() {
+            let line = line_res?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+                if let Some(s) = v["seq"].as_u64() {
+                    max_seq = max_seq.max(s);
+                }
+            }
+            if total >= from_line {
+                lines.push(trimmed.to_string());
+            }
+            total += 1;
+        }
+        Ok((lines, total, max_seq))
+    }
+
+    /// Apply delta command lines received from peer Primary Hub.
+    pub fn apply_delta_lines(&self, raw_lines: &[String]) -> std::io::Result<usize> {
+        if !self.enabled || raw_lines.is_empty() {
+            return Ok(0);
+        }
+        let mut inner = self.inner.lock_or_recover();
+        let mut applied = 0;
+        for line in raw_lines {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                let id = v["id"].as_str().unwrap_or("").to_string();
+                let node = v["node"].as_str().unwrap_or("").to_string();
+                if id.is_empty() || node.is_empty() {
+                    continue;
+                }
+                let seq = v["seq"].as_u64().unwrap_or(0);
+                if seq > 0 {
+                    let cur_seq = inner.seq.get(&node).copied().unwrap_or(0);
+                    inner.seq.insert(node.clone(), cur_seq.max(seq));
+                }
+                let cmd = Command {
+                    id: id.clone(),
+                    node: node.clone(),
+                    kind: v["kind"].as_str().unwrap_or("").to_string(),
+                    rev: v["rev"].as_u64().unwrap_or(0),
+                    op: v["op"].as_str().unwrap_or("").to_string(),
+                    seq,
+                    args: v["args"].as_str().unwrap_or("").to_string(),
+                    state: v["state"].as_str().unwrap_or(STATE_PENDING).to_string(),
+                    ts: v["ts"].as_u64().unwrap_or(0),
+                    actor: v["actor"].as_str().unwrap_or("").to_string(),
+                    ip: v["ip"].as_str().unwrap_or("").to_string(),
+                    attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
+                    ack_at: v["ack_at"].as_u64().unwrap_or(0),
+                    err: v["err"].as_str().unwrap_or("").to_string(),
+                    next_at: Instant::now(),
+                };
+                inner.append(&cmd);
+                // H-08 fix: terminal command state must NEVER be overwritten by pending
+                let should_insert = match inner.commands.get(&id) {
+                    Some(existing) => !existing.is_terminal() || cmd.is_terminal(),
+                    None => true,
+                };
+                if should_insert {
+                    inner.commands.insert(id, cmd);
+                }
+                applied += 1;
+            }
+        }
+        Ok(applied)
     }
 
     /// (total commands known, pending, torn lines)

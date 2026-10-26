@@ -288,6 +288,15 @@ bool CopierSeenRingApplies(const int kind)
 #define CP_T_REG     "REG"    // node -> hub : here I am, this is who I am
 #define CP_T_HBT2    "HBT2"   // node -> hub : still here. Central channel only
 #define CP_T_WHO     "WHO"    // hub -> all  : re-register, my table is empty
+#define CP_T_TOPOLOGY "TOPOLOGY" // hub -> node : cluster topology with primary and standby endpoints
+
+//--- Sequence stream channels for receiver deduplication
+#define CP_STREAM_EVENTS 0
+#define CP_STREAM_SNAP   1
+#define CP_STREAM_HBT    2
+#define CP_STREAM_COUNT  3
+
+#define CP_MAX_CLUSTER_HUBS 2
 
 //--- The version a node reports in REG/HBT2.
 //---
@@ -654,6 +663,39 @@ string CopierNormalizeEndpoint(const string ep)
    if(StringLen(s)==0) return s;
    if(StringFind(s,"://")>=0) return s;
    return "tcp://"+s;
+  }
+
+int CopierParseEndpoints(const string inputStr,string &outEndpoints[],const int maxEndpoints)
+  {
+   int count=0;
+   string s=CopierTrim(inputStr);
+   if(StringLen(s)==0 || maxEndpoints<=0) return 0;
+
+   int semiPos=StringFind(s,";");
+   if(semiPos<0)
+     {
+      outEndpoints[0]=CopierNormalizeEndpoint(s);
+      return 1;
+     }
+
+   string parts[];
+   int n=StringSplit(s,';',parts);
+   for(int i=0;i<n;i++)
+     {
+      string p=CopierTrim(parts[i]);
+      if(StringLen(p)==0) continue;
+      string norm=CopierNormalizeEndpoint(p);
+      bool dup=false;
+      for(int k=0;k<count;k++)
+        {
+         if(outEndpoints[k]==norm) { dup=true; break; }
+        }
+      if(!dup && count<maxEndpoints)
+        {
+         outEndpoints[count++]=norm;
+        }
+     }
+   return count;
   }
 
 // Strip anything that could break the wire format out of a broker

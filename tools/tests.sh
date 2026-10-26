@@ -86,6 +86,9 @@ curve_keyfile_test.py
 hub_proto_test.py
 inputcheck.py
 zmq_topic_test.py
+ha_probe_test.py
+hub_cluster_test.py
+ha_chaos_test.py
 dash_check.py
 "
 

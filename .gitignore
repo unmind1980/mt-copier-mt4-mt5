@@ -46,6 +46,9 @@ curve_hub.keys.tmp
 curve_clients.txt
 config_revisions.jsonl
 commands.jsonl
+cluster_state.json
+cluster_state.json.tmp
+standby_data/
 
 # ---- WorkBuddy project runtime data ----
 .workbuddy-ai/

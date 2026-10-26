@@ -194,6 +194,69 @@ impl ConfigStore {
         v
     }
 
+    /// Read lines starting from line index `from_line` for incremental replication.
+    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize)> {
+        use std::io::BufRead;
+        if !self.enabled || !self.path.exists() {
+            return Ok((Vec::new(), 0));
+        }
+        let file = std::fs::File::open(&self.path)?;
+        let reader = std::io::BufReader::new(file);
+        let mut lines = Vec::new();
+        let mut total = 0;
+        for line_res in reader.lines() {
+            let line = line_res?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if total >= from_line {
+                lines.push(trimmed.to_string());
+            }
+            total += 1;
+        }
+        Ok((lines, total))
+    }
+
+    /// Apply delta lines received from peer Primary Hub.
+    pub fn apply_delta_lines(&self, raw_lines: &[String]) -> std::io::Result<usize> {
+        if !self.enabled || raw_lines.is_empty() {
+            return Ok(0);
+        }
+        let mut inner = self.inner.lock_or_recover();
+        let mut applied = 0;
+        for line in raw_lines {
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                let node = v["node"].as_str().unwrap_or("").to_string();
+                let rev = v["rev"].as_u64().unwrap_or(0);
+                if node.is_empty() || rev == 0 {
+                    continue;
+                }
+                let r = Revision {
+                    node: node.clone(),
+                    rev,
+                    ts: v["ts"].as_u64().unwrap_or(0),
+                    actor: v["actor"].as_str().unwrap_or("").to_string(),
+                    ip: v["ip"].as_str().unwrap_or("").to_string(),
+                    ini: v["ini"].as_str().unwrap_or("").to_string(),
+                    kind: v["kind"].as_str().unwrap_or("").to_string(),
+                    from_rev: v["from_rev"].as_u64().unwrap_or(0),
+                };
+                inner.append(&r)?;
+                // H-07 fix: only advance current if incoming rev is monotonically greater
+                let should_advance = match inner.current.get(&node) {
+                    Some(cur) => r.rev > cur.rev,
+                    None => true,
+                };
+                if should_advance {
+                    inner.current.insert(node, r);
+                }
+                applied += 1;
+            }
+        }
+        Ok(applied)
+    }
+
     /// Append a new revision. Returns it, or None if the store is disabled.
     ///
     /// `kind` is `push` or `adopt`; a rollback goes through `rollback` so the

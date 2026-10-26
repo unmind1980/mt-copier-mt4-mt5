@@ -289,6 +289,17 @@ impl UserStore {
         &self.users
     }
 
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Reload users from disk (used by HA cluster replication).
+    pub fn reload(&mut self) -> Result<(), String> {
+        let loaded = Self::load_at(&self.path)?;
+        self.users = loaded.users;
+        Ok(())
+    }
+
     pub fn get(&self, id: &str) -> Option<&User> {
         self.users.iter().find(|u| u.id == id)
     }

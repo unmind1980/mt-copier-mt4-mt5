@@ -35,6 +35,7 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierPanel.mqh>
 #include <Copier/CopierCurveKey.mqh>
 #include <Copier/CopierPump.mqh>
+#include <Copier/CopierCluster.mqh>
 
 CopierEventPump g_pump;
 
@@ -250,6 +251,8 @@ bool             g_hubOn=false;
 //--- panel and the connect all agree on what was actually dialled - and a
 //--- scheme-less endpoint never reaches the socket.
 string           g_hubEp="";
+string           g_connectedEps[CP_MAX_CLUSTER_HUBS];
+int              g_connectedEpCount=0;
 string           g_hubPeerName="hub";       // the name g_peers files the hub under
 //--- Shared with the receiver's PermittedSymbols: one implementation of the
 //--- "CSV, leading ! means exclude" rule, so the two ends cannot drift into
@@ -483,6 +486,8 @@ void HubAnnounce(const bool isReg)
                                 CopierTerminalName(),up);
 
    long rtt=g_peers.RttFor(g_hubPeerName);
+   if(rtt<0) rtt=g_peers.RttFor("hub:primary");
+   if(rtt<0) rtt=g_peers.RttFor("hub:standby");
    if(rtt>=0) e.payload+=CP_SEP_KV+"PING="+(string)rtt;
 
    //--- Dropped silently on purpose. Losing one heartbeat is nothing, and a
@@ -847,7 +852,31 @@ int OnInit()
    //--- block. The hub is the CURVE server on its side, so the roles are the
    //--- opposite of the direct channel's.
    g_nid=CopierNid(CopierAccountLogin());
-   g_hubEp=CopierNormalizeEndpoint(HubEndpoint);   // bare IP:port gains tcp://
+   string eps[CP_MAX_CLUSTER_HUBS];
+   int nEp=CopierParseEndpoints(HubEndpoint,eps,CP_MAX_CLUSTER_HUBS);
+   if(nEp==1)
+     {
+      CopierClusterState cs;
+      if(CopierClusterCache::Load(cs))
+        {
+         string cachedTarget="";
+         if(eps[0]==cs.primary && StringLen(cs.standby)>0) cachedTarget=cs.standby;
+         else if(eps[0]==cs.standby && StringLen(cs.primary)>0) cachedTarget=cs.primary;
+         if(StringLen(cachedTarget)>0 && cachedTarget!=eps[0])
+           {
+            eps[1]=cachedTarget;
+            nEp=2;
+            g_log.Info("central channel: augmented dual endpoints from "+CP_CLUSTER_STATE_FILE+" -> added "+cachedTarget);
+           }
+        }
+     }
+   g_connectedEpCount=nEp;
+   g_hubEp="";
+   for(int k=0;k<nEp;k++)
+     {
+      g_connectedEps[k]=eps[k];
+      g_hubEp+=(k>0?";":"")+eps[k];
+     }
    //--- Uptime starts here, not at the top of OnInit: everything before this is
    //--- file loading and validation, and reporting it as "up" would claim a
    //--- node is serving before it has bound anything.
@@ -1033,7 +1062,17 @@ void CheckPeers()
       he.type=CP_T_PING;
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
-      g_peers.ProbeSent(g_hubPeerName,now);
+      if(g_connectedEpCount>1)
+        {
+         g_peers.ProbeSent("hub:primary",now);
+         g_peers.ProbeSent("hub:standby",now);
+         g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+        }
+      else
+        {
+         g_peers.ProbeSent(g_hubPeerName,now);
+         g_peers.ProbeSent("hub:primary",now);
+        }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
@@ -1151,10 +1190,13 @@ void SnapTrack(const string who,const string reported,const bool isFromHub=false
 
    //--- cadence, measured from the receipts themselves. Smoothed by halving
    //--- so one delayed heartbeat does not redefine "slow" for the next window.
+   //--- HA-01: Suppress sub-250ms redundant receipt reflections from dual Hubs
+   //--- so identical dual receipts within 2-5ms do not compress g_snapIntMs down to 5ms
+   //--- and collapse the 2-second repair debounce window.
    if(g_snapRcptMs[idx]>0)
      {
       long iv=now-g_snapRcptMs[idx];
-      if(iv>0)
+      if(iv>=250)
         {
          if(g_snapIntMs[idx]<=0) g_snapIntMs[idx]=iv;
          else                    g_snapIntMs[idx]=(g_snapIntMs[idx]+iv)/2;
@@ -1360,7 +1402,14 @@ void UpdatePanel()
    double lots=0.0;
    g_prev.Summary(npos,nord,lots);
 
-   int np=g_peers.Count();
+   int np=0;
+   for(int i=0;i<CP_MAX_PEERS;i++)
+     {
+      string pnm=g_peers.NameAt(i);
+      if(StringLen(pnm)==0) continue;
+      if(pnm==g_hubPeerName && g_connectedEpCount>1) continue;
+      np++;
+     }
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
    //--- per receiver + a spacer. Keep this in step with the Row() calls below
    //--- or the last line silently disappears off the background.
@@ -1418,8 +1467,29 @@ void UpdatePanel()
       //--- the hub is filed in the same table because it IS a peer - but it
       //--- is not a receiver, and showing it as one would make the count above
       //--- read "2 receivers" when one of them is infrastructure.
-      bool isHub=(nm==g_hubPeerName);
-      string line=isHub?("  HUB  "+g_hubEp+"   "):("  "+nm+"   ");
+      bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
+      // If connected to dual hubs, hide the standalone generic "hub" placeholder
+      if(nm==g_hubPeerName && g_connectedEpCount>1) continue;
+
+      string line="";
+      if(isHub)
+        {
+         string hubLabel="  HUB  ";
+         string epShown=g_hubEp;
+         if(nm=="hub:primary")
+           {
+            hubLabel="  HUB1 ";
+            if(g_connectedEpCount>0) epShown=g_connectedEps[0];
+           }
+         else if(nm=="hub:standby")
+           {
+            hubLabel="  HUB2 ";
+            if(g_connectedEpCount>1) epShown=g_connectedEps[1];
+           }
+         line=hubLabel+epShown+"   ";
+        }
+      else
+         line="  "+nm+"   ";
       if(st==CP_PEER_CONNECT)
          line+="connecting...";
       else if(down)
@@ -1481,6 +1551,42 @@ void BroadcastSnapshot(const long now)
    g_snapHash=g_latestSnapHash;
    NoteRecentSnapHash(g_snapHash);
    Emit(CP_T_SNAP,g_snapPayload,true);
+  }
+
+void HandleTopology(const CopierEnv &e)
+  {
+   string prim="", sec="", epStr="", actStr="";
+   CopierKvGet(e.payload,"PRIMARY",prim);
+   CopierKvGet(e.payload,"STANDBY",sec);
+   CopierKvGet(e.payload,"EPOCH",epStr);
+   CopierKvGet(e.payload,"ACTIVE",actStr);
+
+   if(StringLen(prim)==0 && StringLen(sec)==0) return;
+   if(StringLen(prim)>0) prim=CopierNormalizeEndpoint(prim);
+   if(StringLen(sec)>0)  sec=CopierNormalizeEndpoint(sec);
+   long epoch=CopierParseLong(epStr);
+
+   if(StringLen(sec)>0 && sec!=prim)
+     {
+      bool already=false;
+      for(int k=0;k<g_connectedEpCount;k++)
+        {
+         if(g_connectedEps[k]==sec) { already=true; break; }
+        }
+      if(!already && g_connectedEpCount<CP_MAX_CLUSTER_HUBS)
+        {
+         if(g_tp.ConnectExtraHub(sec))
+           {
+            g_connectedEps[g_connectedEpCount++]=sec;
+            g_hubEp="";
+            for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
+            g_announceCount=0;
+            g_log.Info("central channel: dynamically connected to standby hub at "+sec+" via TOPOLOGY (re-registration armed)");
+           }
+        }
+     }
+
+   CopierClusterCache::Save(prim,sec,epoch);
   }
 
 void HandleSenderStat(const CopierEnv &se)
@@ -1601,6 +1707,11 @@ void OnTimer()
               {
                g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
               }
+            continue;
+           }
+         if(he.type==CP_T_TOPOLOGY)
+           {
+            HandleTopology(he);
             continue;
            }
          if(he.type==CP_T_WHO)
