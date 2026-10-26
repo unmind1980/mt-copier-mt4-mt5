@@ -477,6 +477,8 @@ public:
       if(!m_sub.send(payload,true))
         {
          m_errno=CopierZmqErrno();
+         // P1-8: Close hanging multipart message to prevent frame misalignment on subsequent sends
+         m_sub.send("",true);
          return false;
         }
       return true;

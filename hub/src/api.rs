@@ -962,6 +962,19 @@ fn cookie_token(cookies: &str) -> Option<String> {
     None
 }
 
+fn constant_time_eq_str(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 async fn require_session(
     axum::extract::State(st): axum::extract::State<SharedState>,
     mut req: axum::extract::Request,
@@ -987,14 +1000,23 @@ async fn require_session(
     }
     //--- Cluster internal communication authentication (ADR-09):
     //--- Authenticate via cluster_token in Authorization: Bearer <token> or X-Cluster-Token header.
-    if path.starts_with("/api/v1/cluster/") {
+    let is_cluster_path = path.starts_with("/api/v1/cluster/");
+    if is_cluster_path {
         let cluster_token = st.lock_or_recover().cluster.cluster_token.clone();
         let auth_hdr = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok());
         let x_hdr = req.headers().get("X-Cluster-Token").and_then(|v| v.to_str().ok());
-        let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h) == cluster_token).unwrap_or(false)
-            || x_hdr.map(|h| h == cluster_token).unwrap_or(false);
+        let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h)).map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false)
+            || x_hdr.map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false);
         if token_matches {
             return next.run(req).await;
+        }
+        // P0-2: If cluster token did not match and users auth is disabled, forbid anonymous access
+        if !st.lock_or_recover().auth_enabled {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                Json(json!({ "error": "forbidden: cluster endpoints require valid cluster token" })),
+            )
+                .into_response();
         }
     }
     //--- --users none: no login exists, so demanding one would make the HTTP
@@ -1024,6 +1046,14 @@ async fn require_session(
     if let Some(t) = token {
         let sess = st.lock_or_recover().users.session(&t, unix_secs());
         if let Some(sess) = sess {
+            // P0-2: Cluster endpoints accessed without cluster token require Admin role
+            if is_cluster_path && sess.role < UserRole::Admin {
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    Json(json!({ "error": "forbidden: cluster endpoints require Admin role or valid cluster token" })),
+                )
+                    .into_response();
+            }
             req.extensions_mut().insert(sess);
             //--- The raw token too, for the one handler that must tell the
             //--- caller's session apart from the caller's other sessions

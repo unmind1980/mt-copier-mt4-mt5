@@ -51,7 +51,8 @@ public:
 
    static bool Save(const string primary,const string standby,const long epoch)
      {
-      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      string tmpFile=CP_CLUSTER_STATE_FILE+".tmp";
+      int h=FileOpen(tmpFile,FILE_WRITE|FILE_TXT|FILE_ANSI);
       if(h==INVALID_HANDLE) return false;
 
       FileWriteString(h,"# mt-copier HA cluster topology cache\n");
@@ -61,7 +62,8 @@ public:
       FileWriteString(h,"updated="+(string)CopierServerTime()+"\n");
       FileFlush(h);
       FileClose(h);
-      return true;
+      FileDelete(CP_CLUSTER_STATE_FILE);
+      return FileMove(tmpFile,0,CP_CLUSTER_STATE_FILE,FILE_REWRITE);
      }
   };
 

@@ -716,7 +716,15 @@ fn leftover_rotations(path: &Path) -> Vec<PathBuf> {
             if let Some(name) = p.file_name().and_then(|f| f.to_str()) {
                 if name.starts_with(&prefix) {
                     if name.contains(".gz.tmp.") {
-                        let _ = fs::remove_file(&p);
+                        // P2-16: If uncompressed rotating file still exists, this tmp gz can be deleted.
+                        // If uncompressed rotating file was already deleted, do NOT discard the sole surviving copy.
+                        let uncompressed_name = name.split(".gz.tmp.").next().unwrap_or("");
+                        let uncompressed_path = dir.join(uncompressed_name);
+                        if uncompressed_path.exists() {
+                            let _ = fs::remove_file(&p);
+                        } else {
+                            out.push(p);
+                        }
                     } else {
                         out.push(p);
                     }

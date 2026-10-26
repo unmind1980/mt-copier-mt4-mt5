@@ -1066,7 +1066,14 @@ async fn send_webhook(
     if let Some(headers) = channel.config.get("headers").and_then(|v| v.as_object()) {
         for (k, v) in headers {
             if let Some(val_str) = v.as_str() {
-                req = req.header(k, val_str);
+                if let (Ok(hname), Ok(hval)) = (
+                    reqwest::header::HeaderName::try_from(k.as_str()),
+                    reqwest::header::HeaderValue::try_from(val_str),
+                ) {
+                    req = req.header(hname, hval);
+                } else {
+                    eprintln!("[notifications] WARN skipping malformed header: {}", k);
+                }
             }
         }
     }

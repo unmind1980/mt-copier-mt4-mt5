@@ -116,6 +116,16 @@ pub const OPS: [&str; 6] = [
     "pause", "resume", "closeall", "reload", "reqpos", "reqcfg",
 ];
 
+fn state_rank(st: &str) -> u8 {
+    match st {
+        STATE_ACKED => 4,
+        STATE_REJECTED => 3,
+        STATE_UNKNOWN => 2,
+        STATE_SUPERSEDED => 1,
+        _ => 0, // STATE_PENDING
+    }
+}
+
 impl Command {
     pub fn is_terminal(&self) -> bool {
         self.state == STATE_ACKED || self.state == STATE_REJECTED || self.state == STATE_UNKNOWN || self.state == STATE_SUPERSEDED
@@ -352,12 +362,18 @@ impl CommandStore {
                     next_at: Instant::now(),
                 };
                 inner.append(&cmd);
-                // H-08 fix: terminal command state must NEVER be overwritten by pending
+                // H-08 & P2-9 fix: command state cannot be demoted (state rank order)
                 let should_insert = match inner.commands.get(&id) {
-                    Some(existing) => !existing.is_terminal() || cmd.is_terminal(),
+                    Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
                     None => true,
                 };
                 if should_insert {
+                    // P1-3 & P1-4: Maintain in_flight collection synchronously
+                    if cmd.state == STATE_PENDING {
+                        inner.in_flight.insert(id.clone());
+                    } else if cmd.is_terminal() {
+                        inner.in_flight.remove(&id);
+                    }
                     inner.commands.insert(id, cmd);
                 }
                 applied += 1;

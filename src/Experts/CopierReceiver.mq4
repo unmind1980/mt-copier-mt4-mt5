@@ -2965,7 +2965,7 @@ void ExecuteQueue()
             if(g_once.ShouldEmit("unknownsym|"+a.sym))
                g_log.Warn("unknown symbol "+a.sym+", dropping "
                           +a.uid+" (reported at most once per 10 min)");
-            g_seen.Add(a.key);
+            // P2-23 fix: do not add to seen ring so transient symbol unreadiness does not permanently drop mirror for 10 min
             ShiftQueue();
             done++;
             continue;
@@ -5330,56 +5330,33 @@ int SenderIndexById(const string sid)
    return -1;
   }
 
+void LearnSenderClock(const int si,const long ts)
+  {
+   if(ts<=0) return;
+   long off=(long)CopierServerTime()-ts;
+   bool first=!g_senderClockKnown[si];
+   g_senderClockKnown[si]=true;
+   g_senderClockOffset[si]=off;
+   g_senderClockOffsetValid[si]=g_srvEverMoved;
+
+   if(!g_srvEverMoved)
+     {
+      if(MathAbs(off)>=300 && g_once.ShouldEmit("clockfrozen|"+g_sid[si]))
+         g_log.Info("sender "+g_sid[si]+" server clock reads "
+                    +CopierSecText(MathAbs(off))+" from ours, but OUR"
+                    +" clock is not advancing (market closed or no ticks) -"
+                    +" the gap is expected and is ignored until our clock"
+                    +" moves again");
+     }
+   else if(first)
+      g_log.Info("sender "+g_sid[si]+" server clock is "
+                 +CopierSecText(MathAbs(off))
+                 +((off>=0)?" behind":" ahead of")+" ours - its timestamps"
+                 +" are converted before being compared");
+  }
+
 void HandleSnapshot(const int si,const CopierEnv &e)
   {
-   //--- Learn the sender's clock offset. Taken here rather than on every
-   //--- message because this is the snapshot that survived conflation - the
-   //--- newest of its batch, so the one least delayed in the queue. A message
-   //--- that waited would make the sender look further behind than it is.
-   if(e.ts>0)
-     {
-      long off=(long)CopierServerTime()-(long)e.ts;
-      bool first=!g_senderClockKnown[si];
-      g_senderClockKnown[si]=true;
-      g_senderClockOffset[si]=off;
-      g_senderClockOffsetValid[si]=g_srvEverMoved;
-
-      //--- Two very different situations produce a large offset, and they
-      //--- must not be reported the same way:
-      //---
-      //---  a) OUR clock is frozen (market closed, no ticks) while theirs
-      //---     keeps running. The offset then grows without bound - the log
-      //---     showed "18119s ahead of ours" and climbing. That number reads
-      //---     like a fault but is simply the weekly close: TimeCurrent()
-      //---     stops dead, so every second the sender advances is charged
-      //---     to us as skew. It is expected, and SenderTimeToOurs() refuses
-      //---     to apply it until our clock moves again, so nothing is aged
-      //---     wrongly and no position is abandoned by the fill timeout.
-      //---
-      //---  b) Both clocks run but genuinely disagree (two brokers in
-      //---     different timezones). Then the offset is real and IS applied.
-      //---
-      //--- Rate-limited: (a) is true on every snapshot, so it is emitted
-      //--- once per sender per re-warn interval; (b) only on first sight.
-      //--- A 5-minute floor keeps a trivial startup gap from being reported
-      //--- at all - this message exists to explain a number that would
-      //--- otherwise look alarming, and a small one does not.
-      if(!g_srvEverMoved)
-        {
-         if(MathAbs(off)>=300 && g_once.ShouldEmit("clockfrozen|"+g_sid[si]))
-            g_log.Info("sender "+g_sid[si]+" server clock reads "
-                       +CopierSecText(MathAbs(off))+" from ours, but OUR"
-                       +" clock is not advancing (market closed or no ticks) -"
-                       +" the gap is expected and is ignored until our clock"
-                       +" moves again");
-        }
-      else if(first)
-         g_log.Info("sender "+g_sid[si]+" server clock is "
-                    +CopierSecText(MathAbs(off))
-                    +((off>=0)?" behind":" ahead of")+" ours - its timestamps"
-                    +" are converted before being compared");
-     }
-
    int n=CopierDecodeSnapshot(e.payload,g_scratch,CP_MAX_POSITIONS);
 
    string cnt="";
@@ -5479,6 +5456,8 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //--- accepted: the streak only measures CONSECUTIVE failures
    g_snapRejectStreak[si]=0;
    g_lastSnapMs[si]=CopierNowMs();
+   // P2-25 fix: learn sender clock offset ONLY after payload integrity and records are fully validated
+   LearnSenderClock(si,e.ts);
 
    //--- Store this sender's receipt hash once validated.
    g_snapHash[si]=CopierSnapshotHash(e.payload);
@@ -5693,6 +5672,13 @@ void HandleTopology(const CopierEnv &e)
    if(StringLen(sec)>0)  sec=CopierNormalizeEndpoint(sec);
    long epoch=CopierParseLong(epStr);
 
+   CopierClusterState curCs;
+   bool hasCache=CopierClusterCache::Load(curCs);
+   if(hasCache && epoch>0 && epoch<curCs.epoch) return; // P2-24: Ignore stale topology frame with older epoch
+   if(StringLen(prim)==0 && hasCache) prim=curCs.primary;
+   if(StringLen(sec)==0 && hasCache)  sec=curCs.standby;
+   if(epoch==0 && hasCache)           epoch=curCs.epoch;
+
    // Check if standby needs to be dynamically connected
    if(StringLen(sec)>0 && sec!=prim)
      {
@@ -5714,8 +5700,11 @@ void HandleTopology(const CopierEnv &e)
         }
      }
 
-   // Persist topology cache to disk
-   CopierClusterCache::Save(prim,sec,epoch);
+   // Persist topology cache to disk only when changed
+   if(!hasCache || prim!=curCs.primary || sec!=curCs.standby || epoch!=curCs.epoch)
+     {
+      CopierClusterCache::Save(prim,sec,epoch);
+     }
   }
 
 void HandleCfg(const CopierEnv &e)
@@ -7027,8 +7016,8 @@ void CheckPeersPing(const long now)
         }
       else
         {
-         g_peers.ProbeSent(g_hubPeerName,now);
          g_peers.ProbeSent("hub:primary",now);
+         g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
@@ -7241,8 +7230,8 @@ void UpdatePanel()
       long rtt=g_peers.RttAt(i);
 
       bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
-      // If connected to dual hubs, hide the standalone generic "hub" placeholder
-      if(nm==g_hubPeerName && g_connectedEpCount>1) continue;
+      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
+      if(nm==g_hubPeerName) continue;
 
       string line="";
       if(isHub)
@@ -7251,7 +7240,7 @@ void UpdatePanel()
          string epShown=g_hubEp;
          if(nm=="hub:primary")
            {
-            hubLabel="  HUB1 ";
+            hubLabel=(g_connectedEpCount>1)?"  HUB1 ":"  HUB  ";
             if(g_connectedEpCount>0) epShown=g_connectedEps[0];
            }
          else if(nm=="hub:standby")
@@ -7468,6 +7457,13 @@ void OnTimer()
       //--- N49-08: Only converge senders that actually received trade events in this batch (avoids 100x amplification)
       if(hasFastAction)
         {
+         // P2-26 fix: reset wait held tallies and items before fast-track converge to prevent duplicate line accumulation
+         g_waitHeld=0;
+         g_waitLots=0.0;
+         g_mktHeld=0;
+         g_mktHeldLots=0.0;
+         ClearWaitItems();
+
          g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
          RefreshRisk();    // R47-06: Update account position risk counts before fast-track converge & execute
          for(int i=0;i<g_nSenders;i++)

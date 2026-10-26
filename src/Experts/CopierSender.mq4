@@ -1070,8 +1070,8 @@ void CheckPeers()
         }
       else
         {
-         g_peers.ProbeSent(g_hubPeerName,now);
          g_peers.ProbeSent("hub:primary",now);
+         g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
@@ -1468,8 +1468,8 @@ void UpdatePanel()
       //--- is not a receiver, and showing it as one would make the count above
       //--- read "2 receivers" when one of them is infrastructure.
       bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
-      // If connected to dual hubs, hide the standalone generic "hub" placeholder
-      if(nm==g_hubPeerName && g_connectedEpCount>1) continue;
+      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
+      if(nm==g_hubPeerName) continue;
 
       string line="";
       if(isHub)
@@ -1478,7 +1478,7 @@ void UpdatePanel()
          string epShown=g_hubEp;
          if(nm=="hub:primary")
            {
-            hubLabel="  HUB1 ";
+            hubLabel=(g_connectedEpCount>1)?"  HUB1 ":"  HUB  ";
             if(g_connectedEpCount>0) epShown=g_connectedEps[0];
            }
          else if(nm=="hub:standby")
@@ -1566,6 +1566,13 @@ void HandleTopology(const CopierEnv &e)
    if(StringLen(sec)>0)  sec=CopierNormalizeEndpoint(sec);
    long epoch=CopierParseLong(epStr);
 
+   CopierClusterState curCs;
+   bool hasCache=CopierClusterCache::Load(curCs);
+   if(hasCache && epoch>0 && epoch<curCs.epoch) return; // P2-24: Ignore stale topology frame with older epoch
+   if(StringLen(prim)==0 && hasCache) prim=curCs.primary;
+   if(StringLen(sec)==0 && hasCache)  sec=curCs.standby;
+   if(epoch==0 && hasCache)           epoch=curCs.epoch;
+
    if(StringLen(sec)>0 && sec!=prim)
      {
       bool already=false;
@@ -1586,7 +1593,10 @@ void HandleTopology(const CopierEnv &e)
         }
      }
 
-   CopierClusterCache::Save(prim,sec,epoch);
+   if(!hasCache || prim!=curCs.primary || sec!=curCs.standby || epoch!=curCs.epoch)
+     {
+      CopierClusterCache::Save(prim,sec,epoch);
+     }
   }
 
 void HandleSenderStat(const CopierEnv &se)

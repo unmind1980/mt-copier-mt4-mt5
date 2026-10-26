@@ -183,9 +183,9 @@ impl ClusterManager {
         }
 
         // Determine active cluster token (H-03 fix: never fall back to public hardcoded token)
-        let resolved_token = if !cluster_token.is_empty() {
+        let resolved_token = if !cluster_token.is_empty() && cluster_token != DEFAULT_CLUSTER_TOKEN {
             cluster_token.to_string()
-        } else if !state.cluster_token.is_empty() {
+        } else if !state.cluster_token.is_empty() && state.cluster_token != DEFAULT_CLUSTER_TOKEN {
             state.cluster_token.clone()
         } else {
             let gen = format!("ctok_{}_{}", unix_secs(), &crate::users::random_token()[..16]);
@@ -265,6 +265,7 @@ impl ClusterManager {
     pub fn demote(&mut self, new_epoch: u64) {
         self.state.epoch = new_epoch;
         self.state.role = "standby".to_string();
+        self.continuous_online_start = None;
         let _ = self.save();
     }
 
@@ -368,24 +369,49 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 }
             };
 
-            // Peer responded! Update peer liveness and continuous online clock
+            // Peer responded! Check peer identity and cluster id
+            let (my_hub_id, my_cluster_id) = {
+                let s = st.lock_or_recover();
+                (s.cluster.hub_id().to_string(), s.cluster.state.cluster_id.clone())
+            };
+            if remote_st.hub_id == my_hub_id {
+                let mut s = st.lock_or_recover();
+                s.cluster.peer_online = false;
+                s.cluster.last_sync_err = format!("peer_url {} points to self (hub_id {})", peer_url, my_hub_id);
+                continue;
+            }
+            if remote_st.cluster_id != my_cluster_id {
+                let mut s = st.lock_or_recover();
+                s.cluster.peer_online = false;
+                s.cluster.last_sync_err = format!("cluster_id mismatch: peer has {} vs local {}", remote_st.cluster_id, my_cluster_id);
+                continue;
+            }
+
             let now = Instant::now();
             {
                 let mut s = st.lock_or_recover();
                 s.cluster.peer_online = true;
                 s.cluster.last_peer_contact = Some(now);
-                if s.cluster.continuous_online_start.is_none() {
-                    s.cluster.continuous_online_start = Some(now);
-                }
                 s.cluster.peer_status = Some(remote_st.clone());
             }
 
-            // 2. Check split-brain conflict
+            // 2. Check split-brain conflict and resolve (H-10 & P1-5)
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
                 let mut s = st.lock_or_recover();
-                s.cluster.sync_status = "conflict".to_string();
-                s.cluster.last_sync_err = format!("Split-brain detected: both nodes are Primary with epoch {}", epoch);
-                eprintln!("[hub] CLUSTER CONFLICT: both nodes are Primary with epoch {}", epoch);
+                let should_demote = !s.cluster.state.is_configured_primary
+                    || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
+                if should_demote {
+                    let new_ep = epoch + 1;
+                    s.cluster.demote(new_ep);
+                    s.writes = false;
+                    s.cluster.sync_status = "conflict_demoted".to_string();
+                    let audit_rec = Arc::clone(&s.audit);
+                    audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
+                    println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby with epoch {}", new_ep);
+                } else {
+                    s.cluster.sync_status = "conflict_master".to_string();
+                    eprintln!("[hub] CLUSTER CONFLICT RESOLVED: Maintaining Primary role against peer {}", remote_st.hub_id);
+                }
                 continue;
             }
 
@@ -418,7 +444,35 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.state.role.clone()
             };
 
+            // P1-2: Dual Standby recovery
+            if current_role == "standby" && remote_st.role == "standby" && is_cfg_primary {
+                let mut s = st.lock_or_recover();
+                let new_ep = s.cluster.promote(None);
+                s.writes = true;
+                let audit_rec = Arc::clone(&s.audit);
+                audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {}", new_ep), None, None, "ok");
+                println!("[hub] DUAL-STANDBY DETECTED: Configured primary automatically recovered Master with epoch {}", new_ep);
+            }
+
             if current_role == "standby" {
+                // P1-7: Adopt higher epoch from Primary even if no file diffs
+                if remote_st.role == "primary" && remote_st.epoch > epoch {
+                    let mut s = st.lock_or_recover();
+                    s.cluster.state.epoch = remote_st.epoch;
+                    let _ = s.cluster.save();
+                }
+
+                // P1-1: Only track continuous online duration for failback when Standby is healthy & synced with Primary
+                if remote_st.role == "primary" {
+                    let mut s = st.lock_or_recover();
+                    if s.cluster.continuous_online_start.is_none() {
+                        s.cluster.continuous_online_start = Some(now);
+                    }
+                } else {
+                    let mut s = st.lock_or_recover();
+                    s.cluster.continuous_online_start = None;
+                }
+
                 let (cfg_lines_count, cmd_lines_count, users_h, notif_h, curve_h) = {
                     let s = st.lock_or_recover();
                     let (_, cfg_tot) = s.cfg.read_lines_from(0).unwrap_or((Vec::new(), 0));
@@ -457,60 +511,73 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         .send()
                         .await;
 
-                    if let Ok(res) = sync_res {
-                        if let Ok(data) = res.json::<ClusterSyncResponse>().await {
-                            let mut s = st.lock_or_recover();
-                            // Apply delta configs
-                            if !data.cfg_delta_lines.is_empty() {
-                                let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
-                            }
-                            // Apply delta commands
-                            if !data.cmd_delta_lines.is_empty() {
-                                let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
-                            }
-                            // Apply full users content if updated
-                            if let Some(u_content) = data.users_content {
-                                let p = s.users.path().to_path_buf();
-                                let tmp = p.with_extension("json.tmp");
-                                if let Ok(mut f) = File::create(&tmp) {
-                                    let _ = f.write_all(u_content.as_bytes());
-                                    let _ = f.sync_all();
-                                    let _ = fs::rename(&tmp, &p);
-                                    let _ = s.users.reload();
+                    match sync_res {
+                        Ok(res) if res.status().is_success() => {
+                            if let Ok(data) = res.json::<ClusterSyncResponse>().await {
+                                let mut s = st.lock_or_recover();
+                                // Apply delta configs
+                                if !data.cfg_delta_lines.is_empty() {
+                                    let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
-                            }
-                            // Apply full notification channels if updated
-                            if let Some(n_content) = data.notif_content {
-                                let p = s.notif_store.lock_or_recover().path().to_path_buf();
-                                let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
-                                if let Ok(mut f) = File::create(&tmp) {
-                                    let _ = f.write_all(n_content.as_bytes());
-                                    let _ = f.sync_all();
-                                    let _ = fs::rename(&tmp, &p);
-                                    let _ = s.notif_store.lock_or_recover().load();
+                                // Apply delta commands
+                                if !data.cmd_delta_lines.is_empty() {
+                                    let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
                                 }
-                            }
-                            // Apply curve clients content if updated
-                            if let Some(c_content) = data.curve_clients_content {
-                                let p = s.cluster.curve_clients_path.clone();
-                                let mut existing = fs::read_to_string(&p).unwrap_or_default();
-                                for line in c_content.lines() {
-                                    let trimmed = line.trim();
-                                    if !trimmed.is_empty() && !existing.contains(trimmed) {
-                                        existing.push_str(trimmed);
-                                        existing.push('\n');
+                                // Apply full users content if updated
+                                if let Some(u_content) = data.users_content {
+                                    let p = s.users.path().to_path_buf();
+                                    let tmp = p.with_extension("json.tmp");
+                                    if let Ok(mut f) = File::create(&tmp) {
+                                        let _ = f.write_all(u_content.as_bytes());
+                                        let _ = f.sync_all();
+                                        let _ = fs::rename(&tmp, &p);
+                                        let _ = s.users.reload();
                                     }
                                 }
-                                let _ = fs::write(&p, existing);
-                            }
+                                // Apply full notification channels if updated
+                                if let Some(n_content) = data.notif_content {
+                                    let p = s.notif_store.lock_or_recover().path().to_path_buf();
+                                    let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
+                                    if let Ok(mut f) = File::create(&tmp) {
+                                        let _ = f.write_all(n_content.as_bytes());
+                                        let _ = f.sync_all();
+                                        let _ = fs::rename(&tmp, &p);
+                                        let _ = s.notif_store.lock_or_recover().load();
+                                    }
+                                }
+                                // P1-6: Apply curve clients content via atomic file overwrite
+                                if let Some(c_content) = data.curve_clients_content {
+                                    let p = s.cluster.curve_clients_path.clone();
+                                    let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
+                                    if let Ok(mut f) = File::create(&tmp) {
+                                        let _ = f.write_all(c_content.as_bytes());
+                                        let _ = f.sync_all();
+                                        let _ = fs::rename(&tmp, &p);
+                                    }
+                                }
 
-                            if data.epoch > s.cluster.epoch() {
-                                s.cluster.state.epoch = data.epoch;
-                                let _ = s.cluster.save();
+                                if data.epoch > s.cluster.epoch() {
+                                    s.cluster.state.epoch = data.epoch;
+                                    let _ = s.cluster.save();
+                                }
+                                s.cluster.sync_status = "synced".to_string();
+                                s.cluster.last_sync_at = Some(Instant::now());
+                                s.cluster.last_sync_err = String::new();
+                            } else {
+                                let mut s = st.lock_or_recover();
+                                s.cluster.sync_status = "sync_err".to_string();
+                                s.cluster.last_sync_err = "failed to parse sync response json".to_string();
                             }
-                            s.cluster.sync_status = "synced".to_string();
-                            s.cluster.last_sync_at = Some(Instant::now());
-                            s.cluster.last_sync_err = String::new();
+                        }
+                        Ok(res) => {
+                            let mut s = st.lock_or_recover();
+                            s.cluster.sync_status = "sync_err".to_string();
+                            s.cluster.last_sync_err = format!("sync request returned status {}", res.status());
+                        }
+                        Err(e) => {
+                            let mut s = st.lock_or_recover();
+                            s.cluster.sync_status = "sync_err".to_string();
+                            s.cluster.last_sync_err = format!("sync network request failed: {}", e);
                         }
                     }
                 } else {

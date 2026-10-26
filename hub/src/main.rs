@@ -350,7 +350,7 @@ fn parse_args() -> Result<Args, String> {
         stats_every: 30.0,
         duration: 0.0,
         cluster_peer: String::new(),
-        cluster_token: std::env::var("MTC_CLUSTER_TOKEN").unwrap_or_else(|_| cluster::DEFAULT_CLUSTER_TOKEN.to_string()),
+        cluster_token: std::env::var("MTC_CLUSTER_TOKEN").unwrap_or_default(),
         cluster_state: cluster::DEFAULT_STATE_FILE.to_string(),
         failback_hours: cluster::DEFAULT_FAILBACK_HOURS,
         failback_lock: false,
@@ -2237,10 +2237,17 @@ fn main() {
                                     parse_finite_f64(&envelope_kv(&payload, "EQ"));
                                 let balance: Option<f64> =
                                     parse_finite_f64(&envelope_kv(&payload, "BL"));
-                                let held_items = envelope_kv_opt(&payload, "POS")
-                                    .map(|s| registry::parse_receiver_positions(&s));
-                                let wait_items = envelope_kv_opt(&payload, "WAITLIST")
-                                    .map(|s| registry::parse_receiver_waitlist(&s));
+                                // P2-11: Only parse heavy POS & WAITLIST if STAT carries summary fields
+                                let need_stat = !risk.is_empty() || held.is_some() || wait_total.is_some() || equity.is_some();
+                                let (held_items, wait_items) = if need_stat {
+                                    let h = envelope_kv_opt(&payload, "POS")
+                                        .map(|s| registry::parse_receiver_positions(&s));
+                                    let w = envelope_kv_opt(&payload, "WAITLIST")
+                                        .map(|s| registry::parse_receiver_waitlist(&s));
+                                    (h, w)
+                                } else {
+                                    (None, None)
+                                };
 
                                 //--- One lock for all: note_stat, ping, and mirror edge
                                 let mut sender_valid = false;
@@ -2248,7 +2255,7 @@ fn main() {
                                 let mut stat_changed = false;
                                 {
                                     let mut s = shared.lock_or_recover();
-                                    if !risk.is_empty() || held.is_some() || wait_total.is_some() || equity.is_some() {
+                                    if need_stat {
                                         s.reg.note_stat(
                                             "receiver",
                                             &login,
@@ -2717,12 +2724,13 @@ fn main() {
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
         if last_cmd_due.elapsed() >= Duration::from_millis(500) {
             last_cmd_due = Instant::now();
-            let effective_writes = shared.lock_or_recover().writes;
-            for c in cmds.due_gated(Instant::now(), effective_writes) {
-                if !effective_writes && !commands::is_read_only_op(&c.op) {
-                    continue;
-                }
-                if c.state == commands::STATE_UNKNOWN {
+            let (effective_writes, is_primary) = {
+                let s = shared.lock_or_recover();
+                (s.writes, s.cluster.is_primary())
+            };
+            if is_primary && effective_writes {
+                for c in cmds.due_gated(Instant::now(), effective_writes) {
+                    if c.state == commands::STATE_UNKNOWN {
                     let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
                     println!(
                         "[hub] ALERT {} never acknowledged {} ({} {}) after {} attempt(s): {}",
@@ -2789,6 +2797,7 @@ fn main() {
                 }
             }
         }
+    }
 
         //--- One serialisation per change window, shared by every dashboard.
         //--- Placed at the very end of the iteration so it covers a poke raised
