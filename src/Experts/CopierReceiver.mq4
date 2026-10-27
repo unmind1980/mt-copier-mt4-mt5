@@ -7982,7 +7982,21 @@ void OnTimer()
       if(dueSummary) g_lastSummaryMs=now;
       if(dueDetail) g_lastPosDetailMs=now;
 
-      bool putPositionSummary=(dueSummary || dueStatus || g_forcePosReport);
+      //--- N56-14: dueDetail MUST imply putPositionSummary.
+      //---
+      //--- The detail block (POS / WAITLIST) lives INSIDE `if(putPositionSummary)`,
+      //--- but g_lastPosDetailMs is advanced OUTSIDE it (just above). So any tick
+      //--- where dueDetail is true while dueSummary and dueStatus are both false
+      //--- advances the 60s timer and then skips the block: the position table is
+      //--- never transmitted, and the dashboard shows "0 orders" next to a
+      //--- perfectly correct HELD=43 - until the next miss.
+      //---
+      //--- This is exactly what was observed: two receivers, both HELD=43, both
+      //--- positions_detail empty, on BOTH hubs. A manual reqpos filled it
+      //--- immediately (43 rows), which is what ruled out parsing and transport
+      //--- and pointed here. Including dueDetail makes the gate match the block
+      //--- it guards, and costs one extra summary frame per minute.
+      bool putPositionSummary=(dueSummary || dueStatus || dueDetail || g_forcePosReport);
       bool putFigures=dueStatus;
       for(int i=0;i<g_nSenders;i++)
         {

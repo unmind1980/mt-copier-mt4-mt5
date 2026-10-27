@@ -34,6 +34,13 @@ audit.jsonl
 # M9 user table: holds salted password hashes, never belongs in git.
 users.json
 users.json.tmp
+# Cluster shared token. Whoever reads this file can drive every
+# /api/v1/cluster/* endpoint on BOTH hubs (status, sync, handover, relay), so
+# it is a credential, not configuration. Minted by the launcher scripts on
+# first start; never committed. Added 2026-10-27 after one slipped into a
+# commit through `git add -A`.
+cluster_token.txt
+cluster_token.txt.tmp
 # Notification channel store: holds PLAINTEXT bot tokens / webhook secrets
 # (Telegram bot_token, WeCom/DingTalk secrets). Same reason as users.json.
 alert_channels.json
