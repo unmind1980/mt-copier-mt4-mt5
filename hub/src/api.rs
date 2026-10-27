@@ -1810,8 +1810,29 @@ pub fn spawn(
                     s.notif_store.clone()
                 };
                 let http_worker = http_client.clone();
+                let st_worker = st.clone();
                 tokio::spawn(async move {
                     while let Some(alert) = alert_rx.recv().await {
+                        //--- Only the primary notifies.
+                        //---
+                        //--- A standby keeps its own alert_channels.json, and that
+                        //--- file only tracks the primary's while the cluster link
+                        //--- is up. On 2026-10-26 that gap pushed a CRITICAL
+                        //--- "Node Offline" alert for a channel the operator had
+                        //--- disabled SIX DAYS earlier: the link had been down the
+                        //--- whole time (the token mismatch), so the standby still
+                        //--- held enabled=true and sent it.
+                        //---
+                        //--- Two hubs must not both notify anyway - every alert
+                        //--- would arrive twice. The standby stays silent and
+                        //--- starts notifying only after it is promoted.
+                        let is_primary = {
+                            let s = st_worker.lock_or_recover();
+                            s.cluster.is_primary()
+                        };
+                        if !is_primary {
+                            continue;
+                        }
                         let channels = {
                             let s = notif_store_worker.lock_or_recover();
                             s.matching_channels_for_alert(&alert)

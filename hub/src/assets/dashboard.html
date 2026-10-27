@@ -934,7 +934,12 @@
   .waiting-stage-desc{font-size:11px;color:var(--dim);line-height:1.35}
 
   .pos-table-wrap{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel);margin-bottom:16px}
-  .pos-table-wrap table{margin:0;border:none}
+  /* Without an explicit width a <table> shrinks to fit its content, so the
+     detail table stopped two thirds of the way across the pane and left a dead
+     margin on the right - on a maximised window that is most of the screen.
+     `width:100%` makes it fill; table-layout stays auto so the columns keep
+     sizing to their content instead of being split into equal thirds. */
+  .pos-table-wrap table{margin:0;border:none;width:100%}
   .pos-table-wrap th{background:var(--bg)}
   .pos-bar-container{display:flex;align-items:center;gap:8px}
   .pos-bar-bg{flex:1;background:var(--line);height:6px;border-radius:3px;overflow:hidden}
@@ -1266,7 +1271,6 @@
                onfocus="openZoomMenu()" onclick="openZoomMenu()">
         <div class="zoom-menu hidden" id="zoomMenu"></div>
       </div>
-      <span class="zoom-label" id="zoomVal">13.5px</span>
     </div>
 
     <button type="button" class="btn-theme" id="theme_toggle" onclick="toggleTheme()">
@@ -3372,8 +3376,6 @@ function applyScale(size, finalize){
     return;
   }
   document.documentElement.style.setProperty("--font-base", v + "px");
-  var lbl = $("zoomVal");
-  if(lbl) lbl.textContent = v + "px";
   localStorage.setItem("mtc_font_size", v);
 }
 
