@@ -176,6 +176,11 @@ impl ConfigStore {
         (i.count, i.current.len(), i.torn)
     }
 
+    /// Fast memory accessor for total lines in config journal (zero disk I/O).
+    pub fn total_lines(&self) -> usize {
+        self.inner.lock_or_recover().count as usize
+    }
+
     /// The current revision for a node, if it has ever had one.
     pub fn current(&self, node: &str) -> Option<Revision> {
         self.inner.lock_or_recover().current.get(node).cloned()
@@ -199,6 +204,10 @@ impl ConfigStore {
         use std::io::BufRead;
         if !self.enabled || !self.path.exists() {
             return Ok((Vec::new(), 0));
+        }
+        let total_count = self.total_lines();
+        if from_line >= total_count {
+            return Ok((Vec::new(), total_count));
         }
         let file = std::fs::File::open(&self.path)?;
         let reader = std::io::BufReader::new(file);

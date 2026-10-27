@@ -2806,8 +2806,9 @@ async fn cluster_status(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let s = st.lock_or_recover();
-    let (_, cfg_lines) = s.cfg.read_lines_from(0).unwrap_or((Vec::new(), 0));
-    let (_, cmd_lines, max_cmd_seq) = s.cmds.read_lines_from(0).unwrap_or((Vec::new(), 0, 0));
+    // P1-3 & P2-3: Fast memory accessors & cached file hashes under lock (zero disk I/O)
+    let cfg_lines = s.cfg.total_lines();
+    let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
     let users_hash = crate::cluster::file_sha256(&s.users.path());
     let notif_hash = crate::cluster::file_sha256(&s.notif_store.lock_or_recover().path());
     let curve_clients_hash = crate::cluster::file_sha256(&s.cluster.curve_clients_path);

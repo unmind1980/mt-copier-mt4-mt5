@@ -8,10 +8,11 @@
 //! - ADR-09: Cluster token authentication over internal HTTP sync endpoints.
 //! - ADR-10: Two-Phase Handover for graceful auto-failback to Primary after continuous online stabilization.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,8 @@ pub const DEFAULT_CLUSTER_ID: &str = "mt-copier-cluster";
 pub const DEFAULT_CLUSTER_TOKEN: &str = "mtc-cluster-auth-secret-token";
 pub const DEFAULT_STATE_FILE: &str = "cluster_state.json";
 pub const DEFAULT_FAILBACK_HOURS: f64 = 24.0;
+
+static HASH_CACHE: Mutex<Option<HashMap<PathBuf, (Option<SystemTime>, u64, String)>>> = Mutex::new(None);
 
 pub fn unix_secs() -> u64 {
     SystemTime::now()
@@ -125,10 +128,27 @@ pub struct ClusterManager {
     pub last_sync_err: String,
 }
 
-/// Compute SHA-256 hex string of a file. Returns empty string if file does not exist.
+/// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
 pub fn file_sha256(path: &Path) -> String {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    let mtime = meta.modified().ok();
+    let len = meta.len();
+
+    let mut guard = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    if let Some((c_mtime, c_len, hash)) = map.get(path) {
+        if *c_mtime == mtime && *c_len == len {
+            return hash.clone();
+        }
+    }
+
     if let Ok(bytes) = fs::read(path) {
-        crate::users::hex(&crate::users::sha256(&bytes))
+        let hash = crate::users::hex(&crate::users::sha256(&bytes));
+        map.insert(path.to_path_buf(), (mtime, len, hash.clone()));
+        hash
     } else {
         String::new()
     }
@@ -447,7 +467,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
             // P1-2: Dual Standby recovery - deterministic tie breaker (configured primary or lower hub_id)
             if current_role == "standby" && remote_st.role == "standby" {
-                let should_recover = is_cfg_primary || (!remote_st.is_configured_primary && my_hub_id < remote_st.hub_id);
+                let should_recover = if is_cfg_primary != remote_st.is_configured_primary {
+                    is_cfg_primary
+                } else {
+                    my_hub_id < remote_st.hub_id
+                };
                 if should_recover {
                     let mut s = st.lock_or_recover();
                     let new_ep = s.cluster.promote(None);
@@ -466,21 +490,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let _ = s.cluster.save();
                 }
 
-                // P1-1: Only track continuous online duration for failback when Standby is healthy & synced with Primary
-                if remote_st.role == "primary" {
-                    let mut s = st.lock_or_recover();
-                    if s.cluster.continuous_online_start.is_none() {
-                        s.cluster.continuous_online_start = Some(now);
-                    }
-                } else {
-                    let mut s = st.lock_or_recover();
-                    s.cluster.continuous_online_start = None;
-                }
-
+                // P1-3 & P2-3: Use zero-disk-IO memory statistics and cached file hashes under lock
                 let (cfg_lines_count, cmd_lines_count, users_h, notif_h, curve_h) = {
                     let s = st.lock_or_recover();
-                    let (_, cfg_tot) = s.cfg.read_lines_from(0).unwrap_or((Vec::new(), 0));
-                    let (_, cmd_tot, _) = s.cmds.read_lines_from(0).unwrap_or((Vec::new(), 0, 0));
+                    let cfg_tot = s.cfg.total_lines();
+                    let (cmd_tot, _) = s.cmds.sync_stats();
                     let u_h = file_sha256(&s.users.path());
                     let n_h = file_sha256(&s.notif_store.lock_or_recover().path());
                     let c_h = file_sha256(&s.cluster.curve_clients_path);
@@ -492,6 +506,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     || remote_st.users_hash != users_h
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
+
+                // P1-1 & P2-5: Only track continuous online duration for failback when Standby is healthy & in sync with Primary
+                if remote_st.role == "primary" && !needs_sync {
+                    let mut s = st.lock_or_recover();
+                    if s.cluster.continuous_online_start.is_none() {
+                        s.cluster.continuous_online_start = Some(now);
+                    }
+                } else {
+                    let mut s = st.lock_or_recover();
+                    s.cluster.continuous_online_start = None;
+                }
 
                 if needs_sync {
                     {

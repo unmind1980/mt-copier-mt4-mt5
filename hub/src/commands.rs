@@ -195,6 +195,10 @@ struct Inner {
     /// Lines that would not parse. Not fatal: a torn tail is a crash, and the
     /// commands before it are still true.
     torn: u64,
+    /// Total lines in commands journal (for fast sync status & zero-I/O diff checks)
+    line_count: usize,
+    /// Highest op sequence recorded globally
+    max_seq: u64,
 }
 
 pub struct CommandStore {
@@ -209,7 +213,7 @@ impl CommandStore {
         //--- Load BEFORE opening the append handle: the journal may be
         //--- compacted below, and rewriting a file that is open for append
         //--- would leave the handle writing into the old inode.
-        let (mut commands, seq, torn) = load(path);
+        let (mut commands, seq, torn, line_count, max_seq) = load(path);
 
         //--- Retention. A command is never deleted while it is pending - those
         //--- are the ones still owed an answer - but a terminal one (acked,
@@ -223,6 +227,8 @@ impl CommandStore {
             in_flight: HashSet::new(),
             seq,
             torn,
+            line_count,
+            max_seq,
         };
         inner.commands = std::mem::take(&mut commands);
         inner.prune_terminal(now, COMMAND_KEEP_SECS);
@@ -234,12 +240,15 @@ impl CommandStore {
         if let Ok(md) = std::fs::metadata(path) {
             if md.len() > COMMAND_JOURNAL_COMPACT_BYTES {
                 match compact_journal(path, &inner.commands) {
-                    Ok(n) => println!(
-                        "[hub] command journal compacted: {} -> {} command(s), {} bytes",
-                        md.len(),
-                        n,
-                        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-                    ),
+                    Ok(n) => {
+                        println!(
+                            "[hub] command journal compacted: {} -> {} command(s), {} bytes",
+                            md.len(),
+                            n,
+                            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                        );
+                        inner.line_count = n;
+                    }
                     Err(e) => eprintln!("[hub] command journal compaction failed: {}", e),
                 }
             }
@@ -280,6 +289,8 @@ impl CommandStore {
                 in_flight: HashSet::new(),
                 seq: HashMap::new(),
                 torn: 0,
+                line_count: 0,
+                max_seq: 0,
             }),
             path: PathBuf::new(),
             enabled: false,
@@ -295,11 +306,21 @@ impl CommandStore {
         &self.path
     }
 
+    /// Fast memory accessor for (total_lines, max_seq) in command journal for cluster sync (zero disk I/O).
+    pub fn sync_stats(&self) -> (usize, u64) {
+        let inner = self.inner.lock_or_recover();
+        (inner.line_count, inner.max_seq)
+    }
+
     /// Read lines starting from line index `from_line` for incremental replication.
     pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize, u64)> {
         use std::io::BufRead;
         if !self.enabled || !self.path.exists() {
             return Ok((Vec::new(), 0, 0));
+        }
+        let (total_lines, cur_max_seq) = self.sync_stats();
+        if from_line >= total_lines {
+            return Ok((Vec::new(), total_lines, cur_max_seq));
         }
         let file = std::fs::File::open(&self.path)?;
         let reader = std::io::BufReader::new(file);
@@ -732,7 +753,9 @@ impl Inner {
             None => return,
         };
         let mut buf = String::new();
+        self.line_count += cs.len();
         for c in cs {
+            self.max_seq = self.max_seq.max(c.seq);
             let line = json!({
                 "v": 1,
                 "id": c.id,
@@ -838,19 +861,22 @@ fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io:
     Ok(commands.len())
 }
 
-fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64) {
+fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, usize, u64) {
     let mut commands: HashMap<String, Command> = HashMap::new();
     let mut seq: HashMap<String, u64> = HashMap::new();
     let mut torn = 0u64;
+    let mut line_count = 0usize;
+    let mut max_seq = 0u64;
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(_) => return (commands, seq, torn),
+        Err(_) => return (commands, seq, torn, line_count, max_seq),
     };
     let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }
+        line_count += 1;
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
@@ -867,6 +893,7 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64) {
         let node = v["node"].as_str().unwrap_or("").to_string();
         let kind = v["kind"].as_str().unwrap_or(KIND_CONFIG).to_string();
         let seqn = v["seq"].as_u64().unwrap_or(0);
+        max_seq = max_seq.max(seqn);
         if kind == KIND_OP {
             let e = seq.entry(node.clone()).or_insert(0);
             if seqn > *e {
@@ -897,7 +924,7 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64) {
             },
         );
     }
-    (commands, seq, torn)
+    (commands, seq, torn, line_count, max_seq)
 }
 
 fn unix_secs() -> u64 {

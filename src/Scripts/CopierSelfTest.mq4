@@ -642,6 +642,14 @@ void TestSizing()
    v=CopierComputeLots(999.0,CP_SIZE_MULTIPLIER,1.0,1.0,si,0,0,rej);
    OkDbl("sizing: clamps to max",v,50.0,0.0001);
 
+   //--- P2-30: CP_SIZE_OFF copies sender lots directly regardless of lotParam
+   v=CopierComputeLots(0.75,CP_SIZE_OFF,0.1,1.0,si,0,0,rej);
+   Ok("sizing: CP_SIZE_OFF copies sender lots directly",!rej && MathAbs(v-0.75)<0.0001);
+
+   //--- P2-30: symMultiplier scales correctly
+   v=CopierComputeLots(0.5,CP_SIZE_MULTIPLIER,1.0,2.0,si,0,0,rej);
+   Ok("sizing: symMultiplier 2.0x scales correctly",!rej && MathAbs(v-1.0)<0.0001);
+
    Ok("sizing: lot digits",CopierLotDigits(0.01)==2);
   }
 
@@ -2574,7 +2582,8 @@ void TestR47R48Regressions()
    // N49-13: CopierRealizedToday 2-arg overload works
    bool rOk=false;
    double rz=CopierRealizedToday(dayStart, rOk);
-   Ok("model: CopierRealizedToday returns status flag", rOk || !rOk);
+   // P2-29 fix: Assert finite output value rather than vacuous tautology (rOk || !rOk)
+   Ok("model: CopierRealizedToday executes cleanly and rz is finite", MathIsValidNumber(rz));
 
    // INC-01: Symbol mapping suffix configuration
    CopierSymbolMap sm;

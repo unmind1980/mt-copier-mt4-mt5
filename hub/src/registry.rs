@@ -65,6 +65,7 @@ pub enum Liveness {
 }
 
 impl Liveness {
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Liveness::Online => "online",

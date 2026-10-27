@@ -742,6 +742,7 @@ CopierCurveKey   g_key;
 
 CopierPanel      g_panel;
 string           g_hubPeerName="hub";
+string           g_singleHubRole="hub:primary"; // P1-4: auto-adapted role in single endpoint mode
 long             g_lastHubPingMs=0;
 long             g_lastPingMs=0;
 //--- Edge-triggered: see the note on the sender's copy. A repeating popup
@@ -2550,13 +2551,14 @@ void ReportEntryGates()
 //=====================================================================
 bool ActionQueued(const int si,const int kind,const string uid,const string keyExtra="")
   {
+   string expectedKey=(StringLen(keyExtra)>0)?(g_sid[si]+":"+(string)kind+":"+uid+keyExtra):"";
    for(int i=0;i<g_qn;i++)
      {
       if(g_q[g_qHead+i].senderIdx==si && g_q[g_qHead+i].kind==kind
          && g_q[g_qHead+i].uid==uid)
         {
-         // P2-20: If keyExtra distinguishes sub-actions (e.g. TRIM target lots, specific sl/tp), compare extra
-         if(StringLen(keyExtra)==0 || g_q[g_qHead+i].extra==keyExtra) return true;
+         // P2-20: If keyExtra distinguishes sub-actions (e.g. TRIM target lots, specific sl/tp), compare key
+         if(StringLen(keyExtra)==0 || g_q[g_qHead+i].key==expectedKey) return true;
         }
      }
    return false;
@@ -3364,7 +3366,15 @@ void ExecuteQueue()
             g_backoff.Park(a.key,CP_MKTCLOSED_MS+jitter);
            }
          else
-            fails=g_backoff.Note(a.key);
+           {
+            // P3-7: If this action is queued for immediate second pass, defer backoff escalation to Pass 2
+            bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
+                                   && !CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err) && err!=-4 && err!=-5);
+            if(!queuedForSweep)
+               fails=g_backoff.Note(a.key);
+            else
+               fails=1;
+           }
          if(fails>=2 && g_onceFail.ShouldEmit("backoff|"+a.key))
            {
             long ms=CopierBackoffMs(fails);
@@ -6423,6 +6433,15 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
          CopierKvGet(e.payload,"TO",pto);
          if((pto==(string)g_nid || pto==(string)CopierAccountLogin()) && StringLen(pfrom)>0)
            {
+            if(g_connectedEpCount<=1 && StringSubstr(pfrom,0,4)=="hub:")
+              {
+               if(pfrom!=g_singleHubRole)
+                 {
+                  g_peers.Forget(g_singleHubRole);
+                  g_singleHubRole=pfrom;
+                 }
+               g_peers.ProbeSent(g_singleHubRole,CopierNowMs());
+              }
             if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
               {
                g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
@@ -7040,7 +7059,7 @@ void CheckPeersPing(const long now)
         }
       else
         {
-         g_peers.ProbeSent("hub:primary",now);
+         g_peers.ProbeSent(g_singleHubRole,now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
@@ -7156,7 +7175,7 @@ void UpdatePanel()
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(pnm==g_hubPeerName && g_connectedEpCount>1) continue;
+      if(pnm==g_hubPeerName) continue; // P3-12: placeholder peer is not a sender
       np++;
      }
    //--- The orphan block only exists when ShowOrphanedList is on. Sizing the
@@ -7247,6 +7266,8 @@ void UpdatePanel()
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
+      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
+      if(nm==g_hubPeerName) continue;
       shown++;
       long silent=g_peers.SilentAt(i);
       int  st=g_peers.StateAt(i,CP_PEER_TIMEOUT_MS);
@@ -7254,8 +7275,6 @@ void UpdatePanel()
       long rtt=g_peers.RttAt(i);
 
       bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
-      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
-      if(nm==g_hubPeerName) continue;
 
       string line="";
       if(isHub)

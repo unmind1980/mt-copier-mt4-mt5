@@ -123,9 +123,12 @@ def start(writes, audit, cfg, cmds):
         args += ["--writes", "on" if writes else "off"]
     out = open(os.path.join(HERE, "_hub_cmd.out"), "wb")
     p = subprocess.Popen(args, stdout=out, stderr=subprocess.STDOUT)
-    time.sleep(2.0)
-    if not login():
-        raise RuntimeError("could not log in to the test hub - M9 bootstrap failed?")
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        time.sleep(0.2)
+        if login():
+            return p, out
+    raise RuntimeError("could not log in to the test hub - M9 bootstrap failed?")
     return p, out
 
 

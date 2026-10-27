@@ -52,6 +52,7 @@ public:
    static bool Save(const string primary,const string standby,const long epoch)
      {
       string tmpFile=CP_CLUSTER_STATE_FILE+".tmp";
+      FileDelete(tmpFile); // P3-1: Clean truncation defense before opening write handle
       int h=FileOpen(tmpFile,FILE_WRITE|FILE_TXT|FILE_ANSI);
       if(h==INVALID_HANDLE) return false;
 

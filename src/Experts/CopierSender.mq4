@@ -254,6 +254,7 @@ string           g_hubEp="";
 string           g_connectedEps[CP_MAX_CLUSTER_HUBS];
 int              g_connectedEpCount=0;
 string           g_hubPeerName="hub";       // the name g_peers files the hub under
+string           g_singleHubRole="hub:primary"; // P1-4: auto-adapted role in single endpoint mode
 //--- Shared with the receiver's PermittedSymbols: one implementation of the
 //--- "CSV, leading ! means exclude" rule, so the two ends cannot drift into
 //--- disagreeing about what "!EURUSD" means.
@@ -1071,7 +1072,7 @@ void CheckPeers()
         }
       else
         {
-         g_peers.ProbeSent("hub:primary",now);
+         g_peers.ProbeSent(g_singleHubRole,now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
@@ -1409,7 +1410,7 @@ void UpdatePanel()
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(pnm==g_hubPeerName && g_connectedEpCount>1) continue;
+      if(pnm==g_hubPeerName) continue; // P3-12: placeholder peer is not a receiver
       np++;
      }
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
@@ -1460,6 +1461,8 @@ void UpdatePanel()
      {
       string nm=g_peers.NameAt(i);
       if(StringLen(nm)==0) continue;
+      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
+      if(nm==g_hubPeerName) continue;
       shown++;
       long silent=g_peers.SilentAt(i);
       int  st=g_peers.StateAt(i,CP_PEER_TIMEOUT_MS);
@@ -1470,8 +1473,6 @@ void UpdatePanel()
       //--- is not a receiver, and showing it as one would make the count above
       //--- read "2 receivers" when one of them is infrastructure.
       bool isHub=(nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
-      // Hide the standalone generic "hub" placeholder as hub responds with hub:primary / hub:standby
-      if(nm==g_hubPeerName) continue;
 
       string line="";
       if(isHub)
@@ -1619,7 +1620,7 @@ void HandleSenderStat(const CopierEnv &se)
 
    if(!StatusEnabled) return;
 
-   string login="",eq="",bl="",held="",lots="",nsend="",blocked="",risk="";
+   string login="",eq="",bl="",held="",lots="",nsend="",blocked="",risk="",orphan="",wait="";
    CopierKvGet(se.payload,"LOGIN",login);
    CopierKvGet(se.payload,"EQ",eq);
    CopierKvGet(se.payload,"BL",bl);
@@ -1628,20 +1629,33 @@ void HandleSenderStat(const CopierEnv &se)
    CopierKvGet(se.payload,"NSEND",nsend);
    CopierKvGet(se.payload,"BLOCKED",blocked);
    CopierKvGet(se.payload,"RISK",risk);
+   // P2-27: Parse ORPHAN and WAIT telemetry from receiver
+   CopierKvGet(se.payload,"ORPHAN",orphan);
+   CopierKvGet(se.payload,"WAIT",wait);
 
    if(StringLen(login)>0)
       g_peers.Seen(login);
 
    string rk=risk;
    if(StringLen(rk)==0 && StringLen(nsend)>0) rk="ok";
+   if(StringLen(orphan)>0 && CopierParseLong(orphan)>0) rk="orphan:"+orphan;
    if(StringLen(login)>0 && StringLen(rk)>0)
      {
       g_peers.SetNote(login,rk);
       if(g_once.ShouldEmit("stat|"+login+"|"+rk))
+        {
+         string extraStr="";
+         if(StringLen(orphan)>0 && CopierParseLong(orphan)>0) extraStr+=" orphan="+orphan;
+         if(StringLen(wait)>0 && CopierParseLong(wait)>0) extraStr+=" wait="+wait;
          g_log.Info("receiver "+login+" status: equity="+eq+" balance="+bl
                     +" held="+held+" position(s) lots="+lots
                     +" senders="+nsend+" risk="+rk
-                    +" blocked="+blocked+" since the last report");
+                    +" blocked="+blocked+extraStr+" since the last report");
+        }
+      if(StringLen(orphan)>0 && CopierParseLong(orphan)>0 && g_once.ShouldEmit("orphanwarn|"+login))
+        {
+         g_log.Warn("receiver "+login+" reports "+orphan+" orphaned position(s) - check magic configurations");
+        }
      }
   }
 
@@ -1715,9 +1729,21 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
+            if(StringLen(hfrom)>0)
               {
-               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+               if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
+                 {
+                  if(hfrom!=g_singleHubRole)
+                    {
+                     g_peers.Forget(g_singleHubRole);
+                     g_singleHubRole=hfrom;
+                    }
+                  g_peers.ProbeSent(g_singleHubRole,now);
+                 }
+               if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
+                 {
+                  g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+                 }
               }
             continue;
            }
@@ -2045,9 +2071,21 @@ void OnTimer()
             CopierKvGet(he.payload,"FROM",hfrom);
             CopierKvGet(he.payload,"TO",hto);
             if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0 && g_peers.PongBack(hfrom,CopierParseLong(hms)))
+            if(StringLen(hfrom)>0)
               {
-               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+               if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
+                 {
+                  if(hfrom!=g_singleHubRole)
+                    {
+                     g_peers.Forget(g_singleHubRole);
+                     g_singleHubRole=hfrom;
+                    }
+                  g_peers.ProbeSent(g_singleHubRole,now);
+                 }
+               if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
+                 {
+                  g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+                 }
               }
             continue;
            }
