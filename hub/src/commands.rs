@@ -812,11 +812,25 @@ impl CommandStore {
     /// runs its normal course (2s -> 5s -> 15s -> 60s, ~82s total) and the command
     /// ends as `unknown` with an alert if the node stays away. A node that comes
     /// back inside that window still receives the command.
-    pub fn defer(&self, id: &str, delay: Duration) {
+    pub fn defer(&self, id: &str, _delay: Duration) {
         let mut inner = self.inner.lock_or_recover();
         if let Some(c) = inner.commands.get_mut(id) {
             if c.state == STATE_PENDING {
-                c.next_at = Instant::now() + delay;
+                //--- R58-02: honour the ladder step that `due_gated` just consumed.
+                //---
+                //--- Overwriting next_at with a flat 2s made the command due again
+                //--- two seconds later, which consumed the NEXT step immediately:
+                //--- the 2+5+15+60 = 82s ladder actually expired in 8s. A node that
+                //--- was merely restarting (1-5s to resubscribe, plus a REG period)
+                //--- had its closeall declared `unknown` - and dropped from
+                //--- in_flight - before it could possibly answer.
+                //---
+                //--- The delay argument is kept for call-site compatibility and
+                //--- ignored on purpose: the ladder owns the cadence here, and a
+                //--- caller able to override it would just reintroduce the bug.
+                let step = RETRY_LADDER_SECS
+                    [(c.attempts.saturating_sub(1) as usize).min(RETRY_LADDER_SECS.len() - 1)];
+                c.next_at = Instant::now() + Duration::from_secs(step);
             }
         }
     }

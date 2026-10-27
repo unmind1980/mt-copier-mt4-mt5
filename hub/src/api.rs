@@ -3071,7 +3071,18 @@ async fn cluster_handover_request(
     // Step down atomically on current Primary before agreeing:
     // 1. Close write gate immediately
     s.writes = false;
-    let new_epoch = s.cluster.epoch() + 1;
+    //--- R58-06: step down WITHOUT advancing the epoch.
+    //---
+    //--- This used to be epoch()+1 and then tell the peer about it. The peer
+    //--- promotes to max(new_epoch, its own)+1 - also N+1 - so after a handover
+    //--- BOTH hubs sat at the same epoch. ADR-04 resolves a split brain with a
+    //--- strict `remote.epoch > local.epoch`, which can no longer discriminate,
+    //--- and the tie falls through to hub_id lexicographic order: which hub keeps
+    //--- writing becomes arbitrary, with no relation to whose data is newer.
+    //---
+    //--- Staying at N lets the new primary take N+1, strictly above us, so epoch
+    //--- stays a usable tie-breaker for every conflict that follows.
+    let new_epoch = s.cluster.epoch();
     s.cluster.demote(new_epoch);
     let audit_rec = Arc::clone(&s.audit);
 

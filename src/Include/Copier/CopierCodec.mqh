@@ -358,8 +358,24 @@ string CopierDecompressField(const string field)
      {
       string z85Str="";
       int pad=-1;
-      int c2=(StringLen(field)>=4)?StringGetCharacter(field,2):0;
-      if(StringLen(field)>=4 && c2>='0' && c2<='3' && StringGetCharacter(field,3)==':')
+      //--- R58-05: test the LENGTH first, exactly as envelope.rs does.
+      //---
+      //--- The old code probed characters: "position 2 is 0-3 and position 3 is
+      //--- ':'" was read as a pad prefix. But ':' is itself in the Z85 alphabet
+      //--- (index 39), so an OLD-format frame "1:<z85>" whose z85 happens to
+      //--- start with a digit 0-3 followed by ':' was misread as
+      //--- "1:<pad>:<z85>", losing two characters and failing to decode - about
+      //--- one frame in 1,800 - while the hub decoded the same frame fine.
+      //---
+      //--- Length separates them unambiguously: old is 2+5k, new is 4+5k, so the
+      //--- two are never congruent mod 5.
+      int flen=StringLen(field);
+      if((flen-2)%5==0)
+        {
+         z85Str=StringSubstr(field,2);
+        }
+      else if(flen>=4 && StringGetCharacter(field,2)>='0' && StringGetCharacter(field,2)<='3'
+              && StringGetCharacter(field,3)==':')
         {
          pad=(int)StringToInteger(StringSubstr(field,2,1));
          z85Str=StringSubstr(field,4);

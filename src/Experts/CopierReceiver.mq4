@@ -3028,24 +3028,23 @@ void ExecuteQueue()
            }
          else
            {
-         //--- N57-02: use the sender's stops if we have them.
+         //--- R58-01: emergency stops only - a.sl/a.tp are NOT used here.
          //---
-         //--- This used to start from 0.0 and only ever consider EmergencySL/TP,
-         //--- discarding a.sl/a.tp that ConvergeSender had gone to the trouble of
-         //--- computing. The result was a market entry with no stop attached,
-         //--- corrected on a later tick - the exact window a gap moves through.
-         //--- Emergency stops remain the fallback for when the sender has none.
+         //--- For a market entry a.sl is the sender's absolute price in the
+         //--- sender's book. Carrying it across brokers can put the stop on the
+         //--- wrong side of our fill (rejected, or an instant stop-out when it is
+         //--- far away), and under InvertTrades it points the wrong way at all.
+         //--- The converge pass re-stops the position through CopierMirrorStop,
+         //--- which re-anchors by DISTANCE against the real fill.
          double sl=0.0,tp=0.0;
-         if(a.sl>0.0) sl=a.sl;
-         else if(emSL>0.0)
+         if(emSL>0.0)
            {
             int e2=0;
             sl=CopierEmergencySl(a.sym,a.side,0.0,emSL,si,e2);
             if(e2!=0 && g_once.ShouldEmit("em_sl_fail|"+a.sym))
                g_log.Warn("NL-02: EmergencySL configured but could not be computed for "+a.sym+" (err="+(string)e2+") - opening without SL");
            }
-         if(a.tp>0.0) tp=a.tp;
-         else if(emTP>0.0)
+         if(emTP>0.0)
            {
             int e2=0;
             tp=CopierEmergencyTp(a.sym,a.side,0.0,emTP,si,e2);
@@ -5040,17 +5039,32 @@ void ConvergeSender(const int si)
       if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
       if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
 
-      //--- N57-02: carry the sender's stops for MARKET orders too.
+      //--- R58-01: RESTORED the pending-only gate that N57-02 removed.
       //---
-      //--- These used to be gated on `d.kind==CP_ORD_PENDING`, so a market
-      //--- entry was always opened flat and re-stopped on the next tick via
-      //--- CP_ACT_MODIFY. CopierOpenMarket already handles the ECN case itself
-      //--- (err 130 -> open flat, then modify immediately), so pre-zeroing here
-      //--- bought nothing and opened a window where the position has no stop at
-      //--- all: hundreds of ms normally, seconds during news, and forever if the
-      //--- broker keeps rejecting the modify.
-      double osl=(g_senderCfg[si].mirrorstops)?d.sl:0.0;
-      double otp=(g_senderCfg[si].mirrorstops)?d.tp:0.0;
+      //--- N57-02 let a market entry carry the sender's stops so it would not
+      //--- open bare. The motive was right, the mechanism was not: it copied a
+      //--- PRICE from one broker's book onto another's, which is precisely what
+      //--- CopierMirrorStop exists to prevent - see CopierDefs.mqh:1185, "the
+      //--- sender's stop cannot be copied as a price ... what is copied instead
+      //--- is the DISTANCE from the entry".
+      //---
+      //--- Only a pending order may carry an absolute stop, because its entry
+      //--- price is copied verbatim as well and the two sides agree by
+      //--- construction. A market entry fills at a price that did not exist when
+      //--- the action was queued.
+      //---
+      //--- Two ways that goes wrong in practice: the stop can land on the wrong
+      //--- side of the receiver's fill (rejected, or an instant stop-out when it
+      //--- lands far away), and - because osl is computed BEFORE the InvertTrades
+      //--- flip twenty lines below - an inverted entry carries a stop from the
+      //--- opposite direction. MT5 has no err-130 fallback (CopierModel:779), so
+      //--- that order is simply rejected and the mirror never opens at all.
+      //---
+      //--- The converge pass re-stops a market entry on the next tick through
+      //--- CopierMirrorStop, which re-anchors by DISTANCE against the actual
+      //--- fill - the one algorithm in this codebase that is correct for this.
+      double osl=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.sl:0.0;
+      double otp=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.tp:0.0;
 
       if(g_senderCfg[si].inverttrades)
         {

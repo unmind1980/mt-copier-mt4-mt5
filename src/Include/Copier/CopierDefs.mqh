@@ -116,7 +116,22 @@
 //--- the peer instead of buffering anything. Same number, one layer earlier,
 //--- so the two cannot drift apart.
 #define CP_MAXMSGSIZE      CP_MAX_MSG_LEN
-#define CP_Z85_MAX         65536   // NM-03: Max compressed Z85 string length (64 KB) to bound decompression allocations
+//--- R58-03: derived from CP_MAX_MSG_LEN instead of being its own magic number.
+//---
+//--- 64 KB capped the Z85 TEXT, but Z85 inflates by 5/4 while the snapshot itself
+//--- is allowed to be 1 MB - so the text cap silently cut the real snapshot
+//--- budget to ~52 KB of compressed bytes. At the documented worst case of 188
+//--- B/record that is roughly 1,100 records, not the 2048 that CP_MAX_POSITIONS
+//--- promises: a large account's snapshot would be rejected wholesale
+//--- ("exceeds CP_Z85_MAX - rejected" -> CopierDecompressField returns "" ->
+//--- HandleSnapshot refuses the whole frame) while the hub, whose limit is 4 MiB,
+//--- decodes the very same frame fine. The symptom is the worst kind: the
+//--- dashboard shows current positions, the receiver's mirror has silently
+//--- stopped converging, and nothing looks offline.
+//---
+//--- The decompression-bomb guard is the post-decode length check, not this
+//--- constant - this one only needs to bound a preposterous input.
+#define CP_Z85_MAX         ((CP_MAX_MSG_LEN/5)*6)   // room for 1 MB in Z85 form
 
 //=====================================================================
 // ZMQ CURVE key sizes.
