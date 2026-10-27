@@ -3908,6 +3908,13 @@ function renderPositions(pos){
 }
 
 function drawTopology(nodes){
+  //--- An SVG <text> does not wrap. A name longer than TEXT_W is drawn past the
+  //--- viewBox edge and silently disappears - which is how the role prefix lost
+  //--- its first letter. Truncate instead, so the label stays inside the frame.
+  function shortName(nm){
+    var t = String(nm || "");
+    return t.length > 16 ? t.slice(0, 15) + "…" : t;
+  }
   var senders = nodes.filter(function(n){ return n.role === "sender"; });
   var receivers = nodes.filter(function(n){ return n.role === "receiver"; });
   $("tcount").textContent = senders.length + " sender(s) · " + receivers.length + " receiver(s)";
@@ -3926,7 +3933,12 @@ function drawTopology(nodes){
   // one number: BOX_W/2 is the box half-width, LBL_GAP the clear space between
   // the box and the text, and the columns are pushed out far enough that the
   // longest name still has room rather than being clipped by the viewBox.
-  var BOX_W = 148, BOX_HALF = BOX_W / 2, LBL_GAP = 16, TEXT_W = 132;
+  //--- TEXT_W must fit "RECEIVER · <name>" at 10.5px mono BOLD: the role prefix
+  //--- alone is 11 characters, and the widest shipped name ("MetaTrader 5") adds
+  //--- 12 more. 132 clipped the prefix to "ENDER" on one side and cut the "4"
+  //--- off the other, because an SVG text node is not wrapped - it is simply
+  //--- drawn outside the viewBox and disappears.
+  var BOX_W = 148, BOX_HALF = BOX_W / 2, LBL_GAP = 16, TEXT_W = 178;
   var W = BOX_HALF * 2 + LBL_GAP + TEXT_W * 2 + 340;
   var H = 60 + Math.max(senders.length, receivers.length, 1) * 46;
   var cx = W / 2;
@@ -3953,13 +3965,13 @@ function drawTopology(nodes){
     //--- can make at a glance - and the terminal name alone does not tell you
     //--- whether that machine copies or is copied.
     out.push('<text class="lbl role" x="' + (cols.s.x - BOX_HALF - LBL_GAP) + '" y="' + (p.y+4) + '" text-anchor="end">' +
-             'SENDER · ' + esc(n.name || "") + '</text>');
+             'SENDER · ' + esc(shortName(n.name)) + '</text>');
   });
   receivers.forEach(function(n,i){
     var p = slot(i);
     out.push(box(cols.r.x, p.y, "nd receiver", esc(n.acc)));
     out.push('<text class="lbl role" x="' + (cols.r.x + BOX_HALF + LBL_GAP) + '" y="' + (p.y+4) + '">' +
-             'RECEIVER · ' + esc(n.name || "") + '</text>');
+             'RECEIVER · ' + esc(shortName(n.name)) + '</text>');
   });
   out.push('</svg>');
   var newHtml = out.join("");
