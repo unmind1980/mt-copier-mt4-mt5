@@ -2966,7 +2966,15 @@ function confirmCloseAllNode(k){
     danger: true,
     confirmText: "Close All Positions"
   }).then(function(ok){
-    if(ok) sendCommand(k, "closeall");
+    //--- N56-15: pass a message element.
+    //---
+    //--- Without one, sendCommand returns early in EVERY error branch
+    //--- (`if(!msgEl) return`), so a 403 write gate, a 409 standby refusal, a
+    //--- 400 unknown-op and a network failure all look identical to the
+    //--- operator: "I clicked Close All and nothing happened". This element is
+    //--- the only place the reason is ever shown, and it is also what pollCommand
+    //--- needs to report the command's final state.
+    if(ok) sendCommand(k, "closeall", $("pos_foot_msg") || $("gmsg"));
   });
 }
 
@@ -3950,7 +3958,12 @@ function sendCommand(k, op, msgEl){
   }).then(function(r){
     return r.json().then(function(j){ return { status: r.status, j: j }; });
   }).then(function(res){
-    if(!msgEl) return;
+    //--- N56-15: never swallow the outcome. With no message element the old
+    //--- code returned here, which made every refusal invisible.
+    if(!msgEl){
+      console.warn("[sendCommand] " + op + " -> HTTP " + res.status + " " + JSON.stringify(res.j || {}));
+      return;
+    }
     if(res.j && res.j.error){
       msgEl.className = "opmsg bad";
       var extra = res.j.detail
@@ -3972,6 +3985,7 @@ function sendCommand(k, op, msgEl){
     }
   }).catch(function(e){
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
+    else console.error("[sendCommand] request failed:", e);
   });
 }
 
@@ -4074,6 +4088,7 @@ function sendGlobal(op){
       + (ids ? " — " + ids : "");
   }).catch(function(e){
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
+    else console.error("[sendCommand] request failed:", e);
   });
 }
 
