@@ -152,6 +152,23 @@
   .zoom-input:focus { outline: none; border-color: var(--accent); }
   .zoom-input::-webkit-outer-spin-button,
   .zoom-input::-webkit-inner-spin-button { opacity: 0.45; height: 18px; }
+  /* A datalist cannot be used here: browsers filter it by what is already
+     typed, so a box showing "12" offers only 12 and 12.5 and the other
+     thirteen values become unreachable. This is a plain list that always
+     shows every step. */
+  .zoom-picker { position: relative; display: inline-block; }
+  .zoom-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 70;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.22);
+    max-height: 216px; overflow-y: auto; min-width: 92px; padding: 4px 0;
+  }
+  .zoom-opt {
+    padding: 5px 14px; font: 12px var(--mono); font-weight: 600;
+    color: var(--ink); cursor: pointer; white-space: nowrap;
+  }
+  .zoom-opt:hover { background: var(--accent); color: #fff; }
+  .zoom-opt.active { color: var(--accent); font-weight: 800; }
   .zoom-label { font-family: var(--mono); font-weight: 700; color: var(--accent); min-width: 44px; text-align: right; }
   .btn-theme {
     padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600;
@@ -232,6 +249,14 @@
     white-space: nowrap;
     vertical-align: middle;
   }
+  /* The Actions column holds two buttons plus a "Standby node is read-only"
+     note. `nowrap` on EVERY cell pushed that text straight out of the table -
+     it survived only as a clipped fragment past the right edge. Let that one
+     column wrap, and give the wrapper the horizontal scroll it was always
+     meant to have: `.table-scroll` had no CSS at all, so a too-wide table
+     simply overflowed instead of scrolling. */
+  table.hub-table th:last-child, table.hub-table td:last-child { white-space: normal; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table.hub-table td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
 
   /* Buttons */
@@ -812,7 +837,7 @@
   footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
 
   /* Badges & Telemetry */
-  .role-pill{display:inline-block;padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;margin-left:4px}
+  .role-pill{display:inline-block;padding:2px 8px;border-radius:4px;font-family:var(--mono);font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin-left:4px;white-space:nowrap}
   .role-pill.sender{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
   .role-pill.receiver{background:#fdf4ff;color:#86198f;border:1px solid #f5d0fe}
   .ver-tag{font-size:11px;color:var(--dim);margin-left:4px;font-weight:normal}
@@ -1234,19 +1259,13 @@
   <div class="nav-tools">
     <div class="zoom-box" title="Font size 11px - 18px in 0.5 steps. Type a value or pick one from the list.">
       <span style="color:var(--dim)">Font:</span>
-      <input type="number" class="zoom-input" id="zoomRange" list="zoomPresets"
-             min="11" max="18" step="0.5" value="13.5"
-             oninput="applyScale(this.value,false)" onchange="applyScale(this.value,true)">
-      <datalist id="zoomPresets">
-        <option value="11"></option><option value="11.5"></option>
-        <option value="12"></option><option value="12.5"></option>
-        <option value="13"></option><option value="13.5"></option>
-        <option value="14"></option><option value="14.5"></option>
-        <option value="15"></option><option value="15.5"></option>
-        <option value="16"></option><option value="16.5"></option>
-        <option value="17"></option><option value="17.5"></option>
-        <option value="18"></option>
-      </datalist>
+      <div class="zoom-picker">
+        <input type="number" class="zoom-input" id="zoomRange"
+               min="11" max="18" step="0.5" value="13.5"
+               oninput="applyScale(this.value,false)" onchange="applyScale(this.value,true)"
+               onfocus="openZoomMenu()" onclick="openZoomMenu()">
+        <div class="zoom-menu hidden" id="zoomMenu"></div>
+      </div>
       <span class="zoom-label" id="zoomVal">13.5px</span>
     </div>
 
@@ -1481,7 +1500,7 @@
   </div>
 </div>
 
-<footer id="foot"><span id="writes-state">loading command state…</span> · <span id="curvekey" class="hidden">CURVE <code id="ckey" title="click to copy"></code> <a href="#" id="ckeycopy" style="color:inherit">(copy)</a> · <a href="#" id="ckeydlg" style="color:inherit">(download / instructions)</a></span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
 
 <div id="pwdlg" class="hidden">
   <form id="pwdform">
@@ -3100,13 +3119,14 @@ function render(){
 // the one value every node's HubPublicKey input needs and it is PUBLIC by
 // definition (the log prints it at every start; this is the same string).
 function renderCurveKey(cv){
-  var box = $("curvekey");
-  if(!cv || !cv.on || !cv.public_key){ box.classList.add("hidden"); return; }
-  box.classList.remove("hidden");
-  var code = $("ckey");
-  if(code.textContent !== cv.public_key){ code.textContent = cv.public_key; }
-  var note = cv.learn ? " (learn mode: new keys are added to curve_clients.txt automatically)" : "";
-  box.setAttribute("title", "CURVE public key - what every node's HubPublicKey input holds." + note);
+  //--- Intentionally empty.
+  //---
+  //--- The 40-character key used to sit in the footer on every page, where it
+  //--- is pure noise: the Hub Key button already opens a modal with the key, a
+  //--- copy action and a download. Removing the footer copy means removing its
+  //--- DOM, so this function must not reference the removed element either -
+  //--- a stale reference fails the id audit, and binding an event to a missing
+  //--- node would abort the rest of the boot.
 }
 
 // Phase 3: Cluster state, Standby banner, and Failback controls
@@ -3306,6 +3326,37 @@ function updateThemeBtn(theme){
 }
 
 // --- Dynamic Font Scaling Slider ---
+function openZoomMenu(){
+  var m = $("zoomMenu");
+  if(!m) return;
+  if(!m.dataset.built){
+    var h = "";
+    for(var v = 11; v <= 18.001; v += 0.5){
+      var label = (v % 1 === 0) ? String(v) : v.toFixed(1);
+      h += '<div class="zoom-opt" data-v="' + v.toFixed(1) + '" onclick="pickZoom(' + v.toFixed(1) + ')">' + label + '</div>';
+    }
+    m.innerHTML = h;
+    m.dataset.built = "1";
+  }
+  var cur = parseFloat($("zoomRange") ? $("zoomRange").value : "");
+  var opts = m.querySelectorAll(".zoom-opt");
+  for(var i = 0; i < opts.length; i++){
+    opts[i].classList.toggle("active", Math.abs(parseFloat(opts[i].dataset.v) - cur) < 0.001);
+  }
+  m.classList.remove("hidden");
+}
+function closeZoomMenu(){
+  var m = $("zoomMenu");
+  if(m) m.classList.add("hidden");
+}
+function pickZoom(v){
+  applyScale(v, true);
+  closeZoomMenu();
+}
+document.addEventListener("click", function(e){
+  if(!e.target.closest || !e.target.closest(".zoom-picker")) closeZoomMenu();
+});
+
 function applyScale(size, finalize){
   var v = parseFloat(size);
   if(!isFinite(v)) return;                     // empty or garbage while typing
@@ -4513,16 +4564,6 @@ $("userform").addEventListener("submit", function(ev){
     err.textContent = "request failed: " + e.message;
   });
 });
-$("ckeycopy").addEventListener("click", function(ev){
-  ev.preventDefault();
-  var key = $("ckey").textContent;
-  var done = function(){ $("ckeycopy").textContent = "(copied)";
-                         setTimeout(function(){ $("ckeycopy").textContent = "(copy)"; }, 1500); };
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(key).then(done, done);
-  } else { done(); }
-});
-
 function openHubKeyModal(autoDownload){
   var cv = (s.data && s.data.curve) || null;
   var isCurveOn = cv && cv.on && cv.public_key;
@@ -4555,10 +4596,6 @@ function closeHubKeyModal(){
 $("btn-download-hub-key").addEventListener("click", function(ev){
   ev.preventDefault();
   openHubKeyModal(true);
-});
-$("ckeydlg").addEventListener("click", function(ev){
-  ev.preventDefault();
-  openHubKeyModal(false);
 });
 $("hubkeyclose_x").addEventListener("click", closeHubKeyModal);
 $("hubkey_close_btn").addEventListener("click", closeHubKeyModal);
