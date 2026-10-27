@@ -288,7 +288,14 @@ involved.
                     `none` keeps channels in memory only) — see "Notifications"
 --role ROLE         cluster role: primary|standby (default primary) — enforces ADR-03 single-writer gate
 --peer-api URL      peer hub HTTP endpoint (e.g. http://127.0.0.1:6011) for health probes & sync
---cluster-token TOK shared authentication token for internal cluster endpoints (or via MTC_CLUSTER_TOKEN)
+--cluster-token TOK shared authentication token for internal cluster endpoints
+                    (or via MTC_CLUSTER_TOKEN). Must be at least 16 characters,
+                    and the values that have shipped in this repository are
+                    rejected as public. When neither the flag, the env var nor
+                    cluster_state.json yields a usable one, the hub mints
+                    `ctok_<ts>_<random>` and persists it. The token is NEVER
+                    printed to the log - a secret that appears in a log has
+                    stopped being one.
 --failback-hours N  hours of continuous online stabilization required before auto-failback (default 24.0)
 --failback-lock     lock failback transitions, keeping current topology frozen
 --verbose           log every message, not just events and stats

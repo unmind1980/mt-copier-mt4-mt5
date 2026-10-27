@@ -318,8 +318,20 @@ those messages to the application.
 `tools/zmq_bidir_test.py` measures this rather than assuming it, and the  
 design rests on all four results: one XPUB send still reaches **every** XSUB  
 subscriber, an XSUB send arrives at the XPUB on the same socket, the  
-subscription filter still works, and with one receiver attached to **several**  
-senders a status message is **broadcast to all of them**.
+subscription filter still works, and — the one that is easy to get wrong —  
+with one XSUB attached to **several** XPUB peers the uplink **round-robins**: a  
+status message reaches exactly **one** of them, never all of them.
+
+That asymmetry is the whole reason `CopierTransport::SendUp` sends `@hub` frames  
+**twice**. Downstream is a broadcast; upstream is a load balancer. With two hubs  
+a single send delivers `REG` / `ACK` / `STAT` / receipts to one hub only, and the  
+standby consumes them without relaying — so the primary never sees the `ACK`  
+(the command walks the whole retry ladder to `unknown`), never sees the `STAT`  
+(the node looks idle) and never sees the receipt (the sender re-sends snapshots).  
+Sending twice puts one copy on each writable pipe; with a single pipe both copies  
+land on the same hub, which is harmless because every `@hub` frame is idempotent  
+(`REG` upserts, `ACK` sets a terminal state, `STAT` refreshes a timestamp, a  
+receipt is a high-water mark).
 
 Two consequences: **XSUB does not auto-subscribe** — the application must send  
 the subscription byte (`0x01`) itself — and the XPUB therefore receives those  

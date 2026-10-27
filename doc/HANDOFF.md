@@ -1195,6 +1195,21 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **TST-01** | **High 日志分析** | `tools/logcheck.py:46, 258, 600` | **TEST-01 logcheck.py 正则捕获组与格式对齐**：修正 `RE_EXEC_CLOSE` 捕获组索引错位（group 4 为 sym，group 5 为 lots）；更新 `RE_SEND_OPEN` 与 `RE_LISTEN` 匹配当前 MQL 日志格式；`discover()` 补齐 `copier_*.log.*` 轮转文件。 |
 | **STB-01** | **Medium/Low 架构治理** | 全栈各模块 | **MQL-04..05, INC-02..03, HUB-05..08, TEST-02 全面收口**：已持仓与当前 `inverttrades` 反差时安全平仓重开（MQL-04）；挂单已成交修改止损平滑转交市价单修改（INC-02）；余额为 0 时禁止提前锁定当日风控基准（INC-03）；`rollback_node_config` 补齐 poll/state 响应并校验 receiver（HUB-05）；接收端持仓与等待列表解压增加 4096 记录上限（HUB-06）；管理员初始密码统一路径与清理、`users.save()` 错误校验（HUB-07）；`AcceptSeq` 清理空槽（MQL-05）；无 WebSocket 监听跳过快照序列化、单遍切分 `parse_snap`、前端细节（HUB-08）；测试套件覆盖增强（TEST-02）。 |
 
+## 8. 第 56 轮：多厂商交叉盲审与整改（2026-10-27）
+
+首次采用三路独立盲审（DeepSeek / Gemini / GLM，互不可见，不给任何历史结论），产出 26 条发现，跨报告**零重叠**，唯一交叉点是一处直接矛盾：假修复猎人认为 `UserStore` 无误（理由是 PBKDF2-4096 存储确实正确、参数一致），攻击者判为完全接管。回读 `users.rs:645` 证实后者正确——`proof = sha256(stored_digest + ":" + nonce)`，被拉伸后的摘要本身就是钥匙。**验证"代码是否符合它自己的说明"，恰恰看不见这类缺陷。**
+
+已修 20 项，详见 `outputs/mt-copier-fullstack-audit-56-2026-10-27.md` 与提交 `9ab0b35` / `35ff284`。T0 级四条：
+
+- 风控日初基线存了实时余额 → `cashFlow` 恒等于 `-realized` → 每分钟累加 → 假熔断强平（`CopierReceiver.mq4:4539-4559`）
+- XSUB 双连时上行是轮询 → 控制帧丢一半（`CopierTransport.mqh:473` 改为 `@hub` 双发；数据帧仍单发，备机会转发）
+- 集群令牌硬编码在启动脚本 → 首次随机生成 + 拒绝已知公开值 + 不写日志 + 备机缺文件拒绝启动
+- `cluster/sync` 明文下发 `users.json` → 默认关闭，需 `MTC_SYNC_USERS=1`
+
+未修 6 项，含两条架构级限制（XPUB 订阅无 ACL、ZMQ 节点身份自声明，需改 ROUTER/DEALER 或 ZAP user-id 绑定），原因见报告第 4 节。
+
+验证：Rust 0 error / 0 warning + 142/142 单测；4 终端 16 个 MQL 二进制 ALL GREEN。
+
 ---
 
 ---

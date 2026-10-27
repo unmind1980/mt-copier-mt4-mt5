@@ -52,7 +52,7 @@
 | **ADR-06** | **CURVE 加密规范** | **共享同一套 `curve_hub.keys` 服务端密钥对**。<br>`libzmq` 底层限制一个 XSUB 套接字只能绑定一个服务端公钥。主备共享密钥对，客户端只需下载配置一次 `copier_hub.key` 即可双连成功。 |
 | **ADR-07** | **控制帧发射权属** | **Standby 默认控制帧静默，仅在 Primary 失联 >6s 时自动代发 `RCPT`**。<br>避免平时双份 `RCPT` 干扰 Sender 的心跳周期估算；Primary 故障时 Standby 自动接管 `RCPT` 中继，保障快照修复闭环。 |
 | **ADR-08** | **状态持久化与同步** | **沿用现有文本/JSONL 架构，基于增量水位线（High-Watermark）+ SHA-256 摘要对齐**。<br>不引入外部数据库。主备强同步 5 大核心文件：`users.json`、`alert_channels.json`、`curve_clients.txt`、`config_revisions.jsonl`、`commands.jsonl`；客户端真实 INI 依靠 `REG` 哈希按需拉取。 |
-| **ADR-09** | **集群内部通信安全** | **专用集群共享通信令牌（`cluster_token`）+ 私网/防火墙白名单**。<br>不借用前端 Web Session，不从 CURVE 私钥做非标派生；采用清晰的标准 HMAC-SHA256 或 Bearer Token，并在防火墙层限制互联 IP。 |
+| **ADR-09** | **集群内部通信安全** | **专用集群共享通信令牌（`cluster_token`）+ 私网/防火墙白名单**。<br>不借用前端 Web Session，不从 CURVE 私钥做非标派生；采用清晰的标准 HMAC-SHA256 或 Bearer Token，并在防火墙层限制互联 IP。<br>**令牌生命周期（N56 补充）**：首次启动随机生成并落盘 `cluster_token.txt`，主备共享同一份；备机缺文件时**拒绝启动**而非自行生成（两端令牌不一致会导致 401、永久 `disconnected`、永不 failback，且无任何报错）。轮换为**手动**操作：停双机 → 删文件 → 启主机（重新生成）→ 拷贝给备机 → 启备机。hub 侧拒绝长度 <16 或本仓库曾公开过的值，且**不把令牌写入日志**。 |
 | **ADR-10** | **稳定期自动回切机制（Auto-Failback）** | **主机连续健康在线达标（默认 24h）自动夺回 Master**。<br>运维人员难以长期记忆当前主备归属，为保持“绝大多数时候主机恒为 Master”，主机重启追平数据并连续稳定在线 24 小时后，通过两阶段安全握手优雅夺回 Master 身份，避开重启初期的震荡（Flapping），且全过程无双写窗口。 |
 
 ---

@@ -298,7 +298,7 @@ The receiver operates in two modes:
    - Set `HubEndpoint = <hub_ip>:<hub_port>` (e.g. `127.0.0.1:6000`).
    - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
    - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
-   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 12288` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 524288` (512 KB) — the **same** byte bound the hub enforces, asserted equal by `hub_config_test.py`. A full config for the whole `CP_MAX_SENDERS` (100) sender ceiling measures **~5,000 rows / ~100 KB** with the hub’s key set and **~7,400 rows / ~270 KB** with the receiver’s own round-trip serializer (which writes a few more keys per sender) — both figures are produced by `hub_config_test.py`, and both leave ample headroom for symbol maps and long `IgnoreUids` lists; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
+   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 12288` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 524288` (512 KB) — the **same** byte bound the hub enforces, asserted equal by `hub_config_test.py`. The hub now also enforces this row ceiling and the `CP_INI_SECTIONS = 132` section limit: a config that passes the door and is then refused by the node does not fail once — the hub re-pushes it on every heartbeat (`node_rev < hub_rev`), forever. A full config for the whole `CP_MAX_SENDERS` (100) sender ceiling measures **~5,000 rows / ~100 KB** with the hub’s key set and **~7,400 rows / ~270 KB** with the receiver’s own round-trip serializer (which writes a few more keys per sender) — both figures are produced by `hub_config_test.py`, and both leave ample headroom for symbol maps and long `IgnoreUids` lists; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
    - **Live settings sync (Content Hash & On-Demand Pull)**: The receiver reports only a 16-hex content hash (`IH=<hash>`) in its regular `REG` announcements (reducing steady-state configuration bandwidth by 99.9%). The central hub matches this hash against cached copies; if absent or drifted, the hub dispatches an automated `reqcfg` pull request (with adaptive backoff) and the node responds via `CFGRPT`. Operators can inspect and clone live settings in the Web Dashboard via **📥 Load Current Setting from Node** or trigger an instant pull via **[🔄 Query Live INI]**.
    - **Multi-tier Telemetry & On-Demand Refresh**: Receiver sends 1s receipts for instant sync, 5s summary figures (`HELD`, `LOTS`, `WAIT`, `EQ`, `BL`), and 60s detailed lists (`POS`, `WAITLIST`). In Direct mode, detailed lists are automatically skipped to keep communication ultra-lean. In WebUI, operators can click `[🔄 Request Update]` in the orders table header to request an immediate on-demand refresh without waiting for the 60s routine clock.
    - **Full Order & Pipeline Inspection in Split Cockpit**: Clicking any node row in the Terminals & Nodes table jumps smoothly to the dedicated **Split Cockpit** view (eliminating intrusive overlay modals), providing line-by-line order inspection with 5 filter tabs (`All`, `Opened`, `Waiting`, `Managed`, `Orphan / Manual`) and visual breakdown across the 3-stage waiting pipeline (Broker Queue, Gate Delayed, Market Closed). All filter tabs and sidebar items use persistent in-place DOM elements with zero flicker and 0ms transition latency.
@@ -505,6 +505,35 @@ never disagree.
 > key into `curve_clients.txt` itself, so nobody transcribes 40-char strings;
 > restart without it once every node has joined. The direct channel's
 > `UseCurve` is separate and still defaults off.
+
+### Cluster token, and the switches that decide how far it is trusted
+
+The two hubs authenticate each other with one shared token. It is **minted once
+and then reused** — there is no scheduled rotation:
+
+- `tools/start_primary.bat` reads `cluster_token.txt`; if the file is missing (or
+  still holds the old published constant) it mints a GUID pair and writes it.
+- `tools/start_standby.bat` **refuses to start** without that file. A hub pair
+  that disagrees on the token fails every peer probe with 401, reports
+  `disconnected` forever, and never fails over — and nothing says why.
+- To rotate by hand: stop both hubs, delete `cluster_token.txt`, start the
+  primary (it mints a new one), copy the file to the standby, start it there.
+
+The hub itself rejects a token shorter than 16 characters, rejects the values
+that have shipped in this repository, and never writes the token to the log.
+
+Three environment switches decide what the hub trusts. All default to **off**,
+because each one widens the trust boundary:
+
+| variable | default | what it enables | why it stays off |
+|---|---|---|---|
+| `MTC_SYNC_USERS` | off | `cluster/sync` ships `users.json` to the peer | the stored password digest **is** the login proof (`users.rs`), so shipping it over a plaintext cluster channel is equivalent to shipping an admin session |
+| `MTC_TRUST_PROXY` | off | `X-Forwarded-For` for per-IP login rate limiting, and `X-Forwarded-Proto` for the cookie's `Secure` flag | both headers are caller-controlled; believing them without a real proxy lets anyone mint a fresh "client IP" per request and walk past the nonce throttle |
+| `MTC_HTTPS` | off | marks the session cookie `Secure` | declare it only when the browser really reaches the hub over TLS, or the cookie stops being sent at all |
+
+`curve_clients.txt` containing `*` means "any client that can generate a CURVE
+keypair" — a one-second operation. The hub now warns about it at load time. It is
+the right default on a lab bench and the wrong one on a shared network.
 
 ---
 
@@ -1333,8 +1362,15 @@ design rests on all four results:
 - one XPUB send still reaches **every** XSUB subscriber (fan-out is intact)
 - an XSUB send arrives at the XPUB on the same socket
 - the subscription filter still works
-- with one receiver attached to **several** senders, a status message is  
-  **broadcast to all of them**
+- with one XSUB attached to **several** XPUB peers, the uplink **round-robins**  
+  — a status message reaches exactly **one** of them, never all of them
+
+That last one is not a detail. It is why `CopierTransport::SendUp` sends `@hub`  
+frames **twice**: downstream is a broadcast, upstream is a load balancer, so a  
+single send delivers `REG`/`ACK`/`STAT`/receipts to one hub only — and the  
+standby consumes them without relaying, leaving the primary blind to half of  
+them. This line used to claim the opposite, which is why the defect survived  
+several audits: the test that measured it only asserted the downstream half.
 
 Two details that follow from XPUB/XSUB and are easy to get wrong:  
 **XSUB does not auto-subscribe** (the receiver sends the `0x01` subscription  
