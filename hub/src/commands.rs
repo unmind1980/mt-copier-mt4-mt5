@@ -312,17 +312,13 @@ impl CommandStore {
         (inner.line_count, inner.max_seq)
     }
 
-    /// Read lines starting from line index `from_line` for incremental replication.
-    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize, u64)> {
+    /// Read lines from path starting from line index `from_line` without holding the inner lock.
+    pub fn read_lines_from_path(path: &Path, from_line: usize) -> std::io::Result<(Vec<String>, usize, u64)> {
         use std::io::BufRead;
-        if !self.enabled || !self.path.exists() {
+        if !path.exists() {
             return Ok((Vec::new(), 0, 0));
         }
-        let (total_lines, cur_max_seq) = self.sync_stats();
-        if from_line >= total_lines {
-            return Ok((Vec::new(), total_lines, cur_max_seq));
-        }
-        let file = std::fs::File::open(&self.path)?;
+        let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
         let mut lines = Vec::new();
         let mut total = 0;
@@ -344,6 +340,19 @@ impl CommandStore {
             total += 1;
         }
         Ok((lines, total, max_seq))
+    }
+
+    /// Read lines starting from line index `from_line` for incremental replication.
+    #[allow(dead_code)]
+    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize, u64)> {
+        if !self.enabled || !self.path.exists() {
+            return Ok((Vec::new(), 0, 0));
+        }
+        let (total_lines, cur_max_seq) = self.sync_stats();
+        if from_line >= total_lines {
+            return Ok((Vec::new(), total_lines, cur_max_seq));
+        }
+        Self::read_lines_from_path(&self.path, from_line)
     }
 
     /// Apply delta command lines received from peer Primary Hub.
@@ -401,6 +410,52 @@ impl CommandStore {
             }
         }
         Ok(applied)
+    }
+
+    /// Replace all commands in the store and journal with lines from Primary.
+    /// Used when Primary performed compaction or local state is ahead of Primary's lines.
+    pub fn replace_all(&self, lines: &[String]) -> std::io::Result<usize> {
+        if !self.enabled {
+            return Ok(0);
+        }
+        let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
+        {
+            let mut f = File::create(&tmp)?;
+            for l in lines {
+                f.write_all(l.as_bytes())?;
+                f.write_all(b"\n")?;
+            }
+            f.sync_all()?;
+        }
+        {
+            let mut inner = self.inner.lock_or_recover();
+            inner.file = None; // Drop file handle so Windows allows replacing the file
+        }
+        let _ = std::fs::remove_file(&self.path);
+        std::fs::rename(&tmp, &self.path)?;
+        let (mut commands, seq, torn, line_count, max_seq) = load(&self.path);
+        let now = unix_secs();
+        let mut inner = self.inner.lock_or_recover();
+        inner.commands = std::mem::take(&mut commands);
+        inner.prune_terminal(now, COMMAND_KEEP_SECS);
+        inner.seq = seq;
+        inner.torn = torn;
+        let pending_ids: Vec<String> = inner
+            .commands
+            .iter()
+            .filter(|(_, c)| c.state == STATE_PENDING)
+            .map(|(id, _)| id.clone())
+            .collect();
+        inner.in_flight.clear();
+        for id in pending_ids {
+            inner.in_flight.insert(id);
+        }
+        inner.line_count = line_count;
+        inner.max_seq = max_seq;
+        if let Ok(file) = OpenOptions::new().create(true).append(true).open(&self.path) {
+            inner.file = Some(file);
+        }
+        Ok(lines.len())
     }
 
     /// (total commands known, pending, torn lines)
@@ -725,11 +780,19 @@ impl CommandStore {
     /// reverting the attempt counter consumed by due_gated so retries are not wasted.
     pub fn defer(&self, id: &str, delay: Duration) {
         let mut inner = self.inner.lock_or_recover();
-        if let Some(c) = inner.commands.get_mut(id) {
+        let snap = if let Some(c) = inner.commands.get_mut(id) {
             if c.state == STATE_PENDING && c.attempts > 0 {
                 c.attempts -= 1;
                 c.next_at = Instant::now() + delay;
+                Some(c.clone())
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        if let Some(cmd) = snap {
+            inner.append(&cmd);
         }
     }
 }

@@ -1260,6 +1260,12 @@ void TestRiskDailyAndDrawdown()
    Ok("risk: a new day clears the daily switch",!rk.DailyTripped());
    Ok("risk: an open is allowed again",rk.AllowOpen(0.01,0,0.0,0,0.0,why));
 
+   // P2-12: An account blown out on launch (equity <= 0.0 before arming) trips immediately
+   CopierRisk rkBlown;
+   rkBlown.Configure(rl);
+   rkBlown.ObserveAt(0.0,100,0.0);
+   Ok("risk: zero equity trips immediately even before arming",rkBlown.DailyTripped());
+
    //--- the DRAWDOWN switch, which must LATCH
    CopierRiskLimits dl;
    dl.maxLotsPerPosition=0.0;
@@ -2015,6 +2021,13 @@ void TestPeerLiveness()
       CP_PEER_GRACE_MS>=1000);
    Ok("peers: ...and short enough not to hide a dead peer for long",
       CP_PEER_GRACE_MS<=10000);
+
+   // P1-1: ProbeSent records timestamp, and PongBack matches the probe timestamp and measures RTT
+   long tProbe=CopierNowMs();
+   p.ProbeSent("hub:primary",tProbe);
+   Ok("peers: probe sets pending ping timestamp and pongback succeeds",p.PongBack("hub:primary",tProbe));
+   Ok("peers: rtt is measured upon valid pong",p.RttFor("hub:primary")>=0);
+   Ok("peers: mismatching or stale probe timestamp is rejected",!p.PongBack("hub:primary",tProbe+999));
   }
 
 void TestSymbolQuoteAge()

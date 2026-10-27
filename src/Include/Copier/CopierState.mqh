@@ -1097,7 +1097,12 @@ public:
          i=FreeSlot();
 
       if(n>8) n=8;
-      if(StringLen(m_k[i])>0 && m_k[i]!=key) EraseHash(i);
+      // P3-4: Clear slot before EraseHash rebuilds table so old key is not re-indexed
+      if(StringLen(m_k[i])>0 && m_k[i]!=key)
+        {
+         m_k[i]="";
+         EraseHash(i);
+        }
       m_k[i]=key;
       m_n[i]=n;
       m_t[i]=now;

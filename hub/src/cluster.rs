@@ -234,7 +234,7 @@ impl ClusterManager {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let tmp = self.state_path.with_extension("json.tmp");
+        let tmp = PathBuf::from(format!("{}.tmp.{}", self.state_path.display(), std::process::id()));
         let text = serde_json::to_string_pretty(&self.state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         {
@@ -242,6 +242,7 @@ impl ClusterManager {
             f.write_all(text.as_bytes())?;
             f.sync_all()?;
         }
+        let _ = fs::remove_file(&self.state_path);
         fs::rename(&tmp, &self.state_path)
     }
 
@@ -475,10 +476,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 if should_recover {
                     let mut s = st.lock_or_recover();
                     let new_ep = s.cluster.promote(None);
-                    s.writes = true;
+                    s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
+                    let current_writes = s.writes;
                     let audit_rec = Arc::clone(&s.audit);
-                    audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {}", new_ep), None, None, "ok");
-                    println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}", new_ep);
+                    audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", new_ep, current_writes), None, None, "ok");
+                    println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}. Writes={}.", new_ep, current_writes);
                 }
             }
 
@@ -490,19 +492,22 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let _ = s.cluster.save();
                 }
 
-                // P1-3 & P2-3: Use zero-disk-IO memory statistics and cached file hashes under lock
-                let (cfg_lines_count, cmd_lines_count, users_h, notif_h, curve_h) = {
+                // P1-3, P1-4 & P2-3: Use zero-disk-IO memory statistics, max_seq watermark and cached file hashes under lock
+                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_h, notif_h, curve_h) = {
                     let s = st.lock_or_recover();
                     let cfg_tot = s.cfg.total_lines();
-                    let (cmd_tot, _) = s.cmds.sync_stats();
+                    let (cmd_tot, max_seq) = s.cmds.sync_stats();
                     let u_h = file_sha256(&s.users.path());
                     let n_h = file_sha256(&s.notif_store.lock_or_recover().path());
                     let c_h = file_sha256(&s.cluster.curve_clients_path);
-                    (cfg_tot, cmd_tot, u_h, n_h, c_h)
+                    (cfg_tot, cmd_tot, max_seq, u_h, n_h, c_h)
                 };
 
                 let needs_sync = remote_st.cfg_lines > cfg_lines_count
                     || remote_st.cmd_lines > cmd_lines_count
+                    || remote_st.max_cmd_seq > local_max_cmd_seq
+                    || (remote_st.cmd_lines < cmd_lines_count && remote_st.cmd_lines > 0)
+                    || (remote_st.cfg_lines < cfg_lines_count && remote_st.cfg_lines > 0)
                     || remote_st.users_hash != users_h
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
@@ -519,14 +524,25 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 }
 
                 if needs_sync {
-                    {
+                    let was_syncing = {
                         let mut s = st.lock_or_recover();
+                        let was = s.cluster.sync_status == "syncing";
                         s.cluster.sync_status = "syncing".to_string();
+                        was
+                    };
+                    if !was_syncing {
+                        println!(
+                            "[hub] CLUSTER SYNC: Initiating sync with Primary (cfg: {}/{}, cmd: {}/{}, seq: {}/{})...",
+                            cfg_lines_count, remote_st.cfg_lines, cmd_lines_count, remote_st.cmd_lines, local_max_cmd_seq, remote_st.max_cmd_seq
+                        );
                     }
 
+                    let req_from_cfg_line = if cfg_lines_count > remote_st.cfg_lines { 0 } else { cfg_lines_count };
+                    let req_from_cmd_line = if cmd_lines_count > remote_st.cmd_lines { 0 } else { cmd_lines_count };
+
                     let sync_req = ClusterSyncRequest {
-                        from_cfg_line: cfg_lines_count,
-                        from_cmd_line: cmd_lines_count,
+                        from_cfg_line: req_from_cfg_line,
+                        from_cmd_line: req_from_cmd_line,
                         users_hash: users_h,
                         notif_hash: notif_h,
                         curve_clients_hash: curve_h,
@@ -544,12 +560,16 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         Ok(res) if res.status().is_success() => {
                             if let Ok(data) = res.json::<ClusterSyncResponse>().await {
                                 let mut s = st.lock_or_recover();
-                                // Apply delta configs
-                                if !data.cfg_delta_lines.is_empty() {
+                                // Apply delta configs (or replace if Primary was compacted)
+                                if req_from_cfg_line == 0 && !data.cfg_delta_lines.is_empty() && (remote_st.cfg_lines < cfg_lines_count && cfg_lines_count > 0) {
+                                    let _ = s.cfg.replace_all(&data.cfg_delta_lines);
+                                } else if !data.cfg_delta_lines.is_empty() {
                                     let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
-                                // Apply delta commands
-                                if !data.cmd_delta_lines.is_empty() {
+                                // Apply delta commands (or replace if Primary was compacted)
+                                if req_from_cmd_line == 0 && !data.cmd_delta_lines.is_empty() && (remote_st.cmd_lines < cmd_lines_count && cmd_lines_count > 0) {
+                                    let _ = s.cmds.replace_all(&data.cmd_delta_lines);
+                                } else if !data.cmd_delta_lines.is_empty() {
                                     let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
                                 }
                                 // Apply full users content if updated
@@ -665,10 +685,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         Some(s.cluster.epoch() + 1)
                                     };
                                     let new_ep = s.cluster.promote(target_ep);
-                                    s.writes = true;
+                                    s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
+                                    let current_writes = s.writes;
                                     println!(
-                                        "[hub] ADR-10 AUTO-FAILBACK SUCCESS: Master identity recovered with epoch {}!",
-                                        new_ep
+                                        "[hub] ADR-10 AUTO-FAILBACK SUCCESS: Master identity recovered with epoch {}! Writes={}.",
+                                        new_ep, current_writes
                                     );
                                     Arc::clone(&s.audit)
                                 };

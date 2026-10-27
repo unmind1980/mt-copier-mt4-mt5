@@ -52,6 +52,7 @@
 //! a page that has to scan it to render is a page that stops rendering.
 
 use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 use serde_json::{json, Value};
 
@@ -253,6 +254,19 @@ pub fn drift_jumped(prev: Option<i64>, cur: i64, threshold: i64) -> bool {
     }
 }
 
+struct NodeAlertSnapshot {
+    key: String,
+    role_str: &'static str,
+    name: String,
+    acc: String,
+    last_seen: Instant,
+    liveness: crate::registry::Liveness,
+    drift_secs: Option<i64>,
+    node_ts: Option<i64>,
+    blocked: u32,
+    risk: String,
+}
+
 /// Evaluate every rule against the hub's current state, return what fired
 /// (already pushed into the ring). The caller writes them to the audit log.
 ///
@@ -263,17 +277,30 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
     let mut fired: Vec<Alert> = Vec::new();
     let instant_now = std::time::Instant::now();
 
-    //--- Snapshot the node view first. The loop mutates the engine (a
-    //--- different field of `s`), but borrowing `s.reg` for the iteration
-    //--- and `s.alerts` inside it is clearer to read - and to prove correct
-    //--- - as an owned list.
-    let nodes: Vec<crate::registry::Node> = s.reg.nodes().into_iter().cloned().collect();
+    // P3-10: Snapshot only required scalar fields instead of cloning entire Node (held_items, wait_items, config_current, etc.)
+    let nodes: Vec<NodeAlertSnapshot> = s
+        .reg
+        .nodes()
+        .iter()
+        .map(|n| NodeAlertSnapshot {
+            key: n.key.clone(),
+            role_str: n.role_str(),
+            name: n.name.clone(),
+            acc: n.acc.clone(),
+            last_seen: n.last_seen,
+            liveness: n.liveness(instant_now),
+            drift_secs: n.drift_secs,
+            node_ts: n.node_ts,
+            blocked: n.blocked,
+            risk: n.risk.clone(),
+        })
+        .collect();
 
     for n in &nodes {
         //--- liveness, with re-arm. `insert` returns the PREVIOUS value, so
         //--- the first evaluation of a node establishes its baseline and
         //--- never fires on its own.
-        let offline = matches!(n.liveness(instant_now), Liveness::Offline);
+        let offline = matches!(n.liveness, Liveness::Offline);
         let was = s.alerts.was_offline.insert(n.key.clone(), offline);
         if offline && !was.unwrap_or(false) {
             //--- The outage clock starts at the node's LAST CONTACT, not at
@@ -291,7 +318,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 severity: Severity::Critical,
                 node: n.key.clone(),
                 detail: json!({
-                    "role": n.role_str(),
+                    "role": n.role_str,
                     "name": n.name,
                     "account": n.acc,
                     "quiet_secs": instant_now.saturating_duration_since(n.last_seen).as_secs(),
@@ -311,7 +338,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 severity: Severity::Warning,
                 node: n.key.clone(),
                 detail: json!({
-                    "role": n.role_str(),
+                    "role": n.role_str,
                     "name": n.name,
                     "account": n.acc,
                     "outage_secs": outage_secs,
@@ -350,7 +377,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         //--- risk: entries the receiver's risk gates are blocking right now.
         //--- M6: BLOCKED is reported per minute by receiver. Alert when > 0, rate-limited by silence::RISK (300s).
         //--- R47-29: Suppress risk alerts if node is not Online to avoid repeated alerts from frozen offline state
-        if n.liveness(instant_now) == crate::registry::Liveness::Online {
+        if n.liveness == crate::registry::Liveness::Online {
             if n.blocked > 0 {
                 let a = Alert {
                     ts: now,

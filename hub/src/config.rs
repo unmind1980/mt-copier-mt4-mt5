@@ -199,17 +199,13 @@ impl ConfigStore {
         v
     }
 
-    /// Read lines starting from line index `from_line` for incremental replication.
-    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize)> {
+    /// Read lines from path starting from line index `from_line` without holding the inner lock.
+    pub fn read_lines_from_path(path: &Path, from_line: usize) -> std::io::Result<(Vec<String>, usize)> {
         use std::io::BufRead;
-        if !self.enabled || !self.path.exists() {
+        if !path.exists() {
             return Ok((Vec::new(), 0));
         }
-        let total_count = self.total_lines();
-        if from_line >= total_count {
-            return Ok((Vec::new(), total_count));
-        }
-        let file = std::fs::File::open(&self.path)?;
+        let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
         let mut lines = Vec::new();
         let mut total = 0;
@@ -225,6 +221,19 @@ impl ConfigStore {
             total += 1;
         }
         Ok((lines, total))
+    }
+
+    /// Read lines starting from line index `from_line` for incremental replication.
+    #[allow(dead_code)]
+    pub fn read_lines_from(&self, from_line: usize) -> std::io::Result<(Vec<String>, usize)> {
+        if !self.enabled || !self.path.exists() {
+            return Ok((Vec::new(), 0));
+        }
+        let total_count = self.total_lines();
+        if from_line >= total_count {
+            return Ok((Vec::new(), total_count));
+        }
+        Self::read_lines_from_path(&self.path, from_line)
     }
 
     /// Apply delta lines received from peer Primary Hub.
@@ -264,6 +273,38 @@ impl ConfigStore {
             }
         }
         Ok(applied)
+    }
+
+    /// Replace all configurations in the store and journal with lines from Primary.
+    /// Used when Primary performed compaction or local state is ahead of Primary's lines.
+    pub fn replace_all(&self, lines: &[String]) -> std::io::Result<usize> {
+        if !self.enabled {
+            return Ok(0);
+        }
+        let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
+        {
+            let mut f = File::create(&tmp)?;
+            for l in lines {
+                f.write_all(l.as_bytes())?;
+                f.write_all(b"\n")?;
+            }
+            f.sync_all()?;
+        }
+        {
+            let mut inner = self.inner.lock_or_recover();
+            inner.file = None; // Drop file handle so Windows allows replacing the file
+        }
+        let _ = std::fs::remove_file(&self.path);
+        std::fs::rename(&tmp, &self.path)?;
+        let (current, count, torn) = load(&self.path).unwrap_or_default();
+        let mut inner = self.inner.lock_or_recover();
+        inner.current = current;
+        inner.count = count;
+        inner.torn = torn;
+        if let Ok(file) = OpenOptions::new().create(true).append(true).open(&self.path) {
+            inner.file = Some(file);
+        }
+        Ok(lines.len())
     }
 
     /// Append a new revision. Returns it, or None if the store is disabled.

@@ -296,8 +296,9 @@ def main():
         # ---------------------------------------------------------------------
         # Original Primary requests handover back:
         # Current Primary (S_HTTP_PORT) steps down, closes write gate, increments epoch to 3.
+        p_hub_id = p_status.get("hub_id", "original-primary")
         st, h_res, _ = http_req(S_HTTP_PORT, "POST", "/api/v1/cluster/handover-request",
-                                body={"from_hub_id": "original-primary", "from_epoch": 2,
+                                body={"from_hub_id": p_hub_id, "from_epoch": 2,
                                       "is_configured_primary": True, "reason": "test_handover"},
                                 token=CLUSTER_TOKEN)
         check("Handover request returns 200 OK", st == 200, f"status={st}")

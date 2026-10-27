@@ -1738,7 +1738,6 @@ void OnTimer()
                      g_peers.Forget(g_singleHubRole);
                      g_singleHubRole=hfrom;
                     }
-                  g_peers.ProbeSent(g_singleHubRole,now);
                  }
                if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
                  {
@@ -1875,9 +1874,10 @@ void OnTimer()
       if(!g_prev.At(k,q)) continue;
       g_slotMissCount[k]++;
       if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
-      // R47-03: Instant 0ms close when confirmed in history; otherwise enforce >=2000ms debounce
-      // window (protects against transient scan enumeration misses under fast PollMs=5)
-      if(!CopierIsTicketClosedInHistory(q.ticket) && (now-g_slotMissMs[k]<2000)) continue;
+      // R47-03 & P2-7: Instant 0ms close when confirmed in history on initial miss;
+      // Rate-limit history scan to avoid 400 redundant queries under PollMs=5 during 2000ms debounce
+      bool closedInHist = (g_slotMissCount[k]<=1 || (now-g_slotMissMs[k]>=2000)) && CopierIsTicketClosedInHistory(q.ticket);
+      if(!closedInHist && (now-g_slotMissMs[k]<2000)) continue;
       g_slotMissCount[k]=0;
       g_slotMissMs[k]=0;
       EmitClose(q);
@@ -2080,7 +2080,6 @@ void OnTimer()
                      g_peers.Forget(g_singleHubRole);
                      g_singleHubRole=hfrom;
                     }
-                  g_peers.ProbeSent(g_singleHubRole,now);
                  }
                if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
                  {

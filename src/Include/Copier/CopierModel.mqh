@@ -602,6 +602,12 @@ string CopierReadCommentByTicket(const CopierPos &p)
 #ifdef __MQL5__
    if(p.kind==CP_ORD_MARKET)
      {
+      // P2-6 Fast path: direct select by ticket first
+      if(PositionSelectByTicket((ulong)p.ticket))
+        {
+         if((long)PositionGetInteger(POSITION_IDENTIFIER)==p.ticket)
+            return PositionGetString(POSITION_COMMENT);
+        }
       int total=PositionsTotal();
       for(int i=0;i<total;i++)
         {

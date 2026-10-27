@@ -2838,43 +2838,69 @@ async fn cluster_sync(
     Json(req): Json<crate::cluster::ClusterSyncRequest>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let s = st.lock_or_recover();
-    if !s.cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Only Primary node can serve sync requests." })),
-        )
-            .into_response();
-    }
+    // P2-1: Minimize lock holding duration. Capture paths, epoch & cached hashes inside lock, then perform disk I/O outside lock.
+    let (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_path, notif_path, curve_clients_path, local_users_hash, local_notif_hash, local_curve_hash, total_cfg_lines, total_cmd_lines, max_cmd_seq) = {
+        let s = st.lock_or_recover();
+        if !s.cluster.is_primary() {
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({ "error": "Only Primary node can serve sync requests." })),
+            )
+                .into_response();
+        }
+        let epoch = s.cluster.state.epoch;
+        let cfg_path = s.cfg.path().to_path_buf();
+        let cmd_path = s.cmds.path().to_path_buf();
+        let cfg_enabled = s.cfg.enabled();
+        let cmd_enabled = s.cmds.enabled();
+        let users_p = s.users.path().to_path_buf();
+        let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
+        let curve_p = s.cluster.curve_clients_path.clone();
+        let u_hash = crate::cluster::file_sha256(&users_p);
+        let n_hash = crate::cluster::file_sha256(&notif_p);
+        let c_hash = crate::cluster::file_sha256(&curve_p);
+        let cfg_tot = s.cfg.total_lines();
+        let (cmd_tot, max_seq) = s.cmds.sync_stats();
+        (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_p, notif_p, curve_p, u_hash, n_hash, c_hash, cfg_tot, cmd_tot, max_seq)
+    };
 
-    let (cfg_delta_lines, total_cfg_lines) = s.cfg.read_lines_from(req.from_cfg_line).unwrap_or((Vec::new(), 0));
-    let (cmd_delta_lines, total_cmd_lines, max_cmd_seq) = s.cmds.read_lines_from(req.from_cmd_line).unwrap_or((Vec::new(), 0, 0));
+    let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
+        Vec::new()
+    } else {
+        crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line)
+            .map(|(lines, _)| lines)
+            .unwrap_or_default()
+    };
 
-    let local_users_hash = crate::cluster::file_sha256(&s.users.path());
+    let cmd_delta_lines = if !cmd_enabled || req.from_cmd_line >= total_cmd_lines {
+        Vec::new()
+    } else {
+        crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line)
+            .map(|(lines, _, _)| lines)
+            .unwrap_or_default()
+    };
+
     let users_content = if req.users_hash != local_users_hash {
-        std::fs::read_to_string(&s.users.path()).ok()
+        std::fs::read_to_string(&users_path).ok()
     } else {
         None
     };
 
-    let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
-    let local_notif_hash = crate::cluster::file_sha256(&notif_p);
     let notif_content = if req.notif_hash != local_notif_hash {
-        std::fs::read_to_string(&notif_p).ok()
+        std::fs::read_to_string(&notif_path).ok()
     } else {
         None
     };
 
-    let local_curve_hash = crate::cluster::file_sha256(&s.cluster.curve_clients_path);
     let curve_clients_content = if req.curve_clients_hash != local_curve_hash {
-        std::fs::read_to_string(&s.cluster.curve_clients_path).ok()
+        std::fs::read_to_string(&curve_clients_path).ok()
     } else {
         None
     };
 
     let resp = crate::cluster::ClusterSyncResponse {
         ok: true,
-        epoch: s.cluster.state.epoch,
+        epoch,
         cfg_delta_lines,
         cmd_delta_lines,
         users_content,
@@ -2944,6 +2970,21 @@ async fn cluster_handover_request(
             })),
         )
             .into_response();
+    }
+    // P2-2: Verify against known peer if peer status is recorded
+    if let Some(peer) = s.cluster.peer_status.as_ref() {
+        if !peer.hub_id.is_empty() && peer.hub_id != req.from_hub_id {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                Json(json!({
+                    "ok": false,
+                    "agreed": false,
+                    "new_epoch": s.cluster.epoch(),
+                    "error": format!("Handover rejected: from_hub_id {} does not match registered peer {}", req.from_hub_id, peer.hub_id)
+                })),
+            )
+                .into_response();
+        }
     }
 
     // Step down atomically on current Primary before agreeing:
@@ -3110,8 +3151,14 @@ async fn cluster_failback_now(
             if let Ok(h_data) = r.json::<crate::cluster::HandoverResponse>().await {
                 if h_data.agreed {
                     let mut s = st.lock_or_recover();
-                    s.cluster.promote(Some(h_data.new_epoch));
-                    s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
+                    // P2-3: Ensure target epoch is strictly greater than local epoch
+                    let target_ep = if h_data.new_epoch > s.cluster.epoch() {
+                        Some(h_data.new_epoch)
+                    } else {
+                        Some(s.cluster.epoch() + 1)
+                    };
+                    let new_epoch = s.cluster.promote(target_ep);
+                    s.writes = s.writes_allowed; // P1-3: Respect CLI --writes setting
                     let current_writes = s.writes;
                     let audit_rec = Arc::clone(&s.audit);
                     drop(s);
@@ -3119,19 +3166,19 @@ async fn cluster_failback_now(
                         "operator",
                         "",
                         "cluster.manual_failback_success",
-                        &format!("recovered Master identity with epoch {} (writes={})", h_data.new_epoch, current_writes),
+                        &format!("recovered Master identity with epoch {} (writes={})", new_epoch, current_writes),
                         None,
                         None,
                         "ok",
                     );
                     println!(
                         "[hub] MANUAL FAILBACK SUCCESS: Master identity recovered with epoch {}! Writes={}.",
-                        h_data.new_epoch, current_writes
+                        new_epoch, current_writes
                     );
                     return Json(json!({
                         "ok": true,
                         "role": "primary",
-                        "epoch": h_data.new_epoch,
+                        "epoch": new_epoch,
                         "writes": current_writes
                     }))
                     .into_response();

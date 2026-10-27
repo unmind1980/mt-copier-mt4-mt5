@@ -1713,12 +1713,21 @@ fn main() {
                                 //--- one. Recorded for every REG and HBT2 so
                                 //--- the view stays current, and used below to
                                 //--- decide whether the hub owes it a push.
-                                let node_rev: u64 =
-                                    envelope_kv(&payload, "REV").parse().unwrap_or(0);
-                                if node_rev > 0 {
+                                // P2-5: Differentiate between missing REV field vs REV=0 (cleared/reset config)
+                                let rev_str = envelope_kv(&payload, "REV");
+                                let node_rev: u64 = if !rev_str.is_empty() {
+                                    rev_str.parse().unwrap_or(0)
+                                } else {
+                                    0
+                                };
+                                if !rev_str.is_empty() {
                                     let mut s = shared.lock_or_recover();
-                                    s.node_rev
-                                        .insert(format!("{}:{}", role, acc), node_rev);
+                                    let node_key = format!("{}:{}", role, acc);
+                                    if node_rev > 0 {
+                                        s.node_rev.insert(node_key, node_rev);
+                                    } else {
+                                        s.node_rev.remove(&node_key);
+                                    }
                                 }
                                 //--- M6: the node's own clock, for drift
                                 //--- detection. REG and HBT2 both carry TS.

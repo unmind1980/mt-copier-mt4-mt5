@@ -4410,10 +4410,9 @@ string EncodeReceiverPositions()
       bool ours=(MagicToSender(g_acctAllPos[i].magic)>=0);
       int isManaged=ours?1:0;
       string cmt=g_acctAllPos[i].cmt;
-      //--- Ensure POS telemetry sent to Hub/WebUI reflects the real live comment
-      //--- on the terminal, preventing stale sender ticket references (A7).
-      //--- Only executed once a minute, for every position on the account.
-      if(ours)
+      //--- P2-6: g_acctAllPos is already populated with live comments from CopierReadPositions.
+      //--- Only fallback to ticket lookup if comment is empty, avoiding O(n^2) redundant scans.
+      if(ours && StringLen(cmt)==0)
         {
          string liveCmt=CopierReadCommentByTicket(g_acctAllPos[i]);
          if(StringLen(liveCmt)>0)
@@ -4459,7 +4458,7 @@ string EncodeReceiverWaitList()
                  +g_q[g_qHead+i].sym+CP_SEP_ITEM
                  +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
                  +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
-                 +CopierFmtDouble(g_q[g_qHead+i].pprice>0.0?g_q[g_qHead+i].pprice:0.0,5)+CP_SEP_ITEM
+                 +CopierFmtDouble(MathMax(0.0,g_q[g_qHead+i].pprice),5)+CP_SEP_ITEM
                  +"queued"+CP_SEP_ITEM
                  +"Queued in broker dispatch";
       sb.Add(rec);
@@ -5817,6 +5816,17 @@ void HandleCfg(const CopierEnv &e)
       return;
      }
 
+   //--- Monotonicity check: a lagging or split-brain hub must not roll back our config
+   if(rev>0 && g_cfgRev>0 && rev<g_cfgRev)
+     {
+      g_cfgId=id;
+      g_cfgAck="ID="+id+";OK=0;ERR=stale rev "+(string)rev+" < "+(string)g_cfgRev;
+      SendCfgAck(g_cfgAck);
+      g_log.Warn("CFG "+id+" rev "+(string)rev+" is OLDER than running rev "
+                 +(string)g_cfgRev+" - refused (a lagging hub must not roll us back)");
+      return;
+     }
+
    //--- What is about to change, captured BEFORE the reload so the ACK can
    //--- report it. §10 layer 2: a magic change orphans whatever is open under
    //--- the old one, and that is worth saying out loud rather than leaving to
@@ -6440,7 +6450,6 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
                   g_peers.Forget(g_singleHubRole);
                   g_singleHubRole=pfrom;
                  }
-               g_peers.ProbeSent(g_singleHubRole,CopierNowMs());
               }
             if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
               {
