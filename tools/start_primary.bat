@@ -16,14 +16,20 @@ if not exist "%BIN%" (
 )
 
 rem --- Cluster token: NEVER a constant. A token that appears in this repository
-rem --- is not a secret, it is a published password. Generate once here, then
-rem --- copy cluster_token.txt to the standby host before starting it.
+rem --- is not a secret, it is a published password. It is minted ONCE and then
+rem --- reused on every later start; there is no automatic rotation.
+rem --- To rotate by hand: stop both hubs, delete cluster_token.txt, start the
+rem --- primary (it mints a new one), copy the file to the standby, start it.
 set "CP_OLD_PUBLIC_TOKEN=mtc_shared_cluster_token_2026"
+set "CP_TOKEN_FRESH=0"
 set "MTC_CLUSTER_TOKEN="
 if exist "cluster_token.txt" set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
 if /i "!MTC_CLUSTER_TOKEN!"=="%CP_OLD_PUBLIC_TOKEN%" set "MTC_CLUSTER_TOKEN="
 if not defined MTC_CLUSTER_TOKEN (
-    for /f "delims=" %%i in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString()+[guid]::NewGuid().ToString()"') do set "MTC_CLUSTER_TOKEN=%%i"
+    for /f "delims=" %%i in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString()+[guid]::NewGuid().ToString()"') do (
+        set "MTC_CLUSTER_TOKEN=%%i"
+        set "CP_TOKEN_FRESH=1"
+    )
 )
 if not defined MTC_CLUSTER_TOKEN (
     echo [ERROR] Could not generate a cluster token ^(PowerShell unavailable^).
@@ -31,9 +37,16 @@ if not defined MTC_CLUSTER_TOKEN (
     pause
     exit /b 1
 )
-> "cluster_token.txt" echo !MTC_CLUSTER_TOKEN!
-echo [cluster] Cluster token ready - random, stored in %CD%\cluster_token.txt
-echo [cluster] If the standby hub runs elsewhere, copy that file there BEFORE starting it.
+rem --- Only write the file when it was actually minted. Rewriting an unchanged
+rem --- token on every start is pointless, and a standby reading the file at that
+rem --- moment can see it truncated. "If it is not broken, do not touch it."
+if "!CP_TOKEN_FRESH!"=="1" (
+    > "cluster_token.txt" echo !MTC_CLUSTER_TOKEN!
+    echo [cluster] Minted a NEW random cluster token -> %CD%\cluster_token.txt
+    echo [cluster] Copy that file to the standby host BEFORE starting it there.
+) else (
+    echo [cluster] Using the existing cluster token from %CD%\cluster_token.txt
+)
 
 title mt-copier Hub - [PRIMARY (6000 / 6010)]
 echo =======================================================================
