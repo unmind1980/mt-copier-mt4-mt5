@@ -833,7 +833,10 @@
   .nd.sender{fill:#e8f2fb} .nd.receiver{fill:#f0efe4}
   .edge{stroke:#c3cad1;stroke-width:1.5;fill:none}
   text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
-  .lbl{fill:var(--dim);font-size:9.5px}
+  .lbl{fill:var(--dim);font-size:10.5px}
+  /* The role prefix is the point of the label, so it must not read as a caption
+     in the same grey as the terminal name beside it. */
+  .lbl.role{fill:var(--ink);font-weight:700}
   footer{padding:0 20px 24px;color:var(--dim);font-size:12px}
 
   /* Badges & Telemetry */
@@ -3923,7 +3926,7 @@ function drawTopology(nodes){
   // one number: BOX_W/2 is the box half-width, LBL_GAP the clear space between
   // the box and the text, and the columns are pushed out far enough that the
   // longest name still has room rather than being clipped by the viewBox.
-  var BOX_W = 148, BOX_HALF = BOX_W / 2, LBL_GAP = 16, TEXT_W = 96;
+  var BOX_W = 148, BOX_HALF = BOX_W / 2, LBL_GAP = 16, TEXT_W = 132;
   var W = BOX_HALF * 2 + LBL_GAP + TEXT_W * 2 + 340;
   var H = 60 + Math.max(senders.length, receivers.length, 1) * 46;
   var cx = W / 2;
@@ -3945,14 +3948,18 @@ function drawTopology(nodes){
   senders.forEach(function(n,i){
     var p = slot(i);
     out.push(box(cols.s.x, p.y, "nd sender", esc(n.acc)));
-    out.push('<text class="lbl" x="' + (cols.s.x - BOX_HALF - LBL_GAP) + '" y="' + (p.y+4) + '" text-anchor="end">' +
-             esc(n.name || "sender") + '</text>');
+    //--- Say the role out loud. The two node types used to differ only by a
+    //--- fill colour (#e8f2fb vs #f0efe4), which is not a distinction anyone
+    //--- can make at a glance - and the terminal name alone does not tell you
+    //--- whether that machine copies or is copied.
+    out.push('<text class="lbl role" x="' + (cols.s.x - BOX_HALF - LBL_GAP) + '" y="' + (p.y+4) + '" text-anchor="end">' +
+             'SENDER · ' + esc(n.name || "") + '</text>');
   });
   receivers.forEach(function(n,i){
     var p = slot(i);
     out.push(box(cols.r.x, p.y, "nd receiver", esc(n.acc)));
-    out.push('<text class="lbl" x="' + (cols.r.x + BOX_HALF + LBL_GAP) + '" y="' + (p.y+4) + '">' +
-             esc(n.name || "receiver") + '</text>');
+    out.push('<text class="lbl role" x="' + (cols.r.x + BOX_HALF + LBL_GAP) + '" y="' + (p.y+4) + '">' +
+             'RECEIVER · ' + esc(n.name || "") + '</text>');
   });
   out.push('</svg>');
   var newHtml = out.join("");
