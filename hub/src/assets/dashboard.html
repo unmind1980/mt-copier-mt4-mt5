@@ -142,7 +142,10 @@
   /* Numeric font-size input: a slider is hard to hit a 0.5px step with, and the
      operator usually wants a specific value rather than "about that much". */
   .zoom-input {
-    width: 68px; padding: 2px 6px; font: 12px var(--mono); font-weight: 700;
+    /* 88px, not 68: at 12px mono "11.5" plus the spinner is wider than it looks,
+       and the value was being clipped to "11." on screen while still applying
+       correctly - which is worse than wrong, it is silently wrong. */
+    width: 88px; padding: 2px 4px 2px 8px; font: 12px var(--mono); font-weight: 700;
     color: var(--accent); background: var(--panel);
     border: 1px solid var(--line); border-radius: 4px; text-align: center;
   }
