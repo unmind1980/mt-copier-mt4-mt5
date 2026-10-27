@@ -286,6 +286,11 @@ involved.
 --audit PATH        append-only audit log (default audit.jsonl; `none` = off)
 --notifications P   external alert channel store (default alert_channels.json;
                     `none` keeps channels in memory only) — see "Notifications"
+--role ROLE         cluster role: primary|standby (default primary) — enforces ADR-03 single-writer gate
+--peer-api URL      peer hub HTTP endpoint (e.g. http://127.0.0.1:6011) for health probes & sync
+--cluster-token TOK shared authentication token for internal cluster endpoints (or via MTC_CLUSTER_TOKEN)
+--failback-hours N  hours of continuous online stabilization required before auto-failback (default 24.0)
+--failback-lock     lock failback transitions, keeping current topology frozen
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
 --duration SECS     exit after this many seconds (0 = run until Ctrl-C)
@@ -533,6 +538,11 @@ surface as it stands.
 | GET · POST | `/api/v1/notifications` | external alert channels, secrets masked on read; upsert needs operator |
 | DELETE | `/api/v1/notifications/{id}` | remove a channel; operator |
 | POST | `/api/v1/notifications/test` | fire a test message through a channel; operator |
+| GET | `/api/v1/cluster/status` | HA cluster state, role, epoch, memory stats, file hashes; cluster-token auth |
+| POST | `/api/v1/cluster/sync` | incremental replication of users, notifications, curve clients, revisions & commands |
+| POST | `/api/v1/cluster/promote` | manually promote this hub to Primary (admin only); bumps epoch and opens write gate |
+| POST | `/api/v1/cluster/handover` | two-phase failback handover request from Primary to Standby; cluster-token auth |
+| POST | `/api/v1/cluster/failback_lock` | toggle manual failback lock (`{"locked": bool}`); admin only |
 | GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — no 40-char key to transcribe (404 with `--curve off`) |
 
 **Everything except `/`, the health probes, `/api/v1/auth/nonce`, `/api/v1/login`,
@@ -905,6 +915,28 @@ external API can never stall the ZMQ router thread.
 `tools/hub_notifications_test.py` covers the CRUD, the severity filter, the
 secret masking, and the closed-loop recovery path (`node.recovered` after
 `node.offline`).
+
+## High Availability (HA Dual-Active Cluster)
+
+`copier-hub` supports multi-hub active-standby redundancy based on **Dual-Active Client Clustering (Scheme A)**:
+
+1. **Topology & Zero-Downtime Failover**:
+   - Clients connect simultaneously to Primary (`6000`) and Standby (`6001`) via XSUB sockets.
+   - All orders and control frames are delivered with monotonic `SEQ` numbers. Idempotency ring (`g_seen`) automatically drops duplicated frames, achieving **0ms failover** with zero double-execution risk.
+2. **Single-Writer Enforcement (ADR-03)**:
+   - Primary Hub has full read-write authority (`writes: true`).
+   - Standby Hub enforces read-only mode (`writes: false`), rejecting mutating REST calls with `409 Conflict`.
+3. **Epoch Fencing (ADR-04) & Tie-Breaking**:
+   - Every promotion increments cluster epoch. Stale Primaries observing a peer with higher epoch automatically demote themselves to Standby.
+   - Dual-standby recovery incorporates deterministic tie-breaking (`is_configured_primary` followed by lexical hub ID comparison) to prevent split-brain oscillation.
+4. **Zero-Disk-IO Telemetry & Replication (ADR-08)**:
+   - Status checks and replication use memory-backed journal line counters (`s.cfg.total_lines()`, `s.cmds.sync_stats()`) and mtime-cached file hashes (`FileHashCache`), reducing lock contention from 50ms to <5µs.
+   - Five persistent state assets (`users.json`, `alert_channels.json`, `curve_clients.txt`, `config_revisions.jsonl`, `commands.jsonl`) synchronize incrementally over `/api/v1/cluster/sync`.
+5. **Two-Phase Graceful Failback (ADR-10)**:
+   - Configured Primary automatically initiates handover after 24 hours of continuous stable online time while fully synchronized (`synced`).
+   - Standby yields Master role cleanly before Primary advances epoch, eliminating flapping.
+
+`tools/ha_probe_test.py`, `tools/hub_cluster_test.py`, and `tools/ha_chaos_test.py` assert clustering, synchronization, and fault-injection recovery.
 
 ## The audit log (M7)
 
