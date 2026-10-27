@@ -25,6 +25,16 @@ set "CP_TOKEN_FRESH=0"
 set "MTC_CLUSTER_TOKEN="
 if exist "cluster_token.txt" set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
 if /i "!MTC_CLUSTER_TOKEN!"=="%CP_OLD_PUBLIC_TOKEN%" set "MTC_CLUSTER_TOKEN="
+rem --- A token cannot contain a space. This guards against the file being
+rem --- clobbered by a stray redirection: an earlier version of this script had
+rem --- "->" inside an echo, cmd read the ">" as a redirect, and the status line
+rem --- ("[cluster] Minted a NEW random cluster token -") was written into
+rem --- cluster_token.txt. That text is 45 characters, so it passed the length
+rem --- check and one hub adopted it while the other kept the real token -
+rem --- every peer probe answered 401 and both dashboards said "Peer: Offline".
+if defined MTC_CLUSTER_TOKEN (
+    echo !MTC_CLUSTER_TOKEN!| findstr /c:" " >nul && set "MTC_CLUSTER_TOKEN="
+)
 if not defined MTC_CLUSTER_TOKEN (
     for /f "delims=" %%i in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString()+[guid]::NewGuid().ToString()"') do (
         set "MTC_CLUSTER_TOKEN=%%i"
@@ -40,9 +50,10 @@ if not defined MTC_CLUSTER_TOKEN (
 rem --- Only write the file when it was actually minted. Rewriting an unchanged
 rem --- token on every start is pointless, and a standby reading the file at that
 rem --- moment can see it truncated. "If it is not broken, do not touch it."
+rem --- NOTE: never put a bare ">" inside an echo below - it redirects.
 if "!CP_TOKEN_FRESH!"=="1" (
     > "cluster_token.txt" echo !MTC_CLUSTER_TOKEN!
-    echo [cluster] Minted a NEW random cluster token -> %CD%\cluster_token.txt
+    echo [cluster] Minted a NEW random cluster token, written to %CD%\cluster_token.txt
     echo [cluster] Copy that file to the standby host BEFORE starting it there.
 ) else (
     echo [cluster] Using the existing cluster token from %CD%\cluster_token.txt

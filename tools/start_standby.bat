@@ -31,6 +31,14 @@ set "CP_OLD_PUBLIC_TOKEN=mtc_shared_cluster_token_2026"
 set "MTC_CLUSTER_TOKEN="
 if exist "cluster_token.txt" set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
 if /i "!MTC_CLUSTER_TOKEN!"=="%CP_OLD_PUBLIC_TOKEN%" set "MTC_CLUSTER_TOKEN="
+rem --- A token cannot contain a space. An earlier version of start_primary.bat
+rem --- clobbered cluster_token.txt with its own status line (a bare ">" inside
+rem --- an echo became a redirection), and that 45-character text passed every
+rem --- check this script had - so the standby adopted it while the primary kept
+rem --- the real token. Reject anything that does not look like a token.
+if defined MTC_CLUSTER_TOKEN (
+    echo !MTC_CLUSTER_TOKEN!| findstr /c:" " >nul && set "MTC_CLUSTER_TOKEN="
+)
 if not defined MTC_CLUSTER_TOKEN (
     echo [ERROR] No usable cluster token found.
     echo         1^) Start the PRIMARY hub first - it generates cluster_token.txt.
