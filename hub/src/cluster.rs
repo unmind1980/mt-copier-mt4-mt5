@@ -613,7 +613,19 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     if let Ok(mut f) = File::create(&tmp) {
                                         let _ = f.write_all(u_content.as_bytes());
                                         let _ = f.sync_all();
-                                        let _ = fs::rename(&tmp, &p);
+                                        //--- N57-07: never swallow this. On Windows
+                                        //--- a rename onto a file another thread has
+                                        //--- open fails with OS Error 5, and the
+                                        //--- standby then serves a users.json that
+                                        //--- silently never updated.
+                                        if let Err(e) = fs::rename(&tmp, &p) {
+                                            eprintln!(
+                                                "[hub] cluster sync: users rename {} -> {} failed: {} (kept old file)",
+                                                tmp.display(),
+                                                p.display(),
+                                                e
+                                            );
+                                        }
                                         let _ = s.users.reload();
                                     }
                                 }
@@ -624,7 +636,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     if let Ok(mut f) = File::create(&tmp) {
                                         let _ = f.write_all(n_content.as_bytes());
                                         let _ = f.sync_all();
-                                        let _ = fs::rename(&tmp, &p);
+                                        //--- N57-07: see the users branch above.
+                                        if let Err(e) = fs::rename(&tmp, &p) {
+                                            eprintln!(
+                                                "[hub] cluster sync: notifications rename {} -> {} failed: {} (kept old file)",
+                                                tmp,
+                                                p.display(),
+                                                e
+                                            );
+                                        }
                                         let _ = s.notif_store.lock_or_recover().load();
                                     }
                                 }
@@ -635,7 +655,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     if let Ok(mut f) = File::create(&tmp) {
                                         let _ = f.write_all(c_content.as_bytes());
                                         let _ = f.sync_all();
-                                        let _ = fs::rename(&tmp, &p);
+                                        //--- N57-07: see the users branch above.
+                                        if let Err(e) = fs::rename(&tmp, &p) {
+                                            eprintln!(
+                                                "[hub] cluster sync: curve clients rename {} -> {} failed: {} (kept old file)",
+                                                tmp,
+                                                p.display(),
+                                                e
+                                            );
+                                        }
                                     }
                                 }
 

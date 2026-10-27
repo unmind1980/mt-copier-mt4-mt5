@@ -3028,15 +3028,24 @@ void ExecuteQueue()
            }
          else
            {
+         //--- N57-02: use the sender's stops if we have them.
+         //---
+         //--- This used to start from 0.0 and only ever consider EmergencySL/TP,
+         //--- discarding a.sl/a.tp that ConvergeSender had gone to the trouble of
+         //--- computing. The result was a market entry with no stop attached,
+         //--- corrected on a later tick - the exact window a gap moves through.
+         //--- Emergency stops remain the fallback for when the sender has none.
          double sl=0.0,tp=0.0;
-         if(emSL>0.0)
+         if(a.sl>0.0) sl=a.sl;
+         else if(emSL>0.0)
            {
             int e2=0;
             sl=CopierEmergencySl(a.sym,a.side,0.0,emSL,si,e2);
             if(e2!=0 && g_once.ShouldEmit("em_sl_fail|"+a.sym))
                g_log.Warn("NL-02: EmergencySL configured but could not be computed for "+a.sym+" (err="+(string)e2+") - opening without SL");
            }
-         if(emTP>0.0)
+         if(a.tp>0.0) tp=a.tp;
+         else if(emTP>0.0)
            {
             int e2=0;
             tp=CopierEmergencyTp(a.sym,a.side,0.0,emTP,si,e2);
@@ -5010,8 +5019,17 @@ void ConvergeSender(const int si)
       if(g_senderCfg[si].minsenderlotsize>0.0 && d.lots<g_senderCfg[si].minsenderlotsize) continue;
       if(g_senderCfg[si].maxsenderlotsize>0.0 && d.lots>g_senderCfg[si].maxsenderlotsize) continue;
 
-      double osl=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.sl:0.0;
-      double otp=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.tp:0.0;
+      //--- N57-02: carry the sender's stops for MARKET orders too.
+      //---
+      //--- These used to be gated on `d.kind==CP_ORD_PENDING`, so a market
+      //--- entry was always opened flat and re-stopped on the next tick via
+      //--- CP_ACT_MODIFY. CopierOpenMarket already handles the ECN case itself
+      //--- (err 130 -> open flat, then modify immediately), so pre-zeroing here
+      //--- bought nothing and opened a window where the position has no stop at
+      //--- all: hundreds of ms normally, seconds during news, and forever if the
+      //--- broker keeps rejecting the modify.
+      double osl=(g_senderCfg[si].mirrorstops)?d.sl:0.0;
+      double otp=(g_senderCfg[si].mirrorstops)?d.tp:0.0;
 
       if(g_senderCfg[si].inverttrades)
         {
@@ -6979,6 +6997,17 @@ int OnInit()
         }
       //--- its own control topic first, then one per mirrored sender
       g_tp.Subscribe("@"+(string)g_nid);
+      //--- N57-01: also subscribe to the RAW account number.
+      //---
+      //--- CopierNid() truncates accounts >= 1e9 (10 digits) modulo 1e9 to keep
+      //--- the mirror magic inside 32 bits. The hub, however, addresses control
+      //--- topics by the account it received in REG - the RAW one, because
+      //--- CopierPayloadReg() reports CopierAccountLogin(). For a 9-digit
+      //--- account the two strings are identical and this line changes nothing;
+      //--- for a 10-digit account it is the difference between working and
+      //--- being unreachable while still showing "online" in the dashboard.
+      long rawAcc=CopierAccountLogin();
+      if(rawAcc!=g_nid) g_tp.Subscribe("@"+(string)rawAcc);
       //--- @all is how the hub asks everyone to re-register after it loses its
       //--- table. A node that does not subscribe to it is unreachable by the
       //--- one message that exists to make it reachable.

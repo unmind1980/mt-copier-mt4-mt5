@@ -102,6 +102,14 @@ class TestCluster:
         env = os.environ.copy()
         env["MTC_ADMIN_PASSWORD"] = TEST_ADMIN_PASS
         env["MTC_CLUSTER_TOKEN"] = CLUSTER_TOKEN
+        #--- N57-06: round 56 gated users.json replication behind this flag, on
+        #--- the grounds that the stored digest IS the login proof - shipping it
+        #--- over the cluster channel is shipping admin. The assertion below
+        #--- checks that the standby receives it, so the test has to opt in
+        #--- explicitly. Without this the assertion fails for a reason that has
+        #--- nothing to do with the code under test, and a real regression in
+        #--- replication would hide behind that red line.
+        env["MTC_SYNC_USERS"] = "1"
 
         p_dir = os.path.join(self.tmpdir, "primary")
         s_dir = os.path.join(self.tmpdir, "standby")

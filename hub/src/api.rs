@@ -3114,7 +3114,20 @@ async fn cluster_promote(
         )
             .into_response();
     }
-    let new_epoch = s.cluster.promote(None);
+    //--- N57-04: jump above whatever the peer currently claims.
+    //---
+    //--- This used to be promote(None), i.e. local_epoch + 1. A standby that had
+    //--- been isolated (local epoch 2) promoting while the real primary runs
+    //--- epoch 5 got 3 - and ADR-04 demoted it back within one probe cycle
+    //--- (remote.role=="primary" && remote.epoch > local.epoch), silently undoing
+    //--- an explicit operator action. Pressing Promote means "this node takes
+    //--- over NOW"; the epoch has to say so, not merely increment.
+    //---
+    //--- When the peer is unreachable its last known epoch is 0, so this
+    //--- degrades to the old local+1, which is correct for a lone survivor.
+    let peer_ep = s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0);
+    let target_ep = peer_ep.max(s.cluster.state.epoch) + 1;
+    let new_epoch = s.cluster.promote(Some(target_ep));
     s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
     let current_writes = s.writes;
     let audit_rec = Arc::clone(&s.audit);

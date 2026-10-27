@@ -504,8 +504,16 @@ public:
          if(!m_sub.send(payload,true))
            {
             m_errno=CopierZmqErrno();
-            // P1-8: Close hanging multipart message with blocking/reliable zero-payload send so next message is clean
-            m_sub.send("",false);
+            //--- N57-05: close the half-sent multipart WITHOUT blocking.
+            //---
+            //--- This used to pass false, which is ZMQ's BLOCKING mode. That call
+            //--- runs on the EA thread: on a dead peer or a full pipe it simply
+            //--- never returns, and the whole terminal freezes with it - charts,
+            //--- trading, everything. Closing a dangling multipart is best-effort
+            //--- cleanup and is never worth a wedge. If this one also fails the
+            //--- frame is dropped, which is the same outcome the caller reports
+            //--- anyway (return false) but without taking the terminal down.
+            m_sub.send("",true);
             return false;
            }
         }

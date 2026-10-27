@@ -921,6 +921,12 @@ int OnInit()
         {
          g_hubOn=true;
          g_tp.Subscribe("@"+(string)g_nid);
+         //--- N57-01: the hub addresses control topics by the RAW account (what
+         //--- REG reported), while g_nid is CopierNid()'s truncation for
+         //--- accounts >= 1e9. Identical for 9-digit accounts; for 10-digit ones
+         //--- this second subscription is what keeps the node reachable.
+         long rawAcc=CopierAccountLogin();
+         if(rawAcc!=g_nid) g_tp.Subscribe("@"+(string)rawAcc);
          //--- @all is how the hub asks everyone to re-register when it has lost
          //--- its table. A node that does not subscribe to it is unreachable by
          //--- the one message that exists to make it reachable.
