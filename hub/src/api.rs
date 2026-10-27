@@ -1114,12 +1114,25 @@ async fn auth_nonce(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let now = unix_secs();
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "127.0.0.1".to_string());
+    //--- N56-15: only trust X-Forwarded-For when an operator has declared that a
+    //--- proxy sits in front of this hub. Otherwise any caller can invent a fresh
+    //--- "client IP" on every request, get a brand-new 25/s budget each time, and
+    //--- still fill the 512-slot nonce table - which locks every real operator
+    //--- out of the login page. Set MTC_TRUST_PROXY=1 only behind a real proxy
+    //--- that overwrites (not appends to) this header.
+    let trust_proxy = std::env::var("MTC_TRUST_PROXY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let client_ip = if trust_proxy {
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "direct".to_string())
+    } else {
+        "direct".to_string()
+    };
     let created = {
         let mut s = st.lock_or_recover();
         // 10-second single-use challenge window with IP rate limiting
@@ -1242,8 +1255,29 @@ async fn login(
                 let s = st.lock_or_recover();
                 s.users.cleanup_bootstrap_password();
             }
-            let is_https = headers.get("x-forwarded-proto").map(|v| v == "https").unwrap_or(false)
-                || headers.get("x-forwarded-ssl").map(|v| v == "on").unwrap_or(false);
+            //--- N56-16: TLS state comes from CONFIGURATION, not from a request
+            //--- header. A header is caller-controlled, so trusting it means the
+            //--- cookie's Secure flag is decided by whoever is talking. The
+            //--- dangerous direction is the silent one: a real TLS deployment
+            //--- behind a proxy that does not set X-Forwarded-Proto gets a
+            //--- NON-Secure session cookie, which then travels in cleartext.
+            //--- Declare it with MTC_HTTPS=1, or MTC_TRUST_PROXY=1 behind a proxy
+            //--- that overwrites (not appends to) X-Forwarded-Proto.
+            let trust_proxy = std::env::var("MTC_TRUST_PROXY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let is_https = std::env::var("MTC_HTTPS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+                || (trust_proxy
+                    && (headers
+                        .get("x-forwarded-proto")
+                        .map(|v| v == "https")
+                        .unwrap_or(false)
+                        || headers
+                            .get("x-forwarded-ssl")
+                            .map(|v| v == "on")
+                            .unwrap_or(false)));
             let secure_attr = if is_https { "; Secure" } else { "" };
             (
                 axum::http::StatusCode::OK,
@@ -2880,7 +2914,15 @@ async fn cluster_sync(
             .unwrap_or_default()
     };
 
-    let users_content = if req.users_hash != local_users_hash {
+    //--- The user table carries password digests, and this hub's login proof is
+    //--- computed FROM those digests (users.rs login_with_proof). Shipping the
+    //--- file over a plaintext cluster channel therefore upgrades "can read one
+    //--- file" into "can become admin". Sync is OFF by default and must be
+    //--- opted into with MTC_SYNC_USERS=1 on both hubs. (N56-02)
+    let users_sync_enabled = std::env::var("MTC_SYNC_USERS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let users_content = if users_sync_enabled && req.users_hash != local_users_hash {
         std::fs::read_to_string(&users_path).ok()
     } else {
         None
@@ -2941,6 +2983,24 @@ async fn cluster_handover_request(
                 "agreed": false,
                 "new_epoch": s.cluster.epoch(),
                 "error": "Failback is locked by operator."
+            })),
+        )
+            .into_response();
+    }
+
+    //--- N56-04: a handover request is only meaningful coming FROM a node that
+    //--- is itself configured as primary. Without this check any holder of the
+    //--- cluster token can force the real primary to close its write gate and
+    //--- demote - that is a demotion order, not a handover. The field has
+    //--- existed on HandoverRequest since cluster.rs:102 and was never read.
+    if !req.is_configured_primary {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": "Handover rejected: requester is not a configured primary"
             })),
         )
             .into_response();

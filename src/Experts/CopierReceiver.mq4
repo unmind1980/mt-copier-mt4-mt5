@@ -304,7 +304,6 @@ string  g_serverKey[CP_MAX_SENDERS];
 string  g_myPublicKey="";
 string  g_suffix[CP_MAX_SENDERS];
 long    g_magic[CP_MAX_SENDERS];
-bool    g_magicPinned[CP_MAX_SENDERS];  // true when magic came from copier.ini
 int     g_lotMode[CP_MAX_SENDERS];
 double  g_lotParam[CP_MAX_SENDERS];
 //--- One sequence watermark PER STREAM, not per sender.
@@ -1111,7 +1110,6 @@ bool LoadConfigFromInputs()
       return false;
      }
    g_magic[0]=Magic;
-   g_magicPinned[0]=true;
 
    //--- The input enum's numbers ARE the internal CP_SIZE_* ones now, so this
    //--- is a normalisation rather than a mapping - it exists so that anything
@@ -1759,9 +1757,12 @@ bool LoadConfigForHub()
       //--- fallback: a guessed magic orphans whatever is already open under the
       //--- real one. The hub knows every sender's NID, so it can always write a
       //--- correct value here.
+      //--- `pinned` is an out-parameter of CopierResolveMagic reporting
+      //--- whether magic= was present in the ini. Nothing is decided from it
+      //--- here: a missing magic already aborted the reload in pass 1 above,
+      //--- so every sender that reaches this line is pinned by construction.
       bool pinned=false;
       g_magic[i]=CopierResolveMagic(ini.Get(sec,"magic",""),pinned);
-      g_magicPinned[i]=pinned;
 
       bool lotOk=false;
       g_lotMode[i] =CopierLotModeFromText(ini.Get(sec,"lotmode","multiplier"),
@@ -4536,24 +4537,36 @@ void RefreshRisk()
       if(rOk)
         {
          double curBal=CopierAccountBalance();
+         //--- N56-01: g_riskDayStartBalance MUST hold the day-start balance,
+         //--- i.e. the live balance with today's realized P/L stripped out.
+         //--- Storing the live balance here makes the cash-flow delta
+         //---   (curBal-realized) - g_riskDayStartBalance
+         //--- collapse to -realized, which then re-adds itself to the baseline
+         //--- on EVERY recalibration tick. With a realized loss the baseline
+         //--- inflates once a minute until the daily-loss guard trips and
+         //--- force-closes every position; with a realized profit it decays
+         //--- toward zero and silently disables the guard.
+         //--- The anchor is "balance at day start", so it must be derived, not
+         //--- sampled from the live account.
          if(g_riskDayStartEquity<=0.0)
            {
             double derivedBase=curBal-realized;
             if(derivedBase>0.0)
               {
                g_riskDayStartEquity=derivedBase;
-               g_riskDayStartBalance=curBal;
+               g_riskDayStartBalance=derivedBase;
                g_risk.SetDayStartEquity(derivedBase);
               }
            }
          else
            {
-            if(g_riskDayStartBalance<=0.0) g_riskDayStartBalance=curBal;
-            double cashFlow=(curBal-realized)-g_riskDayStartBalance;
+            double dayStartBal=curBal-realized;
+            if(g_riskDayStartBalance<=0.0) g_riskDayStartBalance=dayStartBal;
+            double cashFlow=dayStartBal-g_riskDayStartBalance;
             if(MathAbs(cashFlow)>0.01)
               {
                g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
-               g_riskDayStartBalance=curBal;
+               g_riskDayStartBalance=dayStartBal;
                g_risk.SetDayStartEquity(g_riskDayStartEquity);
               }
            }
@@ -4625,7 +4638,36 @@ int CloseAllOurs(const string reason,int &failedCount,int &totalMatching)
       int si=MagicToSender(g_scanScratch[i].magic);
       if(si<0) continue;                      // not ours
       string uid=ResolveUid(g_scanScratch[i]);
-      if(StringLen(uid)==0) continue;         // unmanageable; reported elsewhere
+      if(StringLen(uid)==0)
+        {
+         //--- The magic says this IS ours, but the UID cannot be recovered:
+         //--- the broker overwrote the comment, or this terminal restarted and
+         //--- g_recKnown has not been rebuilt yet.
+         //---
+         //--- Skipping it - which is what this used to do - leaves a live
+         //--- position that nothing on this side will ever close, while the
+         //--- sender may already be flat. That is an open exposure the
+         //--- operator never sees, and it appears at exactly the moment a
+         //--- risk trip or a hub closeall is trying to get us flat.
+         //---
+         //--- So it is closed anyway. The queue is keyed by UID, so it needs
+         //--- SOMETHING unique per position: a ticket-derived placeholder is
+         //--- unique, stable across retries (so backoff and the seen ring work
+         //--- normally), and can never collide with a real UID - a real one is
+         //--- 8 characters of Crockford base32, and '#' is not in that set.
+         //---
+         //--- The placeholder lives only in the action key. It is never added
+         //--- to g_recKnown (the UID <-> ticket map), never looked up in it,
+         //--- and never written to a comment, so rebuilding that map later
+         //--- still sees only real UIDs. CP_ACT_CLOSE executes on a.ticket,
+         //--- so the placeholder never reaches the broker.
+         uid="#t"+(string)g_scanScratch[i].ticket;
+         if(g_once.ShouldEmit("closeall_nouid|"+(string)g_scanScratch[i].ticket))
+            g_log.Warn("CloseAll: ticket "+(string)g_scanScratch[i].ticket
+                       +" carries our magic "+(string)g_scanScratch[i].magic
+                       +" but no recoverable UID - closing it anyway under a"
+                       +" ticket-derived key");
+        }
       if(g_ignore.Has(uid) || (si>=0 && g_senderIgnore[si].Has(uid))) continue;         // handed over to the operator
       totalMatching++;
       string actKey=g_sid[si]+":"+(string)CP_ACT_CLOSE+":"+uid;
@@ -5712,24 +5754,42 @@ void HandleTopology(const CopierEnv &e)
    if(StringLen(sec)==0 && hasCache)  sec=curCs.standby;
    if(epoch==0 && hasCache)           epoch=curCs.epoch;
 
-   // Check if standby needs to be dynamically connected
-   if(StringLen(sec)>0 && sec!=prim)
+   //--- Connect whichever of the two hubs is missing - PRIMARY as well as
+   //--- STANDBY.
+   //---
+   //--- Only the standby used to be handled here, so a node whose ini named
+   //--- the standby alone (or that came up while the primary was being
+   //--- serviced) stayed connected to the standby forever. It shows as online
+   //--- in the hub's node list, and every CFG and CMD the primary pushes is
+   //--- addressed to a link that does not exist - "the node is up but never
+   //--- picks up its configuration", with nothing on either side saying why.
+   //---
+   //--- PRIMARY is tried first, so g_connectedEps keeps PRIMARY/STANDBY order
+   //--- after whatever the ini already connected. When the two entries name
+   //--- the same hub, the second pass finds it already in the list and does
+   //--- nothing, which is what the old `sec!=prim` guard did.
+   string wantEp[2];
+   wantEp[0]=prim;
+   wantEp[1]=sec;
+   for(int w=0;w<2;w++)
      {
+      string ep=wantEp[w];
+      if(StringLen(ep)==0) continue;
       bool already=false;
       for(int k=0;k<g_connectedEpCount;k++)
         {
-         if(g_connectedEps[k]==sec) { already=true; break; }
+         if(g_connectedEps[k]==ep) { already=true; break; }
         }
-      if(!already && g_connectedEpCount<CP_MAX_CLUSTER_HUBS)
+      if(already || g_connectedEpCount>=CP_MAX_CLUSTER_HUBS) continue;
+      if(g_tp.ConnectExtraHub(ep))
         {
-         if(g_tp.ConnectExtraHub(sec))
-           {
-            g_connectedEps[g_connectedEpCount++]=sec;
-            g_hubEp="";
-            for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
-            g_announceCount=0; // Reset announcement burst to register on new Hub across handshake!
-            g_log.Info("central channel: dynamically connected to standby hub at "+sec+" via TOPOLOGY (re-registration armed)");
-           }
+         g_connectedEps[g_connectedEpCount++]=ep;
+         g_hubEp="";
+         for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
+         g_announceCount=0; // Reset announcement burst to register on new Hub across handshake!
+         g_log.Info("central channel: dynamically connected to "
+                    +((w==0)?"primary":"standby")+" hub at "+ep
+                    +" via TOPOLOGY (re-registration armed)");
         }
      }
 
@@ -6412,6 +6472,47 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
       g_stOvEpoch++;
       g_snapRejectStreak[si]=0; // NM-14: Clear reject streak on sender restart so failure diagnosis is not biased by prior session
       g_log.Info("sender "+g_sid[si]+" new session "+e.ssid+" -> resync");
+     }
+   //--- A SNAPSHOT MUST NEVER BE OLDER THAN AN EVENT ALREADY APPLIED.
+   //---
+   //--- The per-stream watermark below cannot see that on its own: it
+   //--- compares a snapshot only with earlier snapshots and an event only
+   //--- with earlier events, so a SNAP at seq 90 arriving after an EVENT at
+   //--- seq 100 passes the SNAP watermark - nothing was ever seen on that
+   //--- stream - and then REPLACES the desired set with the state as it was
+   //--- BEFORE that event. Converge reads the freshly opened mirror as "no
+   //--- longer desired" and closes it, and the next snapshot opens it again.
+   //--- Each round trip costs the spread and the slippage; if the re-open is
+   //--- refused by margin or by the risk gate, the position is gone while
+   //--- the sender still holds it - an exposure split nothing reports.
+   //---
+   //--- Two hubs make that arrival order ordinary rather than exotic: each
+   //--- delivers its own copy of every frame, and the two links are not
+   //--- obliged to preserve the same relative order.
+   //---
+   //--- The test is ONE-DIRECTIONAL on purpose, and is NOT "reject anything
+   //--- below the highest seq seen". One watermark shared by all three
+   //--- streams was tried and reverted - see the note on g_lastSeq - because
+   //--- a snapshot that overtook the event backlog discarded events that had
+   //--- not been applied yet. Here only a SNAPSHOT is checked, and only
+   //--- against the EVENT watermark, so no event can ever be dropped by it.
+   //---
+   //--- It cannot starve the snapshot stream either. The sender numbers a
+   //--- frame from one counter when the frame is BUILT, so a snapshot is
+   //--- always numbered after the events that precede it: the next periodic
+   //--- broadcast carries a seq above anything applied here, and a targeted
+   //--- repair is numbered afresh by EmitToNode. Only a snapshot emitted
+   //--- BEFORE an event we have already acted on is discarded, and that
+   //--- snapshot is stale by definition.
+   if(stream==CP_STREAM_SNAP && g_lastSeq[si][CP_STREAM_EVENTS]>=0
+      && e.seq<g_lastSeq[si][CP_STREAM_EVENTS])
+     {
+      if(g_once.ShouldEmit("stalesnap|"+g_sid[si]))
+         g_log.Verbose("discarded snapshot seq="+(string)e.seq+" from sender "
+                       +g_sid[si]+": event seq="
+                       +(string)g_lastSeq[si][CP_STREAM_EVENTS]
+                       +" is already applied, so this snapshot predates it");
+      return false;
      }
    //--- per-stream watermark: a snapshot must never invalidate an event
    //--- that was emitted before it on the other socket

@@ -825,6 +825,15 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
     /// 512 KB leaves headroom for symbol maps and long IgnoreUids lists.
     const MAX_INI_BYTES: usize = 512 * 1024;
 
+    //--- N56-05: these two MUST equal CP_INI_SECTIONS / CP_INI_MAX in
+    //--- CopierConfig.mqh. The byte cap alone is not the contract: the node
+    //--- enforces section count and row count as separate limits, so a config
+    //--- that passes here can still be refused there - and a refused CFG is not
+    //--- a one-off. The hub re-pushes on the next heartbeat because
+    //--- node_rev < hub_rev, forever.
+    const MAX_INI_SECTIONS: usize = 132;
+    const MAX_INI_LINES: usize = 12288;
+
     if ini.trim().is_empty() {
         return Err("empty".to_string());
     }
@@ -836,7 +845,9 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
         ));
     }
     let mut sections = 0usize;
+    let mut line_count = 0usize;
     for (n, raw) in ini.lines().enumerate() {
+        line_count = n + 1;
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
@@ -863,6 +874,18 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
     }
     if sections == 0 {
         return Err("no [section] - this does not look like a copier.ini".to_string());
+    }
+    if sections > MAX_INI_SECTIONS {
+        return Err(format!(
+            "{} sections, over the {} limit",
+            sections, MAX_INI_SECTIONS
+        ));
+    }
+    if line_count > MAX_INI_LINES {
+        return Err(format!(
+            "{} lines, over the {} limit",
+            line_count, MAX_INI_LINES
+        ));
     }
     Ok(())
 }

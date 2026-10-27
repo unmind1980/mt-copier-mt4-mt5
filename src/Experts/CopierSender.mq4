@@ -1576,23 +1576,42 @@ void HandleTopology(const CopierEnv &e)
    if(StringLen(sec)==0 && hasCache)  sec=curCs.standby;
    if(epoch==0 && hasCache)           epoch=curCs.epoch;
 
-   if(StringLen(sec)>0 && sec!=prim)
+   //--- Connect whichever of the two hubs is missing - PRIMARY as well as
+   //--- STANDBY.
+   //---
+   //--- Only the standby used to be handled here, so a node whose ini named
+   //--- the standby alone (or that came up while the primary was being
+   //--- serviced) stayed connected to the standby forever. It shows as online
+   //--- in the hub's node list, and every CFG and CMD the primary pushes is
+   //--- addressed to a link that does not exist - "the node is up but never
+   //--- picks up its configuration", with nothing on either side saying why.
+   //---
+   //--- PRIMARY is tried first, so g_connectedEps keeps PRIMARY/STANDBY order
+   //--- after whatever the ini already connected. When the two entries name
+   //--- the same hub, the second pass finds it already in the list and does
+   //--- nothing, which is what the old `sec!=prim` guard did.
+   string wantEp[2];
+   wantEp[0]=prim;
+   wantEp[1]=sec;
+   for(int w=0;w<2;w++)
      {
+      string ep=wantEp[w];
+      if(StringLen(ep)==0) continue;
       bool already=false;
       for(int k=0;k<g_connectedEpCount;k++)
         {
-         if(g_connectedEps[k]==sec) { already=true; break; }
+         if(g_connectedEps[k]==ep) { already=true; break; }
         }
-      if(!already && g_connectedEpCount<CP_MAX_CLUSTER_HUBS)
+      if(already || g_connectedEpCount>=CP_MAX_CLUSTER_HUBS) continue;
+      if(g_tp.ConnectExtraHub(ep))
         {
-         if(g_tp.ConnectExtraHub(sec))
-           {
-            g_connectedEps[g_connectedEpCount++]=sec;
-            g_hubEp="";
-            for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
-            g_announceCount=0;
-            g_log.Info("central channel: dynamically connected to standby hub at "+sec+" via TOPOLOGY (re-registration armed)");
-           }
+         g_connectedEps[g_connectedEpCount++]=ep;
+         g_hubEp="";
+         for(int k=0;k<g_connectedEpCount;k++) g_hubEp+=(k>0?";":"")+g_connectedEps[k];
+         g_announceCount=0;
+         g_log.Info("central channel: dynamically connected to "
+                    +((w==0)?"primary":"standby")+" hub at "+ep
+                    +" via TOPOLOGY (re-registration armed)");
         }
      }
 

@@ -145,6 +145,38 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
+    //--- N56-14: two hubs sharing one key file can both reach this point having
+    //--- seen "file absent" further up, each generate a DIFFERENT keypair, and
+    //--- the last rename wins. The loser keeps serving the key it generated in
+    //--- memory while the file on disk holds the other one, so every node
+    //--- configured with the loser's PUBLIC key fails the CURVE handshake
+    //--- forever - and no log points at the cause.
+    //--- Re-check right before publishing: if someone else got there first,
+    //--- adopt THEIR key instead of overwriting it.
+    if let Ok(existing) = std::fs::read_to_string(path) {
+        let mut lines = existing.lines();
+        if lines.next().map(|l| l.trim()) == Some(KEY_FILE_MAGIC) {
+            let mut p = String::new();
+            let mut s = String::new();
+            for line in lines {
+                let t = line.trim();
+                if let Some(v) = t.strip_prefix("PUBLIC=") {
+                    p = v.trim().to_string();
+                } else if let Some(v) = t.strip_prefix("SECRET=") {
+                    s = v.trim().to_string();
+                }
+            }
+            if shape_ok(&p) && shape_ok(&s) {
+                let _ = std::fs::remove_file(&tmp);
+                eprintln!(
+                    "[hub] {} was created by another process while we were generating \
+                     - adopting that keypair instead of overwriting it",
+                    path.display()
+                );
+                return Ok((HubKeys { public: p, secret: s }, false));
+            }
+        }
+    }
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
 
     Ok((HubKeys { public, secret }, true))
@@ -206,7 +238,23 @@ impl AllowList {
 
     pub fn load(path: &Path) -> Result<AllowList, String> {
         match std::fs::read_to_string(path) {
-            Ok(t) => Ok(AllowList::parse(&t)),
+            Ok(t) => {
+                let list = AllowList::parse(&t);
+                if list.any {
+                    //--- N56-07: '*' means "any client holding a valid CURVE
+                    //--- keypair" - and minting one takes a second. Encryption
+                    //--- still runs, but the authentication half of it is off.
+                    //--- Say it once, at load time: this default is fine on a
+                    //--- lab bench and fatal on a shared network.
+                    eprintln!(
+                        "[hub] WARN  {} contains '*': ANY client that can generate a CURVE \
+                         keypair is accepted. Replace it with explicit public keys before \
+                         exposing this hub beyond localhost.",
+                        path.display()
+                    );
+                }
+                Ok(list)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(format!("{} does not exist", path.display()))
             }
@@ -367,6 +415,38 @@ pub fn spawn_zap_handler(
 ) -> std::thread::JoinHandle<()> {
     let ctx = ctx.clone();
     let shared = std::sync::Arc::new(std::sync::Mutex::new(list));
+    //--- N56-08: watch the allow-list FILE and reload it when it changes.
+    //---
+    //--- Without this, a key that the cluster sync writes into curve_clients.txt
+    //--- on a standby exists on disk but NOT in this handler's memory. After a
+    //--- failover every node using that key is refused at the ZAP handshake
+    //--- ("key is not on this hub's allow-list"), so the hub looks dead while it
+    //--- is running perfectly. Reloading here needs no plumbing through
+    //--- SharedState and cannot miss a writer, whoever it is.
+    {
+        let shared = std::sync::Arc::clone(&shared);
+        let path = clients_path.clone();
+        std::thread::spawn(move || {
+            let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            let mut last = stamp(&path);
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let cur = stamp(&path);
+                if cur == last || cur.is_none() {
+                    continue;
+                }
+                last = cur;
+                match AllowList::load(&path) {
+                    Ok(l) => {
+                        let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
+                        *g = l;
+                        eprintln!("[hub] allow-list reloaded: {}", path.display());
+                    }
+                    Err(e) => eprintln!("[hub] allow-list reload failed: {}", e),
+                }
+            }
+        });
+    }
     std::thread::spawn(move || {
         let sock = match ctx.socket(zmq::REP) {
             Ok(s) => s,

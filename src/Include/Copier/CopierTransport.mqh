@@ -58,7 +58,10 @@
 //|   * an XSUB send arrives at the XPUB on the same socket           |
 //|   * the subscription filter still works                           |
 //|   * with one receiver attached to SEVERAL senders, a status       |
-//|     message is broadcast to all of them                           |
+//|     message reaches only ONE of them - the uplink round-robins,   |
+//|     it does NOT broadcast. SendUp compensates by sending @hub     |
+//|     frames twice. This line used to claim "broadcast to all",     |
+//|     which was simply false and hid a real defect.                 |
 //|                                                                   |
 //| Two consequences to keep in mind:                                 |
 //|                                                                   |
@@ -473,13 +476,38 @@ public:
    bool              SendUp(const string topic,const string payload)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
-      if(!m_sub.sendMore(topic,true)) { m_errno=CopierZmqErrno(); return false; }
-      if(!m_sub.send(payload,true))
+      //--- N56-13: @hub CONTROL frames must reach BOTH hubs.
+      //---
+      //--- This XSUB may hold two peers (primary + standby), and libzmq
+      //--- round-robins the uplink across them: ONE send reaches exactly ONE
+      //--- peer. The downstream direction broadcasts, the upstream does not -
+      //--- tools/zmq_bidir_test.py measures precisely this and used to print
+      //--- "status reaches only ONE sender" while still exiting green, because
+      //--- it only asserted the downstream half.
+      //---
+      //--- Consequence: half of REG / ACK / STAT / snapshot-receipts landed on
+      //--- the standby, which consumes them and never relays. The primary then
+      //--- saw no ACK (command walked the whole retry ladder to `unknown`), no
+      //--- STAT (node looked idle) and no receipt (sender re-sent snapshots).
+      //---
+      //--- Sending a control frame twice makes the round-robin land one copy on
+      //--- each writable pipe. With a single pipe both copies go to the same
+      //--- hub - harmless, because every @hub frame is idempotent (REG upserts,
+      //--- ACK sets a terminal state, STAT refreshes a timestamp, a receipt is a
+      //--- high-water mark). Data frames stay single-send: the standby forwards
+      //--- them, so they are not lost either way, and duplicating them would
+      //--- only add traffic.
+      int copies=(StringLen(topic)>0 && StringSubstr(topic,0,1)=="@") ? 2 : 1;
+      for(int i=0;i<copies;i++)
         {
-         m_errno=CopierZmqErrno();
-         // P1-8: Close hanging multipart message with blocking/reliable zero-payload send so next message is clean
-         m_sub.send("",false);
-         return false;
+         if(!m_sub.sendMore(topic,true)) { m_errno=CopierZmqErrno(); return false; }
+         if(!m_sub.send(payload,true))
+           {
+            m_errno=CopierZmqErrno();
+            // P1-8: Close hanging multipart message with blocking/reliable zero-payload send so next message is clean
+            m_sub.send("",false);
+            return false;
+           }
         }
       return true;
      }

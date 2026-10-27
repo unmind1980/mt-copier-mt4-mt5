@@ -2746,11 +2746,17 @@ fn main() {
         //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
         if last_cmd_due.elapsed() >= Duration::from_millis(500) {
             last_cmd_due = Instant::now();
-            let (effective_writes, is_primary) = {
+            let effective_writes = {
                 let s = shared.lock_or_recover();
-                (s.writes, s.cluster.is_primary())
+                s.writes
             };
-            if is_primary {
+            //--- N56-10: do NOT gate the whole dispatcher on is_primary.
+            //--- due_gated already freezes write commands when `writes` is false,
+            //--- and read-only telemetry (reqpos / reqcfg) is explicitly allowed
+            //--- to run on a standby. Gating here made those commands sit in
+            //--- STATE_PENDING until the retry ladder expired - the HTTP layer
+            //--- answered 200 and minted a command id that could never execute.
+            {
                 for c in cmds.due_gated(Instant::now(), effective_writes) {
                     if c.state == commands::STATE_UNKNOWN {
                     let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };

@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 set "HERE=%~dp0"
 set "REPO=%HERE%.."
 set "BIN=%REPO%\hub\target\release\copier-hub.exe"
@@ -24,11 +24,21 @@ if not exist "standby_data\curve_clients.txt" (
     )
 )
 
-if exist "cluster_token.txt" (
-    set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
-) else (
-    set "MTC_CLUSTER_TOKEN=mtc_shared_cluster_token_2026"
-    echo mtc_shared_cluster_token_2026> "cluster_token.txt"
+rem --- The standby MUST NOT invent its own token. A hub pair that disagrees on
+rem --- the token silently fails every peer probe (401), reports "disconnected"
+rem --- forever, and never fails over. Take the file from the primary.
+set "CP_OLD_PUBLIC_TOKEN=mtc_shared_cluster_token_2026"
+set "MTC_CLUSTER_TOKEN="
+if exist "cluster_token.txt" set /p MTC_CLUSTER_TOKEN=<"cluster_token.txt"
+if /i "!MTC_CLUSTER_TOKEN!"=="%CP_OLD_PUBLIC_TOKEN%" set "MTC_CLUSTER_TOKEN="
+if not defined MTC_CLUSTER_TOKEN (
+    echo [ERROR] No usable cluster token found.
+    echo         1^) Start the PRIMARY hub first - it generates cluster_token.txt.
+    echo         2^) Copy that file next to this script.
+    echo         Without a shared token the hubs cannot authenticate and
+    echo         failover will never work.
+    pause
+    exit /b 1
 )
 
 title mt-copier Hub - [STANDBY (6001 / 6011)]

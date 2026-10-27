@@ -588,7 +588,6 @@ impl CommandStore {
     pub fn issue_op(&self, node: &str, op: &str, args: &str, actor: &str, ip: &str) -> Command {
         let mut inner = self.inner.lock_or_recover();
         let seq = inner.seq.get(node).copied().unwrap_or(0) + 1;
-        inner.seq.insert(node.to_string(), seq);
         let id = if self.salt.is_empty() {
             command_id_op(node, op, seq)
         } else {
@@ -611,9 +610,25 @@ impl CommandStore {
             err: String::new(),
             next_at: Instant::now(),
         };
+        //--- N56-12: persist FIRST, advance the sequence SECOND.
+        //---
+        //--- The old order consumed `seq` in memory before writing, and `append`
+        //--- swallowed write failures. A failed write therefore left the id
+        //--- consumed in memory but absent from the journal: after a restart the
+        //--- next command of the same op got the SAME id, and the node - which
+        //--- deduplicates by id - replayed the old ACK instead of executing the
+        //--- new order. A risk close that "succeeded" in the audit log and never
+        //--- ran. Returning a failed Command instead of a 202 is the honest
+        //--- answer: nothing was queued.
+        if !inner.append(&c) {
+            let mut failed = c;
+            failed.state = STATE_UNKNOWN.to_string();
+            failed.err = "command journal write failed - NOT queued".to_string();
+            return failed;
+        }
+        inner.seq.insert(node.to_string(), seq);
         inner.in_flight.insert(c.id.clone());
         inner.commands.insert(c.id.clone(), c.clone());
-        inner.append(&c);
         c
     }
 
@@ -776,30 +791,33 @@ impl CommandStore {
         }
     }
 
-    /// Defer an in-flight command when the target node is not subscribed/connected,
-    /// reverting the attempt counter consumed by due_gated so retries are not wasted.
+    /// Defer an in-flight command when the target node is not subscribed yet.
+    ///
+    /// N56-09: this is a SCHEDULING decision, not a state transition. The old
+    /// implementation decremented `attempts` and re-appended the command to the
+    /// journal on EVERY defer - so a command aimed at an offline node was
+    /// rewritten every 2 seconds forever, the retry ladder could never reach its
+    /// end, and `command.timeout` never fired. One offline node holding a single
+    /// pending command produced roughly 30 MB of journal per day plus ~170k
+    /// fsyncs, and the operator never learned the command had not been delivered.
+    ///
+    /// Now: push `next_at` out, leave `attempts` alone, write nothing. The ladder
+    /// runs its normal course (2s -> 5s -> 15s -> 60s, ~82s total) and the command
+    /// ends as `unknown` with an alert if the node stays away. A node that comes
+    /// back inside that window still receives the command.
     pub fn defer(&self, id: &str, delay: Duration) {
         let mut inner = self.inner.lock_or_recover();
-        let snap = if let Some(c) = inner.commands.get_mut(id) {
-            if c.state == STATE_PENDING && c.attempts > 0 {
-                c.attempts -= 1;
+        if let Some(c) = inner.commands.get_mut(id) {
+            if c.state == STATE_PENDING {
                 c.next_at = Instant::now() + delay;
-                Some(c.clone())
-            } else {
-                None
             }
-        } else {
-            None
-        };
-        if let Some(cmd) = snap {
-            inner.append(&cmd);
         }
     }
 }
 
 impl Inner {
-    fn append(&mut self, c: &Command) {
-        self.append_many(std::slice::from_ref(c));
+    fn append(&mut self, c: &Command) -> bool {
+        self.append_many(std::slice::from_ref(c))
     }
 
     /// Append one or more state transitions, then fsync ONCE.
@@ -810,10 +828,15 @@ impl Inner {
     /// hub's main thread, which is also the thread forwarding OPEN/CLOSE. The
     /// durability contract is unchanged (everything written is flushed before
     /// the call returns); only the number of flushes changed.
-    fn append_many(&mut self, cs: &[Command]) {
+    ///
+    /// N56-12: returns whether the batch actually reached the disk. Callers that
+    /// advance an in-memory counter BEFORE writing must check this - swallowing
+    /// the failure is how a command id gets consumed in memory while being
+    /// absent from the journal, and then reused after a restart.
+    fn append_many(&mut self, cs: &[Command]) -> bool {
         let f = match self.file.as_mut() {
             Some(f) => f,
-            None => return,
+            None => return false,
         };
         let mut buf = String::new();
         self.line_count += cs.len();
@@ -840,13 +863,19 @@ impl Inner {
             buf.push('\n');
         }
         if buf.is_empty() {
-            return;
+            return true;
         }
         // Same rule as the audit and the revisions: append, flush, never seek.
         // "What did we tell that node to do" must survive the machine losing
         // power - so the fsync is still there, just not once per line.
-        if let Err(e) = f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
-            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
+        match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
+                // Keep the in-memory line counter honest: the lines did not land.
+                self.line_count -= cs.len();
+                false
+            }
         }
     }
 

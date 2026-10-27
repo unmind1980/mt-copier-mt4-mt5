@@ -202,14 +202,31 @@ impl ClusterManager {
             state.failback_stabilization_hours = failback_hours;
         }
 
-        // Determine active cluster token (H-03 fix: never fall back to public hardcoded token)
-        let resolved_token = if !cluster_token.is_empty() && cluster_token != DEFAULT_CLUSTER_TOKEN {
+        //--- A token that has shipped inside this repository is public
+        //--- knowledge, not a secret. Accepting one is equivalent to accepting
+        //--- no authentication at all, so the known-public values are treated
+        //--- exactly like an empty token. The length floor exists for the same
+        //--- reason: "abc" is not a credential. (N56-01)
+        let token_is_usable = |t: &str| -> bool {
+            !t.is_empty()
+                && t.len() >= 16
+                && t != DEFAULT_CLUSTER_TOKEN
+                && t != "mtc_shared_cluster_token_2026"
+        };
+
+        let resolved_token = if token_is_usable(&cluster_token) {
             cluster_token.to_string()
-        } else if !state.cluster_token.is_empty() && state.cluster_token != DEFAULT_CLUSTER_TOKEN {
+        } else if token_is_usable(&state.cluster_token) {
             state.cluster_token.clone()
         } else {
             let gen = format!("ctok_{}_{}", unix_secs(), &crate::users::random_token()[..16]);
-            println!("[hub] H-03: Generated new cluster auth token: {}", gen);
+            //--- NEVER print the token itself. Logs get pasted into tickets,
+            //--- chat windows and bug reports; printing a secret is precisely
+            //--- how it stops being one. The path is enough for an operator.
+            println!(
+                "[hub] H-03: no usable cluster token - generated a new random one (persisted to {})",
+                state_path.display()
+            );
             gen
         };
         state.cluster_token = resolved_token.clone();
@@ -242,8 +259,25 @@ impl ClusterManager {
             f.write_all(text.as_bytes())?;
             f.sync_all()?;
         }
-        let _ = fs::remove_file(&self.state_path);
-        fs::rename(&tmp, &self.state_path)
+        //--- N56-03: NO remove_file() before the rename.
+        //---
+        //--- On Windows rename() is MoveFileEx(REPLACE_EXISTING), so it already
+        //--- replaces atomically. Deleting the target first opens a window where
+        //--- a crash leaves NO state file at all - and the next boot then invents
+        //--- a fresh hub_id, epoch=1 and whatever role the CLI passed. That is
+        //--- precisely how a standby comes back as a write-enabled primary, and
+        //--- it also breaks HandoverRequest.from_hub_id forever.
+        match fs::rename(&tmp, &self.state_path) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                //--- Some Windows setups still refuse to replace a file another
+                //--- handle holds open. Copy over the target instead of deleting
+                //--- it: never destroy the only copy we have.
+                let r = fs::copy(&tmp, &self.state_path).map(|_| ());
+                let _ = fs::remove_file(&tmp);
+                r
+            }
+        }
     }
 
     pub fn is_primary(&self) -> bool {
@@ -661,7 +695,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             let s = st.lock_or_recover();
                             s.cluster.hub_id().to_string()
                         },
-                        from_epoch: epoch,
+                        //--- N56-11: re-read the epoch under the lock. `epoch`
+                        //--- was captured at the top of this tick, BEFORE the
+                        //--- sync block above adopted the peer's epoch. Sending
+                        //--- that stale value makes the peer reject the handover
+                        //--- ("from_epoch is behind local epoch"), so graceful
+                        //--- failback could never complete and the stabilization
+                        //--- clock was reset every time.
+                        from_epoch: {
+                            let s = st.lock_or_recover();
+                            s.cluster.epoch()
+                        },
                         is_configured_primary: true,
                         reason: "auto_failback_stabilization_met".to_string(),
                     };
@@ -732,7 +776,7 @@ mod tests {
             &curve_path,
             Some("primary"),
             "http://127.0.0.1:6011",
-            "test_token",
+            "test_token_0123456789abcdef",
             24.0,
             false,
         ).expect("create cluster manager");
@@ -742,7 +786,7 @@ mod tests {
         assert_eq!(cm.epoch(), 1);
         assert_eq!(cm.role(), "primary");
         assert_eq!(cm.peer_url, "http://127.0.0.1:6011");
-        assert_eq!(cm.cluster_token, "test_token");
+        assert_eq!(cm.cluster_token, "test_token_0123456789abcdef");
 
         // Reload from file
         let reloaded = ClusterManager::load_or_create(
@@ -750,7 +794,7 @@ mod tests {
             &curve_path,
             None,
             "http://127.0.0.1:6011",
-            "test_token",
+            "test_token_0123456789abcdef",
             24.0,
             false,
         ).expect("reload cluster manager");

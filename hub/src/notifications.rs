@@ -955,6 +955,19 @@ async fn send_wecom(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+    //--- N56-06: WeCom answers HTTP 200 even when it REFUSES the message - the
+    //--- real verdict is `errcode` in the JSON body. Treating 200 as success
+    //--- makes a revoked key, an IP-whitelist rejection or a rate limit look
+    //--- like a delivered alert, which is the one failure an alert channel must
+    //--- never have.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(code) = v.get("errcode").and_then(|c| c.as_i64()) {
+            if code != 0 {
+                let msg = v.get("errmsg").and_then(|m| m.as_str()).unwrap_or("");
+                return Err(format!("WeCom rejected: errcode {} - {}", code, msg));
+            }
+        }
+    }
     if status.is_success() {
         Ok(format!("WeCom sent: HTTP {}", status))
     } else {
@@ -1030,6 +1043,16 @@ async fn send_dingtalk(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+    //--- N56-06: same trap as WeCom - DingTalk returns HTTP 200 with
+    //--- {"errcode":310000,...} for an expired token or a keyword mismatch.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(code) = v.get("errcode").and_then(|c| c.as_i64()) {
+            if code != 0 {
+                let msg = v.get("errmsg").and_then(|m| m.as_str()).unwrap_or("");
+                return Err(format!("DingTalk rejected: errcode {} - {}", code, msg));
+            }
+        }
+    }
     if status.is_success() {
         Ok(format!("DingTalk sent: HTTP {}", status))
     } else {

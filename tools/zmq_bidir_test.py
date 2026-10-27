@@ -154,15 +154,20 @@ def scenario_fan_in():
     print(f"  {'PASS' if to1 else 'FAIL'}  status reaches XPUB #1")
     print(f"  {'PASS' if to2 else 'FAIL'}  status reaches XPUB #2")
     if to1 and to2:
-        print("  -> status is BROADCAST to every connected sender")
+        print("  -> upstream is BROADCAST")
+        print("     CopierTransport::SendUp double-sends @hub frames; that is now")
+        print("     redundant but harmless, because every @hub frame is idempotent.")
     elif to1 or to2:
-        print("  -> status reaches only ONE sender: a receiver with N senders")
-        print("     would report to just one of them")
+        print("  -> upstream is ROUND-ROBIN: exactly one peer sees each frame.")
+        print("     This is why SendUp sends @hub frames twice - a single send would")
+        print("     deliver REG/ACK/STAT to only one of the two hubs.")
     else:
-        print("  -> status reaches nobody")
+        print("  -> upstream reaches NOBODY: the hub would never see REG/ACK/STAT.")
 
-    # only the downstream direction is load-bearing for correctness
-    return both_down
+    # BOTH directions are load-bearing: downstream carries data, upstream carries
+    # control. The old version returned `both_down` alone and therefore stayed
+    # green while the upstream half was broken.
+    return both_down and (to1 or to2)
 
 
 if __name__ == "__main__":
