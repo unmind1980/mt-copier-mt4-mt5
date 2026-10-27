@@ -744,6 +744,21 @@ async fn send_telegram(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Telegram chat_id missing".to_string())?;
 
+    //--- N57-15: the token is interpolated straight into a URL PATH, and unlike
+    //--- the webhook senders this path never goes through validate_outgoing_url.
+    //--- A value containing '/', '?', '@' or ".." rewrites the request target,
+    //--- and "api.telegram.org/botX@evil.example/..." addresses a different host
+    //--- entirely. Real tokens are digits, ':' and '-' (test bots may use '_').
+    if token.is_empty()
+        || !token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == '-')
+    {
+        return Err(
+            "Telegram bot_token contains characters that cannot appear in a token".to_string(),
+        );
+    }
+
     let fmt = format_alert(alert);
     //--- Everything interpolated is HTML-escaped. node names come from REG
     //--- (operator-supplied) and risk names from the node itself; a "&" or

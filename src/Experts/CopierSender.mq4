@@ -2191,7 +2191,15 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       trans.type==TRADE_TRANSACTION_HISTORY_ADD)
      {
       // R47-24: Pulse high-priority pump directly without dead dirty-flag variable
-      g_pump.Trigger();
+      //--- N57-08: ArmFast(), not Trigger().
+      //---
+      //--- Trigger() only fires when the fast window is already open
+      //--- (IsActive() -> now < m_fastPumpUntil), and the only other ArmFast
+      //--- calls are in CheckPeers - a 15ms window every 5s. Calling Trigger()
+      //--- alone therefore fired nothing for 99.7% of the time and MT5's
+      //--- millisecond event-driven copy quietly degraded to the 50ms OnTimer
+      //--- sweep. ArmFast() opens the window and triggers in one call.
+      g_pump.ArmFast();
      }
   }
 #endif

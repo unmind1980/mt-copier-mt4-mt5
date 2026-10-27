@@ -801,10 +801,40 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
               {
                outErr=0;
                //--- Apply the stops immediately on the newly opened position
+               //--- N57-13: re-clamp first. The fill can slip far enough that the
+               //--- original sl/tp now sits inside MODE_STOPLEVEL, and then the
+               //--- modify below fails with the same err 130 that sent us down
+               //--- this path - leaving the position with no stop at all until
+               //--- the next converge pass. CopierSizing's CopierFitStop is not
+               //--- reachable from here (this header is included BY it), so the
+               //--- clamp is done inline against the live bid/ask.
+               //--- sl/tp are const parameters, hence the local copies.
+               double fsl=sl, ftp=tp;
+               if(fsl>0.0 || ftp>0.0)
+                 {
+                  double mkPoint=MarketInfo(sym,MODE_POINT);
+                  double mkStop=MarketInfo(sym,MODE_STOPLEVEL)*mkPoint;
+                  int    mkDig=(int)MarketInfo(sym,MODE_DIGITS);
+                  double mkBid=MarketInfo(sym,MODE_BID);
+                  double mkAsk=MarketInfo(sym,MODE_ASK);
+                  if(mkStop>0.0)
+                    {
+                     if(cmd==OP_BUY)
+                       {
+                        if(fsl>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
+                        if(ftp>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                       }
+                     else
+                       {
+                        if(fsl>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
+                        if(ftp>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                       }
+                    }
+                 }
                if(OrderSelect(ticket,SELECT_BY_TICKET))
                  {
                   int mErr=0;
-                  if(!CopierModifyStops((long)ticket,sym,sl,tp,mErr))
+                  if(!CopierModifyStops((long)ticket,sym,fsl,ftp,mErr))
                     {
                      Print("[copier] WARN: ECN open succeeded (ticket ",ticket,") but immediate stops modify failed: err=",mErr);
                     }

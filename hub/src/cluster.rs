@@ -537,11 +537,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (cfg_tot, cmd_tot, max_seq, u_h, n_h, c_h)
                 };
 
+                //--- N57-12: `> 0` created a blind spot. When the primary's
+                //--- journal is compacted to nothing (everything terminal and
+                //--- older than the retention window, then a restart), it reports
+                //--- cmd_lines == 0 - and the old condition refused to sync
+                //--- because "0 < N" was gated on "0 > 0". The standby then kept
+                //--- serving a history that no longer existed anywhere and
+                //--- reported a cmd_lines figure the primary would deny.
                 let needs_sync = remote_st.cfg_lines > cfg_lines_count
                     || remote_st.cmd_lines > cmd_lines_count
                     || remote_st.max_cmd_seq > local_max_cmd_seq
-                    || (remote_st.cmd_lines < cmd_lines_count && remote_st.cmd_lines > 0)
-                    || (remote_st.cfg_lines < cfg_lines_count && remote_st.cfg_lines > 0)
+                    || remote_st.cmd_lines < cmd_lines_count
+                    || remote_st.cfg_lines < cfg_lines_count
                     || remote_st.users_hash != users_h
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
@@ -601,7 +608,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
                                 // Apply delta commands (or replace if Primary was compacted)
-                                if req_from_cmd_line == 0 && !data.cmd_delta_lines.is_empty() && (remote_st.cmd_lines < cmd_lines_count && cmd_lines_count > 0) {
+                                //--- N57-12: the `!is_empty()` guard meant a primary
+                                //--- compacted to zero rows produced no delta AND no
+                                //--- replace, so the standby kept its stale history.
+                                //--- replace_all(&[]) is exactly the reset needed.
+                                if req_from_cmd_line == 0 && remote_st.cmd_lines < cmd_lines_count {
                                     let _ = s.cmds.replace_all(&data.cmd_delta_lines);
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);

@@ -45,6 +45,12 @@ RE_EXEC_OPEN = re.compile(
     r"(?: ptype=\d+ trigger=[0-9.]+(?: stoplimit=[0-9.]+)?(?: exp=\d+)?(?: sl=[0-9.]+)?(?: tp=[0-9.]+)?)? lots=([0-9.]+)$")
 RE_EXEC_CLOSE = re.compile(
     r"^exec (?:close|partial-close|remove-duplicate) (\S+) ([0-9A-Z]{8})(?: senderTkt=(-?\d+))? (\S+) lots=([0-9.]+)$")
+# N57-14: a position that Pass 1 could not close is retried 30ms later by the
+# two-pass sweeper, which logs its own line. Without this pattern every sweeper
+# success looked like "never closed" to this checker and produced a false
+# "position(s) still open at the end of this terminal's log".
+RE_SWEEPER_CLOSE = re.compile(
+    r"^Two-Pass Sweeper: successfully closed straggler ticket (-?\d+) uid ([0-9A-Z]{8})$")
 RE_SEND_OPEN = re.compile(
     r"^open ([0-9A-Z]{8}) tkt=(-?\d+) (\S+) side=(-?\d+)(?: (?:market|place-pending \S+ \S+))? lots=([0-9.]+)(?: sl=\S+ tp=\S+)?$")
 RE_SEND_CLOSE = re.compile(r"^close ([0-9A-Z]{8}) tkt=(-?\d+) (\S+)$")
@@ -260,6 +266,16 @@ def analyse(events):
                 u["senderTkt"] = u["senderTkt"] or mo.group(3)
             u["sym"] = u["sym"] or mo.group(4)
             u["lots"] = u["lots"] or mo.group(5)
+            u["state"] = "closed"
+            u["last"] = e.ts
+            u["src"].add("receiver")
+            continue
+
+        mo = RE_SWEEPER_CLOSE.match(m)
+        if mo:
+            u = rec(mo.group(2))
+            u["closes"] += 1
+            u["senderTkt"] = u["senderTkt"] or mo.group(1)
             u["state"] = "closed"
             u["last"] = e.ts
             u["src"].add("receiver")

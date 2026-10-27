@@ -3498,6 +3498,16 @@ void ExecuteQueue()
                if(g_ourPending>0) g_ourPending--;
                if(g_ourCount>0) g_ourCount--;
                g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+               //--- N57-14: the per-sender tallies were only decremented on the
+               //--- MARKET branch above, so a pending order removed here left
+               //--- sAddedCount/sAddedLots permanently one order high. Those
+               //--- tallies feed the per-sender caps and the dashboard, so the
+               //--- error accumulated for the life of the terminal.
+               if(sa.senderIdx>=0 && sa.senderIdx<CP_MAX_SENDERS)
+                 {
+                  sAddedCount[sa.senderIdx]--;
+                  sAddedLots[sa.senderIdx]-=sa.lots;
+                 }
               }
             g_mapDirty=true;
             g_log.Info("Two-Pass Sweeper: successfully closed straggler ticket "+(string)sa.ticket+" uid "+sa.uid);
@@ -4044,11 +4054,22 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
         {
          if(g_desired[base+d].uid==loc[i].uid)
            {
-            double rawLots=g_desired[base+d].lots;
-            bool rej=false;
-            double tLots=ComputeReceiverLots(si,loc[i].sym,rawLots,rej);
-            if(!rej && tLots>0.0) want=tLots;
-            else                  want=rawLots;
+            //--- N57-10: use the SAME target the converge pass will use.
+            //---
+            //--- This called ComputeReceiverLots, which knows nothing about
+            //--- CP_SIZE_FIXED partial closes. In fixed-lot mode a sender that
+            //--- opened 2.00 and has since trimmed to 1.00 leaves the receiver
+            //--- holding 0.50 (1.00 scaled by 1.00/2.00). ComputeReceiverLots
+            //--- still returns 1.00, so CopierPreferSurvivor - whose first rule
+            //--- is "whoever matches `want` survives" - kept a stray 1.00
+            //--- duplicate and closed the correct 0.50 position, then trimmed
+            //--- the survivor back down. The operator paid the spread twice and
+            //--- lost the original entry price.
+            //--- the 3-arg form: it returns 0.0 when the target is rejected, so
+            //--- there is no out-param to test.
+            double tLots=ComputeTargetLotsForMirror(si,g_desired[base+d],loc[i].sym);
+            if(tLots>0.0) want=tLots;
+            else          want=g_desired[base+d].lots;
             break;
            }
         }

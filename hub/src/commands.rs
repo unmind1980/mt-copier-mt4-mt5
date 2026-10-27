@@ -409,6 +409,13 @@ impl CommandStore {
                 applied += 1;
             }
         }
+        //--- N57-11: bound what a standby holds in memory.
+        //---
+        //--- The primary prunes on every issue_* (COMMAND_KEEP_SECS retention),
+        //--- but a standby only ever applies deltas - so without this its command
+        //--- map grows for as long as it runs, and every /api/v1/commands clones
+        //--- the whole table. replace_all already pruned; this path did not.
+        inner.prune_terminal(unix_secs(), COMMAND_KEEP_SECS);
         Ok(applied)
     }
 

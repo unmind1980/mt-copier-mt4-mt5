@@ -177,7 +177,17 @@ mod sig {
 /// its queue is full, and that is acceptable here ONLY because a snapshot is
 /// idempotent full state: whatever is dropped is superseded within
 /// SnapshotSeconds. The hub must not be the thing that makes it worse.
-const HWM: i32 = 64;
+///
+/// N57-09: this was 64 while the EAs moved to 256 in N49-12, so the hub was the
+/// narrowest link in the chain - exactly backwards. A martingale/grid sender
+/// closing 74 orders at once, or several nodes bursting together, would have the
+/// hub drop OPEN/CLOSE frames that every EA had room to accept.
+///
+/// 256 rather than the larger figure sometimes suggested: HWM is PER PIPE, and
+/// the hub keeps one queue for every connected node. At a few hundred nodes a
+/// 1024-deep queue each is a lot of retained memory for headroom that will not
+/// be used; 256 matches the EAs, which is the only bound that has been measured.
+const HWM: i32 = 256;
 
 /// The largest frame this hub will accept, matching the EAs' CP_MAXMSGSIZE
 /// (1 MB) so a frame the hub forwards can never be one a node would refuse.
