@@ -139,6 +139,16 @@
     padding: 4px 10px; border-radius: 6px; font-size: 12px;
   }
   .zoom-slider { width: 80px; cursor: pointer; accent-color: var(--accent); }
+  /* Numeric font-size input: a slider is hard to hit a 0.5px step with, and the
+     operator usually wants a specific value rather than "about that much". */
+  .zoom-input {
+    width: 68px; padding: 2px 6px; font: 12px var(--mono); font-weight: 700;
+    color: var(--accent); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px; text-align: center;
+  }
+  .zoom-input:focus { outline: none; border-color: var(--accent); }
+  .zoom-input::-webkit-outer-spin-button,
+  .zoom-input::-webkit-inner-spin-button { opacity: 0.45; height: 18px; }
   .zoom-label { font-family: var(--mono); font-weight: 700; color: var(--accent); min-width: 44px; text-align: right; }
   .btn-theme {
     padding: 6px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600;
@@ -743,7 +753,7 @@
   .cluster-bar.standby{background:var(--warn-bg);border-bottom:1px solid var(--warn-border);color:var(--ink)}
   .cluster-bar.primary{background:var(--ok-bg);border-bottom:1px solid var(--ok-border);color:var(--ink)}
   .cluster-bar.conflict{background:var(--bad-bg);border-bottom:1px solid var(--bad-border);color:var(--bad)}
-  .cluster-banner-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;max-width:1440px;margin:0 auto}
+  .cluster-banner-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;max-width:1920px;margin:0 auto}
   .cluster-status-info{display:flex;align-items:center;gap:10px;font-weight:600}
   .cluster-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .cluster-failback-text{font-size:12px;color:var(--dim);font-weight:400;margin-left:6px}
@@ -752,7 +762,7 @@
   .btn-warn:hover{opacity:.9}
   .cluster-standby-mode .standby-disabled{opacity:0.55;cursor:not-allowed}
 
-  main{padding:20px;display:flex;flex-direction:column;gap:16px;max-width:1440px;margin:0 auto}
+  main{padding:20px;display:flex;flex-direction:column;gap:16px;max-width:1920px;margin:0 auto}
 
   /* KPI Grid */
   .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
@@ -1219,9 +1229,21 @@
   </div>
 
   <div class="nav-tools">
-    <div class="zoom-box" title="Scale font size without layout distortion (11px - 18px)">
+    <div class="zoom-box" title="Font size 11px - 18px in 0.5 steps. Type a value or pick one from the list.">
       <span style="color:var(--dim)">Font:</span>
-      <input type="range" class="zoom-slider" id="zoomRange" min="11" max="18" step="0.5" value="13.5" oninput="applyScale(this.value)">
+      <input type="number" class="zoom-input" id="zoomRange" list="zoomPresets"
+             min="11" max="18" step="0.5" value="13.5"
+             oninput="applyScale(this.value,false)" onchange="applyScale(this.value,true)">
+      <datalist id="zoomPresets">
+        <option value="11"></option><option value="11.5"></option>
+        <option value="12"></option><option value="12.5"></option>
+        <option value="13"></option><option value="13.5"></option>
+        <option value="14"></option><option value="14.5"></option>
+        <option value="15"></option><option value="15.5"></option>
+        <option value="16"></option><option value="16.5"></option>
+        <option value="17"></option><option value="17.5"></option>
+        <option value="18"></option>
+      </datalist>
       <span class="zoom-label" id="zoomVal">13.5px</span>
     </div>
 
@@ -2686,6 +2708,10 @@ function renderPosNodeDetail(){
     // C. Detailed Line-by-Line Order & Position Table
     var opened = n.positions_detail || [];
     var waiting = n.waiting_detail || [];
+    //--- N56-16: the receiver sends this table on a 60s cadence, so entering the
+    //--- view between ticks shows "0 orders" next to a correct "Held: 43" for up
+    //--- to a minute. Ask once instead of making the operator press Request Update.
+    maybeAutoRequestPositions(n);
     var managedOrders = opened.filter(function(p){ return p.managed; });
     var unmanagedOrders = opened.filter(function(p){ return !p.managed; });
     var totalOrders = opened.length + waiting.length;
@@ -2956,6 +2982,28 @@ function openPositionsView(focusKey){
 
 function openPositionsModal(focusKey){
   openPositionsView(focusKey);
+}
+
+//--- The receiver transmits its line-by-line table on a 60-second cadence, so
+//--- opening this view between ticks shows "0 orders" next to a correct
+//--- "Held: 43" for up to a minute - which reads as "the data is broken".
+//---
+//--- Ask once when that is exactly the situation: holdings reported, no rows.
+//--- Throttled per node, because the view re-renders on every auto-refresh and
+//--- an unthrottled request here would be a request loop with a 60s period.
+//--- Deliberately NOT triggered when the node reports zero holdings: an empty
+//--- account is a valid answer, not a missing one.
+var _autoPosAt = {};
+function maybeAutoRequestPositions(n){
+  if(!n || n.role !== "receiver") return;
+  var held = (n.positions && n.positions.count) || 0;
+  var rows = (n.positions_detail || []).length + (n.waiting_detail || []).length;
+  if(held <= 0) return;
+  if(rows > 0) return;
+  var now = Date.now();
+  if(now - (_autoPosAt[n.key] || 0) < 30000) return;
+  _autoPosAt[n.key] = now;
+  sendCommand(n.key, "reqpos", $("pos_foot_msg") || $("gmsg"));
 }
 
 function confirmCloseAllNode(k){
@@ -3255,11 +3303,24 @@ function updateThemeBtn(theme){
 }
 
 // --- Dynamic Font Scaling Slider ---
-function applyScale(size){
-  document.documentElement.style.setProperty("--font-base", size + "px");
+function applyScale(size, finalize){
+  var v = parseFloat(size);
+  if(!isFinite(v)) return;                     // empty or garbage while typing
+  if(finalize){
+    //--- Commit: clamp into range and snap to the 0.5 grid, then write the
+    //--- corrected value back so the box never shows something it did not apply.
+    v = Math.min(18, Math.max(11, Math.round(v * 2) / 2));
+    var el = $("zoomRange");
+    if(el) el.value = v;
+  } else if(v < 11 || v > 18){
+    //--- Mid-typing out of range (e.g. "1" on the way to "15"): do not clamp
+    //--- here, or the box would rewrite itself to 11 and eat the next keystroke.
+    return;
+  }
+  document.documentElement.style.setProperty("--font-base", v + "px");
   var lbl = $("zoomVal");
-  if(lbl) lbl.textContent = size + "px";
-  localStorage.setItem("mtc_font_size", size);
+  if(lbl) lbl.textContent = v + "px";
+  localStorage.setItem("mtc_font_size", v);
 }
 
 // --- Split Cockpit Rendering (Tab 2) ---
