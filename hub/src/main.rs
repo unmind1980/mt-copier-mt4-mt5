@@ -653,7 +653,7 @@ fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> z
     );
     sock.send_multipart(
         vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
-        0,
+        zmq::DONTWAIT,
     )
 }
 
@@ -681,7 +681,7 @@ fn send_topology(
     );
     sock.send_multipart(
         vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
-        0,
+        zmq::DONTWAIT,
     )
 }
 
@@ -725,7 +725,7 @@ fn send_cfg(
         nid,
         config::escape_ini(ini)
     );
-    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], 0)
+    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
 }
 
 /// Send one operational command to a node: `T=CMD` on the node's own `@<nid>`
@@ -755,7 +755,7 @@ fn send_cmd(
         unix_millis() % 2147483647,
         p
     );
-    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], 0)
+    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
 }
 
 fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result<()> {
@@ -768,7 +768,7 @@ fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result
         unix_millis() % 2147483647,
         nonce
     );
-    sock.send_multipart(vec![b"@all".to_vec(), env.into_bytes()], 0)
+    sock.send_multipart(vec![b"@all".to_vec(), env.into_bytes()], zmq::DONTWAIT)
 }
 
 /// Relay a receiver's snapshot receipt to the sender it is about.
@@ -818,7 +818,7 @@ fn send_receipt(
     );
     sock.send_multipart(
         vec![format!("@{}", sid).into_bytes(), env.into_bytes()],
-        0,
+        zmq::DONTWAIT,
     )
 }
 

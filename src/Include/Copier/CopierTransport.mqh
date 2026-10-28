@@ -568,7 +568,18 @@ public:
             ZmqMsg m1;
             //--- a first frame that promised more but delivered nothing is a
             //--- torn message: drop it rather than act on half of one
-            if(!m_sub.recv(m1,true)) break;
+            if(!m_sub.recv(m1,true))
+              {
+               // L6 fix: Drain remaining multipart frames if any to prevent socket misalignment
+               bool hasM0=m0.more();
+               while(hasM0)
+                 {
+                  ZmqMsg extra;
+                  if(!m_sub.recv(extra,true)) break;
+                  hasM0=extra.more();
+                 }
+               break;
+              }
             topic=first;
             payload=m1.getData();
             //--- Drain and drop any unexpected additional frames (>2) to prevent

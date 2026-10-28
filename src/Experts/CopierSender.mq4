@@ -689,6 +689,20 @@ int BuildCurrent()
 #endif
         }
 
+      //--- M9 fix: Ensure inherited UID has not already been assigned to an earlier order in this scan
+      if(StringLen(uid)>0)
+        {
+         for(int k=0;k<n;k++)
+           {
+            if(g_curScratch[k].uid==uid)
+              {
+               uid="";
+               slot=-1;
+               break;
+              }
+           }
+        }
+
       //--- 3) genuinely new
       //---
       //--- REFUSE to mint an identity we cannot store. A new UID only becomes
@@ -1055,7 +1069,11 @@ void CheckPeers()
       for(int k=0;k<CP_MAX_PEERS;k++)
         {
          string pn=g_peers.NameAt(k);
-         if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
+         if(StringLen(pn)>0)
+           {
+            if(IsHubPeerName(pn)) continue; // M1: Hub is probed on its own channel below; do not overwrite with direct ping
+            g_peers.ProbeSentAt(k,now);
+           }
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }

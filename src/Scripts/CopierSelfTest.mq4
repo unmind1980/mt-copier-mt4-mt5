@@ -2630,6 +2630,16 @@ void TestR47R48Regressions()
    CopierPos pModLegacy;
    Ok("modify: parse legacy payload without PPRICE succeeds", CopierPayloadModifyParse(legacyMod, pModLegacy));
    OkDbl("modify: legacy parsed pprice defaults to 0.0", pModLegacy.pprice, 0.0, 0.00001);
+
+   // M12: PosTable PruneTo cleans up properly
+   CopierPosTable pt;
+   CopierPos pSample;
+   pSample.uid = "PRUNTEST";
+   pSample.ticket = 99999;
+   pt.InsertEmpty(pSample);
+   CopierPos desEmpty[];
+   pt.PruneTo(desEmpty, 0);
+   Ok("table: PruneTo empty desired array cleans up all rows", pt.Count() == 0);
   }
 
 //+------------------------------------------------------------------+

@@ -377,7 +377,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 | **B6** | 300 次/tick   | `CopierReadPositions`            | 循环内 `ArrayResize`。**已修**：按 32 起倍增批量扩容。                                                                                                                                     |
 | **B7** | 一次性          | `CopierPosTable::InsertEmpty`    | 线性找空槽。**已修**：增加 `m_hint` 游标，`RemoveAt` 释放的槽位优先复用。                                                                                                                          |
 | **B8** | —            | `hub/src/main.rs`                | `last_rcpt_relayed` 无上限。**已修**：每 60 秒清理 10 分钟未更新的配对。                                                                                                                       |
-| **B9** | —            | `hub/src/main.rs`                | 两段式 `send` 失败会留下半个 multipart 帧。**已修**：第二帧失败判定为致命，置 `EXIT` 并明确报错，不再继续往撕裂的帧里写。                                                                                               |
+| **B9** | —            | `hub/src/main.rs`                | 两段式 `send` 失败曾置 EXIT；P1-04 已加固为发送空帧安全闭合多段消息并打 WARN，杜绝单客户端异常断开拉垮 Hub 进程。 |
 
 #### 修复后的量级对照（300 单 / 10Hz）
 
@@ -1251,6 +1251,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **P1-04**：`hub/src/main.rs` 移除 XPUB 数据帧转发单次失败直接触发 `EXIT.store(true)` 自杀退出的过激逻辑，改为补发空帧安全闭合 multipart 事务并记录警告，杜绝单个客户端异常连接抖动引发整个 Hub 宕机；
 - **业务决策确认**：
   - **P0-01（反向跟单 InvertTrades 无 TP 时不强加止损）**：严格保持原貌坚决不改，继续遵循客户既定执行层策略预期。
+
+### 六十六次审计：满队列就地轮转防饿死、SSID重置秒级Bootstrap、直连探针隔离与StopsPrune降维（2026-10-29 01:20；全部闭环）
+
+- **修复与加固项**：
+  1. **H2**：`CopierReceiver.mq4` 的 `RotateQueue` 在满队列（`g_qn == CP_MAX_ACTIONS`）时由原简单 return 改为就地数组平移并将队头移至队尾（`headAct = g_q[0]; for(k=0;k<g_qn-1;k++) g_q[k]=g_q[k+1]; g_q[g_qn-1]=headAct; g_qHead=0;`），彻底根除队头受阻时整队 256 项（含关键平仓单）永久被饿死的问题；
+  2. **H5**：`CopierReceiver.mq4` 的 `AcceptSeq` 在检测到 SSID 变更时补齐 `g_snapHash[si] = "";`，确保重启后接收端立刻向发送端回报空收据 `H=""`，触发发送端 <1s 的即时单播快照 bootstrap；
+  3. **M1**：`CopierSender.mq4` 与 `CopierReceiver.mq4` 的直连 ping 循环中增加 `if(IsHubPeerName(pn)) continue;`，防止 direct ping 覆写 `hub:primary` / `hub:standby` 的探针时间戳，彻底消除 Hub RTT 偶发被破坏为 -1；
+  4. **M2**：`CopierReceiver.mq4` 的 `StopsPrune` 将 $O(N \times S \times D)$（约 1 亿次）的三重嵌套循环反转为单遍 `StopsOvIndex(uid, false)` 标记存活条目，耗时降至 $O(Desired + Acct)$ 微秒级，消除移动止损场景下的秒级卡顿；
+  5. **M7**：`CopierReceiver.mq4` 的 `ClearQueueExceptRiskReducing` 在压缩队列时清空搬移后腾出的 `w..g_qn-1` 槽位字符串引用，防止死动作字符串滞留；
+  6. **M9**：`CopierSender.mq4` 的 `BuildCurrent` 在 MT4 `from #` 继承 UID 前做本轮已分配检查，若冲突则强制铸新 UID，保证单 tick 内 UID 绝对唯一性；
+  7. **M11**：`hub/src/main.rs` 在 `send_pong`, `send_topology`, `send_cfg`, `send_cmd`, `send_who`, `send_receipt` 中将 flag `0` 改为 `zmq::DONTWAIT`，确保 Hub 主路由循环在任何套接字负载下永不阻塞；
+  8. **M12**：`CopierState.mqh` 的 `PruneTo` 在函数退出前清空使用过的静态 `desUid` 槽位；
+  9. **L6**：`CopierTransport.mqh` 的 `DrainFrames` 在第二帧接收失败时排空残余帧，保障帧对齐；
+  10. **测试断言增强**：`CopierSelfTest.mq4` 增加 `PosTable PruneTo` 清空断言。
 
 ---
 

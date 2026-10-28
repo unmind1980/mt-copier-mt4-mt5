@@ -528,6 +528,11 @@ public:
             m_tkValid=false;
            }
         }
+      //--- M12 fix: clear static desUid references so no strings linger across calls
+      for(int k=0;k<CP_UIDIDX_SLOTS;k++)
+        {
+         if(desHash[k]!=0) { desHash[k]=0; desUid[k]=""; }
+        }
       m_n=UsedCount();          // derived, so Count() can never disagree
       return removed;
      }

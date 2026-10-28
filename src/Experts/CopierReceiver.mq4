@@ -2723,6 +2723,14 @@ void ClearQueueExceptRiskReducing()
          g_q[idx].key="";
         }
      }
+   //--- M7 fix: clear string references on vacated tail slots to prevent dead string retention
+   for(int k=w;k<g_qn;k++)
+     {
+      int idx=g_qHead+k;
+      g_q[idx].uid="";
+      g_q[idx].sym="";
+      g_q[idx].key="";
+     }
    g_qn=w;
    if(g_qn<=0) g_qHead=0;
   }
@@ -2742,10 +2750,16 @@ void RotateQueue()
   {
    if(g_qn<2) return;
    if(g_qHead+g_qn>=CP_MAX_ACTIONS) CompactQueue();
-   //--- Still no room at the tail even after compaction: the array is
-   //--- genuinely full of live entries, so leave the order alone. The caller's
-   //--- `skipped` counter still bounds the pass, so this cannot spin.
-   if(g_qHead+g_qn>=CP_MAX_ACTIONS) return;
+   //--- H2 fix: If queue is completely full (g_qn == CP_MAX_ACTIONS), rotate in-place
+   //--- by shifting elements left and moving head to the tail, preventing head-of-line blocking.
+   if(g_qHead+g_qn>=CP_MAX_ACTIONS)
+     {
+      CopierAction headAct=g_q[0];
+      for(int k=0;k<g_qn-1;k++) g_q[k]=g_q[k+1];
+      g_q[g_qn-1]=headAct;
+      g_qHead=0;
+      return;
+     }
    //--- head to tail in ONE assignment: the live region [H, H+Q-1] becomes
    //--- [H+1, H+Q], which is the same Q entries with the head last.
    g_q[g_qHead+g_qn]=g_q[g_qHead];
@@ -5711,27 +5725,34 @@ void StopsPrune(const long now)
          maxThrottle=g_senderCfg[s].stopsThrottleSeconds;
      }
    long keep=(long)maxThrottle*1000;
+
+   //--- M2 fix: Pre-mark active override UIDs in O(Desired + Acct) time using StopsOvIndex
+   //--- instead of O(Overrides * Senders * Desired) ~ 100M nested comparisons.
+   static bool s_isOvAlive[CP_MAX_STOPS_OV];
+   ArrayInitialize(s_isOvAlive,false);
+   if(g_stCount>0)
+     {
+      for(int s=0;s<g_nSenders;s++)
+        {
+         int base=s*CP_MAX_POSITIONS;
+         for(int d=0;d<g_desiredCount[s];d++)
+           {
+            int idx=StopsOvIndex(g_desired[base+d].uid,false);
+            if(idx>=0 && idx<g_stCount) s_isOvAlive[idx]=true;
+           }
+        }
+      for(int k=0;k<g_acctAllPosCount;k++)
+        {
+         int idx=StopsOvIndex(g_acctAllPos[k].uid,false);
+         if(idx>=0 && idx<g_stCount) s_isOvAlive[idx]=true;
+        }
+     }
+
    for(int i=g_stCount-1;i>=0;i--)
      {
-      bool isAlive=false;
       if(g_stHasOv[i])
         {
-         for(int s=0;s<g_nSenders && !isAlive;s++)
-           {
-            int base=s*CP_MAX_POSITIONS;
-            for(int d=0;d<g_desiredCount[s];d++)
-              {
-               if(g_desired[base+d].uid==g_stUid[i]) { isAlive=true; break; }
-              }
-           }
-         if(!isAlive)
-           {
-            for(int k=0;k<g_acctAllPosCount;k++)
-              {
-               if(g_acctAllPos[k].uid==g_stUid[i]) { isAlive=true; break; }
-              }
-           }
-         if(isAlive) continue;
+         if(s_isOvAlive[i]) continue;
         }
       else
         {
@@ -6549,6 +6570,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
       int prevDesired=g_desiredCount[si];
       g_desiredCount[si]=0;
       g_lastSnapMs[si]=0;
+      g_snapHash[si]=""; // H5 fix: Clear cached snapshot receipt so STAT sends H="" to trigger immediate bootstrap
       int base=si*CP_MAX_POSITIONS;
       for(int d=0;d<prevDesired;d++)
         {
@@ -7248,7 +7270,11 @@ void CheckPeersPing(const long now)
       for(int k=0;k<CP_MAX_PEERS;k++)
         {
          string pn=g_peers.NameAt(k);
-         if(StringLen(pn)>0) g_peers.ProbeSentAt(k,now);
+         if(StringLen(pn)>0)
+           {
+            if(IsHubPeerName(pn)) continue; // M1: Do not overwrite hub peer probe timestamps from direct ping
+            g_peers.ProbeSentAt(k,now);
+           }
         }
       g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
