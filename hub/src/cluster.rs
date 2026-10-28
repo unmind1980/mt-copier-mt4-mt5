@@ -592,17 +592,25 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
 
-                // P0-03: Track continuous online duration when Standby is healthy & in sync with Primary
-                let is_synced_or_syncing = {
+                // N67-03: Track continuous online duration strictly based on alignment.
+                // When aligned (!needs_sync && synced), accumulate online duration.
+                // When syncing, hold duration steady (neither advance nor reset).
+                // On sync error or non-primary peer, reset duration to None.
+                let cur_sync_status = {
                     let s = st.lock_or_recover();
-                    s.cluster.sync_status == "synced" || s.cluster.sync_status == "syncing"
+                    s.cluster.sync_status.clone()
                 };
-                if remote_st.role == "primary" && (!needs_sync || is_synced_or_syncing) {
-                    let mut s = st.lock_or_recover();
-                    if s.cluster.continuous_online_start.is_none() {
-                        s.cluster.continuous_online_start = Some(now);
+                if remote_st.role == "primary" {
+                    if !needs_sync && cur_sync_status == "synced" {
+                        let mut s = st.lock_or_recover();
+                        if s.cluster.continuous_online_start.is_none() {
+                            s.cluster.continuous_online_start = Some(now);
+                        }
+                    } else if cur_sync_status == "sync_err" {
+                        let mut s = st.lock_or_recover();
+                        s.cluster.continuous_online_start = None;
                     }
-                } else if remote_st.role != "primary" {
+                } else {
                     let mut s = st.lock_or_recover();
                     s.cluster.continuous_online_start = None;
                 }

@@ -686,21 +686,21 @@ int BuildCurrent()
                   g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket+"; minting fresh UID");
               }
            }
-#endif
-        }
-
-      //--- M9 fix: Ensure inherited UID has not already been assigned to an earlier order in this scan
-      if(StringLen(uid)>0)
-        {
-         for(int k=0;k<n;k++)
+         //--- N67-01 fix: Check UID uniqueness ONLY when inherited from MT4 "from #" chain
+         //--- Eliminates O(N^2) loop on the 99.9% hot path where uid is matched 1:1 by ticket.
+         if(StringLen(uid)>0)
            {
-            if(g_curScratch[k].uid==uid)
+            for(int k=0;k<n;k++)
               {
-               uid="";
-               slot=-1;
-               break;
+               if(g_curScratch[k].uid==uid)
+                 {
+                  uid="";
+                  slot=-1;
+                  break;
+                 }
               }
            }
+#endif
         }
 
       //--- 3) genuinely new
