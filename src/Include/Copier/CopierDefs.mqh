@@ -876,15 +876,21 @@ public:
          int r=0;
          for(int i=0;i+1<w;i+=2)
            {
-            m_parts[r]=m_parts[i]+m_parts[i+1];
+            //--- R60-01: Take merged temporary first!
+            //--- When i=0 and r=0, m_parts[r]=m_parts[i]+m_parts[i+1] followed
+            //--- immediately by m_parts[i]="" erased m_parts[0] on the first pair.
+            //--- Any string spanning >= 2 chunks (>= 4KB) returned empty string.
+            string merged=m_parts[i]+m_parts[i+1];
             m_parts[i]="";
             m_parts[i+1]="";
+            m_parts[r]=merged;
             r++;
            }
          if((w&1)!=0)
            {
-            m_parts[r]=m_parts[w-1];
+            string tail=m_parts[w-1];
             m_parts[w-1]="";
+            m_parts[r]=tail;
             r++;
            }
          w=r;

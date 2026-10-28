@@ -2812,9 +2812,14 @@ fn main() {
                 }
                 let nid = c.node.split_once(':').map(|(_, acc)| acc).unwrap_or(&c.node);
                 let target_sub = format!("@{}", nid);
-                if !st.subs.contains_key(&target_sub) {
-                    // HUB-02: Node is currently disconnected or has not subscribed yet;
-                    // defer sending without consuming retry ladder attempts.
+                let is_offline = {
+                    let s = shared.lock_or_recover();
+                    s.reg.get(&c.node).map(|n| n.liveness(Instant::now()) == crate::registry::Liveness::Offline).unwrap_or(false)
+                };
+                if !st.subs.contains_key(&target_sub) || is_offline {
+                    // HUB-02 & R60-06: Node is currently disconnected, has not subscribed yet,
+                    // or registry reports it is offline (crashed/unreachable without sending 0x00 unsubscribe).
+                    // Defer sending without consuming retry ladder attempts.
                     cmds.defer(&c.id, Duration::from_secs(2));
                     continue;
                 }

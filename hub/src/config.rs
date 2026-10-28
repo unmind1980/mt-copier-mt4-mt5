@@ -260,16 +260,18 @@ impl ConfigStore {
                     kind: v["kind"].as_str().unwrap_or("").to_string(),
                     from_rev: v["from_rev"].as_u64().unwrap_or(0),
                 };
-                inner.append(&r)?;
-                // H-07 fix: only advance current if incoming rev is monotonically greater
+                // R60-05: Check monotonicity BEFORE appending to journal.
+                // Do not persist older revisions to disk, avoiding load() on restart
+                // overwriting current with a stale revision.
                 let should_advance = match inner.current.get(&node) {
                     Some(cur) => r.rev > cur.rev,
                     None => true,
                 };
                 if should_advance {
+                    inner.append(&r)?;
                     inner.current.insert(node, r);
+                    applied += 1;
                 }
-                applied += 1;
             }
         }
         Ok(applied)

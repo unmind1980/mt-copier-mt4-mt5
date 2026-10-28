@@ -1768,7 +1768,12 @@ void HandleHubSubFrame(const CopierEnv &he)
       CopierKvGet(he.payload,"H",rh);
       CopierKvGet(he.payload,"SID",rsid);
       if(SenderAnswersTo(rsid))
+        {
+         //--- R60-16: Record receiver as active peer in central mode so on-chart panel
+         //--- and disconnect detector accurately show connected receivers.
+         if(StringLen(rwho)>0) g_peers.Seen(rwho);
          SnapTrack(rwho,rh,true);
+        }
       return;
      }
    if(g_once.ShouldEmit("hubctl|"+he.type))

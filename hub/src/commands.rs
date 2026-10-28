@@ -362,6 +362,7 @@ impl CommandStore {
         }
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
+        let mut to_append = Vec::new();
         for line in raw_lines {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
                 let id = v["id"].as_str().unwrap_or("").to_string();
@@ -394,8 +395,9 @@ impl CommandStore {
                     err: v["err"].as_str().unwrap_or("").to_string(),
                     next_at: Instant::now() + Duration::from_secs(step),
                 };
-                inner.append(&cmd);
-                // H-08 & P2-9 fix: command state cannot be demoted (state rank order)
+                // R60-04: Evaluate state rank BEFORE appending to journal.
+                // Do not persist demoted/superseded commands to disk, which would
+                // cause load() on restart to overwrite newer state with stale journal lines.
                 let should_insert = match inner.commands.get(&id) {
                     Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
                     None => true,
@@ -407,10 +409,14 @@ impl CommandStore {
                     } else if cmd.is_terminal() {
                         inner.in_flight.remove(&id);
                     }
+                    to_append.push(cmd.clone());
                     inner.commands.insert(id, cmd);
+                    applied += 1;
                 }
-                applied += 1;
             }
+        }
+        if !to_append.is_empty() {
+            inner.append_many(&to_append);
         }
         //--- N57-11: bound what a standby holds in memory.
         //---

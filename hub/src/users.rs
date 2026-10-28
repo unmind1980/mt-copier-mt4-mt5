@@ -297,6 +297,14 @@ impl UserStore {
     pub fn reload(&mut self) -> Result<(), String> {
         let loaded = Self::load_at(&self.path)?;
         self.users = loaded.users;
+        // R60-14: Purge sessions whose user was deleted, disabled, or had their role changed
+        self.sessions.retain(|_, s| {
+            if let Some(u) = self.users.iter().find(|u| u.id == s.user_id) {
+                !u.disabled && u.role == s.role
+            } else {
+                false
+            }
+        });
         Ok(())
     }
 

@@ -116,6 +116,7 @@ private:
    int               m_errno;
    string            m_subPrefixes[CP_MAX_XSUB_SUBS];
    int               m_nSubPrefixes;
+   int               m_connectedHubs;
 
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
@@ -192,7 +193,7 @@ private:
 
 public:
                      CopierTransport():m_ctx(NULL),m_pub(NULL),m_sub(NULL),
-                     m_errno(0),m_nSubPrefixes(0) {}
+                     m_errno(0),m_nSubPrefixes(0),m_connectedHubs(0) {}
 
                     ~CopierTransport() { Close(); }
 
@@ -403,6 +404,7 @@ public:
         }
       //--- deliberately NO \x01 here. See the note above.
       //--- Connect all parsed cluster endpoints to the same XSUB socket
+      m_connectedHubs=nEp;
       for(int k=0;k<nEp;k++)
         {
          m_sub.connect(eps[k]);
@@ -418,6 +420,7 @@ public:
       string ep=CopierNormalizeEndpoint(endpoint);
       if(StringLen(ep)==0) return false;
       if(!m_sub.connect(ep)) return false;
+      m_connectedHubs++;
       // H-06: Replay all existing XSUB subscriptions over the newly connected pipe
       for(int i=0;i<m_nSubPrefixes;i++)
         {
@@ -497,7 +500,10 @@ public:
       //--- high-water mark). Data frames stay single-send: the standby forwards
       //--- them, so they are not lost either way, and duplicating them would
       //--- only add traffic.
-      int copies=(StringLen(topic)>0 && StringSubstr(topic,0,1)=="@") ? 2 : 1;
+      //--- R60-18: Send 2 copies only when connected to multiple hubs (HA cluster),
+      //--- avoiding duplicate traffic on single-hub links while ensuring both Primary and
+      //--- Standby receive control frames when dual endpoints are active.
+      int copies=(m_connectedHubs>1 && StringLen(topic)>0 && StringSubstr(topic,0,1)=="@") ? 2 : 1;
       int sent=0;
       for(int i=0;i<copies;i++)
         {
@@ -642,6 +648,7 @@ public:
    //=================================================================
    void              Close()
      {
+      m_connectedHubs=0;
       if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       if(CheckPointer(m_ctx)!=POINTER_INVALID) { delete m_ctx; m_ctx=NULL; }

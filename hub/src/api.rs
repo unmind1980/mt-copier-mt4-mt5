@@ -1010,6 +1010,13 @@ async fn require_session(
         let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h)).map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false)
             || x_hdr.map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false);
         if token_matches {
+            // R60-07: Inject Session extension for cluster endpoints expecting admin session
+            req.extensions_mut().insert(Session {
+                user_id: "cluster".to_string(),
+                role: UserRole::Admin,
+                seen: unix_secs(),
+            });
+            req.extensions_mut().insert(Token(cluster_token));
             return next.run(req).await;
         }
         // P0-2: If cluster token did not match and users auth is disabled, forbid anonymous access

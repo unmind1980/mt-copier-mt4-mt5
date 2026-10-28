@@ -429,7 +429,8 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
             node: c.node.clone(),
             detail: json!({ "command_id": c.id, "op": c.op, "attempts": c.attempts }),
         };
-        if s.alerts.allow(a.kind, &c.id, now, silence::COMMAND_UNKNOWN) {
+        // R60-03: window 0 means "remember forever, fire once per command id"
+        if s.alerts.allow(a.kind, &c.id, now, 0) {
             s.alerts.push(a.clone());
             fired.push(a);
         }
