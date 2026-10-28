@@ -1901,18 +1901,22 @@ void OnTimer()
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
             if(otherDiff) MarkStateDirty();
 
-            //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
-            if(stopsDiff)
+            //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05)
+            bool ppriceDiff = (g_curScratch[i].kind==CP_ORD_PENDING && MathAbs(g_prev.GetPPriceAt(slot)-g_curScratch[i].pprice)>0.0000001);
+            if(stopsDiff || ppriceDiff)
               {
                MarkStateDirty();
+               string extraLog = ppriceDiff ? (" pprice="+DoubleToString(g_curScratch[i].pprice,5)) : "";
                g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                           +" side="+(string)g_curScratch[i].side
                           +" entry="+DoubleToString(g_curScratch[i].openPx,5)
                           +" sl="+((g_curScratch[i].sl>0.0)?DoubleToString(g_curScratch[i].sl,5):"none")
-                          +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none"));
+                          +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none")
+                          +extraLog);
                Emit(CP_T_MODIFY,
                     CopierPayloadModify(g_curScratch[i].uid,g_curScratch[i].openPx,
-                                        g_curScratch[i].sl,g_curScratch[i].tp),false);
+                                        g_curScratch[i].sl,g_curScratch[i].tp,
+                                        g_curScratch[i].pprice),false);
               }
 
             //--- VOLUME DRIFT (partial close we do not model in the MVP)

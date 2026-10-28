@@ -6311,6 +6311,19 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvSl[idx]=p.sl;
    g_stOvTp[idx]=p.tp;
    g_stOvOpn[idx]=p.openPx;
+   //--- DEF-63-05: If modify event carries updated pprice, update desired table immediately
+   if(p.pprice>0.0)
+     {
+      int base=si*CP_MAX_POSITIONS;
+      for(int i=0;i<g_desiredCount[si];i++)
+        {
+         if(g_desired[base+i].uid==p.uid)
+           {
+            g_desired[base+i].pprice=p.pprice;
+            break;
+           }
+        }
+     }
    g_stOvEpoch++;                          // invalidates the stop-geometry cache
   }
 

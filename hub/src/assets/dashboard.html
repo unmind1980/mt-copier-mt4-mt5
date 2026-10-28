@@ -2946,7 +2946,7 @@ function renderPosNodeDetail(){
         sndHtml += '</div>';
       }
 
-      var sItems = (p && p.items) ? p.items : ((n.positions && n.positions.items) ? n.positions.items : []);
+      var sItems = (p && p.items) ? p.items : [];
       sndHtml += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
       if(sItems.length > 0){
         var sRows = sItems.map(function(item){

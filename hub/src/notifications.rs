@@ -403,7 +403,7 @@ impl NotificationStore {
         }
         // F-08: validate final unmasked URL before writing to disk
         if let Some(url) = channel.config.get("url").or_else(|| channel.config.get("webhook_url")).and_then(|u| u.as_str()) {
-            if let Err(e) = validate_outgoing_url(url) {
+            if let Err(e) = validate_outgoing_url_sync(url) {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
             }
         }
@@ -813,7 +813,102 @@ async fn send_telegram(
     }
 }
 
-pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
+pub(crate) fn validate_outgoing_url_sync(url: &str) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL must begin with http:// or https://".to_string());
+    }
+
+    let authority = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("URL cannot contain userinfo credentials".to_string());
+    }
+
+    let host = if authority.starts_with('[') {
+        authority.split(']').next().unwrap_or("").trim_start_matches('[')
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+
+    let host_lower = host.to_ascii_lowercase();
+    if host_lower.starts_with("169.254.")
+        || host_lower == "metadata.google.internal"
+        || host_lower == "fd00:ec2::254"
+        || host_lower == "100.100.100.200"
+        || host_lower.starts_with("fe80:")
+        || host_lower.starts_with("fe80::")
+    {
+        return Err("URL points to prohibited cloud metadata or link-local service".to_string());
+    }
+
+    let allow_local = std::env::var("MTC_ALLOW_LOCAL_WEBHOOK").is_ok();
+    if !allow_local {
+        if host_lower == "localhost"
+            || host_lower == "127.0.0.1"
+            || host_lower == "0.0.0.0"
+            || host_lower == "::1"
+            || host_lower.starts_with("127.")
+            || host_lower.ends_with(".localhost")
+            || host_lower.ends_with(".local")
+            || host_lower.ends_with(".nip.io")
+            || host_lower == "localtest.me"
+        {
+            return Err("URL points to prohibited localhost or loopback address".to_string());
+        }
+
+        let check_single_ip = |ip: std::net::IpAddr| -> Result<(), String> {
+            if ip.is_loopback() || ip.is_unspecified() {
+                return Err("URL points to prohibited loopback or unspecified IP".to_string());
+            }
+            match ip {
+                std::net::IpAddr::V4(v4) => {
+                    let oct = v4.octets();
+                    if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                        || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+                        || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                        return Err("URL points to prohibited private, CGNAT, or reserved IPv4".to_string());
+                    }
+                }
+                std::net::IpAddr::V6(v6) => {
+                    let segs = v6.segments();
+                    if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xffc0) == 0xfe80 {
+                        return Err("URL points to prohibited private or link-local IPv6".to_string());
+                    }
+                    if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
+                        let v4 = std::net::Ipv4Addr::new(
+                            (segs[6] >> 8) as u8,
+                            (segs[6] & 0xff) as u8,
+                            (segs[7] >> 8) as u8,
+                            (segs[7] & 0xff) as u8,
+                        );
+                        let oct = v4.octets();
+                        if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                            || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+                            || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                            return Err("URL points to prohibited IPv4-mapped private or loopback".to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        };
+
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            check_single_ip(ip)?;
+        }
+
+        use std::net::ToSocketAddrs;
+        let lookup_target = format!("{}:80", host);
+        if let Ok(addrs) = lookup_target.to_socket_addrs() {
+            for addr in addrs {
+                check_single_ip(addr.ip())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("URL must begin with http:// or https://".to_string());
     }
@@ -912,10 +1007,20 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
             check_single_ip(ip)?;
         }
 
-        use std::net::ToSocketAddrs;
-        if let Ok(addrs) = format!("{}:80", host).to_socket_addrs() {
-            for addr in addrs {
+        // DEF-63-01: Asynchronously resolve host via tokio lookup_host to eliminate
+        // worker thread blocking on slow/unreachable external DNS servers.
+        // Falls back safely if lookup fails (e.g. offline test environment).
+        let lookup_target = format!("{}:80", host);
+        if let Ok(mut addrs) = tokio::net::lookup_host(lookup_target.clone()).await {
+            while let Some(addr) = addrs.next() {
                 check_single_ip(addr.ip())?;
+            }
+        } else {
+            use std::net::ToSocketAddrs;
+            if let Ok(addrs) = lookup_target.to_socket_addrs() {
+                for addr in addrs {
+                    check_single_ip(addr.ip())?;
+                }
             }
         }
     }
@@ -935,7 +1040,7 @@ async fn send_wecom(
     } else {
         return Err("WeCom webhook_url or key missing".to_string());
     };
-    validate_outgoing_url(&url)?;
+    validate_outgoing_url(&url).await?;
 
     let fmt = format_alert(alert);
     let color_tag = match alert.kind {
@@ -1014,7 +1119,7 @@ async fn send_dingtalk(
     } else {
         return Err("DingTalk webhook_url or access_token missing".to_string());
     };
-    validate_outgoing_url(&raw_url)?;
+    validate_outgoing_url(&raw_url).await?;
 
     let secret = channel.config.get("secret").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1098,7 +1203,7 @@ async fn send_webhook(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Webhook URL missing".to_string())?;
 
-    validate_outgoing_url(url)?;
+    validate_outgoing_url(url).await?;
 
     let method_str = channel
         .config
@@ -1489,26 +1594,26 @@ mod tests {
         let _ = fs::remove_file(&tmp_file);
     }
 
-    #[test]
-    fn validate_outgoing_url_ssrf_protection() {
+    #[tokio::test]
+    async fn validate_outgoing_url_ssrf_protection() {
         // Disallow metadata and link-local
-        assert!(validate_outgoing_url("http://169.254.169.254/latest/meta-data").is_err());
-        assert!(validate_outgoing_url("http://metadata.google.internal/computeMetadata/v1").is_err());
-        assert!(validate_outgoing_url("http://[fe80::1]:8080/hook").is_err());
+        assert!(validate_outgoing_url("http://169.254.169.254/latest/meta-data").await.is_err());
+        assert!(validate_outgoing_url("http://metadata.google.internal/computeMetadata/v1").await.is_err());
+        assert!(validate_outgoing_url("http://[fe80::1]:8080/hook").await.is_err());
         // Disallow loopback and private networks by default
-        assert!(validate_outgoing_url("http://127.0.0.1:8080/hook").is_err());
-        assert!(validate_outgoing_url("http://localhost:8080/hook").is_err());
-        assert!(validate_outgoing_url("http://[::ffff:127.0.0.1]:8080/hook").is_err());
-        assert!(validate_outgoing_url("http://localtest.me/hook").is_err());
-        assert!(validate_outgoing_url("http://10.0.0.1/hook").is_err());
-        assert!(validate_outgoing_url("http://192.168.1.1/hook").is_err());
-        assert!(validate_outgoing_url("http://172.16.0.1/hook").is_err());
-        assert!(validate_outgoing_url("http://172.31.255.255/hook").is_err());
+        assert!(validate_outgoing_url("http://127.0.0.1:8080/hook").await.is_err());
+        assert!(validate_outgoing_url("http://localhost:8080/hook").await.is_err());
+        assert!(validate_outgoing_url("http://[::ffff:127.0.0.1]:8080/hook").await.is_err());
+        assert!(validate_outgoing_url("http://localtest.me/hook").await.is_err());
+        assert!(validate_outgoing_url("http://10.0.0.1/hook").await.is_err());
+        assert!(validate_outgoing_url("http://192.168.1.1/hook").await.is_err());
+        assert!(validate_outgoing_url("http://172.16.0.1/hook").await.is_err());
+        assert!(validate_outgoing_url("http://172.31.255.255/hook").await.is_err());
         // Disallow userinfo
-        assert!(validate_outgoing_url("http://admin:secret@example.com/hook").is_err());
+        assert!(validate_outgoing_url("http://admin:secret@example.com/hook").await.is_err());
         // Allow valid public urls
-        assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").is_ok());
-        assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").is_ok());
-        assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").is_ok());
+        assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").await.is_ok());
+        assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").await.is_ok());
+        assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").await.is_ok());
     }
 }

@@ -665,16 +665,21 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
 //--- know is the SENDER's stops and the SENDER's entry price - and it needs
 //--- both, because a stop is mirrored as a DISTANCE from the sender's entry and
 //--- re-anchored on the receiver's own fill.
+//--- DEF-63-05: Supports optional PPRICE for real-time pending order trigger price updates
 string CopierPayloadModify(const string uid,const double openPx,
-                           const double sl,const double tp)
+                           const double sl,const double tp,
+                           const double pprice=0.0)
   {
-   return "UID="+uid
+   string s="UID="+uid
           +CP_SEP_KV+"OPN="+CopierFmtDouble(openPx,CP_DIGITS_PX)
           +CP_SEP_KV+"SL="+CopierFmtDouble(sl,CP_DIGITS_PX)
           +CP_SEP_KV+"TP="+CopierFmtDouble(tp,CP_DIGITS_PX);
+   if(pprice>0.0)
+      s+=CP_SEP_KV+"PPRICE="+CopierFmtDouble(pprice,CP_DIGITS_PX);
+   return s;
   }
 
-//--- Fills only uid/openPx/sl/tp; every other field is left for the caller.
+//--- Fills only uid/openPx/sl/tp and optional pprice; every other field is left for the caller.
 //--- Deliberately NOT CopierPayloadOpenParse - that one refuses a payload
 //--- without a side or a volume, and a stop change carries neither.
 bool CopierPayloadModifyParse(const string payload,CopierPos &p)
@@ -688,6 +693,9 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    p.sl    =StringToDouble(slStr);
    p.tp    =StringToDouble(tpStr);
    if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
+   string ppStr="";
+   if(CopierKvGet(payload,"PPRICE",ppStr)) p.pprice=StringToDouble(ppStr);
+   else                                    p.pprice=0.0;
    return true;
   }
 

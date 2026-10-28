@@ -340,6 +340,8 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
         .map(|n| {
             let mut j = node_json(n, now);
             //--- The NODES table's POS column, for BOTH roles:
+            //--- DEF-63-04: Omit full items list inside nodes to eliminate redundant
+            //--- double-serialization; items are already published in top-level positions array.
             let pv = if n.role == Role::Sender {
                 pos.view_for(&n.acc)
                     .map(|v| {
@@ -348,23 +350,6 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
                             "lots": trim_lots(v.lots),
                             "receipt": v.receipt,
                             "orphaned": Value::Null,
-                            "items": v.items.iter().map(|p| json!({
-                                "ticket": p.ticket,
-                                "uid": p.uid,
-                                "symbol": p.symbol,
-                                "side": p.side,
-                                "lots": trim_lots(p.lots),
-                                "open_px": p.open_px,
-                                "sl": p.sl,
-                                "tp": p.tp,
-                                "magic": p.magic,
-                                "open_time": p.open_time,
-                                "kind": p.kind,
-                                "ptype": p.ptype,
-                                "pprice": p.pprice,
-                                "pstop": p.pstop,
-                                "pexpire": p.pexpire,
-                            })).collect::<Vec<_>>(),
                         })
                     })
             } else {
@@ -2651,7 +2636,7 @@ async fn notifications_upsert(
 
     if let Some(url) = b.config.get("url").or_else(|| b.config.get("webhook_url")).and_then(|u| u.as_str()) {
         if !url.contains("***") {
-            if let Err(e) = crate::notifications::validate_outgoing_url(url) {
+            if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
                     Json(json!({ "error": e })),
@@ -2822,7 +2807,7 @@ async fn notifications_test(
 
     if target_channel.channel_type == "webhook" {
         if let Some(url) = target_channel.config.get("url").and_then(|u| u.as_str()) {
-            if let Err(e) = crate::notifications::validate_outgoing_url(url) {
+            if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
                     Json(json!({ "ok": false, "error": e })),

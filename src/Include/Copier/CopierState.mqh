@@ -263,6 +263,12 @@ public:
       return true;
      }
 
+   double            GetPPriceAt(const int i) const
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return 0.0;
+      return m_p[i].pprice;
+     }
+
    bool              Get(const string uid,CopierPos &out) const
      {
       int i=Find(uid);
