@@ -613,7 +613,11 @@ public:
          m_used=m_occN;
         }
       m_k[m_head]=key;
-      m_t[m_head]=CopierNowMs();
+      //--- F-03: Ensure timestamp is strictly positive (>=1) so GetTime()
+      //--- returning 0 unambiguously distinguishes "not found" from "timestamp 0".
+      long now=CopierNowMs();
+      if(now<=0) now=1;
+      m_t[m_head]=now;
       m_head++;
       if(m_head>=CP_SEEN_RING) m_head=0;
      }

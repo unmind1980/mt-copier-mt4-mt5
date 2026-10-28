@@ -4869,6 +4869,8 @@ void ConvergeSender(const int si)
    //--- Pre-scan queued CLOSE and TRIM actions for this sender once per tick,
    //--- NM-01: Built into g_qCloseIdx hash table to achieve true O(N + Q) lookup.
    static string queuedCloseOrTrim[CP_MAX_ACTIONS];
+   static int queuedPrevCount=0;
+   for(int k=0;k<queuedPrevCount;k++) queuedCloseOrTrim[k]="";
    int queuedCloseOrTrimCount=0;
    if(g_qn>0)
      {
@@ -4881,6 +4883,7 @@ void ConvergeSender(const int si)
            }
         }
      }
+   queuedPrevCount=queuedCloseOrTrimCount;
    if(queuedCloseOrTrimCount>0)
       g_qCloseIdx.BuildFromStrings(queuedCloseOrTrim,queuedCloseOrTrimCount);
    else

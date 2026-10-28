@@ -294,19 +294,21 @@ public:
       m_active=(m_n>0) || anyDay;
      }
 
-   //--- Decomposed by ARITHMETIC, not by TimeHour/TimeMinute/TimeDayOfWeek.
-   //---
-   //--- Those helpers are not portable: MQL4 has TimeSeconds (plural) and no
-   //--- TimeSecond, while MQL5 has no TimeHour at all - it expects
-   //--- MqlDateTime + TimeToStruct. A `datetime` is seconds since 1970-01-01
-   //--- on BOTH platforms, so plain arithmetic works everywhere and cannot
-   //--- drift with a terminal build.
-   //---
-   //--- The +4 is because 1970-01-01 was a Thursday, and the result is
-   //--- indexed 0=Sunday to match the DayTradingTimes names.
-   static int        SecOfDay(const datetime t) { return (int)((long)t%86400); }
+   //--- F-05: Decomposed via TimeToStruct, aligning with R48-05 and R48-07.
+   //--- TimeToStruct decomposes datetime into local broker day-of-week and seconds from midnight,
+   //--- ensuring consistent session window checks across all brokers.
+   static int        SecOfDay(const datetime t)
+     {
+      MqlDateTime dt;
+      TimeToStruct(t,dt);
+      return dt.hour*3600 + dt.min*60 + dt.sec;
+     }
    static int        DayOfWeek7(const datetime t)
-     { return (int)((((long)t/86400)+4)%7); }
+     {
+      MqlDateTime dt;
+      TimeToStruct(t,dt);
+      return dt.day_of_week;
+     }
 
    //--- `now` must be SERVER time - pass CopierServerTime(), not TimeLocal().
    bool              Allows(const datetime now) const

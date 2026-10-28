@@ -2602,6 +2602,12 @@ void TestR47R48Regressions()
    CopierSymbolMap sm;
    sm.SetSuffix("m");
    Ok("symbol: non-dotted suffix configures", sm.Suffix()=="m");
+
+   // F-14 & R60-01 regression: large string spanning multiple chunks (>4KB) survives pairwise merge in CopierStrBuilder
+   CopierStrBuilder sb;
+   for(int i=0;i<1000;i++) sb.Add("0123456789"); // 10,000 bytes > 2 chunks
+   string sbResult=sb.Result();
+   Ok("strbuilder: large string (10KB) survives pairwise merge without being erased", StringLen(sbResult)==10000);
   }
 
 //+------------------------------------------------------------------+
