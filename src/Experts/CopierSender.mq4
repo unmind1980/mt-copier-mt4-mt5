@@ -1026,6 +1026,12 @@ void OnDeinit(const int reason)
 //--- A probe is REQUIRED, not optional: the receiver's own traffic is a STAT
 //--- once a minute, which is far slower than the 15s timeout - so without this
 //--- every peer flaps and the operator gets a popup per cycle.
+//--- F-09: accurately recognize hub peers whether standalone "hub" or HA "hub:primary" / "hub:standby"
+bool IsHubPeerName(const string nm)
+  {
+   return (nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
+  }
+
 void CheckPeers()
   {
    long now=CopierNowMs();
@@ -1145,7 +1151,7 @@ void CheckPeers()
       //---
       //--- The hub is a peer like any other here, but calling it a "receiver"
       //--- would be wrong and would make the count above look off by one.
-      string what=(nm==g_hubPeerName)?"hub":"receiver";
+      string what=IsHubPeerName(nm)?"hub":"receiver";
       string how =(silent<0)?"has NEVER been heard from"
                             :("has been silent for "+(string)(silent/1000)+"s");
 
@@ -1449,8 +1455,8 @@ void UpdatePanel()
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(pnm==g_hubPeerName) continue; // P3-12: placeholder peer is not a receiver
-      np++;
+      if(IsHubPeerName(pnm)) continue; // F-09: hub (standalone or HA) is not a receiver peer
+      if(g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
      }
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
    //--- per receiver + a spacer. Keep this in step with the Row() calls below
@@ -1717,6 +1723,59 @@ void HandleSenderStat(const CopierEnv &se)
      }
   }
 
+//--- F-01: Unified dispatcher for inbound control frames received from Central Hub.
+//--- Handles PONG, TOPOLOGY, WHO, and RCPT consistently in both drain passes.
+void HandleHubSubFrame(const CopierEnv &he)
+  {
+   if(he.type==CP_T_PONG)
+     {
+      string hms="",hfrom="",hto="";
+      CopierKvGet(he.payload,"MS",hms);
+      CopierKvGet(he.payload,"FROM",hfrom);
+      CopierKvGet(he.payload,"TO",hto);
+      if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) return;
+      if(StringLen(hfrom)>0)
+        {
+         if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
+           {
+            if(hfrom!=g_singleHubRole)
+              {
+               g_peers.Forget(g_singleHubRole);
+               g_singleHubRole=hfrom;
+              }
+           }
+         if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
+           {
+            g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+           }
+        }
+      return;
+     }
+   if(he.type==CP_T_TOPOLOGY)
+     {
+      HandleTopology(he);
+      return;
+     }
+   if(he.type==CP_T_WHO)
+     {
+      HubAnnounce(true);
+      return;
+     }
+   if(he.type==CP_T_RCPT)
+     {
+      string rwho="",rh="",rsid="";
+      CopierKvGet(he.payload,"LOGIN",rwho);
+      CopierKvGet(he.payload,"H",rh);
+      CopierKvGet(he.payload,"SID",rsid);
+      if(SenderAnswersTo(rsid))
+         SnapTrack(rwho,rh,true);
+      return;
+     }
+   if(g_once.ShouldEmit("hubctl|"+he.type))
+      g_log.Info("central channel: hub sent "+he.type
+                 +" (nothing to do for it yet - Phase 2 is read-only)");
+  }
+
 void OnTimer()
   {
    long now=CopierNowMs();
@@ -1779,41 +1838,7 @@ void OnTimer()
            }
          CopierEnv he;
          if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
-
-         if(he.type==CP_T_PONG)
-           {
-            string hms="",hfrom="",hto="";
-            CopierKvGet(he.payload,"MS",hms);
-            CopierKvGet(he.payload,"FROM",hfrom);
-            CopierKvGet(he.payload,"TO",hto);
-            if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0)
-              {
-               if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
-                 {
-                  if(hfrom!=g_singleHubRole)
-                    {
-                     g_peers.Forget(g_singleHubRole);
-                     g_singleHubRole=hfrom;
-                    }
-                 }
-               if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
-                 {
-                  g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
-                 }
-              }
-            continue;
-           }
-         if(he.type==CP_T_TOPOLOGY)
-           {
-            HandleTopology(he);
-            continue;
-           }
-         if(he.type==CP_T_WHO)
-           {
-            HubAnnounce(true);
-            continue;
-           }
+         HandleHubSubFrame(he);
         }
      }
 
@@ -2130,87 +2155,7 @@ void OnTimer()
            }
          CopierEnv he;
          if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
-
-         if(he.type==CP_T_PONG)
-           {
-            string hms="",hfrom="",hto="";
-            CopierKvGet(he.payload,"MS",hms);
-            CopierKvGet(he.payload,"FROM",hfrom);
-            CopierKvGet(he.payload,"TO",hto);
-            if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) continue;
-            if(StringLen(hfrom)>0)
-              {
-               if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
-                 {
-                  if(hfrom!=g_singleHubRole)
-                    {
-                     g_peers.Forget(g_singleHubRole);
-                     g_singleHubRole=hfrom;
-                    }
-                 }
-               if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
-                 {
-                  g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
-                 }
-              }
-            continue;
-           }
-         //--- WHO: the hub has lost its node table - it restarted, and the
-         //--- table is in memory only - and is asking everyone to say who they
-         //--- are. Answering is the entire job, and it is why this node
-         //--- subscribed to @all.
-         if(he.type==CP_T_WHO)
-           {
-            //--- Answer with ONE REG. The counter is deliberately NOT reset.
-            //---
-            //--- Resetting it looks like a safety net - "if this answer is
-            //--- lost, the next few heartbeats are REG as well" - but the WHO
-            //--- sweep is unconditional and runs every 60s forever, so the
-            //--- counter would be re-armed every minute and the node would
-            //--- never settle into HBT2. MEASURED on a live 5-minute run: 19
-            //--- REG from a node whose steady state should be 3, and REG is
-            //--- the EXPENSIVE message (it carries NAME, and the hub logs
-            //--- every one).
-            //---
-            //--- The safety net is unnecessary anyway. A lost REG is recovered
-            //--- by the NEXT WHO, which arrives whether or not anyone answers -
-            //--- that is the entire reason the sweep exists.
-            HubAnnounce(true);
-            continue;
-           }
-
-         //--- SNAPSHOT RECEIPT, relayed back by the hub.
-         //---
-         //--- In central mode the receiver's STAT stops AT THE HUB and is not
-         //--- forwarded (D13, doc/CENTRAL-HUB-PLAN.md) - the hub keeps the
-         //--- receiver's monitoring figures, which belong to whoever watches
-         //--- receivers. The delivery receipt is the one part that has to
-         //--- reach the sender, because only the sender can act on it, so the
-         //--- hub extracts it and relays it here.
-         //---
-         //--- This is a SEPARATE T from STAT on purpose. A relayed receipt
-         //--- carries no equity, lots or risk state, so running the STAT path
-         //--- on it would print a receiver-status line full of empty numbers.
-         //--- Different message, different path, no shared assumptions.
-         if(he.type==CP_T_RCPT)
-           {
-            string rwho="",rh="",rsid="";
-            CopierKvGet(he.payload,"LOGIN",rwho);
-            CopierKvGet(he.payload,"H",rh);
-            CopierKvGet(he.payload,"SID",rsid);
-            if(SenderAnswersTo(rsid))
-               SnapTrack(rwho,rh,true);
-            continue;
-           }
-
-         //--- anything else from the hub is control. Phase 2 has no command
-         //--- that CHANGES anything - the write path (CFG/ACK/CFGR) is Phase 3,
-         //--- the highest-risk step, deliberately last - so there is nothing to
-         //--- obey yet. Logged once per type so a future CFG does not look like
-         //--- it vanished.
-         if(g_once.ShouldEmit("hubctl|"+he.type))
-            g_log.Info("central channel: hub sent "+he.type
-                       +" (nothing to do for it yet - Phase 2 is read-only)");
+         HandleHubSubFrame(he);
         }
      }
 

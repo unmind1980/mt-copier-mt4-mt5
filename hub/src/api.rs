@@ -1478,11 +1478,11 @@ async fn users_upsert(
             }
         }
     } else {
-        // R47-32: Enforce minimum password policy on user creation
-        if b.password.chars().count() < 6 {
+        // F-14: Enforce consistent minimum password policy (at least 8 characters)
+        if b.password.chars().count() < 8 {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "password must be at least 6 characters" })),
+                Json(json!({ "error": "password must be at least 8 characters" })),
             )
                 .into_response();
         }
@@ -3207,7 +3207,7 @@ async fn cluster_failback_now(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (peer_url, token, epoch, hub_id) = {
+    let (peer_url, token, epoch, hub_id, is_configured_primary) = {
         let s = st.lock_or_recover();
         if s.cluster.is_primary() {
             return (
@@ -3223,11 +3223,19 @@ async fn cluster_failback_now(
             )
                 .into_response();
         }
+        if !s.cluster.state.is_configured_primary {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Failback is only available to the configured Primary node." })),
+            )
+                .into_response();
+        }
         (
             s.cluster.peer_url.clone(),
             s.cluster.cluster_token.clone(),
             s.cluster.epoch(),
             s.cluster.hub_id().to_string(),
+            s.cluster.state.is_configured_primary,
         )
     };
 
@@ -3240,7 +3248,7 @@ async fn cluster_failback_now(
     let h_req = crate::cluster::HandoverRequest {
         from_hub_id: hub_id,
         from_epoch: epoch,
-        is_configured_primary: true,
+        is_configured_primary,
         reason: "manual_failback_now".to_string(),
     };
 

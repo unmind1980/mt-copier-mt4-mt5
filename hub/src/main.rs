@@ -2777,21 +2777,18 @@ fn main() {
         //--- command out, so a node that never answers walks 2 → 5 → 15 → 60 →
         //--- unknown without needing anything else to happen.
         //---
-        //--- Gated on `writes` as well as on there being a command, except for
-        //--- read-only telemetry queries like `reqpos` which are safe to dispatch.
+        //--- F-02: ONLY the Primary executes the command dispatcher.
+        //--- A Standby must never run due_gated: doing so causes it to dispatch
+        //--- read-only commands (reqpos/reqcfg) replicated from Primary, increment
+        //--- attempts locally, and write to its own commands.jsonl - creating a
+        //--- line-count divergence that triggers infinite replace_all resync loops.
         if last_cmd_due.elapsed() >= Duration::from_millis(500) {
             last_cmd_due = Instant::now();
-            let effective_writes = {
+            let (effective_writes, is_prim) = {
                 let s = shared.lock_or_recover();
-                s.writes
+                (s.writes, s.cluster.is_primary())
             };
-            //--- N56-10: do NOT gate the whole dispatcher on is_primary.
-            //--- due_gated already freezes write commands when `writes` is false,
-            //--- and read-only telemetry (reqpos / reqcfg) is explicitly allowed
-            //--- to run on a standby. Gating here made those commands sit in
-            //--- STATE_PENDING until the retry ladder expired - the HTTP layer
-            //--- answered 200 and minted a command id that could never execute.
-            {
+            if is_prim {
                 for c in cmds.due_gated(Instant::now(), effective_writes) {
                     if c.state == commands::STATE_UNKNOWN {
                     let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };

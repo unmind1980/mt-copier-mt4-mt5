@@ -227,6 +227,9 @@ public:
      {
       int i=Find(name);
       if(i<0) return -1;
+      // F-09: If peer is down/unreachable (silent > 15s) or measurement is older than 12s, consider RTT unavailable (-1)
+      if(m_seen[i]<=0 || (CopierNowMs()-m_seen[i]>15000))
+         return -1;
       if(m_rtt[i]>=0 && m_rttTime[i]>0 && (CopierNowMs()-m_rttTime[i]>12000))
          return -1; // Invalidate stale RTT
       return m_rtt[i];

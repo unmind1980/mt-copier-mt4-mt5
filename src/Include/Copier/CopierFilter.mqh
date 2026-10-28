@@ -137,11 +137,9 @@ public:
 // handled explicitly below:
 //
 //   * END BEFORE START wraps past midnight. 22:00-02:00 is ONE window that
-//     runs through midnight, not an empty range. Treating it as empty would
-//     silently forbid trading during the exact hours it was written to allow.
-//     Note: In DayTradingTimes, wrapping applies to that calendar day's
-//     00:00-02:00 and 22:00-24:00. To explicitly bridge across two days, specify
-//     each day (e.g. "Mon=22:00-24:00;Tue=00:00-02:00").
+//     runs through midnight, not an empty range. In DayTradingTimes, specifying
+//     "Mon=22:00-02:00" opens on Monday at 22:00 and naturally extends into
+//     Tuesday morning until 02:00.
 //   * START == END means all day. A zero-length window is never what anyone
 //     means, and 00:00-00:00 is the natural way to write "always".
 //+------------------------------------------------------------------+

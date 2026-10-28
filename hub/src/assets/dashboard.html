@@ -3146,7 +3146,7 @@ function renderCluster(cl){
     return;
   }
   var isStandby = (cl.role === "standby");
-  var isConflict = (cl.sync_status === "conflict");
+  var isConflict = (typeof cl.sync_status === "string" && cl.sync_status.indexOf("conflict") === 0);
 
   // Update header pill
   if(badge){
@@ -3217,7 +3217,7 @@ function renderCluster(cl){
 
     var btnFailbackNow = $("btn_cluster_failback_now");
     if(btnFailbackNow){
-      btnFailbackNow.style.display = (isStandby && cl.peer_url && cl.peer_online) ? "inline-block" : "none";
+      btnFailbackNow.style.display = (isStandby && cl.is_configured_primary && cl.peer_url && cl.peer_online) ? "inline-block" : "none";
     }
 
     var chkLock = $("chk_failback_lock");
@@ -5503,10 +5503,10 @@ function renderSenderCards(senders){
            '<div class="cfgfield"><label>Stops Throttle (Sec)</label><input type="number" step="1" class="inp-s-stopsthrottleseconds" placeholder="2" value="' + esc(s.stopsthrottleseconds !== undefined ? s.stopsthrottleseconds : '') + '"><span class="hint">Min sec between modifications</span></div>' +
            '</div>' +
            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, true) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="1"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, isChk(c.mirrorstops, true)) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="' + (isChk(c.mirrorstops, true) ? '1' : '0') + '"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
            '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="0"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, false) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="0"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, true) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="1"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, isChk(c.reopenclosedmirrors, true)) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="' + (isChk(c.reopenclosedmirrors, true) ? '1' : '0') + '"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
+           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, isChk(c.dedupduplicates, true)) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="' + (isChk(c.dedupduplicates, true) ? '1' : '0') + '"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
            '</div></div>' +
 
            // Panel: Filters

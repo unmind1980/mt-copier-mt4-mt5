@@ -401,6 +401,12 @@ impl NotificationStore {
         if let Some(existing) = self.channels.get(&channel.id) {
             merge_unmasked_config(&mut channel.config, &existing.config, &existing.channel_type);
         }
+        // F-08: validate final unmasked URL before writing to disk
+        if let Some(url) = channel.config.get("url").or_else(|| channel.config.get("webhook_url")).and_then(|u| u.as_str()) {
+            if let Err(e) = validate_outgoing_url(url) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
+            }
+        }
         if channel.created_at == 0 {
             channel.created_at = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -871,8 +877,11 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
             }
             match ip {
                 std::net::IpAddr::V4(v4) => {
-                    if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
-                        return Err("URL points to prohibited private or link-local IPv4".to_string());
+                    let oct = v4.octets();
+                    if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                        || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+                        || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                        return Err("URL points to prohibited private, CGNAT, or reserved IPv4".to_string());
                     }
                 }
                 std::net::IpAddr::V6(v6) => {
@@ -887,7 +896,10 @@ pub(crate) fn validate_outgoing_url(url: &str) -> Result<(), String> {
                             (segs[7] >> 8) as u8,
                             (segs[7] & 0xff) as u8,
                         );
-                        if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
+                        let oct = v4.octets();
+                        if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                            || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+                            || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
                             return Err("URL points to prohibited IPv4-mapped private or loopback".to_string());
                         }
                     }

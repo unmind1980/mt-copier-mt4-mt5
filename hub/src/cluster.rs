@@ -620,7 +620,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             if let Ok(data) = res.json::<ClusterSyncResponse>().await {
                                 let mut s = st.lock_or_recover();
                                 // Apply delta configs (or replace if Primary was compacted)
-                                if req_from_cfg_line == 0 && !data.cfg_delta_lines.is_empty() && (remote_st.cfg_lines < cfg_lines_count && cfg_lines_count > 0) {
+                                //--- F-05: symmetrical with cmds: allow replace_all(&[]) when Primary cfg is 0
+                                if req_from_cfg_line == 0 && remote_st.cfg_lines < cfg_lines_count {
                                     let _ = s.cfg.replace_all(&data.cfg_delta_lines);
                                 } else if !data.cfg_delta_lines.is_empty() {
                                     let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);

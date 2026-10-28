@@ -374,6 +374,9 @@ impl CommandStore {
                     let cur_seq = inner.seq.get(&node).copied().unwrap_or(0);
                     inner.seq.insert(node.clone(), cur_seq.max(seq));
                 }
+                let attempts = v["attempts"].as_u64().unwrap_or(0) as u32;
+                let step = RETRY_LADDER_SECS
+                    [(attempts as usize).min(RETRY_LADDER_SECS.len() - 1)];
                 let cmd = Command {
                     id: id.clone(),
                     node: node.clone(),
@@ -386,10 +389,10 @@ impl CommandStore {
                     ts: v["ts"].as_u64().unwrap_or(0),
                     actor: v["actor"].as_str().unwrap_or("").to_string(),
                     ip: v["ip"].as_str().unwrap_or("").to_string(),
-                    attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
+                    attempts,
                     ack_at: v["ack_at"].as_u64().unwrap_or(0),
                     err: v["err"].as_str().unwrap_or("").to_string(),
-                    next_at: Instant::now(),
+                    next_at: Instant::now() + Duration::from_secs(step),
                 };
                 inner.append(&cmd);
                 // H-08 & P2-9 fix: command state cannot be demoted (state rank order)

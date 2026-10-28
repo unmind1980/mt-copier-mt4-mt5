@@ -794,7 +794,7 @@ def main(argv):
     if total_fail == 0:
         print("  no failing checks")
     print()
-    return 0
+    return 1 if total_fail > 0 else 0
 
 
 if __name__ == "__main__":

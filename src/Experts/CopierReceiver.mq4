@@ -1826,7 +1826,9 @@ bool LoadConfigForHub()
    g_log.Info("central mode: "+IntegerToString(g_nSenders)+" sender(s) from "
               +CP_INI_PATH+" - subscribing to each sender's NID, plus control"
               +" for this account (NID "+(string)g_nid+")");
-   ClearQueue();
+   //--- F-03: Do NOT call ClearQueue() here. During hot-reloading (HandleCfg / reload),
+   //--- ClearQueueExceptRiskReducing() must preserve in-flight CLOSE/TRIM actions.
+   //--- The queue is explicitly initialized in OnInit().
    return true;
   }
 
@@ -2014,7 +2016,7 @@ void RiskPeakLoad()
       if(StringLen(line)==0) continue;
       string v="";
       if(CopierKvGet(line,"PEAK",v)) peak=StringToDouble(v);
-      if(CopierKvGet(line,"DAY",v)) savedDay=(long)StringToInteger(v);
+      if(CopierKvGet(line,"DAY",v)) savedDay=CopierParseLong(v);
       if(CopierKvGet(line,"DAY_EQUITY",v)) savedDayEquity=StringToDouble(v);
       if(CopierKvGet(line,"DAY_BALANCE",v)) savedDayBalance=StringToDouble(v);
      }
@@ -3138,6 +3140,9 @@ void ExecuteQueue()
            {
             g_ourCount++;
             g_ourLots+=a.lots;
+            //--- F-10: keep granular order/position counters aligned on successful OPEN
+            if(a.ordKind==CP_ORD_PENDING) { g_ourPending++; g_acctOrders++; }
+            else                          { g_ourPositions++; g_acctPositions++; }
             if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
               {
                sAddedCount[a.senderIdx]++;
@@ -6209,7 +6214,8 @@ void HandleCmd(const CopierEnv &e)
          return;
         }
       int added=ResubscribeSenders(beforeSid,beforeN);
-      ClearQueue();
+      //--- F-03: preserve risk-reducing actions (CLOSE/TRIM) across reload
+      ClearQueueExceptRiskReducing();
 
       int warnings=0;
       for(int i=0;i<g_nSenders;i++)
@@ -7060,6 +7066,8 @@ int OnInit()
       //--- a sender publishing there reaches nobody. '<nid>' is forwarded byte
       //--- for byte to whoever subscribed to that prefix - us.
       g_tp.Subscribe((string)g_nid);
+      //--- F-04: also subscribe to rawAcc as a DATA topic for targeted snapshot repair from senders
+      if(rawAcc!=g_nid) g_tp.Subscribe((string)rawAcc);
       for(int i=0;i<g_nSenders;i++)
          g_tp.Subscribe(g_sid[i]);
       g_hubUpMs=CopierNowMs();
@@ -7071,9 +7079,10 @@ int OnInit()
       //--- are REG too, and the hub repeats WHO while its table is empty.
       HubAnnounce(true);
       g_announceCount=1;
+      int extraTopics=(rawAcc!=g_nid)?1:0;
       g_log.Info("central mode: connected to "+g_hubEp+" as NID="
                  +(string)g_nid+", subscribed to "
-                 +IntegerToString(g_nSenders+3)+" topic(s)");
+                 +IntegerToString(g_nSenders+3+extraTopics)+" topic(s)");
      }
    else
      {
@@ -7088,6 +7097,8 @@ int OnInit()
          return INIT_FAILED;
         }
      }
+
+   ClearQueue(); // F-03: explicitly initialize queue on startup
 
    //--- the status channel needs no setup of its own: it goes up the socket
    //--- the data already comes down.
@@ -7245,6 +7256,12 @@ void CheckPeersPing(const long now)
      }
   }
 
+//--- F-09: accurately recognize hub peers whether standalone "hub" or HA "hub:primary" / "hub:standby"
+bool IsHubPeerName(const string nm)
+  {
+   return (nm==g_hubPeerName || StringSubstr(nm,0,4)=="hub:");
+  }
+
 void CheckPeersLiveness(const long now)
   {
    for(int i=0;i<CP_MAX_PEERS;i++)
@@ -7277,7 +7294,7 @@ void CheckPeersLiveness(const long now)
       if(down && !g_peerWasDown[i])
         {
          g_peerWasDown[i]=true;
-         string what=(nm==g_hubPeerName)?"hub":"sender";
+         string what=IsHubPeerName(nm)?"hub":"sender";
          g_log.Warn(what+" "+nm+" "
                     +((silent<0)?"has NEVER been heard from"
                                 :("has been silent for "
@@ -7296,7 +7313,7 @@ void CheckPeersLiveness(const long now)
       else if(!down && g_peerWasDown[i])
         {
          g_peerWasDown[i]=false;
-         string what=(nm==g_hubPeerName)?"hub":"sender";
+         string what=IsHubPeerName(nm)?"hub":"sender";
          g_log.Info(what+" "+nm+" is back");
         }
      }
@@ -7354,8 +7371,8 @@ void UpdatePanel()
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(pnm==g_hubPeerName) continue; // P3-12: placeholder peer is not a sender
-      np++;
+      if(IsHubPeerName(pnm)) continue; // F-09: hub (standalone or HA) is not a sender peer
+      if(g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
      }
    //--- The orphan block only exists when ShowOrphanedList is on. Sizing the
    //--- panel for rows that will not be written would leave a gap at the
