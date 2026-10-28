@@ -303,7 +303,7 @@ def main():
         # 6. Two-Phase Handover & Failback (ADR-10)
         # ---------------------------------------------------------------------
         # Original Primary requests handover back:
-        # Current Primary (S_HTTP_PORT) steps down, closes write gate, increments epoch to 3.
+        # Current Primary (S_HTTP_PORT) steps down, closes write gate, and keeps epoch (R58-06: does not advance).
         p_hub_id = p_status.get("hub_id", "original-primary")
         st, h_res, _ = http_req(S_HTTP_PORT, "POST", "/api/v1/cluster/handover-request",
                                 body={"from_hub_id": p_hub_id, "from_epoch": 2,
@@ -311,7 +311,8 @@ def main():
                                 token=CLUSTER_TOKEN)
         check("Handover request returns 200 OK", st == 200, f"status={st}")
         check("Handover agreed is True", h_res.get("agreed") is True)
-        check("Handover generated new_epoch = 3", h_res.get("new_epoch") == 3)
+        # R58-06: Demoting node preserves epoch (2) so the recovering master can promote to strictly higher epoch (3)
+        check("Handover stepped down with epoch = 2", h_res.get("new_epoch") == 2)
 
         # S node has stepped down
         st, s_status, _ = http_req(S_HTTP_PORT, "GET", "/api/v1/cluster/status", token=CLUSTER_TOKEN)
