@@ -3232,7 +3232,6 @@ void ExecuteQueue()
          //--- rather than leaving a stale count to punish the next, unrelated
          //--- failure with an hours-long park it never earned.
          g_backoff.Clear(a.key);
-         skipped=0; // N67-05: Reset consecutive skipped counter upon successful action execution
          //--- the sender ticket is logged too: in a many-to-one setup it
          //--- is how you tell which sender an order came from without
          //--- reading the order comment in the terminal
@@ -7641,10 +7640,12 @@ void OnTimer()
          s_isLatestSnap[i]=false;
         }
 
-      // HA-02 & N67-04: Conflate snapshots PER SENDER by selecting the snapshot with the MAXIMAL SEQ
+      // HA-02, N67-04 & N68-03: Conflate snapshots PER SENDER by selecting the snapshot with the MAXIMAL SEQ
       // within the current session, immune to multi-hub arrival jitter (older Standby snapshot arriving after newer Primary snapshot).
       // Sized to CP_DRAIN_MAX (256) matching maximum drain frames per tick.
+      // s_seenSnapHash provides O(1) integer pre-check before string comparison, avoiding O(N^2) CPU overhead.
       static string s_seenSnapSid[CP_DRAIN_MAX];
+      static uint   s_seenSnapHash[CP_DRAIN_MAX];
       static string s_bestSnapSsid[CP_DRAIN_MAX];
       static long   s_bestSnapSeq[CP_DRAIN_MAX];
       static int    s_bestSnapIdx[CP_DRAIN_MAX];
@@ -7655,9 +7656,10 @@ void OnTimer()
          if(s_errs[i]==CP_ERR_NONE && s_envs[i].type==CP_T_SNAP)
            {
             int slot=-1;
+            uint hSid=(uint)CopierHash32(s_envs[i].sid);
             for(int s=0;s<snapSendersCount;s++)
               {
-               if(s_seenSnapSid[s]==s_envs[i].sid) { slot=s; break; }
+               if(s_seenSnapHash[s]==hSid && s_seenSnapSid[s]==s_envs[i].sid) { slot=s; break; }
               }
             if(slot<0)
               {
@@ -7665,15 +7667,10 @@ void OnTimer()
                  {
                   slot=snapSendersCount++;
                   s_seenSnapSid[slot]=s_envs[i].sid;
+                  s_seenSnapHash[slot]=hSid;
                   s_bestSnapSsid[slot]=s_envs[i].ssid;
                   s_bestSnapSeq[slot]=s_envs[i].seq;
                   s_bestSnapIdx[slot]=i;
-                 }
-               else
-                 {
-                  // N67-04: If unique senders exceed CP_DRAIN_MAX in this single drain,
-                  // mark as latest directly to avoid dropping valid snapshot.
-                  s_isLatestSnap[i]=true;
                  }
               }
             else
@@ -7771,10 +7768,11 @@ void OnTimer()
          ExecuteQueue();
         }
 
-      // N67-04: Clear string references on static conflate table to prevent dead string retention
+      // N67-04 & N68-03: Clear string references on static conflate table to prevent dead string retention
       for(int sc=0;sc<snapSendersCount;sc++)
         {
          s_seenSnapSid[sc]="";
+         s_seenSnapHash[sc]=0;
          s_bestSnapSsid[sc]="";
         }
      }

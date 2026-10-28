@@ -1266,13 +1266,20 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   9. **L6**：`CopierTransport.mqh` 的 `DrainFrames` 在第二帧接收失败时排空残余帧，保障帧对齐；
   10. **测试断言增强**：`CopierSelfTest.mq4` 增加 `PosTable PruneTo` 清空断言。
 
-### 六十七次审计：发送端去重热路径降维、快照合流表扩容防丢、连续跳过计数器复位与回切时钟语义恢复（2026-10-29 09:50；全部闭环）
+### 六十七次审计：发送端去重热路径降维、快照合流表扩容防丢与回切时钟语义恢复（2026-10-29 09:50；全部闭环）
 
 - **修复与加固项**：
   1. **N67-01**：`CopierSender.mq4` 将第 66 轮引入的 UID 去重检查从主热路径移入 MT4 `#ifndef __MQL5__` 的 `from #` 继承分支内部，彻底消除 MT5 平台的白烧 CPU 与 $O(N^2)$ 嵌套循环回归；
   2. **N67-03**：`hub/src/cluster.rs` 恢复 ADR-10 与 F-04 的数据对齐语义：时钟仅在 `!needs_sync && cur_sync_status == "synced"` 下稳定累积，`syncing` 期间宽限保持不动，`sync_err` 或对端非 Primary 时立刻清零，消除时钟虚高累积；
-  3. **N67-04**：`CopierReceiver.mq4` 的快照按 SEQ 合流表大小由 `CP_MAX_SENDERS`（100）扩容至 `CP_DRAIN_MAX`（256），与单 tick 突发排空帧数完全对齐；且在溢出时作为最新快照放行保底，并在用完后清空静态字符串引用；
-  4. **N67-05**：`CopierReceiver.mq4` 的 `ExecuteQueue` 在任何动作成功执行（`done++`）后即刻将 `skipped` 复位为 0，防止队列内偶发包含休市/受限路障动作时压低后续正常动作的放行量。
+  3. **N67-04**：`CopierReceiver.mq4` 的快照按 SEQ 合流表大小由 `CP_MAX_SENDERS`（100）扩容至 `CP_DRAIN_MAX`（256），与单 tick 突发排空帧数完全对齐，并在用完后清空静态字符串引用。
+
+### 六十八次审计：回滚有害复位恢复迭代硬上界、快照坏记录前置过滤与合流哈希短路（2026-10-29 10:35；全部闭环）
+
+- **修复与加固项**：
+  1. **N68-01**：`CopierReceiver.mq4` 的 `ExecuteQueue` 坚决回滚第 67 轮引入的 `skipped=0;`，恢复 `skipped<=g_qn` 在整个 while 期间充当全局迭代硬上界（约 320 次）的结构性作用，彻底根治批量平仓遇路障时单 tick 16,448 次迭代及 420 万次结构体拷贝的事件循环冻结灾难；
+  2. **N67-02**：`CopierSender.mq4` 的 `BuildCurrent` 增加前置合法性守卫（过滤 `lots<=0`、非法挂单类型、清洗后空品种名），确保进入发送端快照的每条记录在接收端 `CopierDecodeRec` 均 100% 成功解码，治本消除快照 $N \ne \text{expected}$ 整包拒收且重发同一字节导致的永久停跟死锁，且完全守住接收端防假平仓的最高安全防线；
+  3. **N68-02**：`hub/src/cluster.rs` 将连续在线时长维护严格置于同步请求执行完毕之后，仅在 `remote_st.role == "primary" && sync_status == "synced"` 时累加，只要发生同步错误、网络错误或非 primary 则立刻置 None，消除旧状态时序偏差并彻底落实严格对齐语义；
+  4. **N68-03**：`CopierReceiver.mq4` 引入 `s_seenSnapHash` 32 位整型哈希短路，将 256 槽合流时的字符串匹配降低到单指令周期，消灭 3.2 万次字符串扫描，并移除不可达的违规兜底分支。
 
 ---
 

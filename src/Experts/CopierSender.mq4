@@ -636,6 +636,13 @@ int BuildCurrent()
       CopierPos p=g_rawScratch[i];
       if(!SymbolAllowed(p.sym)) continue;
       if(!MagicAllowed(p.magic)) continue;
+      //--- N67-02 fix: Pre-filter malformed or unencodable positions so snapshot declared N
+      //--- strictly matches decodeable records on the receiver side, preventing snapshot rejection deadlocks.
+      if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) continue;
+      if(p.lots<=0.0) continue;
+      if(p.kind==CP_ORD_PENDING && !CopierPendingTypeKnown(p.ptype)) continue;
+      string cleanSym=CopierSanitizeSymbol(p.sym);
+      if(StringLen(cleanSym)==0) continue;
 
       //--- 1) identity carried over from the previous tick (ticket match)
       string uid="";

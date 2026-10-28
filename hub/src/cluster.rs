@@ -592,29 +592,6 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
 
-                // N67-03: Track continuous online duration strictly based on alignment.
-                // When aligned (!needs_sync && synced), accumulate online duration.
-                // When syncing, hold duration steady (neither advance nor reset).
-                // On sync error or non-primary peer, reset duration to None.
-                let cur_sync_status = {
-                    let s = st.lock_or_recover();
-                    s.cluster.sync_status.clone()
-                };
-                if remote_st.role == "primary" {
-                    if !needs_sync && cur_sync_status == "synced" {
-                        let mut s = st.lock_or_recover();
-                        if s.cluster.continuous_online_start.is_none() {
-                            s.cluster.continuous_online_start = Some(now);
-                        }
-                    } else if cur_sync_status == "sync_err" {
-                        let mut s = st.lock_or_recover();
-                        s.cluster.continuous_online_start = None;
-                    }
-                } else {
-                    let mut s = st.lock_or_recover();
-                    s.cluster.continuous_online_start = None;
-                }
-
                 if needs_sync {
                     let was_syncing = {
                         let mut s = st.lock_or_recover();
@@ -757,6 +734,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let mut s = st.lock_or_recover();
                     s.cluster.sync_status = "synced".to_string();
                     s.cluster.last_sync_err = String::new();
+                }
+
+                // N68-02: Maintain continuous online duration strictly AFTER sync action completes.
+                // Accumulated ONLY when Standby is genuinely in synced state with Primary.
+                // Reset immediately to None if sync failed, peer disconnected, or peer is non-primary.
+                {
+                    let mut s = st.lock_or_recover();
+                    if remote_st.role == "primary" && s.cluster.sync_status == "synced" {
+                        if s.cluster.continuous_online_start.is_none() {
+                            s.cluster.continuous_online_start = Some(now);
+                        }
+                    } else {
+                        s.cluster.continuous_online_start = None;
+                    }
                 }
 
                 // 5. ADR-10 Auto-Failback Check
