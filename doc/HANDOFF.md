@@ -1239,6 +1239,19 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **DEF-64-04**：`CopierTransport.mqh` 引入 `IsDirectSocketBound()` 准确反映直连套接字绑定状态，并将历史 `HasDirectSubscribers()` 保留为向后兼容别名，消除命名歧义；
   5. **DEF-64-05**：`CopierSelfTest.mq4` 补齐针对 `CopierPayloadModify` / `CopierPayloadModifyParse` 的 `PPRICE` 字段编码、解码往返及老版本协议向后兼容性单元测试断言。
 
+### 六十五次审计：集群让位递增防碰撞、同步行数与时钟死锁根除、防刷桶扩容与转发自杀消除（2026-10-29 00:20；全部闭环）
+
+- **修复与加固项**：
+  1. **P0-02**：`hub/src/api.rs` 与 `hub/src/cluster.rs` 在集群手动/自动回切（failback）时，将提升新主的目标 Epoch 强制设定为 `max(peer_epoch, local_epoch) + 1`，彻底根除新旧主处于相同 Epoch 导致 ADR-04 围栏失效的问题；
+  2. **P0-03**：
+     - `hub/src/commands.rs` 与 `hub/src/config.rs` 在增量日志回放 `apply_delta_lines` 中，将所有被拉取的日志行完整持久化落盘，确保 Standby 文本行数与 Primary 100% 吻合，同时内存状态与 `load()` 重放严格遵循 `state_rank` 和单调递增，杜绝状态回滚；
+     - `hub/src/cluster.rs` 调整 24h 在线稳定时钟判定，在备机处于正常同步中或已同步状态下不再每秒清零时钟，彻底解除 Auto-Failback 无法触发的死锁；
+     - `commands.rs` 与 `config.rs` 的全量替换 `replace_all` 接入 `atomic_replace_file`，杜绝 Windows 平台上的文件锁占用异常（P2-01）；
+  3. **P0-04**：`hub/src/users.rs` 优化登录防刷桶规则，对于非代理直连模式的 `"direct"` 统一 IP 键，将单 IP 阈值由 25 req/s 放大至 250 req/s（依然严格受限于 512 全局和 16 单用户上限），彻底消除内网多操作员或多标签页并发访问时的 429 误杀；
+  4. **P1-04**：`hub/src/main.rs` 移除 XPUB 数据帧转发单次失败直接触发 `EXIT.store(true)` 自杀退出的过激逻辑，改为补发空帧安全闭合 multipart 事务并记录警告，杜绝单个客户端异常连接抖动引发整个 Hub 宕机；
+- **业务决策确认**：
+  - **P0-01（反向跟单 InvertTrades 无 TP 时不强加止损）**：严格保持原貌坚决不改，继续遵循客户既定执行层策略预期。
+
 ---
 
 ## 9. 最终交付状态确认

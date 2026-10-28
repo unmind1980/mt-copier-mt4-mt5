@@ -395,9 +395,7 @@ impl CommandStore {
                     err: v["err"].as_str().unwrap_or("").to_string(),
                     next_at: Instant::now() + Duration::from_secs(step),
                 };
-                // R60-04: Evaluate state rank BEFORE appending to journal.
-                // Do not persist demoted/superseded commands to disk, which would
-                // cause load() on restart to overwrite newer state with stale journal lines.
+                // R60-04: Evaluate state rank for memory state updates
                 let should_insert = match inner.commands.get(&id) {
                     Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
                     None => true,
@@ -409,10 +407,11 @@ impl CommandStore {
                     } else if cmd.is_terminal() {
                         inner.in_flight.remove(&id);
                     }
-                    to_append.push(cmd.clone());
-                    inner.commands.insert(id, cmd);
-                    applied += 1;
+                    inner.commands.insert(id, cmd.clone());
                 }
+                // P0-03: Append all replicated lines so Standby's journal matches Primary's line count
+                to_append.push(cmd);
+                applied += 1;
             }
         }
         if !to_append.is_empty() {
@@ -447,8 +446,7 @@ impl CommandStore {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
-        let _ = std::fs::remove_file(&self.path);
-        std::fs::rename(&tmp, &self.path)?;
+        crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
         let (mut commands, seq, torn, line_count, max_seq) = load(&self.path);
         let now = unix_secs();
         let mut inner = self.inner.lock_or_recover();
@@ -1036,29 +1034,31 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
                 *e = seqn;
             }
         }
-        // Last one wins, so the map ends up holding each command at its latest
-        // state without a second record to keep in step.
-        commands.insert(
-            id.to_string(),
-            Command {
-                id: id.to_string(),
-                node,
-                kind,
-                rev: v["rev"].as_u64().unwrap_or(0),
-                op: v["op"].as_str().unwrap_or("").to_string(),
-                seq: seqn,
-                args: v["args"].as_str().unwrap_or("").to_string(),
-                state: v["state"].as_str().unwrap_or(STATE_PENDING).to_string(),
-                ts: v["ts"].as_u64().unwrap_or(0),
-                actor: v["actor"].as_str().unwrap_or("").to_string(),
-                ip: v["ip"].as_str().unwrap_or("").to_string(),
-                attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
-                ack_at: v["ack_at"].as_u64().unwrap_or(0),
-                err: v["err"].as_str().unwrap_or("").to_string(),
-                // Runtime, and deliberately not restored: see the field docs.
-                next_at: Instant::now(),
-            },
-        );
+        let cmd = Command {
+            id: id.to_string(),
+            node,
+            kind,
+            rev: v["rev"].as_u64().unwrap_or(0),
+            op: v["op"].as_str().unwrap_or("").to_string(),
+            seq: seqn,
+            args: v["args"].as_str().unwrap_or("").to_string(),
+            state: v["state"].as_str().unwrap_or(STATE_PENDING).to_string(),
+            ts: v["ts"].as_u64().unwrap_or(0),
+            actor: v["actor"].as_str().unwrap_or("").to_string(),
+            ip: v["ip"].as_str().unwrap_or("").to_string(),
+            attempts: v["attempts"].as_u64().unwrap_or(0) as u32,
+            ack_at: v["ack_at"].as_u64().unwrap_or(0),
+            err: v["err"].as_str().unwrap_or("").to_string(),
+            next_at: Instant::now(),
+        };
+        // P0-03 & R60-04: Respect state rank on replay so newer state is never regressed by older lines
+        let should_insert = match commands.get(id) {
+            Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
+            None => true,
+        };
+        if should_insert {
+            commands.insert(id.to_string(), cmd);
+        }
     }
     (commands, seq, torn, line_count, max_seq)
 }

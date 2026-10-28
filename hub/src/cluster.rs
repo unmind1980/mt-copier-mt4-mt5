@@ -360,7 +360,7 @@ impl ClusterManager {
 }
 
 /// Replace target file atomically, with Windows file-lock fallback (copy + delete tmp).
-fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
     match fs::rename(tmp, target) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -592,13 +592,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
 
-                // P1-1 & P2-5: Only track continuous online duration for failback when Standby is healthy & in sync with Primary
-                if remote_st.role == "primary" && !needs_sync {
+                // P0-03: Track continuous online duration when Standby is healthy & in sync with Primary
+                let is_synced_or_syncing = {
+                    let s = st.lock_or_recover();
+                    s.cluster.sync_status == "synced" || s.cluster.sync_status == "syncing"
+                };
+                if remote_st.role == "primary" && (!needs_sync || is_synced_or_syncing) {
                     let mut s = st.lock_or_recover();
                     if s.cluster.continuous_online_start.is_none() {
                         s.cluster.continuous_online_start = Some(now);
                     }
-                } else {
+                } else if remote_st.role != "primary" {
                     let mut s = st.lock_or_recover();
                     s.cluster.continuous_online_start = None;
                 }
@@ -798,14 +802,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     if let Ok(res) = h_res {
                         if let Ok(h_data) = res.json::<HandoverResponse>().await {
                             if h_data.agreed {
-                                let audit_rec = {
+                                let (audit_rec, new_ep) = {
                                     let mut s = st.lock_or_recover();
-                                    // P2-1: Ensure target epoch is strictly greater than local epoch
-                                    let target_ep = if h_data.new_epoch > s.cluster.epoch() {
-                                        Some(h_data.new_epoch)
-                                    } else {
-                                        Some(s.cluster.epoch() + 1)
-                                    };
+                                    // P0-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
+                                    let target_ep = Some(h_data.new_epoch.max(s.cluster.epoch()) + 1);
                                     let new_ep = s.cluster.promote(target_ep);
                                     s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
                                     let current_writes = s.writes;
@@ -813,13 +813,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         "[hub] ADR-10 AUTO-FAILBACK SUCCESS: Master identity recovered with epoch {}! Writes={}.",
                                         new_ep, current_writes
                                     );
-                                    Arc::clone(&s.audit)
+                                    (Arc::clone(&s.audit), new_ep)
                                 };
                                 audit_rec.record(
                                     "hub",
                                     "",
                                     "cluster.failback_success",
-                                    &format!("recovered Master identity with epoch {}", h_data.new_epoch),
+                                    &format!("recovered Master identity with epoch {}", new_ep),
                                     None,
                                     None,
                                     "ok",

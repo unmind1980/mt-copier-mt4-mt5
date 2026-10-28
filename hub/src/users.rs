@@ -540,15 +540,19 @@ impl UserStore {
         ttl_secs: u64,
         ip: &str,
     ) -> Option<(String, String, u32)> {
-        // N49-03: Rate limit nonce requests per client IP (max 25/sec)
+        // N49-03 & P0-04: Rate limit nonce requests per client IP.
+        // For individual remote IPs, allow max 25/sec.
+        // For "direct" (when MTC_TRUST_PROXY is off and multiple operators/tabs share one IP key),
+        // raise the bucket limit to 250/sec to eliminate false-positive 429 lockouts while still bounded by MAX_PENDING_NONCES (512).
         if ip != "default" {
+            let ip_limit = if ip == "direct" { 250 } else { 25 };
             self.nonce_ip_rates.retain(|_, (_, start)| now.saturating_sub(*start) <= 2);
             let rate = self.nonce_ip_rates.entry(ip.to_string()).or_insert((0, now));
             if now.saturating_sub(rate.1) >= 1 {
                 *rate = (0, now);
             }
             rate.0 = rate.0.saturating_add(1);
-            if rate.0 > 25 {
+            if rate.0 > ip_limit {
                 return None;
             }
         }

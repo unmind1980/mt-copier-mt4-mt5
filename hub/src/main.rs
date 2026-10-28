@@ -2458,17 +2458,18 @@ fn main() {
                         }
 
                         if !skip_frame {
-                            let fwd_res = sock.send(topic, zmq::SNDMORE).and_then(|_| sock.send(payload, 0));
-                            if let Err(e) = fwd_res {
-                                eprintln!(
-                                    "[hub] FATAL forward failed mid-message ({}): the socket is \
-                                     left inside a multipart message - shutting down rather \
-                                     than forwarding a torn frame",
-                                    e
-                                );
-                                EXIT.store(true, Ordering::SeqCst);
-                            } else {
-                                st.note_forward(topic_str, &ty);
+                            let first_res = sock.send(topic, zmq::SNDMORE);
+                            match first_res {
+                                Ok(()) => {
+                                    if let Err(e) = sock.send(payload, 0) {
+                                        eprintln!(
+                                            "[hub] WARN forward payload frame failed ({}): closing multipart frame with empty terminator",
+                                            e
+                                        );
+                                        // P1-04: Safely close multipart message with empty frame so socket is not left in torn state
+                                        let _ = sock.send("", 0);
+                                    } else {
+                                        st.note_forward(topic_str, &ty);
 
                                 //--- M3 POSITION VIEW - read-only, and deliberately
                                 //--- AFTER the forward above.
@@ -2518,9 +2519,17 @@ fn main() {
                                 }
                             }
                         }
+                        Err(e) => {
+                            eprintln!(
+                                "[hub] WARN forward topic frame failed ({}): dropped frame without entering multipart",
+                                e
+                            );
+                        }
                     }
                 }
             }
+        }
+    }
             Err(e) => {
                 consecutive_poll_errors += 1;
                 eprintln!("[hub] poll failed ({} consecutive): {}", consecutive_poll_errors, e);

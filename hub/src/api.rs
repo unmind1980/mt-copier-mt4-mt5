@@ -1121,6 +1121,12 @@ async fn auth_nonce(
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(',').next())
             .map(|s| s.trim().to_string())
+            .or_else(|| {
+                headers
+                    .get("x-real-ip")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.trim().to_string())
+            })
             .unwrap_or_else(|| "direct".to_string())
     } else {
         "direct".to_string()
@@ -3270,12 +3276,8 @@ async fn cluster_failback_now(
             if let Ok(h_data) = r.json::<crate::cluster::HandoverResponse>().await {
                 if h_data.agreed {
                     let mut s = st.lock_or_recover();
-                    // P2-3: Ensure target epoch is strictly greater than local epoch
-                    let target_ep = if h_data.new_epoch > s.cluster.epoch() {
-                        Some(h_data.new_epoch)
-                    } else {
-                        Some(s.cluster.epoch() + 1)
-                    };
+                    // P0-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
+                    let target_ep = Some(h_data.new_epoch.max(s.cluster.epoch()) + 1);
                     let new_epoch = s.cluster.promote(target_ep);
                     s.writes = s.writes_allowed; // P1-3: Respect CLI --writes setting
                     let current_writes = s.writes;

@@ -260,18 +260,16 @@ impl ConfigStore {
                     kind: v["kind"].as_str().unwrap_or("").to_string(),
                     from_rev: v["from_rev"].as_u64().unwrap_or(0),
                 };
-                // R60-05: Check monotonicity BEFORE appending to journal.
-                // Do not persist older revisions to disk, avoiding load() on restart
-                // overwriting current with a stale revision.
                 let should_advance = match inner.current.get(&node) {
                     Some(cur) => r.rev > cur.rev,
                     None => true,
                 };
                 if should_advance {
-                    inner.append(&r)?;
-                    inner.current.insert(node, r);
-                    applied += 1;
+                    inner.current.insert(node, r.clone());
                 }
+                // P0-03: Append replicated line so Standby's journal matches Primary's line count
+                inner.append(&r)?;
+                applied += 1;
             }
         }
         Ok(applied)
@@ -296,8 +294,7 @@ impl ConfigStore {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
-        let _ = std::fs::remove_file(&self.path);
-        std::fs::rename(&tmp, &self.path)?;
+        crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
         let (current, count, torn) = load(&self.path).unwrap_or_default();
         let mut inner = self.inner.lock_or_recover();
         inner.current = current;
@@ -583,21 +580,26 @@ fn load(path: &Path) -> std::io::Result<(HashMap<String, Revision>, u64, u64)> {
                     continue;
                 }
                 count += 1;
-                // Last one wins, so the map ends up holding the current
-                // revision without a separate "current" record to keep in step.
-                current.insert(
-                    node.clone(),
-                    Revision {
-                        node,
-                        rev,
-                        ts: v["ts"].as_u64().unwrap_or(0),
-                        actor: v["actor"].as_str().unwrap_or("").to_string(),
-                        ip: v["ip"].as_str().unwrap_or("").to_string(),
-                        ini: v["ini"].as_str().unwrap_or("").to_string(),
-                        kind: v["kind"].as_str().unwrap_or("").to_string(),
-                        from_rev: v["from_rev"].as_u64().unwrap_or(0),
-                    },
-                );
+                // P0-03 & R60-05: Ensure monotonicity on load
+                let should_advance = match current.get(&node) {
+                    Some(cur) => rev > cur.rev,
+                    None => true,
+                };
+                if should_advance {
+                    current.insert(
+                        node.clone(),
+                        Revision {
+                            node,
+                            rev,
+                            ts: v["ts"].as_u64().unwrap_or(0),
+                            actor: v["actor"].as_str().unwrap_or("").to_string(),
+                            ip: v["ip"].as_str().unwrap_or("").to_string(),
+                            ini: v["ini"].as_str().unwrap_or("").to_string(),
+                            kind: v["kind"].as_str().unwrap_or("").to_string(),
+                            from_rev: v["from_rev"].as_u64().unwrap_or(0),
+                        },
+                    );
+                }
             }
             Err(_) => {
                 // A torn tail is a crash mid-append; the revisions before it
