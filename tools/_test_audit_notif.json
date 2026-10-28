@@ -1,0 +1,57 @@
+[
+  {
+    "id": "chan_1793163204_e49a6c",
+    "name": "Channel_4",
+    "channel_type": "webhook",
+    "enabled": true,
+    "min_severity": "warning",
+    "config": {
+      "url": "https://example.com/webhook/4"
+    },
+    "created_at": 1793163204
+  },
+  {
+    "id": "chan_1793163204_f75893",
+    "name": "Channel_1",
+    "channel_type": "webhook",
+    "enabled": true,
+    "min_severity": "warning",
+    "config": {
+      "url": "https://example.com/webhook/1"
+    },
+    "created_at": 1793163204
+  },
+  {
+    "id": "chan_1793163204_13c310",
+    "name": "Channel_0",
+    "channel_type": "webhook",
+    "enabled": true,
+    "min_severity": "warning",
+    "config": {
+      "url": "https://example.com/webhook/0"
+    },
+    "created_at": 1793163204
+  },
+  {
+    "id": "chan_1793163204_870018",
+    "name": "Channel_3",
+    "channel_type": "webhook",
+    "enabled": true,
+    "min_severity": "warning",
+    "config": {
+      "url": "https://example.com/webhook/3"
+    },
+    "created_at": 1793163204
+  },
+  {
+    "id": "chan_1793163204_71361c",
+    "name": "Channel_2",
+    "channel_type": "webhook",
+    "enabled": true,
+    "min_severity": "warning",
+    "config": {
+      "url": "https://example.com/webhook/2"
+    },
+    "created_at": 1793163204
+  }
+]

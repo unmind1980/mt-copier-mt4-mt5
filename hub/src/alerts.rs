@@ -72,6 +72,7 @@ mod silence {
     /// Command ids are unique per issue, so the "window" is only a
     /// belt-and-braces guard against the same id being evaluated by two
     /// overlapping ticks.
+    #[allow(dead_code)]
     pub const COMMAND_UNKNOWN: u64 = 600;
 }
 

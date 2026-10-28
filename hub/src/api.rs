@@ -2900,8 +2900,8 @@ async fn cluster_sync(
     Json(req): Json<crate::cluster::ClusterSyncRequest>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // P2-1: Minimize lock holding duration. Capture paths, epoch & cached hashes inside lock, then perform disk I/O outside lock.
-    let (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_path, notif_path, curve_clients_path, local_users_hash, local_notif_hash, local_curve_hash, total_cfg_lines, total_cmd_lines, max_cmd_seq) = {
+    // DEF-61-06: Capture paths, epoch & total stats inside lock, then perform disk I/O & SHA256 outside lock.
+    let (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_path, notif_path, curve_clients_path, total_cfg_lines, total_cmd_lines, max_cmd_seq) = {
         let s = st.lock_or_recover();
         if !s.cluster.is_primary() {
             return (
@@ -2918,19 +2918,28 @@ async fn cluster_sync(
         let users_p = s.users.path().to_path_buf();
         let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
         let curve_p = s.cluster.curve_clients_path.clone();
-        let u_hash = crate::cluster::file_sha256(&users_p);
-        let n_hash = crate::cluster::file_sha256(&notif_p);
-        let c_hash = crate::cluster::file_sha256(&curve_p);
         let cfg_tot = s.cfg.total_lines();
         let (cmd_tot, max_seq) = s.cmds.sync_stats();
-        (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_p, notif_p, curve_p, u_hash, n_hash, c_hash, cfg_tot, cmd_tot, max_seq)
+        (epoch, cfg_path, cmd_path, cfg_enabled, cmd_enabled, users_p, notif_p, curve_p, cfg_tot, cmd_tot, max_seq)
     };
 
+    // Calculate file hashes completely outside the shared state lock
+    let local_users_hash = crate::cluster::file_sha256(&users_path);
+    let local_notif_hash = crate::cluster::file_sha256(&notif_path);
+    let local_curve_hash = crate::cluster::file_sha256(&curve_clients_path);
+
+    // DEF-61-07: Bound max delta lines returned per sync batch to avoid memory spikes and network timeouts
+    const MAX_SYNC_BATCH: usize = 1000;
     let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
         Vec::new()
     } else {
         crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line)
-            .map(|(lines, _)| lines)
+            .map(|(mut lines, _)| {
+                if lines.len() > MAX_SYNC_BATCH {
+                    lines.truncate(MAX_SYNC_BATCH);
+                }
+                lines
+            })
             .unwrap_or_default()
     };
 
@@ -2938,7 +2947,12 @@ async fn cluster_sync(
         Vec::new()
     } else {
         crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line)
-            .map(|(lines, _, _)| lines)
+            .map(|(mut lines, _, _)| {
+                if lines.len() > MAX_SYNC_BATCH {
+                    lines.truncate(MAX_SYNC_BATCH);
+                }
+                lines
+            })
             .unwrap_or_default()
     };
 

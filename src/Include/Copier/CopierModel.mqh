@@ -776,7 +776,36 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    bool ok;
    if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
    else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
-   if(!ok) outErr=(int)trade.ResultRetcode();
+   if(!ok)
+     {
+      outErr=(int)trade.ResultRetcode();
+      //--- DEF-61-02: TRADE_RETCODE_INVALID_STOPS (10016) fallback.
+      //--- On ECN brokers or during spread/StopLevel widening, market orders with
+      //--- non-zero SL/TP are rejected with 10016. Fall back to opening flat
+      //--- (SL=0, TP=0) so the trade is not lost to exponential backoff, then
+      //--- attempt immediate stop placement (and let converge re-clamp if needed).
+      if(outErr==10016 && (sl>0.0 || tp>0.0))
+        {
+         if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,0.0,0.0,comment);
+         else                  ok=trade.Sell(lots,sym,0.0,0.0,0.0,comment);
+         if(ok)
+           {
+            outErr=0;
+            ulong deal=trade.ResultDeal();
+            ulong order=trade.ResultOrder();
+            ulong posId=(deal>0)?deal:order;
+            if(posId>0)
+              {
+               int mErr=0;
+               CopierModifyStops((long)posId,sym,sl,tp,mErr);
+              }
+           }
+         else
+           {
+            outErr=(int)trade.ResultRetcode();
+           }
+        }
+     }
    return ok;
 #else
    RefreshRates();

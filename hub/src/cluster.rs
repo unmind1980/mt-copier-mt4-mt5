@@ -359,6 +359,23 @@ impl ClusterManager {
     }
 }
 
+/// Replace target file atomically, with Windows file-lock fallback (copy + delete tmp).
+fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
+    match fs::rename(tmp, target) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Attempt fallback copy on Windows in case target file is locked against rename
+            if fs::copy(tmp, target).is_ok() {
+                let _ = fs::remove_file(tmp);
+                Ok(())
+            } else {
+                let _ = fs::remove_file(tmp);
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Spawns the background cluster replication and failback manager loop.
 pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
@@ -637,62 +654,55 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
                                 }
                                 // Apply full users content if updated
+                                let mut file_sync_err: Option<String> = None;
                                 if let Some(u_content) = data.users_content {
                                     let p = s.users.path().to_path_buf();
                                     let tmp = p.with_extension("json.tmp");
                                     if let Ok(mut f) = File::create(&tmp) {
                                         let _ = f.write_all(u_content.as_bytes());
                                         let _ = f.sync_all();
-                                        //--- N57-07: never swallow this. On Windows
-                                        //--- a rename onto a file another thread has
-                                        //--- open fails with OS Error 5, and the
-                                        //--- standby then serves a users.json that
-                                        //--- silently never updated.
-                                        if let Err(e) = fs::rename(&tmp, &p) {
-                                            eprintln!(
-                                                "[hub] cluster sync: users rename {} -> {} failed: {} (kept old file)",
-                                                tmp.display(),
-                                                p.display(),
-                                                e
-                                            );
+                                        drop(f);
+                                        //--- DEF-61-05: safe replacement with Windows lock fallback
+                                        if let Err(e) = atomic_replace_file(&tmp, &p) {
+                                            let msg = format!("users file replace failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        } else {
+                                            let _ = s.users.reload();
                                         }
-                                        let _ = s.users.reload();
                                     }
                                 }
                                 // Apply full notification channels if updated
                                 if let Some(n_content) = data.notif_content {
                                     let p = s.notif_store.lock_or_recover().path().to_path_buf();
                                     let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
-                                    if let Ok(mut f) = File::create(&tmp) {
+                                    let tmp_path = PathBuf::from(&tmp);
+                                    if let Ok(mut f) = File::create(&tmp_path) {
                                         let _ = f.write_all(n_content.as_bytes());
                                         let _ = f.sync_all();
-                                        //--- N57-07: see the users branch above.
-                                        if let Err(e) = fs::rename(&tmp, &p) {
-                                            eprintln!(
-                                                "[hub] cluster sync: notifications rename {} -> {} failed: {} (kept old file)",
-                                                tmp,
-                                                p.display(),
-                                                e
-                                            );
+                                        drop(f);
+                                        if let Err(e) = atomic_replace_file(&tmp_path, &p) {
+                                            let msg = format!("notifications file replace failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        } else {
+                                            let _ = s.notif_store.lock_or_recover().load();
                                         }
-                                        let _ = s.notif_store.lock_or_recover().load();
                                     }
                                 }
                                 // P1-6: Apply curve clients content via atomic file overwrite
                                 if let Some(c_content) = data.curve_clients_content {
                                     let p = s.cluster.curve_clients_path.clone();
                                     let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
-                                    if let Ok(mut f) = File::create(&tmp) {
+                                    let tmp_path = PathBuf::from(&tmp);
+                                    if let Ok(mut f) = File::create(&tmp_path) {
                                         let _ = f.write_all(c_content.as_bytes());
                                         let _ = f.sync_all();
-                                        //--- N57-07: see the users branch above.
-                                        if let Err(e) = fs::rename(&tmp, &p) {
-                                            eprintln!(
-                                                "[hub] cluster sync: curve clients rename {} -> {} failed: {} (kept old file)",
-                                                tmp,
-                                                p.display(),
-                                                e
-                                            );
+                                        drop(f);
+                                        if let Err(e) = atomic_replace_file(&tmp_path, &p) {
+                                            let msg = format!("curve clients file replace failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
                                         }
                                     }
                                 }
@@ -701,9 +711,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     s.cluster.state.epoch = data.epoch;
                                     let _ = s.cluster.save();
                                 }
-                                s.cluster.sync_status = "synced".to_string();
-                                s.cluster.last_sync_at = Some(Instant::now());
-                                s.cluster.last_sync_err = String::new();
+
+                                if let Some(err) = file_sync_err {
+                                    s.cluster.sync_status = "sync_err".to_string();
+                                    s.cluster.last_sync_err = err;
+                                } else {
+                                    s.cluster.sync_status = "synced".to_string();
+                                    s.cluster.last_sync_at = Some(Instant::now());
+                                    s.cluster.last_sync_err = String::new();
+                                }
                             } else {
                                 let mut s = st.lock_or_recover();
                                 s.cluster.sync_status = "sync_err".to_string();

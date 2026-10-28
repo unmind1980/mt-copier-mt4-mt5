@@ -129,16 +129,16 @@ def main():
         print()
         print("== 3. the §17.2 role matrix ==")
         st, _ = js("POST", "/api/v1/users",
-                   {"id": "viewer1", "password": "v-pass", "role": "viewer",
+                   {"id": "viewer1", "password": "viewer-password", "role": "viewer",
                     "disabled": False}, tok)
         check("admin creates a viewer", st == 200, f"status {st}")
         st, _ = js("POST", "/api/v1/users",
-                   {"id": "op1", "password": "o-pass", "role": "operator",
+                   {"id": "op1", "password": "operator-password", "role": "operator",
                     "disabled": False}, tok)
         check("...and an operator", st == 200, f"status {st}")
-        st, vtok = login("viewer1", "v-pass")
+        st, vtok = login("viewer1", "viewer-password")
         check("the viewer logs in", st == 200, f"status {st}")
-        st, otok = login("op1", "o-pass")
+        st, otok = login("op1", "operator-password")
         check("the operator logs in", st == 200, f"status {st}")
 
         st, _ = js("GET", "/api/v1/topology", cookie=vtok)
@@ -166,20 +166,20 @@ def main():
         print()
         print("== 3b. change your own password (any role; the old one is required) ==")
         st, _ = js("POST", "/api/v1/password",
-                   {"old": "not-my-password", "new": "v-pass-new"}, cookie=vtok)
+                   {"old": "not-my-password", "new": "viewer-pass-new"}, cookie=vtok)
         check("a wrong current password -> 403", st == 403, f"status {st}")
         st, _ = js("POST", "/api/v1/password",
-                   {"old": "v-pass", "new": "short"}, cookie=vtok)
+                   {"old": "viewer-password", "new": "short"}, cookie=vtok)
         check("a too-short new password -> 400", st == 400, f"status {st}")
         st, d = js("POST", "/api/v1/password",
-                   {"old": "v-pass", "new": "v-pass-new"}, cookie=vtok)
+                   {"old": "viewer-password", "new": "viewer-pass-new"}, cookie=vtok)
         check("a VIEWER may change their own password (not admin-only)",
               st == 200 and d.get("ok") is True, f"status {st} {str(d)[:60]}")
         st, _ = js("GET", "/api/v1/topology", cookie=vtok)
         check("the session that made the change survives", st == 200, f"status {st}")
-        st, _ = login("viewer1", "v-pass")
+        st, _ = login("viewer1", "viewer-password")
         check("the old password no longer works", st == 401, f"status {st}")
-        st, vtok2 = login("viewer1", "v-pass-new")
+        st, vtok2 = login("viewer1", "viewer-pass-new")
         check("...and the new one does", st == 200, f"status {st}")
         st, _ = js("GET", "/api/v1/topology", cookie=vtok2)
         check("...and its fresh session works", st == 200, f"status {st}")
@@ -206,7 +206,7 @@ def main():
                    {"id": "viewer1", "password": "", "role": "operator",
                     "disabled": False}, tok)
         check("role change with an empty password -> 200", st == 200, f"status {st}")
-        st, _ = login("viewer1", "v-pass-new")
+        st, _ = login("viewer1", "viewer-pass-new")
         check("...and the OLD password still works", st == 200, f"status {st}")
         st, _ = login("viewer1", "wrong-password")
         check("...and it is not 'no password at all'", st == 401, f"status {st}")
@@ -223,10 +223,10 @@ def main():
         st, _ = js("GET", "/api/v1/topology", cookie=otok)
         check("the logged-out token is dead", st == 401, f"status {st}")
         st, _ = js("POST", "/api/v1/users",
-                   {"id": "op1", "password": "o-pass", "role": "operator",
+                   {"id": "op1", "password": "operator-password", "role": "operator",
                     "disabled": True}, tok)
         check("admin disables the operator", st == 200, f"status {st}")
-        st, _ = login("op1", "o-pass")
+        st, _ = login("op1", "operator-password")
         check("a disabled user cannot log in", st == 401, f"status {st}")
 
         # =================================================================

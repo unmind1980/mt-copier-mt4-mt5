@@ -2340,10 +2340,9 @@ fn main() {
                                         let rkey = format!("receiver:{}", login);
                                         let sid_is_sender = s.reg.get(&skey).is_some();
                                         let login_is_receiver = s.reg.get(&rkey).is_some();
-                                        let any_sender_known = s.reg.count_by_role(registry::Role::Sender) > 0;
-                                        let any_receiver_known = s.reg.count_by_role(registry::Role::Receiver) > 0;
-                                        sender_valid = sid_is_sender || !any_sender_known || warm;
-                                        receiver_valid = login_is_receiver || !any_receiver_known || warm;
+                                        // DEF-61-11: Short-circuit evaluate role count only when sender/receiver is unknown
+                                        sender_valid = sid_is_sender || warm || s.reg.count_by_role(registry::Role::Sender) == 0;
+                                        receiver_valid = login_is_receiver || warm || s.reg.count_by_role(registry::Role::Receiver) == 0;
 
                                         if sender_valid && receiver_valid {
                                             if s.mirrors.entry(sid.clone()).or_default().insert(login.clone(), Instant::now()).is_none() {

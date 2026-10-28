@@ -865,30 +865,39 @@ int PeakFind(const string uid)
 
 void PruneSenderPeakLots()
   {
-   for(int i=g_uidPeakLotsCount-1;i>=0;i--)
+   if(g_uidPeakLotsCount<=0) return;
+   bool isAlive[];
+   ArrayResize(isAlive,g_uidPeakLotsCount);
+   ArrayInitialize(isAlive,false);
+
+   //--- DEF-61-04: Mark active UIDs in O(Desired + Acct) time via direct-mapped PeakFind
+   //--- instead of O(N * S * D) nested brute-force loop.
+   for(int s=0;s<g_nSenders;s++)
      {
-      string uid=g_uidPeakLots[i].uid;
-      bool isAlive=false;
-      for(int s=0;s<g_nSenders && !isAlive;s++)
+      int base=s*CP_MAX_POSITIONS;
+      for(int d=0;d<g_desiredCount[s];d++)
         {
-         int base=s*CP_MAX_POSITIONS;
-         for(int d=0;d<g_desiredCount[s];d++)
-           {
-            if(g_desired[base+d].uid==uid) { isAlive=true; break; }
-           }
-        }
-      if(!isAlive)
-        {
-         for(int k=0;k<g_acctAllPosCount;k++)
-           {
-            if(g_acctAllPos[k].uid==uid) { isAlive=true; break; }
-           }
-        }
-      if(!isAlive)
-        {
-         g_uidPeakLots[i]=g_uidPeakLots[--g_uidPeakLotsCount];
+         int p=PeakFind(g_desired[base+d].uid);
+         if(p>=0 && p<g_uidPeakLotsCount) isAlive[p]=true;
         }
      }
+   for(int k=0;k<g_acctAllPosCount;k++)
+     {
+      int p=PeakFind(g_acctAllPos[k].uid);
+      if(p>=0 && p<g_uidPeakLotsCount) isAlive[p]=true;
+     }
+
+   //--- Compact active entries in single pass
+   int writeIdx=0;
+   for(int i=0;i<g_uidPeakLotsCount;i++)
+     {
+      if(isAlive[i])
+        {
+         if(writeIdx!=i) g_uidPeakLots[writeIdx]=g_uidPeakLots[i];
+         writeIdx++;
+        }
+     }
+   g_uidPeakLotsCount=writeIdx;
    //--- the compaction moved rows, so every cached index is suspect
    ArrayInitialize(g_peakLookup,0);
   }
