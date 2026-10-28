@@ -748,9 +748,7 @@ breached, and a wrong stop is worse than no stop.
 ### The broker's minimum distance wins
 
 Both terminals reject a stop closer than `SYMBOL_TRADE_STOPS_LEVEL`  
-(MT4 `#130` / MT5 `10016`), and **MT5 rejects the whole `OrderSend`** rather  
-than just the stop — so an unclamped stop does not merely fail to protect a  
-position, it can stop the position existing at all. `CopierFitStopAt()`  
+(MT4 `#130` / MT5 `10016`). On MT4, OrderSend fails with `#130` and falls back to flat open (`SL=0, TP=0`), followed by `OrderModify`. On MT5, `trade.Buy`/`trade.Sell` fails with `10016` (TRADE_RETCODE_INVALID_STOPS); `CopierOpenMarket` now automatically falls back to a flat market entry (`SL=0, TP=0`) so the trade is not lost to exponential backoff, followed by an immediate modify attempt and converge re-clamping. `CopierFitStopAt()`  
 widens the stop to exactly that minimum and reports that it did.
 
 Widening is the safe direction: the position lives longer instead of being  
