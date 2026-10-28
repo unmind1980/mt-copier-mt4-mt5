@@ -2608,6 +2608,28 @@ void TestR47R48Regressions()
    for(int i=0;i<1000;i++) sb.Add("0123456789"); // 10,000 bytes > 2 chunks
    string sbResult=sb.Result();
    Ok("strbuilder: large string (10KB) survives pairwise merge without being erased", StringLen(sbResult)==10000);
+
+   // DEF-64-05: CopierPayloadModify with and without PPRICE roundtrip and backward compatibility
+   string modWithPprice = CopierPayloadModify("TEST1234", 1.08500, 1.08000, 1.09000, 1.08550);
+   Ok("modify: payload with non-zero pprice contains PPRICE", StringFind(modWithPprice, ";PPRICE=1.0855") > 0);
+   CopierPos pMod1;
+   Ok("modify: parse payload with PPRICE succeeds", CopierPayloadModifyParse(modWithPprice, pMod1));
+   OkDbl("modify: parsed pprice matches", pMod1.pprice, 1.08550, 0.00001);
+   OkDbl("modify: parsed openPx matches", pMod1.openPx, 1.08500, 0.00001);
+   OkDbl("modify: parsed sl matches", pMod1.sl, 1.08000, 0.00001);
+   OkDbl("modify: parsed tp matches", pMod1.tp, 1.09000, 0.00001);
+
+   string modNoPprice = CopierPayloadModify("TEST1234", 1.08500, 1.08000, 1.09000, 0.0);
+   Ok("modify: payload with 0.0 pprice omits PPRICE key", StringFind(modNoPprice, ";PPRICE=") < 0);
+   CopierPos pMod2;
+   Ok("modify: parse payload without PPRICE succeeds", CopierPayloadModifyParse(modNoPprice, pMod2));
+   OkDbl("modify: parsed pprice is 0.0 when omitted", pMod2.pprice, 0.0, 0.00001);
+
+   // Legacy string without PPRICE field
+   string legacyMod = "UID=TEST1234;OPN=1.08500;SL=1.08000;TP=1.09000";
+   CopierPos pModLegacy;
+   Ok("modify: parse legacy payload without PPRICE succeeds", CopierPayloadModifyParse(legacyMod, pModLegacy));
+   OkDbl("modify: legacy parsed pprice defaults to 0.0", pModLegacy.pprice, 0.0, 0.00001);
   }
 
 //+------------------------------------------------------------------+

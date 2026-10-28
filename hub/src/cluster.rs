@@ -544,16 +544,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let _ = s.cluster.save();
                 }
 
-                // P1-3, P1-4 & P2-3: Use zero-disk-IO memory statistics, max_seq watermark and cached file hashes under lock
-                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_h, notif_h, curve_h) = {
+                // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
+                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_path, notif_path, curve_path) = {
                     let s = st.lock_or_recover();
                     let cfg_tot = s.cfg.total_lines();
                     let (cmd_tot, max_seq) = s.cmds.sync_stats();
-                    let u_h = file_sha256(&s.users.path());
-                    let n_h = file_sha256(&s.notif_store.lock_or_recover().path());
-                    let c_h = file_sha256(&s.cluster.curve_clients_path);
-                    (cfg_tot, cmd_tot, max_seq, u_h, n_h, c_h)
+                    let u_p = s.users.path().to_path_buf();
+                    let n_p = s.notif_store.lock_or_recover().path().to_path_buf();
+                    let c_p = s.cluster.curve_clients_path.clone();
+                    (cfg_tot, cmd_tot, max_seq, u_p, n_p, c_p)
                 };
+
+                let users_h = file_sha256(&users_path);
+                let notif_h = file_sha256(&notif_path);
+                let curve_h = file_sha256(&curve_path);
 
                 //--- N57-12: `> 0` created a blind spot. When the primary's
                 //--- journal is compacted to nothing (everything terminal and

@@ -596,9 +596,15 @@ public:
    // whether it matters. For a snapshot it does not: the next one
    // supersedes it within SnapshotSeconds.
    //=================================================================
-   bool              HasDirectSubscribers() const
+   //--- DEF-64-04: Returns true if direct publisher socket is bound and ready to send.
+   //--- HasDirectSubscribers is maintained as a backward-compatible alias.
+   bool              IsDirectSocketBound() const
      {
       return (CheckPointer(m_pub)!=POINTER_INVALID);
+     }
+   bool              HasDirectSubscribers() const
+     {
+      return IsDirectSocketBound();
      }
 
    bool              Send(const string msg)

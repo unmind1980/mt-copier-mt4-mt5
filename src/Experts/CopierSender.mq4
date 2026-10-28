@@ -525,8 +525,8 @@ void Emit(const string type,const string payload,const bool snapshot,
    e.payload=payload;
 
    //--- DIRECT channel: identity is the PORT, one frame.
-   //--- Only encode and send if direct socket is bound and ready.
-   if(g_tp.HasDirectSubscribers())
+   //--- Only encode and send if direct socket is bound and ready. (DEF-64-04)
+   if(g_tp.IsDirectSocketBound())
      {
       e.sid=SenderId();
       bool ok=g_tp.Send(CopierEncodeEnv(e));
@@ -1888,21 +1888,21 @@ void OnTimer()
          g_slotStamp[slot]=g_stampGen;
          g_slotMissCount[slot]=0;
          g_slotMissMs[slot]=0;
-         bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false;
+         bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false, ppriceDiff=false;
          double prevLots=0.0;
          int prevKind=0;
          long prevTicket=0;
 
          //--- Fast numeric check directly against m_p[slot]: ZERO struct copies,
          //--- ZERO string allocations on 99.9% of steady-state ticks (B11).
+         //--- DEF-64-02: CheckSlot directly evaluates ppriceDiff, eliminating redundant external checks
          if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
-                             prevLots,prevKind,prevTicket,g_curScratch[i]))
+                             prevLots,prevKind,prevTicket,g_curScratch[i],ppriceDiff))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
             if(otherDiff) MarkStateDirty();
 
-            //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05)
-            bool ppriceDiff = (g_curScratch[i].kind==CP_ORD_PENDING && MathAbs(g_prev.GetPPriceAt(slot)-g_curScratch[i].pprice)>0.0000001);
+            //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05 & DEF-64-02)
             if(stopsDiff || ppriceDiff)
               {
                MarkStateDirty();
