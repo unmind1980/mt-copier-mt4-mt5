@@ -3618,20 +3618,24 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
    return targetLots;
   }
 
-void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local)
+void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &local,const double targetLotsCached=0.0)
   {
    if(local.kind!=CP_ORD_MARKET) return;
-   CopierSymInfo si2;
-   if(!CopierGetSymbolInfo(local.sym,si2)) return;
 
-   //--- Sizing conversion: desired.lots is the SENDER's raw volume. We must
-   //--- convert it through this receiver's sizing rules (multiplier / fixed / off)
-   //--- to determine the local target volume.
-   double targetLots=ComputeTargetLotsForMirror(si,desired,local.sym);
+   //--- Sizing conversion: use cached targetLots if already computed by converge,
+   //--- or compute directly if called stand-alone.
+   double targetLots=targetLotsCached;
+   if(targetLots<=0.0) targetLots=ComputeTargetLotsForMirror(si,desired,local.sym);
    if(targetLots<=0.0) return;
 
    double diff=local.lots-targetLots;
    if(diff<=0.0) return;                       // local is not larger than target
+
+   //--- R59-05: Query symbol info ONLY when there is actual excess volume to trim.
+   //--- In steady state (99.99% of ticks), local.lots <= targetLots, returning
+   //--- above with ZERO MarketInfo / DLL queries per position.
+   CopierSymInfo si2;
+   if(!CopierGetSymbolInfo(local.sym,si2)) return;
 
    double step=si2.lotStep;
    if(step<=0.0) return;
@@ -4885,9 +4889,10 @@ void ConvergeSender(const int si)
          //--- causes duplicate execution on the next tick.
          //--- NM-01: O(1) hash probe replaces nested O(N*Q) linear loop
          bool hasQueued=(g_qCloseIdx.FindInStrings(queuedCloseOrTrim,d.uid)>=0);
+         double targetLots=0.0;
          if(!hasQueued)
            {
-            double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
+            targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
             if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+0.0001)
                g_seen.ForgetUidActions(g_sid[si],d.uid);
             else
@@ -4991,7 +4996,7 @@ void ConvergeSender(const int si)
            }
 
          QueueModifyIfNeeded(si,d,g_locScratch[li]);
-         QueueTrimIfNeeded(si,d,g_locScratch[li]);
+         QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
          continue;
         }
 

@@ -424,6 +424,8 @@ string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slo
 //--- something.
 #define CP_ALERT_QUIET_MS  (5*60*1000)
 bool             g_stateDirty=false;
+bool             g_snapDirty=false;
+void             MarkStateDirty() { g_stateDirty=true; g_snapDirty=true; }
 
 //=====================================================================
 // Helpers
@@ -1849,7 +1851,7 @@ void OnTimer()
                     +" lots="+DoubleToString(g_curScratch[i].lots,2)
                     +" sl="+((g_curScratch[i].sl>0.0)?DoubleToString(g_curScratch[i].sl,5):"none")
                     +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none"));
-         g_stateDirty=true;
+         MarkStateDirty();
         }
       else
         {
@@ -1867,12 +1869,12 @@ void OnTimer()
                              prevLots,prevKind,prevTicket,g_curScratch[i]))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
-            if(otherDiff) g_stateDirty=true;
+            if(otherDiff) MarkStateDirty();
 
             //--- STOPS CHANGED: compare directly by slot, 0 string lookups!
             if(stopsDiff)
               {
-               g_stateDirty=true;
+               MarkStateDirty();
                g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                           +" side="+(string)g_curScratch[i].side
                           +" entry="+DoubleToString(g_curScratch[i].openPx,5)
@@ -1886,7 +1888,7 @@ void OnTimer()
             //--- VOLUME DRIFT (partial close we do not model in the MVP)
             if(lotsDiff)
               {
-               g_stateDirty=true;
+               MarkStateDirty();
                if(g_once.ShouldEmit("vol|"+g_curScratch[i].uid))
                   g_log.Info("partial close on "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                              +" "+DoubleToString(prevLots,2)+" -> "+DoubleToString(g_curScratch[i].lots,2)
@@ -1897,7 +1899,7 @@ void OnTimer()
             //--- PENDING ORDER FILLING / KIND CHANGED
             if(kindDiff)
               {
-               g_stateDirty=true;
+               MarkStateDirty();
                g_log.Info("uid "+g_curScratch[i].uid+" "+g_curScratch[i].sym+" moved: kind "
                           +(string)prevKind+" -> "+(string)g_curScratch[i].kind+", ticket "
                           +(string)prevTicket+" -> "+(string)g_curScratch[i].ticket
@@ -1938,7 +1940,7 @@ void OnTimer()
       g_slotMissMs[k]=0;
       EmitClose(q,k);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
-      g_stateDirty=true;
+      MarkStateDirty();
       g_prev.RemoveAt(k);
       g_openLots[k]=0.0;
      }
@@ -1995,17 +1997,25 @@ void OnTimer()
         }
      }
 
-   //--- When positions changed (open/close/modify/drift), immediately refresh the cached
-   //--- snapshot payload so any targeted repair or bootstrap emitted before
-   //--- the next routine 15s broadcast always carries the true current state.
-   //--- Avoid rebuilding twice in the same tick if BroadcastSnapshot is about to run.
-   if(g_stateDirty && g_fillSnapshotDueMs==0 && !dueSnap)
+   static long s_lastSnapRebuildMs=0;
+   static long s_lastStateSaveMs=0;
+
+   //--- R59-02: Debounce snapshot rebuild to at most once per 250ms during dirty bursts
+   //--- (e.g. trailing-stop updates on 5ms ticks). Avoids 200x per second zlib/Z85 encoding.
+   if(g_snapDirty && g_fillSnapshotDueMs==0 && !dueSnap)
      {
-      RebuildSnapshotPayload();
+      if(now-s_lastSnapRebuildMs>=250)
+        {
+         s_lastSnapRebuildMs=now;
+         g_snapDirty=false;
+         RebuildSnapshotPayload();
+        }
      }
 
    if(dueSnap)
      {
+      g_snapDirty=false;
+      s_lastSnapRebuildMs=now;
       BroadcastSnapshot(now);
      }
 
@@ -2019,9 +2029,10 @@ void OnTimer()
                                            CopierAccountLogin()),false);
      }
 
-   //--- 8) persist UID map only when it actually changed
-   if(g_stateDirty)
+   //--- 8) persist UID map only when it actually changed (debounced to at most once per 250ms)
+   if(g_stateDirty && (now-s_lastStateSaveMs>=250))
      {
+      s_lastStateSaveMs=now;
       g_stateDirty=false;
       CopierPos dense[];
       int slots[];

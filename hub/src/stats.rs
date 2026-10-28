@@ -4,7 +4,7 @@
 //! the loop detector - the one piece of this that is a genuine safety net -
 //! has somewhere to live with its reasoning attached.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 /// A topic emitting faster than this is not traffic, it is a LOOP: some node is
@@ -86,9 +86,10 @@ pub struct Stats {
     /// explain, and the first thing anyone does with it is guess.
     control_by_type: HashMap<String, u64>,
     /// Prefixes currently subscribed, so the line can say who is listening.
-    /// A BTreeSet because the output should be stable between runs - a stats
-    /// line that reshuffles is one nobody can diff.
-    pub subs: BTreeSet<String>,
+    /// A BTreeMap with subscriber reference counting so multiple nodes sharing
+    /// a prefix (e.g. @hub, or multiple receivers mirroring the same sender)
+    /// do not drop the prefix when one node unsubscribes.
+    pub subs: BTreeMap<String, usize>,
     window_start: Instant,
 }
 
@@ -110,7 +111,7 @@ impl Stats {
             by_topic: HashMap::new(),
             by_type: HashMap::new(),
             control_by_type: HashMap::new(),
-            subs: BTreeSet::new(),
+            subs: BTreeMap::new(),
             window_start: Instant::now(),
         }
     }
@@ -264,7 +265,7 @@ impl Stats {
             }
         }
 
-        let subs: Vec<&str> = self.subs.iter().map(|s| s.as_str()).collect();
+        let subs: Vec<&str> = self.subs.keys().map(|s| s.as_str()).collect();
         if subs.is_empty() {
             println!("[hub]   subscribers 0");
         } else {

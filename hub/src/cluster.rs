@@ -366,6 +366,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap_or_default();
+        let mut last_users_warn = Instant::now() - Duration::from_secs(300);
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -544,12 +545,29 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 //--- because "0 < N" was gated on "0 > 0". The standby then kept
                 //--- serving a history that no longer existed anywhere and
                 //--- reported a cmd_lines figure the primary would deny.
+                //--- R59-07: users_hash mismatch only triggers sync when MTC_SYNC_USERS
+                //--- is active. If sync is off, the primary refuses to send users_content,
+                //--- so gating needs_sync on users_hash trapped the standby in an infinite
+                //--- sync request loop and permanently blocked auto-failback.
+                let users_sync_enabled = std::env::var("MTC_SYNC_USERS")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+
+                if !users_sync_enabled && remote_st.users_hash != users_h {
+                    if last_users_warn.elapsed() >= Duration::from_secs(300) {
+                        last_users_warn = Instant::now();
+                        eprintln!(
+                            "[hub] CLUSTER WARN: Primary users.json hash differs from Standby, but MTC_SYNC_USERS is off. User accounts will not be replicated."
+                        );
+                    }
+                }
+
                 let needs_sync = remote_st.cfg_lines > cfg_lines_count
                     || remote_st.cmd_lines > cmd_lines_count
                     || remote_st.max_cmd_seq > local_max_cmd_seq
                     || remote_st.cmd_lines < cmd_lines_count
                     || remote_st.cfg_lines < cfg_lines_count
-                    || remote_st.users_hash != users_h
+                    || (users_sync_enabled && remote_st.users_hash != users_h)
                     || remote_st.notif_hash != notif_h
                     || remote_st.curve_clients_hash != curve_h;
 

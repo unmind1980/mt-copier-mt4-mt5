@@ -498,9 +498,10 @@ public:
       //--- them, so they are not lost either way, and duplicating them would
       //--- only add traffic.
       int copies=(StringLen(topic)>0 && StringSubstr(topic,0,1)=="@") ? 2 : 1;
+      int sent=0;
       for(int i=0;i<copies;i++)
         {
-         if(!m_sub.sendMore(topic,true)) { m_errno=CopierZmqErrno(); return false; }
+         if(!m_sub.sendMore(topic,true)) { m_errno=CopierZmqErrno(); continue; }
          if(!m_sub.send(payload,true))
            {
             m_errno=CopierZmqErrno();
@@ -514,10 +515,11 @@ public:
             //--- frame is dropped, which is the same outcome the caller reports
             //--- anyway (return false) but without taking the terminal down.
             m_sub.send("",true);
-            return false;
+            continue;
            }
+         sent++;
         }
-      return true;
+      return (sent>0);
      }
 
    //--- Drain m_sub, splitting each message into (topic, payload).

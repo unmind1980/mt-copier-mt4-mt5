@@ -1566,15 +1566,34 @@ fn main() {
                     if !b.is_empty() && (b[0] == 1 || b[0] == 0) {
                         let prefix: String = b[1..].iter().map(|c| *c as char).collect();
                         if b[0] == 1 {
-                            if st.subs.insert(prefix.clone()) {
+                            //--- R58-04: reference-counted subscriptions.
+                            //--- Multiple nodes subscribe to @hub, and multiple receivers
+                            //--- subscribe to the same sender data topic.
+                            let count = st.subs.entry(prefix.clone()).or_insert(0);
+                            *count += 1;
+                            if *count == 1 {
                                 println!("[hub] +sub {:<24} {}", prefix, describe_sub(&prefix));
                             }
                         } else {
-                            st.subs.remove(&prefix);
-                            println!(
-                                "[hub] -sub {:<24} (last subscriber for this prefix left)",
-                                prefix
-                            );
+                            let mut remove = false;
+                            if let Some(count) = st.subs.get_mut(&prefix) {
+                                if *count > 1 {
+                                    *count -= 1;
+                                    println!(
+                                        "[hub] -sub {:<24} ({} subscriber(s) remaining)",
+                                        prefix, *count
+                                    );
+                                } else {
+                                    remove = true;
+                                }
+                            }
+                            if remove {
+                                st.subs.remove(&prefix);
+                                println!(
+                                    "[hub] -sub {:<24} (last subscriber for this prefix left)",
+                                    prefix
+                                );
+                            }
                         }
                     } else {
                         //--- One frame, and not a subscription. The hub cannot
@@ -2796,7 +2815,7 @@ fn main() {
                 }
                 let nid = c.node.split_once(':').map(|(_, acc)| acc).unwrap_or(&c.node);
                 let target_sub = format!("@{}", nid);
-                if !st.subs.contains(&target_sub) {
+                if !st.subs.contains_key(&target_sub) {
                     // HUB-02: Node is currently disconnected or has not subscribed yet;
                     // defer sending without consuming retry ladder attempts.
                     cmds.defer(&c.id, Duration::from_secs(2));
