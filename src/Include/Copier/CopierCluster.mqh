@@ -51,11 +51,27 @@ public:
 
    static bool Save(const string primary,const string standby,const long epoch)
      {
-      string tmpFile=CP_CLUSTER_STATE_FILE+".tmp";
-      FileDelete(tmpFile); // P3-1: Clean truncation defense before opening write handle
-      int h=FileOpen(tmpFile,FILE_WRITE|FILE_TXT|FILE_ANSI);
-      if(h==INVALID_HANDLE) return false;
-
+      //--- R59-03: write the target directly, no FileMove.
+      //---
+      //--- This used FileDelete(target) + FileMove(tmp, target) - while
+      //--- CopierState.mqh:1150 records, in this same project, that FileMove
+      //--- "does not compile consistently across the MetaTrader builds this
+      //--- project targets" (error 199 measured on the MT4 targets). Depending on
+      //--- it here contradicted that, and a false return was not even logged, so a
+      //--- failed topology-cache write was silent and the dual-endpoint
+      //--- augmentation simply did not happen on the next start.
+      //---
+      //--- The cache is four lines. A direct truncated write is simpler than
+      //--- tmp+swap, and a torn write costs nothing: Load() returns false on any
+      //--- unparsable line and the caller keeps the endpoints it already has.
+      FileDelete(CP_CLUSTER_STATE_FILE);
+      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      if(h==INVALID_HANDLE)
+        {
+         Print("[copier] WARN: cannot write cluster cache ",CP_CLUSTER_STATE_FILE,
+               " err=",GetLastError());
+         return false;
+        }
       FileWriteString(h,"# mt-copier HA cluster topology cache\n");
       FileWriteString(h,"primary="+primary+"\n");
       FileWriteString(h,"standby="+standby+"\n");
@@ -63,8 +79,7 @@ public:
       FileWriteString(h,"updated="+(string)CopierServerTime()+"\n");
       FileFlush(h);
       FileClose(h);
-      FileDelete(CP_CLUSTER_STATE_FILE);
-      return FileMove(tmpFile,0,CP_CLUSTER_STATE_FILE,FILE_REWRITE);
+      return true;
      }
   };
 

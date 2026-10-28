@@ -2117,8 +2117,14 @@ fn main() {
                                     if ok { "ok" } else { "rejected" },
                                 );
                             } else {
+                                //--- R59-04: ack() returns false for two very
+                                //--- different situations - an id this hub never
+                                //--- issued, and a duplicate/late ACK for one that is
+                                //--- already at its final state. Saying "never sent"
+                                //--- for the second sent operators hunting for a
+                                //--- forger when the real story was a retry.
                                 println!(
-                                    "[hub] WARN  {} ACKed {} which this hub never sent",
+                                    "[hub] WARN  {} ACKed {} - unknown id, or the command is already terminal (late/duplicate ACK)",
                                     who, id
                                 );
                                 // `prefix` is "config" here only because the

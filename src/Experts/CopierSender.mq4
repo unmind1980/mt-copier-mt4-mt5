@@ -599,9 +599,15 @@ void EmitOpen(const CopierPos &p)
    Emit(CP_T_OPEN,CopierPayloadOpen(q),false);
   }
 
-void EmitClose(const CopierPos &p)
+//--- R59-09: the slot is already known at the one call site (it is the loop
+//--- variable that just found the miss), so pass it instead of scanning all 2048
+//--- entries for the uid. A close storm of 74 orders was 74 full-table scans per
+//--- tick. The hint is bounds-checked and the fallback still works, so a caller
+//--- that does not know the slot is unaffected.
+void EmitClose(const CopierPos &p,const int slotHint=-1)
   {
-   int slot=g_prev.Find(p.uid);
+   int slot=slotHint;
+   if(slot<0 || slot>=CP_MAX_POSITIONS) slot=g_prev.Find(p.uid);
    double initLots=(slot>=0)?g_openLots[slot]:p.lots;
    double bLots=BroadcastLots(p.lots,initLots);
    Emit(CP_T_CLOSE,CopierPayloadClose(p.uid,p.ticket,bLots,0.0),false);
@@ -1295,13 +1301,38 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    if(toHub)
      {
       long rnid=CopierNid(CopierParseLong(who));
-      EmitToNode(rnid,CP_T_SNAP,g_snapPayload);
-      g_snapHash=CopierSnapshotHash(g_snapPayload);
-      NoteRecentSnapHash(g_snapHash);
+      //--- R59-01: a brand-new node gets the LATEST snapshot, not the last one
+      //--- broadcast.
+      //---
+      //--- g_snapPayload is the bytes of the most recent BROADCAST, and the
+      //--- repair path re-sends it verbatim so that receivers which already
+      //--- acknowledged that frame are not handed a different hash (a hash change
+      //--- makes every one of them look stale and triggers a fleet-wide re-send).
+      //---
+      //--- That reasoning does not apply to a node on first contact: it has no
+      //--- prior hash to protect, because it has never seen a snapshot. Sending
+      //--- it the old bytes gave it a state up to SnapshotSeconds out of date -
+      //--- and worse, it then ACKed that old hash, which IsRecentSnapHash()
+      //--- accepted, which reset the sender's staleness counter. The evidence of
+      //--- being behind was erased by the very act of catching up, so nothing
+      //--- would repair it until the next periodic broadcast.
+      //---
+      //--- g_snapHash is deliberately NOT touched here: it names the broadcast
+      //--- bytes, and IsRecentSnapHash() already accepts g_latestSnapHash too, so
+      //--- the new node's ACK of the newer frame is recognised as current.
+      string snapPayload=g_snapPayload;
+      if(isBootstrap && StringLen(g_latestSnapPayload)>0)
+         snapPayload=g_latestSnapPayload;
+      EmitToNode(rnid,CP_T_SNAP,snapPayload);
+      if(!isBootstrap)
+        {
+         g_snapHash=CopierSnapshotHash(g_snapPayload);
+         NoteRecentSnapHash(g_snapHash);
+        }
       // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
       // to this single receiver. Other receivers on the hub have not received this frame.
       if(isBootstrap)
-         g_log.Info("bootstrapped snapshot to new receiver "+who+" (NID "
+         g_log.Info("bootstrapped the LATEST snapshot to new receiver "+who+" (NID "
                     +IntegerToString(rnid)+") on first contact");
       else
          g_log.Warn("re-sent the snapshot to receiver "+who+" (NID "
@@ -1905,7 +1936,7 @@ void OnTimer()
       if(!closedInHist && (now-g_slotMissMs[k]<2000)) continue;
       g_slotMissCount[k]=0;
       g_slotMissMs[k]=0;
-      EmitClose(q);
+      EmitClose(q,k);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
       g_stateDirty=true;
       g_prev.RemoveAt(k);

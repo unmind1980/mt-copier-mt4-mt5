@@ -756,11 +756,25 @@ impl CommandStore {
         let updated = match inner.commands.get_mut(id) {
             None => return false,
             Some(c) => {
-                // P1-6: If command already reached terminal status, do not re-append or rewrite
-                if c.is_terminal() {
+                //--- R59-04: a terminal command normally ignores further ACKs, but
+                //--- REJECTED -> ACKED must be allowed through.
+                //---
+                //--- closeall reports OK=0/queue_full immediately when its queue is
+                //--- full, then retries in the background and sends OK=1 once the
+                //--- remainder is closed. That late ACK is the true outcome, and the
+                //--- blanket "already terminal, ignore" dropped it - so the
+                //--- dashboard and the audit trail said `rejected` forever while
+                //--- every position had in fact been closed.
+                //---
+                //--- The rank check keeps the other directions closed: ACKED ->
+                //--- REJECTED (4 -> 3) and duplicate ACKED (4 -> 4) still return
+                //--- false, so a retried or replayed frame cannot downgrade a
+                //--- command that genuinely succeeded.
+                let new_state = if ok { STATE_ACKED } else { STATE_REJECTED };
+                if c.is_terminal() && state_rank(new_state) <= state_rank(&c.state) {
                     return false;
                 }
-                c.state = if ok { STATE_ACKED } else { STATE_REJECTED }.to_string();
+                c.state = new_state.to_string();
                 c.ack_at = unix_secs();
                 c.err = err.to_string();
                 if ok && rev > 0 {
