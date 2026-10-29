@@ -296,7 +296,13 @@ impl UserStore {
     /// Reload users from disk (used by HA cluster replication).
     pub fn reload(&mut self) -> Result<(), String> {
         let loaded = Self::load_at(&self.path)?;
-        self.users = loaded.users;
+        self.apply_loaded_users(loaded.users);
+        Ok(())
+    }
+
+    /// N72-03: Apply pre-loaded users in memory without disk I/O while holding locks.
+    pub fn apply_loaded_users(&mut self, users: Vec<User>) {
+        self.users = users;
         // R60-14: Purge sessions whose user was deleted, disabled, or had their role changed
         self.sessions.retain(|_, s| {
             if let Some(u) = self.users.iter().find(|u| u.id == s.user_id) {
@@ -305,7 +311,10 @@ impl UserStore {
                 false
             }
         });
-        Ok(())
+    }
+
+    pub fn into_users(self) -> Vec<User> {
+        self.users
     }
 
     pub fn get(&self, id: &str) -> Option<&User> {

@@ -918,7 +918,8 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-// N71-02: Fast non-blocking synchronous SSRF syntax/IP validation (no network DNS resolution)
+// N71-02 & N72-08: Fast non-blocking synchronous SSRF syntax/IP validation (no network DNS resolution)
+#[allow(dead_code)]
 pub(crate) fn validate_outgoing_url_sync(url: &str) -> Result<(), String> {
     check_url_base(url).map(|_| ())
 }

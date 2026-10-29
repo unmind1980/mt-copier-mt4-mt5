@@ -986,6 +986,19 @@ string CopierFmtDouble(const double v,const int digits)
    return StringSubstr(s,0,len);
   }
 
+#ifndef CP_DIGITS_LOTS
+#define CP_DIGITS_LOTS 8
+#endif
+
+//--- N72-01: Structure-level lot encodability predicate.
+//--- Directly queries CopierFmtDouble to guarantee that any lot passing this check
+//--- formats to a non-zero representation, preventing snapshot rejection deadlocks.
+bool CopierLotEncodable(const double lots)
+  {
+   if(lots<=0.0) return false;
+   return (CopierFmtDouble(lots,CP_DIGITS_LOTS)!="0");
+  }
+
 //=====================================================================
 // UID generation
 //=====================================================================
@@ -1340,11 +1353,8 @@ bool CopierIsTopicTarget(const string topic,const string myNid,const string myAc
      {
       if(topic==sids[i]) return true;
      }
-   if(StringLen(envSid)>0)
-     {
-      for(int i=0;i<nSids;i++)
-         if(envSid==sids[i]) return true;
-     }
+   // N72-07: Valid data frames must match the configured sender topic or receiver's target topic
+   if(StringLen(envSid)>0 && topic==envSid) return true;
    return false;
   }
 

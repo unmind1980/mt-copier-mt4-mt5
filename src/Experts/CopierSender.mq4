@@ -445,21 +445,21 @@ double BroadcastLots(const double actual,const double initLots=0.0)
   {
    if(FixedLotSize>0.0)
      {
-      if(FixedLotSize<0.000000001) return actual; // N71-01: guard against sub-1e-9 fixed lot
+      if(!CopierLotEncodable(FixedLotSize)) return actual; // N71-01 & N72-01: guard against unencodable fixed lot
       //--- Scale partial closes proportionally so receiver trims mirror sender
       if(initLots>0.0 && actual<initLots)
         {
          double scaled=NormalizeDouble(FixedLotSize*(actual/initLots),CP_DIGITS_LOTS);
-         // BUG-08 & N71-01: Fall back to actual lots rather than hardcoded 0.01 to support crypto/micro lots (<0.01)
-         return (scaled>=0.000000001)?scaled:actual;
+         // BUG-08 & N71-01 & N72-01: Fall back to actual lots if scaled is not encodable
+         return CopierLotEncodable(scaled)?scaled:actual;
         }
       return FixedLotSize;
      }
    if(LotSizeMultiplier>0.0)
      {
       double scaled=NormalizeDouble(actual*LotSizeMultiplier,CP_DIGITS_LOTS);
-      // N70-01 & N71-01: Fall back to actual lots if multiplier scales below precision threshold (1e-9)
-      return (scaled>=0.000000001)?scaled:actual;
+      // N70-01 & N71-01 & N72-01: Fall back to actual lots if multiplier scales to unencodable lot
+      return CopierLotEncodable(scaled)?scaled:actual;
      }
    return actual;
   }
@@ -644,11 +644,11 @@ int BuildCurrent()
       CopierPos p=g_rawScratch[i];
       if(!SymbolAllowed(p.sym)) continue;
       if(!MagicAllowed(p.magic)) continue;
-      //--- N67-02 & N71-01 fix: Pre-filter malformed or unencodable positions so snapshot declared N
+      //--- N67-02, N71-01 & N72-01 fix: Pre-filter malformed or unencodable positions so snapshot declared N
       //--- strictly matches decodeable records on the receiver side, preventing snapshot rejection deadlocks.
-      //--- Threshold is 1e-9 (0.000000001) matching CopierFmtDouble's "0" formatting threshold.
+      //--- Direct CopierLotEncodable check guarantees format compatibility with CopierFmtDouble and CopierDecodeRec.
       if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) continue;
-      if(p.lots<0.000000001) continue;
+      if(!CopierLotEncodable(p.lots)) continue;
       if(p.kind==CP_ORD_PENDING && !CopierPendingTypeKnown(p.ptype)) continue;
       string cleanSym=CopierSanitizeSymbol(p.sym);
       if(StringLen(cleanSym)==0) continue;
@@ -1618,12 +1618,12 @@ void RebuildSnapshotPayload()
       double initLots=(slot>=0)?g_openLots[slot]:dense[i].lots;
       dense[i].lots=BroadcastLots(dense[i].lots,initLots);
 
-      //--- N70-01 & N71-01: Chokepoint validation strictly mirroring CopierDecodeRec.
+      //--- N70-01, N71-01 & N72-01: Chokepoint validation strictly mirroring CopierDecodeRec.
       //--- Ensures every declared record in N can be 100% decoded by receiver,
       //--- guarding against bad records restored from .st files or scaled below threshold.
-      //--- Threshold is 1e-9 (0.000000001) matching CopierFmtDouble's "0" formatting threshold.
+      //--- Direct CopierLotEncodable check guarantees format compatibility with CopierFmtDouble.
       if(dense[i].side!=CP_SIDE_BUY && dense[i].side!=CP_SIDE_SELL) continue;
-      if(dense[i].lots<0.000000001) continue;
+      if(!CopierLotEncodable(dense[i].lots)) continue;
       if(dense[i].openPx<0.0 || dense[i].sl<0.0 || dense[i].tp<0.0 || dense[i].pprice<0.0 || dense[i].pstop<0.0) continue;
       if(StringLen(dense[i].uid)!=CP_UID_LEN || !CopierUidValid(dense[i].uid)) continue;
       string cleanSym=CopierSanitizeSymbol(dense[i].sym);

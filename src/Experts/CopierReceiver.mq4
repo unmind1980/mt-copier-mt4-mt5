@@ -2841,6 +2841,20 @@ void ExecuteQueue()
    int sweepCount=0;
    int asyncBatchCount=0;
 
+   //--- N72-05: Global feed stall check BEFORE entering the queue loop.
+   //--- The server clock advance check is completely symbol-agnostic and uniform for all actions.
+   //--- Holding the whole queue up-front eliminates rotating every queued action (up to 256
+   //--- in-place left-shift copies per tick, ~65,000 struct copies) during market close or feed stalls.
+   if(!g_srvEverMoved || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS)
+     {
+      if(g_once.ShouldEmit("qstallglobal"))
+         g_log.Warn("no quotes for "
+                    +(string)((CopierNowMs()-g_srvChangedMs)/1000)+"s -"
+                    +" holding ENTIRE queue ("+(string)g_qn+" action(s))."
+                    +" Market is closed or feed is down; nothing can be priced from a stale clock.");
+      return;
+     }
+
    //--- `skipped` bounds a full rotation, so a queue in which EVERY action is
    //--- blocked does not spin through itself ten times a second.
    while(g_qn>0 && done<maxActions && skipped<=g_qn)
@@ -2854,49 +2868,6 @@ void ExecuteQueue()
         {
          g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
          ShiftQueue();
-         continue;
-        }
-
-      //--- THE QUEUE DRAIN IS NOT THE CONVERGE LOOP, and it does not pass
-      //--- through converge's gates. An action queued BEFORE the market shut
-      //--- would otherwise still be sent - which is exactly what happened:
-      //--- the log showed "market is closed, holding new entries" and a
-      //--- failed attempt in the same second, because the gate stopped the
-      //--- NEW entries while this one was already in the queue.
-      //---
-      //--- So the same check has to be applied on the way OUT as well. The
-      //--- action is rotated to the back, not dropped, so other symbols keep
-      //--- flowing and this one goes as soon as its session opens.
-      //--- The stale-feed test is checked HERE TOO, and this is the one that
-      //--- actually stops the weekly-close retry loop: the session schedule
-      //--- is evaluated against the frozen clock, so at 23:54:59 on a Friday
-      //--- it still reports "inside the session" and waves the send through.
-      //--- A clock that is not advancing is the reliable signal.
-      //---
-      //--- IT COVERS EVERY ACTION KIND, NOT JUST OPEN. Gating only OPEN did
-      //--- not fix the storm, it MOVED it: over the next weekly close the
-      //--- sender had closed something, converge queued the CLOSE, the market
-      //--- was shut, and the attempt failed with err=132 every two seconds
-      //--- until Monday - exactly the same loop, one action kind over. The
-      //--- log read "trade failed ... kind=2 err=132" while converge was
-      //--- correctly refusing every new entry.
-      //---
-      //--- Nothing can be priced from a clock that is not advancing, so there
-      //--- is nothing to attempt. Holding is safe because converge re-derives
-      //--- every action from the next snapshot the moment the feed returns -
-      //--- a held close is a DELAY, never a loss.
-      if(!g_srvEverMoved
-         || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS)
-        {
-         if(g_once.ShouldEmit("qstall|"+a.sym))
-            g_log.Warn("no quotes for "
-                       +(string)((CopierNowMs()-g_srvChangedMs)/1000)+"s -"
-                       +" holding EVERY queued action, not just new entries."
-                       +" The market is closed or the feed is down, and nothing"
-                       +" can be priced from a stale clock. Everything is"
-                       +" re-derived from the next snapshot when it returns.");
-         RotateQueue();
-         skipped++;
          continue;
         }
 
@@ -3683,7 +3654,7 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
       targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
      }
    if(rejected || targetLots<=0.0) return 0.0;
-   if(targetLots<si2.minLot) targetLots=si2.minLot;
+   // N72-09: Never clamp sub-minLot lots up to minLot as it would silently inflate risk (see CopierSizing.mqh)
    return targetLots;
   }
 

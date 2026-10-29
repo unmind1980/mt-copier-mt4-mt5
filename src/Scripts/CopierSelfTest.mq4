@@ -205,6 +205,14 @@ void TestSnapshot()
    int microN=CopierDecodeSnapshot(microPayload,microOut,10);
    Ok("snapshot: 1e-8 micro lots roundtrip succeeds",microN==1);
    OkDbl("snapshot: 1e-8 micro lots precision preserved",microOut[0].lots,0.00000001,0.000000001);
+
+   //--- N72-01: CopierLotEncodable boundary test: <5e-9 formats to "0" and is rejected; >=5e-9 formats to "0.00000001" and passes
+   Ok("encodable: 1e-10 rejected",!CopierLotEncodable(0.0000000001));
+   Ok("encodable: 1e-9 rejected",!CopierLotEncodable(0.000000001));
+   Ok("encodable: 3e-9 rejected",!CopierLotEncodable(0.000000003));
+   Ok("encodable: 4.9e-9 rejected",!CopierLotEncodable(0.0000000049));
+   Ok("encodable: 5e-9 accepted",CopierLotEncodable(0.000000005));
+   Ok("encodable: 0.01 accepted",CopierLotEncodable(0.01));
   }
 
 void TestUid()

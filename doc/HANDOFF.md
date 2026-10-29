@@ -1313,6 +1313,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N71-04 & N71-05**：`hub/src/cluster.rs` 将备机同步块中所有文件的创建、写入、sync 与 `atomic_replace_file` 全部移出 `SharedState` 全局互斥锁，并将全量重同步截断判定对齐为响应自带的 `total_*_lines`，彻底消除 5~8 次磁盘屏障对 ZMQ 路由线程的持锁阻塞；
   5. **N71-08**：`src/Include/Copier/CopierModel.mqh` 在 MT5 10016 fallback 开仓成功后优先取 `trade.ResultOrder()`（订单号对应 `POSITION_IDENTIFIER`）而非 `ResultDeal()`（成交号），并在即时补止损失败时输出告警日志。
 
+### 七十二次审计：快照可编码谓词统一（根除 5e-9 格式化死锁）、命令离线重试阶梯保护、备机 reload/save 移出锁与全局停顿门禁外提（2026-10-29 15:40；全部闭环）
+
+- **修复与加固项**：
+  1. **N72-01**：在 `CopierDefs.mqh` 引入 `CopierLotEncodable(lots)` 结构性谓词（直接调用 `CopierFmtDouble` 判断是否格式化为 `"0"`），并在 `RebuildSnapshotPayload`、`BuildCurrent` 和 `BroadcastLots` 中全量统一使用，并在 `CopierSelfTest.mq4` 增补边界断言，彻底消除 `DoubleToString(v, 8)` 八位舍入在 `[1e-9, 5e-9)` 区间编成 `"0"` 导致的快照拒收死锁；
+  2. **N72-02**：`hub/src/commands.rs` 重构 `due_gated` 支持传入节点可达性谓词 `is_reachable`，在节点离线/未订阅时直接推迟 2 秒重试且**不递增 attempts、不消耗重试阶梯、不写盘**，彻底解决节点重启（如 90 秒）期间 82 秒阶梯被白白耗尽导致 `closeall` 被标为 `unknown` 并移出队列的风险；
+  3. **N72-03**：`hub/src/cluster.rs` 将 `users.reload()`（通过 `UserStore::into_users`）与 `cluster.save()`（通过 `save_state_to_file`）彻底移出 `SharedState` 全局互斥锁，全局锁内仅保留纯内存赋值，严格践行锁内零 I/O；
+  4. **N72-05**：`CopierReceiver.mq4` 将 `ExecuteQueue` 中的全局喂价停顿门禁 `!g_srvEverMoved || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS` 提至 `while` 循环外，周末闭市期间队列原地保留直接 return，彻底消灭每 tick 256 次无效旋转与 6.5 万次结构体深拷贝；
+  5. **N72-07 & N72-09**：`CopierDefs.mqh` 修正 `CopierIsTopicTarget`，杜绝 `envSid` 导致 topic 过滤退化失效；`CopierReceiver.mq4` 移除 `ComputeTargetLotsForMirror` 中违背风控策略的 `targetLots<minLot` 不可达上抬分支。
+
 ---
 
 ## 9. 最终交付状态确认

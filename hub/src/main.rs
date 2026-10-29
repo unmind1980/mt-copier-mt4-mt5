@@ -2808,41 +2808,37 @@ fn main() {
                 (s.writes, s.cluster.is_primary())
             };
             if is_prim {
-                for c in cmds.due_gated(Instant::now(), effective_writes) {
-                    if c.state == commands::STATE_UNKNOWN {
-                    let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
-                    println!(
-                        "[hub] ALERT {} never acknowledged {} ({} {}) after {} attempt(s): {}",
-                        c.node, c.id, prefix, c.op, c.attempts, c.err
-                    );
-                    let action = format!("{}.timeout", prefix);
-                    audit.record(
-                        "",
-                        "",
-                        &action,
-                        &c.node,
-                        None,
-                        Some(serde_json::json!({
-                            "id": c.id, "kind": c.kind, "op": c.op, "attempts": c.attempts,
-                        })),
-                        "unknown",
-                    );
-                    continue;
-                }
-                let nid = c.node.split_once(':').map(|(_, acc)| acc).unwrap_or(&c.node);
-                let target_sub = format!("@{}", nid);
-                let is_offline = {
+                let is_reachable = |node: &str| -> bool {
+                    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
+                    let target_sub = format!("@{}", nid);
+                    if !st.subs.contains_key(&target_sub) {
+                        return false;
+                    }
                     let s = shared.lock_or_recover();
-                    s.reg.get(&c.node).map(|n| n.liveness(Instant::now()) == crate::registry::Liveness::Offline).unwrap_or(false)
+                    s.reg.get(node).map(|n| n.liveness(Instant::now()) != crate::registry::Liveness::Offline).unwrap_or(false)
                 };
-                if !st.subs.contains_key(&target_sub) || is_offline {
-                    // HUB-02 & R60-06: Node is currently disconnected, has not subscribed yet,
-                    // or registry reports it is offline (crashed/unreachable without sending 0x00 unsubscribe).
-                    // Defer sending without consuming retry ladder attempts.
-                    cmds.defer(&c.id, Duration::from_secs(2));
-                    continue;
-                }
-                match c.kind.as_str() {
+                for c in cmds.due_gated(Instant::now(), effective_writes, is_reachable) {
+                    if c.state == commands::STATE_UNKNOWN {
+                        let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
+                        println!(
+                            "[hub] ALERT {} never acknowledged {} ({} {}) after {} attempt(s): {}",
+                            c.node, c.id, prefix, c.op, c.attempts, c.err
+                        );
+                        let action = format!("{}.timeout", prefix);
+                        audit.record(
+                            "",
+                            "",
+                            &action,
+                            &c.node,
+                            None,
+                            Some(serde_json::json!({
+                                "id": c.id, "kind": c.kind, "op": c.op, "attempts": c.attempts,
+                            })),
+                            "unknown",
+                        );
+                        continue;
+                    }
+                    match c.kind.as_str() {
                     commands::KIND_CONFIG => {
                         match cfg.current(&c.node) {
                             Some(r) if r.rev == c.rev => {

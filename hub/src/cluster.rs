@@ -251,33 +251,7 @@ impl ClusterManager {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let tmp = PathBuf::from(format!("{}.tmp.{}", self.state_path.display(), std::process::id()));
-        let text = serde_json::to_string_pretty(&self.state)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        {
-            let mut f = File::create(&tmp)?;
-            f.write_all(text.as_bytes())?;
-            f.sync_all()?;
-        }
-        //--- N56-03: NO remove_file() before the rename.
-        //---
-        //--- On Windows rename() is MoveFileEx(REPLACE_EXISTING), so it already
-        //--- replaces atomically. Deleting the target first opens a window where
-        //--- a crash leaves NO state file at all - and the next boot then invents
-        //--- a fresh hub_id, epoch=1 and whatever role the CLI passed. That is
-        //--- precisely how a standby comes back as a write-enabled primary, and
-        //--- it also breaks HandoverRequest.from_hub_id forever.
-        match fs::rename(&tmp, &self.state_path) {
-            Ok(()) => Ok(()),
-            Err(_) => {
-                //--- Some Windows setups still refuse to replace a file another
-                //--- handle holds open. Copy over the target instead of deleting
-                //--- it: never destroy the only copy we have.
-                let r = fs::copy(&tmp, &self.state_path).map(|_| ());
-                let _ = fs::remove_file(&tmp);
-                r
-            }
-        }
+        save_state_to_file(&self.state_path, &self.state)
     }
 
     pub fn is_primary(&self) -> bool {
@@ -374,6 +348,19 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
             }
         }
     }
+}
+
+/// N72-03: Save cluster state to path atomically without holding SharedState mutex.
+pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::io::Result<()> {
+    let tmp = PathBuf::from(format!("{}.tmp.{}", path.display(), std::process::id()));
+    let text = serde_json::to_string_pretty(state)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+    }
+    atomic_replace_file(&tmp, path)
 }
 
 /// Spawns the background cluster replication and failback manager loop.
@@ -731,24 +718,41 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     }
                                 }
 
-                                // Re-acquire SharedState lock briefly for in-memory status updates
-                                let mut s = st.lock_or_recover();
-                                if reload_users {
-                                    let _ = s.users.reload();
-                                }
-
-                                if data.epoch > s.cluster.epoch() {
-                                    s.cluster.state.epoch = data.epoch;
-                                    let _ = s.cluster.save();
-                                }
-
-                                if let Some(err) = file_sync_err {
-                                    s.cluster.sync_status = "sync_err".to_string();
-                                    s.cluster.last_sync_err = err;
+                                // N72-03: Pre-load users outside SharedState lock to eliminate disk read & parse under lock
+                                let loaded_users = if reload_users {
+                                    crate::users::UserStore::load_at(&users_path).ok().map(|u| u.into_users())
                                 } else {
-                                    s.cluster.sync_status = "synced".to_string();
-                                    s.cluster.last_sync_at = Some(Instant::now());
-                                    s.cluster.last_sync_err = String::new();
+                                    None
+                                };
+
+                                // Re-acquire SharedState lock briefly for in-memory status updates only (<5 microseconds)
+                                let (need_save_cluster, state_to_save, state_path_to_save) = {
+                                    let mut s = st.lock_or_recover();
+                                    if let Some(u) = loaded_users {
+                                        s.users.apply_loaded_users(u);
+                                    }
+
+                                    let save_info = if data.epoch > s.cluster.epoch() {
+                                        s.cluster.state.epoch = data.epoch;
+                                        (true, s.cluster.state.clone(), s.cluster.state_path.clone())
+                                    } else {
+                                        (false, s.cluster.state.clone(), s.cluster.state_path.clone())
+                                    };
+
+                                    if let Some(err) = file_sync_err {
+                                        s.cluster.sync_status = "sync_err".to_string();
+                                        s.cluster.last_sync_err = err;
+                                    } else {
+                                        s.cluster.sync_status = "synced".to_string();
+                                        s.cluster.last_sync_at = Some(Instant::now());
+                                        s.cluster.last_sync_err = String::new();
+                                    }
+                                    save_info
+                                };
+
+                                // N72-03: Save cluster state to disk outside the SharedState lock
+                                if need_save_cluster {
+                                    let _ = save_state_to_file(&state_path_to_save, &state_to_save);
                                 }
                             } else {
                                 let mut s = st.lock_or_recover();

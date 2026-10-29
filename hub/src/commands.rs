@@ -690,10 +690,13 @@ impl CommandStore {
     /// before resending. See `load`, which restores `attempts`.
     #[allow(dead_code)]
     pub fn due(&self, now: Instant) -> Vec<Command> {
-        self.due_gated(now, true)
+        self.due_gated(now, true, |_| true)
     }
 
-    pub fn due_gated(&self, now: Instant, writes_enabled: bool) -> Vec<Command> {
+    pub fn due_gated<F>(&self, now: Instant, writes_enabled: bool, is_reachable: F) -> Vec<Command>
+    where
+        F: Fn(&str) -> bool,
+    {
         let mut inner = self.inner.lock_or_recover();
         let ids: Vec<String> = inner.in_flight.iter().cloned().collect();
         let mut out = Vec::new();
@@ -719,6 +722,12 @@ impl CommandStore {
                 continue;
             }
             if now < c.next_at {
+                continue;
+            }
+            // HUB-02, R60-06 & N72-02: Check reachability BEFORE incrementing attempts or consuming ladder.
+            // If node is currently disconnected/offline, defer next check by 2 seconds without burning retry steps.
+            if !is_reachable(&c.node) {
+                c.next_at = now + Duration::from_secs(2);
                 continue;
             }
             let step = RETRY_LADDER_SECS.get(c.attempts as usize).copied();
@@ -833,7 +842,7 @@ impl CommandStore {
     /// runs its normal course (2s -> 5s -> 15s -> 60s, ~82s total) and the command
     /// ends as `unknown` with an alert if the node stays away. A node that comes
     /// back inside that window still receives the command.
-    pub fn defer(&self, id: &str, _delay: Duration) {
+    pub fn defer(&self, id: &str, delay: Duration) {
         let mut inner = self.inner.lock_or_recover();
         if let Some(c) = inner.commands.get_mut(id) {
             if c.state == STATE_PENDING {
@@ -849,9 +858,7 @@ impl CommandStore {
                 //--- The delay argument is kept for call-site compatibility and
                 //--- ignored on purpose: the ladder owns the cadence here, and a
                 //--- caller able to override it would just reintroduce the bug.
-                let step = RETRY_LADDER_SECS
-                    [(c.attempts.saturating_sub(1) as usize).min(RETRY_LADDER_SECS.len() - 1)];
-                c.next_at = Instant::now() + Duration::from_secs(step);
+                c.next_at = Instant::now() + delay;
             }
         }
     }
