@@ -514,9 +514,9 @@ one-UID-one-position mapping the whole design rests on.
 
 Partial closes are rounded conservatively: the difference must be at least one  
 whole lot step, the amount trimmed is rounded **down** so the receiver can  
-never end up smaller than the sender, and if the remainder would fall below  
-the broker's minimum lot the whole position is closed instead — a dust  
-remainder cannot be managed and would be stranded forever.
+never end up smaller than the sender, and if trimming would leave a remainder below  
+the broker's minimum lot, the position is held intact rather than closed outright  
+(avoiding immediate reopen ping-pong while the sender still holds it), until the sender fully closes the position.
 
 The `IgnoreUids` receiver input (a UID list, comma/space separated)  
 suppresses both directions for a listed position: it is neither opened nor  

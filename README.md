@@ -1296,8 +1296,8 @@ Reserved in the protocol (`PARTIAL`) so adding it will not break v1 peers:
   arrives as a fresh open) and would need a second position under one UID on  
   MT5, which breaks the mapping. **Shrinking IS supported**: a partial close  
   on the sender trims the receiver, rounded down to a whole lot step so it can  
-  never overshoot, and closed outright if the remainder would fall below the  
-  broker's minimum lot.
+  never overshoot, and held intact if the remainder would fall below the  
+  broker's minimum lot (avoiding reopen ping-pong while the sender still holds it).
 - equity-relative / risk-based sizing (`HBT` already carries balance and  
   equity, so the data is on the wire)
 - `EmergencySLPips` / `EmergencyTPPips` exist but default to 0

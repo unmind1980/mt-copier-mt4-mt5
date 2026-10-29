@@ -1348,13 +1348,18 @@ bool CopierIsTopicTarget(const string topic,const string myNid,const string myAc
      {
       return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
      }
-   if(topic==myNid || topic==myAcc) return true;
+   // N73-07: Precise topic & sender matching preventing ZMQ prefix collision bypass
+   if(topic==myNid || topic==myAcc)
+     {
+      // Target topic: slice-B targeted repair sent by one of our senders
+      if(StringLen(envSid)==0) return true;
+      for(int i=0;i<nSids;i++) if(envSid==sids[i]) return true;
+      return false;
+     }
    for(int i=0;i<nSids;i++)
      {
-      if(topic==sids[i]) return true;
+      if(topic==sids[i] && (StringLen(envSid)==0 || envSid==sids[i])) return true;
      }
-   // N72-07: Valid data frames must match the configured sender topic or receiver's target topic
-   if(StringLen(envSid)>0 && topic==envSid) return true;
    return false;
   }
 

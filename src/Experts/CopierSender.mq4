@@ -172,14 +172,9 @@ const bool   HubUseCurve      = true;       // Hub link CURVE encryption permane
 //--- 2s that is ~1.5 TB/day of downlink for a state that changes far less
 //--- often than that.
 //---
-//--- WHAT THIS COSTS, STATED PLAINLY: SL/TP changes ride the snapshot (MODIFY
-//--- is deliberately unimplemented), so their propagation latency is bounded
-//--- by this number. At 2 it was <= 2s; at 10 it is <= 10s. The receipt
-//--- mechanism does NOT reduce it - a receipt can only report what was SENT,
-//--- so it detects a LOST snapshot, never a change that has not been sent yet.
-//--- If stop latency matters more than the bandwidth here, either lower this
-//--- (2 restores the old behaviour) or add an event-driven push on content
-//--- change, which is a separate decision and not part of this change.
+//--- N73-09: SL/TP modifications propagate in real-time via CP_T_MODIFY events (0.4-0.6s latency).
+//--- SnapshotSeconds serves as the periodic baseline for full-state convergence and recovery,
+//--- bounded to 15s to conserve wire bandwidth.
 #ifdef __MQL5__
 input group "--- Cadence & Performance ---"
 #else

@@ -1322,6 +1322,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N72-05**：`CopierReceiver.mq4` 将 `ExecuteQueue` 中的全局喂价停顿门禁 `!g_srvEverMoved || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS` 提至 `while` 循环外，周末闭市期间队列原地保留直接 return，彻底消灭每 tick 256 次无效旋转与 6.5 万次结构体深拷贝；
   5. **N72-07 & N72-09**：`CopierDefs.mqh` 修正 `CopierIsTopicTarget`，杜绝 `envSid` 导致 topic 过滤退化失效；`CopierReceiver.mq4` 移除 `ComputeTargetLotsForMirror` 中违背风控策略的 `targetLots<minLot` 不可达上抬分支。
 
+### 七十三次审计：消除 due_gated 锁顺序反转死锁、注册表条目 Arc 浅拷贝优化、配置同步错误传播与 MQL 主题过滤加固（2026-10-29 17:40；全部闭环）
+
+- **修复与加固项**：
+  1. **N73-01 & N73-06**：`hub/src/main.rs` 在进入 `due_gated` 前预先获取全局可达节点集合 `reachable_nodes: HashSet<String>`，消除闭包在 `CommandStore.inner` 锁内取 `SharedState` 锁引发的 ABBA 致命死锁；`due_gated` 签名改为强制接收 `&HashSet<String>` 引用，从类型层面阻断反向获取锁；并在 `CopierReceiver.mq4` 的 `HubAnnounce` 中定期重放控制主题订阅；
+  2. **N73-02**：`hub/src/registry.rs` 将 `Node` 的 `held_items` 和 `wait_items` 改为 `Arc<Vec<...>>`，使快照与节点克隆开销由数万次深拷贝降为 O(1) 浅拷贝；并在 `api.rs` 的 `GET /nodes` 中将 JSON 构造移出 `SharedState` 全局锁；
+  3. **N73-03 & N73-04 & N72-04**：`hub/src/config.rs` 中 `replace_all` 读失败改由 `?` 直接向上传播错误，杜绝静默清空内存配置库；`read_lines_from_path` 严格跳过 torn 与无效行，使其与 `load()` 的计数口径完全对齐；`api.rs` 的 `cluster_sync` 在读取 journal 失败时返回 HTTP 500；
+  4. **N73-05**：`hub/src/api.rs` 的 `notifications_delete` 提取 `notif_store` 句柄后在 `SharedState` 锁外执行 `store.remove()`，严格遵守锁内零文件 I/O 纪律；
+  5. **N73-07 & N73-08**：`CopierDefs.mqh` 严格收紧 `CopierIsTopicTarget` 规则，广播帧要求 `topic==sids[i] && envSid==sids[i]`，定向修复帧要求 `topic==myNid && envSid==sids[i]`，彻底消除前缀碰撞与恶意帧旁路；并在 `CopierSelfTest.mq4` 增补端到端快照编码过滤断言；
+  6. **P1-01**：`CopierReceiver.mq4` 将平仓/部分平仓的 `BlockedCapped` 最大重试间隔由 5000ms 降至 1000ms，并在全局喂价停顿检查中对队列中的 CLOSE/TRIM 动作予以放行，彻底消除极端行情或闭市期间平仓时延无上界风险。
+
 ---
 
 ## 9. 最终交付状态确认

@@ -690,10 +690,16 @@ impl CommandStore {
     /// before resending. See `load`, which restores `attempts`.
     #[allow(dead_code)]
     pub fn due(&self, now: Instant) -> Vec<Command> {
-        self.due_gated(now, true, |_| true)
+        self.due_gated_with(now, true, |_| true)
     }
 
-    pub fn due_gated<F>(&self, now: Instant, writes_enabled: bool, is_reachable: F) -> Vec<Command>
+    /// N73-01: Takes pre-computed `reachable_nodes` HashSet rather than a lock-acquiring closure.
+    /// This statically guarantees that due_gated never calls back into SharedState under inner lock.
+    pub fn due_gated(&self, now: Instant, writes_enabled: bool, reachable_nodes: &std::collections::HashSet<String>) -> Vec<Command> {
+        self.due_gated_with(now, writes_enabled, |node| reachable_nodes.contains(node))
+    }
+
+    fn due_gated_with<F>(&self, now: Instant, writes_enabled: bool, is_reachable: F) -> Vec<Command>
     where
         F: Fn(&str) -> bool,
     {

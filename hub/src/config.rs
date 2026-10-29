@@ -215,10 +215,17 @@ impl ConfigStore {
             if trimmed.is_empty() {
                 continue;
             }
-            if total >= from_line {
-                lines.push(trimmed.to_string());
+            // N73-04: Only count and return valid revision JSON lines, matching load()'s count & skipping torn lines
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+                let node = v["node"].as_str().unwrap_or("");
+                let rev = v["rev"].as_u64().unwrap_or(0);
+                if !node.is_empty() && rev > 0 {
+                    if total >= from_line {
+                        lines.push(trimmed.to_string());
+                    }
+                    total += 1;
+                }
             }
-            total += 1;
         }
         Ok((lines, total))
     }
@@ -299,7 +306,8 @@ impl ConfigStore {
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
         crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
-        let (current, count, torn) = load(&self.path).unwrap_or_default();
+        // N73-03: Propagate load error instead of unwrap_or_default() wiping in-memory state
+        let (current, count, torn) = load(&self.path)?;
         let mut inner = self.inner.lock_or_recover();
         inner.current = current;
         inner.count = count;
@@ -615,6 +623,7 @@ fn load(path: &Path) -> std::io::Result<(HashMap<String, Revision>, u64, u64)> {
                 if node.is_empty() || rev == 0 {
                     continue;
                 }
+                // N73-04: Count valid revision lines, aligned with read_lines_from_path
                 count += 1;
                 // P0-03 & R60-05: Ensure monotonicity on load
                 let should_advance = match current.get(&node) {

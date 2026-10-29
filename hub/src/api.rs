@@ -416,13 +416,11 @@ fn positions_json_list(pos: &Positions) -> Vec<Value> {
 
 /// `GET /api/v1/nodes`
 async fn nodes(State(st): State<SharedState>) -> Json<Value> {
-    let (nodes, counts, uptime) = {
+    let now = Instant::now();
+    // N73-02: Extract state and clone nodes (O(1) with Arc items) under lock;
+    // construct all JSON ASTs completely outside the shared lock.
+    let (reg_nodes, pos_clone, counts, uptime) = {
         let s = st.lock_or_recover();
-        let now = Instant::now();
-        // One order, shared with the WebSocket. See nodes_json_list: this
-        // used to sort by `key` here while the WS push sorted by `last_seen`,
-        // and the page showed the second one.
-        let v: Vec<Value> = nodes_json_list(&s.reg, &s.pos, now);
         let counts = json!({
             "online": s.reg.count(Liveness::Online, now),
             "stale": s.reg.count(Liveness::Stale, now),
@@ -430,10 +428,14 @@ async fn nodes(State(st): State<SharedState>) -> Json<Value> {
             "total": s.reg.len(),
             "evicted": s.reg.evicted,
         });
-        (Value::Array(v), counts, now - s.started)
+        let reg_nodes = s.reg.sorted().into_iter().cloned().collect::<Vec<_>>();
+        let pos_clone = s.clone_view();
+        let uptime = now.saturating_duration_since(s.started);
+        (reg_nodes, pos_clone, counts, uptime)
     };
+    let v: Vec<Value> = nodes_json_list_from_nodes(&reg_nodes, &pos_clone, now);
     Json(json!({
-        "nodes": nodes,
+        "nodes": Value::Array(v),
         "counts": counts,
         "hub_uptime_secs": uptime.as_secs(),
     }))
@@ -2731,9 +2733,14 @@ async fn notifications_delete(
             .into_response();
     }
 
-    let removed = {
+    let notif_store = {
         let s = st.lock_or_recover();
-        let mut store = s.notif_store.lock_or_recover();
+        s.notif_store.clone()
+    };
+
+    // N73-05: Call store.remove (which fsyncs to disk) outside the SharedState mutex
+    let removed = {
+        let mut store = notif_store.lock_or_recover();
         store.remove(&id).unwrap_or(false)
     };
 
@@ -2930,34 +2937,49 @@ async fn cluster_sync(
     let local_notif_hash = crate::cluster::file_sha256(&notif_path);
     let local_curve_hash = crate::cluster::file_sha256(&curve_clients_path);
 
-    // DEF-61-07 & BUG-05 & N70-04: Bound max delta lines returned per sync batch.
+    // DEF-61-07, BUG-05, N70-04 & N72-04: Bound max delta lines returned per sync batch.
     // Truncate only incremental deltas (from_line > 0). Full baseline resets (from_line == 0)
     // must return complete snapshot history so replace_all does not truncate active in-flight commands.
+    // Propagate journal read errors as 500 so Standby detects transient failures and backs off.
     const MAX_SYNC_BATCH: usize = 10000;
     let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
         Vec::new()
     } else {
-        crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line)
-            .map(|(mut lines, _)| {
+        match crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line) {
+            Ok((mut lines, _)) => {
                 if req.from_cfg_line > 0 && lines.len() > MAX_SYNC_BATCH {
                     lines.truncate(MAX_SYNC_BATCH);
                 }
                 lines
-            })
-            .unwrap_or_default()
+            }
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to read config journal: {}", e) })),
+                )
+                    .into_response();
+            }
+        }
     };
 
     let cmd_delta_lines = if !cmd_enabled || req.from_cmd_line >= total_cmd_lines {
         Vec::new()
     } else {
-        crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line)
-            .map(|(mut lines, _, _)| {
+        match crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line) {
+            Ok((mut lines, _, _)) => {
                 if req.from_cmd_line > 0 && lines.len() > MAX_SYNC_BATCH {
                     lines.truncate(MAX_SYNC_BATCH);
                 }
                 lines
-            })
-            .unwrap_or_default()
+            }
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to read command journal: {}", e) })),
+                )
+                    .into_response();
+            }
+        }
     };
 
     //--- The user table carries password digests, and this hub's login proof is

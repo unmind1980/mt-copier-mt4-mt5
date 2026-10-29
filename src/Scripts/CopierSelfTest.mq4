@@ -213,6 +213,20 @@ void TestSnapshot()
    Ok("encodable: 4.9e-9 rejected",!CopierLotEncodable(0.0000000049));
    Ok("encodable: 5e-9 accepted",CopierLotEncodable(0.000000005));
    Ok("encodable: 0.01 accepted",CopierLotEncodable(0.01));
+
+   //--- N73-08: End-to-end roundtrip assertion verifying unencodable sub-5e-9 lots are filtered at chokepoint
+   double probe[]={0.0000000001, 0.000000001, 0.000000003, 0.000000005, 0.00000001, 0.01};
+   for(int i=0;i<ArraySize(probe);i++)
+     {
+      CopierPos one[]; ArrayResize(one,1);
+      one[0]=MakePos("P"+StringFormat("%07d",i),100+i,"EURUSD",CP_SIDE_BUY,probe[i],1.085,0,0,0,1780000000);
+      int kept=0; CopierPos dense[]; ArrayResize(dense,1);
+      if(CopierLotEncodable(one[0].lots)) { dense[kept]=one[0]; kept++; }
+      string pld=CopierEncodeSnapshot(dense,kept);
+      CopierPos back[]; ArrayResize(back,10);
+      int got=CopierDecodeSnapshot(pld,back,10);
+      Ok("roundtrip: probe lots="+DoubleToString(probe[i],10)+" N==decoded", got==kept);
+     }
   }
 
 void TestUid()

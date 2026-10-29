@@ -2651,11 +2651,11 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- limit, an unsupported filling mode) backs off to hours instead of
    //--- being hammered every two seconds.
    //--- CLOSE and TRIM actions are risk-reducing operations. They must never
-   //--- be delayed by long backoff ladders (capped at 5s max), protecting trading safety.
-   //--- H-04: Enforce BlockedCapped(5000) to eliminate 200/sec hammering while bounding retry delay to 5s.
+   //--- be delayed by long backoff ladders (P1-01: capped at 1000ms max), protecting trading safety.
+   //--- H-04 & P1-01: Enforce BlockedCapped(1000) to eliminate 200/sec hammering while bounding retry delay to 1s.
    if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM)
      {
-      if(g_backoff.BlockedCapped(key,5000)) return false;
+      if(g_backoff.BlockedCapped(key,1000)) return false;
      }
    else if(g_backoff.Blocked(key)) return false;
    //--- and a longer park for something this platform cannot place at all,
@@ -2841,11 +2841,12 @@ void ExecuteQueue()
    int sweepCount=0;
    int asyncBatchCount=0;
 
-   //--- N72-05: Global feed stall check BEFORE entering the queue loop.
-   //--- The server clock advance check is completely symbol-agnostic and uniform for all actions.
-   //--- Holding the whole queue up-front eliminates rotating every queued action (up to 256
-   //--- in-place left-shift copies per tick, ~65,000 struct copies) during market close or feed stalls.
-   if(!g_srvEverMoved || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS)
+   //--- N72-05 & P1-01: Global feed stall check BEFORE entering the queue loop.
+   //--- If server clock is stalled, check if queue has risk-reducing actions (CLOSE/TRIM).
+   //--- If queue has ONLY opens/modifies, hold entire queue up-front to eliminate 65,000 struct copies/tick.
+   //--- If queue contains CLOSE/TRIM, proceed into loop so exit orders can be dispatched to broker.
+   bool globalStall = (!g_srvEverMoved || CopierNowMs()-g_srvChangedMs>CP_FEED_STALL_MS);
+   if(globalStall && closeCount==0)
      {
       if(g_once.ShouldEmit("qstallglobal"))
          g_log.Warn("no quotes for "
@@ -2868,6 +2869,14 @@ void ExecuteQueue()
         {
          g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
          ShiftQueue();
+         continue;
+        }
+
+      //--- P1-01: During a global quote stall, hold OPEN actions while permitting CLOSE/TRIM to attempt execution
+      if(globalStall && a.kind!=CP_ACT_CLOSE && a.kind!=CP_ACT_TRIM)
+        {
+         RotateQueue();
+         skipped++;
          continue;
         }
 
@@ -6543,6 +6552,14 @@ void HubAnnounce(const bool isReg)
    //--- whenever the config actually changed.
    if(isReg)
       e.payload+=CP_SEP_KV+"IH="+CurrentIniHash();
+
+   //--- N73-06: Periodically re-assert control channel subscriptions so a dropped initial subscribe
+   //--- frame or hub restart does not leave this receiver permanently unsubscribed to commands.
+   g_tp.Subscribe("@"+(string)g_nid);
+   long rawAcc=CopierAccountLogin();
+   if(rawAcc!=g_nid) g_tp.Subscribe("@"+(string)rawAcc);
+   g_tp.Subscribe("@all");
+
    //--- Dropped silently on purpose: one lost heartbeat is nothing, and a log
    //--- line per failure would be a line per five seconds on a hub that is
    //--- simply not running yet. The hub's WHO sweep is the recovery path.

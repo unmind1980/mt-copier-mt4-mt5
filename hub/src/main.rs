@@ -2808,16 +2808,19 @@ fn main() {
                 (s.writes, s.cluster.is_primary())
             };
             if is_prim {
-                let is_reachable = |node: &str| -> bool {
-                    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
-                    let target_sub = format!("@{}", nid);
-                    if !st.subs.contains_key(&target_sub) {
-                        return false;
-                    }
+                // N73-01 & N73-06: Pre-compute reachable nodes completely OUTSIDE due_gated.
+                // This eliminates the ABBA deadlock between CommandStore.inner and SharedState mutexes.
+                // A node is considered reachable if it is registered and not offline.
+                let reachable_nodes: std::collections::HashSet<String> = {
                     let s = shared.lock_or_recover();
-                    s.reg.get(node).map(|n| n.liveness(Instant::now()) != crate::registry::Liveness::Offline).unwrap_or(false)
+                    let now = Instant::now();
+                    s.reg.nodes()
+                        .into_iter()
+                        .filter(|n| n.liveness(now) != crate::registry::Liveness::Offline)
+                        .map(|n| n.key.clone())
+                        .collect()
                 };
-                for c in cmds.due_gated(Instant::now(), effective_writes, is_reachable) {
+                for c in cmds.due_gated(Instant::now(), effective_writes, &reachable_nodes) {
                     if c.state == commands::STATE_UNKNOWN {
                         let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
                         println!(

@@ -14,6 +14,7 @@
 //! hub was down. WHO exists to ask for fresh ones.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// No word from a node for this long and it is STALE: still counted, no longer
@@ -140,10 +141,10 @@ pub struct Node {
     /// Receiver financial snapshot: equity and balance reported by the terminal.
     pub equity: Option<f64>,
     pub balance: Option<f64>,
-    /// Itemized open positions on the receiver terminal (Managed & Orphan).
-    pub held_items: Vec<ReceiverPositionItem>,
-    /// Itemized waiting orders in the receiver pipeline (Queued, Delayed, Market Closed).
-    pub wait_items: Vec<ReceiverWaitItem>,
+    /// N73-02: Itemized open positions on the receiver terminal wrapped in Arc for O(1) cloning.
+    pub held_items: Arc<Vec<ReceiverPositionItem>>,
+    /// N73-02: Itemized waiting orders in the receiver pipeline wrapped in Arc for O(1) cloning.
+    pub wait_items: Arc<Vec<ReceiverWaitItem>>,
 }
 
 /// One open position record reported by a receiver.
@@ -487,10 +488,10 @@ impl Registry {
                 e.balance = Some(bl);
             }
             if let Some(hi) = held_items {
-                e.held_items = hi;
+                e.held_items = Arc::new(hi);
             }
             if let Some(wi) = wait_items {
-                e.wait_items = wi;
+                e.wait_items = Arc::new(wi);
             }
         }
     }
@@ -580,8 +581,8 @@ impl Registry {
             wait_mkt: None,
             equity: None,
             balance: None,
-            held_items: Vec::new(),
-            wait_items: Vec::new(),
+            held_items: Arc::new(Vec::new()),
+            wait_items: Arc::new(Vec::new()),
         })
     }
 
