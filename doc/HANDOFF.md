@@ -1332,6 +1332,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **N73-07 & N73-08**：`CopierDefs.mqh` 严格收紧 `CopierIsTopicTarget` 规则，广播帧要求 `topic==sids[i] && envSid==sids[i]`，定向修复帧要求 `topic==myNid && envSid==sids[i]`，彻底消除前缀碰撞与恶意帧旁路；并在 `CopierSelfTest.mq4` 增补端到端快照编码过滤断言；
   6. **P1-01**：`CopierReceiver.mq4` 将平仓/部分平仓的 `BlockedCapped` 最大重试间隔由 5000ms 降至 1000ms，并在全局喂价停顿检查中对队列中的 CLOSE/TRIM 动作予以放行，彻底消除极端行情或闭市期间平仓时延无上界风险。
 
+### 七十四次审计：重构命令派发可达性模型、无报价放行 DEDUP、配置增量去重防虚增与持仓端点锁优化（2026-10-29 19:30；全部闭环）
+
+- **修复与加固项**：
+  1. **N74-01**：`hub/src/main.rs` 与 `hub/src/commands.rs` 彻底重构 `due_gated` 节点可达性判断模型：在调用前锁外提取 `offline_nodes`（确诊离线节点）与 `online_nodes`，闭包结合网络层 `st.subs`（`@<nid>` / `@all`）订阅状态进行实时可达性判定（无任何互斥锁争用）。彻底修复测试客户端未发 REG 被误判离线的问题，恢复 `hub_commands_test.py`（47/47 PASS）与 `hub_config_test.py`（71/71 PASS）全绿通行，并打通新节点初始配置推送与控制通道；
+  2. **N74-03**：`src/Experts/CopierReceiver.mq4:2876` 在全局喂价停顿（`globalStall`）队列门禁中补充 `&& a.kind!=CP_ACT_DEDUP`，与外层统计严格对齐，保证周末闭市或时钟停顿期间重复持仓去重平仓动作不受阻；
+  3. **N74-04**：`hub/src/config.rs:271` 在 `apply_delta_lines` 中对重复 revision 进行严格去重过滤，只有 `should_advance` 为 true 时才追加到 `to_append` 并递增计数，彻底杜绝主备同步期间备机配置日志行数虚增引发的无限全量覆写死循环；
+  4. **N74-06**：`hub/src/api.rs:580` 在 `/api/v1/positions` 端点中，在锁内仅提取 `pos_clone` 句柄，将 `positions_json_list` 及其庞大的 JSON AST 构造移至 `SharedState` 全局锁外执行，消灭大持仓并发查询对 ZMQ 路由转发的阻塞卡顿；
+  5. **N74-10 & N74-11**：清理 `notifications.rs` 中无调用的 `validate_outgoing_url_sync` 死代码，修正 `commands.rs` 中的 `defer()` 标注。
+
 ---
 
 ## 9. 最终交付状态确认

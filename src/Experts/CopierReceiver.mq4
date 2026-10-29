@@ -2872,8 +2872,9 @@ void ExecuteQueue()
          continue;
         }
 
-      //--- P1-01: During a global quote stall, hold OPEN actions while permitting CLOSE/TRIM to attempt execution
-      if(globalStall && a.kind!=CP_ACT_CLOSE && a.kind!=CP_ACT_TRIM)
+      //--- P1-01 & N74-03: During a global quote stall, hold OPEN actions while permitting
+      //--- risk-reducing exit actions (CLOSE/TRIM/DEDUP) to attempt execution.
+      if(globalStall && a.kind!=CP_ACT_CLOSE && a.kind!=CP_ACT_TRIM && a.kind!=CP_ACT_DEDUP)
         {
          RotateQueue();
          skipped++;

@@ -693,10 +693,13 @@ impl CommandStore {
         self.due_gated_with(now, true, |_| true)
     }
 
-    /// N73-01: Takes pre-computed `reachable_nodes` HashSet rather than a lock-acquiring closure.
-    /// This statically guarantees that due_gated never calls back into SharedState under inner lock.
-    pub fn due_gated(&self, now: Instant, writes_enabled: bool, reachable_nodes: &std::collections::HashSet<String>) -> Vec<Command> {
-        self.due_gated_with(now, writes_enabled, |node| reachable_nodes.contains(node))
+    /// N73-01 & N74-01: Takes reachability predicate closure that does not acquire SharedState lock.
+    /// This guarantees due_gated never calls back into SharedState under inner lock.
+    pub fn due_gated<F>(&self, now: Instant, writes_enabled: bool, is_reachable: F) -> Vec<Command>
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.due_gated_with(now, writes_enabled, is_reachable)
     }
 
     fn due_gated_with<F>(&self, now: Instant, writes_enabled: bool, is_reachable: F) -> Vec<Command>
@@ -848,6 +851,7 @@ impl CommandStore {
     /// runs its normal course (2s -> 5s -> 15s -> 60s, ~82s total) and the command
     /// ends as `unknown` with an alert if the node stays away. A node that comes
     /// back inside that window still receives the command.
+    #[allow(dead_code)]
     pub fn defer(&self, id: &str, delay: Duration) {
         let mut inner = self.inner.lock_or_recover();
         if let Some(c) = inner.commands.get_mut(id) {

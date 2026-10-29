@@ -2808,19 +2808,33 @@ fn main() {
                 (s.writes, s.cluster.is_primary())
             };
             if is_prim {
-                // N73-01 & N73-06: Pre-compute reachable nodes completely OUTSIDE due_gated.
-                // This eliminates the ABBA deadlock between CommandStore.inner and SharedState mutexes.
-                // A node is considered reachable if it is registered and not offline.
-                let reachable_nodes: std::collections::HashSet<String> = {
+                // N73-01, N73-06 & N74-01: Query registry liveness OUTSIDE due_gated so no SharedState lock
+                // is acquired while holding CommandStore.inner (eliminating ABBA deadlock).
+                // Reachability requires that the node is NOT confirmed offline in registry,
+                // AND either has an active ZMQ subscription (@nid / @all) or is known active in registry.
+                let (offline_nodes, online_nodes) = {
                     let s = shared.lock_or_recover();
                     let now = Instant::now();
-                    s.reg.nodes()
-                        .into_iter()
-                        .filter(|n| n.liveness(now) != crate::registry::Liveness::Offline)
-                        .map(|n| n.key.clone())
-                        .collect()
+                    let mut off = std::collections::HashSet::new();
+                    let mut on = std::collections::HashSet::new();
+                    for n in s.reg.nodes() {
+                        if n.liveness(now) == crate::registry::Liveness::Offline {
+                            off.insert(n.key.clone());
+                        } else {
+                            on.insert(n.key.clone());
+                        }
+                    }
+                    (off, on)
                 };
-                for c in cmds.due_gated(Instant::now(), effective_writes, &reachable_nodes) {
+                let is_reachable = |node: &str| -> bool {
+                    if offline_nodes.contains(node) {
+                        return false;
+                    }
+                    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
+                    let target_sub = format!("@{}", nid);
+                    st.subs.contains_key(&target_sub) || st.subs.contains_key("@all") || online_nodes.contains(node)
+                };
+                for c in cmds.due_gated(Instant::now(), effective_writes, is_reachable) {
                     if c.state == commands::STATE_UNKNOWN {
                         let prefix = if c.kind == commands::KIND_OP { "command" } else { "config" };
                         println!(

@@ -918,11 +918,6 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-// N71-02 & N72-08: Fast non-blocking synchronous SSRF syntax/IP validation (no network DNS resolution)
-#[allow(dead_code)]
-pub(crate) fn validate_outgoing_url_sync(url: &str) -> Result<(), String> {
-    check_url_base(url).map(|_| ())
-}
 
 pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     if let Some(host) = check_url_base(url)? {

@@ -274,10 +274,12 @@ impl ConfigStore {
                 };
                 if should_advance {
                     inner.current.insert(node, r.clone());
+                    // P0-03, N70-05 & N74-04: Collect replicated line for single batch flush.
+                    // Only append new revisions so Standby journal line count does not inflate
+                    // beyond Primary on redundant replay batches (preventing infinite full resync oscillation).
+                    to_append.push(r);
+                    applied += 1;
                 }
-                // P0-03 & N70-05: Collect replicated line for single batch flush (eliminates per-line fsync under lock)
-                to_append.push(r);
-                applied += 1;
             }
         }
         if !to_append.is_empty() {

@@ -578,18 +578,25 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
 /// same structs and this is not, so one of them has been changed - and the
 /// honest fix is to make both read the same place.
 async fn positions(State(st): State<SharedState>) -> Json<Value> {
-    let out = {
+    // N74-06: Extract positions snapshot under lock; construct JSON AST completely outside the shared mutex.
+    let (pos, parsed, mismatched, total_positions, total_lots) = {
         let s = st.lock_or_recover();
-        let rows: Vec<Value> = positions_json_list(&s.pos);
-        json!({
-            "senders": Value::Array(rows),
-            "parsed": s.pos.parsed,
-            "mismatched": s.pos.mismatched,
-            "total_positions": s.pos.total_positions(),
-            "total_lots": trim_lots(s.pos.total_lots()),
-        })
+        (
+            s.clone_view(),
+            s.pos.parsed,
+            s.pos.mismatched,
+            s.pos.total_positions(),
+            trim_lots(s.pos.total_lots()),
+        )
     };
-    Json(out)
+    let rows: Vec<Value> = positions_json_list(&pos);
+    Json(json!({
+        "senders": Value::Array(rows),
+        "parsed": parsed,
+        "mismatched": mismatched,
+        "total_positions": total_positions,
+        "total_lots": total_lots,
+    }))
 }
 
 /// `GET /api/v1/audit?limit=N&since=SEQ`
