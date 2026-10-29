@@ -1304,6 +1304,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **N70-05**：`hub/src/config.rs` 引入 `append_many` 批量刷盘机制，将 `apply_delta_lines` 改为内存单调筛选后单次写入并一次 `sync_data`，消除持全局互斥锁期间逐行 fsync 的秒级阻塞；
   6. **N70-02**：`CopierReceiver.mq4` 引入 `CopierUidIndex g_stUidIdx` 为止损覆盖表建立哈希索引，将 `StopsOvIndex`（热路径）与 `StopsPrune` 彻底优化为真正的 O(1) 哈希查找。
 
+### 七十一次审计：快照判据 1e-9 精度对齐、通知 upsert 移出阻塞 DNS、旧 SSID 延迟包防护、备机同步 I/O 移出全局锁与 MT5 仓位 ID 优先级调整（2026-10-29 14:45；全部闭环）
+
+- **修复与加固项**：
+  1. **N71-01**：`CopierSender.mq4` 将快照编码咽喉处的 lots 校验门槛从 `<=0.0` 收紧对齐为 `<0.000000001`（对齐 `CopierFmtDouble` 编成 `"0"` 的 1e-9 门槛），并在 `BroadcastLots` 的 `FixedLotSize` 与 `LotSizeMultiplier` 分支补齐 `<0.000000001` 回落 `actual` 兜底，并在 `CopierSelfTest.mq4` 增加 1e-8 微手数往返单测断言，从数学与构造上彻底杜绝 (0, 1e-9) 穿透死锁；
+  2. **N71-02**：`hub/src/api.rs` 将 `notif_store` 句柄提取至 `SharedState` 锁外进行全量 unmasked URL 的异步 DNS 校验；`hub/src/notifications.rs` 的 `NotificationStore::upsert` 移除阻塞的 `to_socket_addrs()`，彻底杜绝持全局互斥锁进行同步网络 DNS 解析；
+  3. **N71-03**：`CopierReceiver.mq4` 在 `AcceptSeq` 和快照合流中引入 `IsAbandonedSsid` 历史遗弃会话环，直接过滤 Standby Hub 延迟到达的旧 session 帧，彻底消除多 Hub 网络抖动下的虚假 resync 与仓位回退；
+  4. **N71-04 & N71-05**：`hub/src/cluster.rs` 将备机同步块中所有文件的创建、写入、sync 与 `atomic_replace_file` 全部移出 `SharedState` 全局互斥锁，并将全量重同步截断判定对齐为响应自带的 `total_*_lines`，彻底消除 5~8 次磁盘屏障对 ZMQ 路由线程的持锁阻塞；
+  5. **N71-08**：`src/Include/Copier/CopierModel.mqh` 在 MT5 10016 fallback 开仓成功后优先取 `trade.ResultOrder()`（订单号对应 `POSITION_IDENTIFIER`）而非 `ResultDeal()`（成交号），并在即时补止损失败时输出告警日志。
+
 ---
 
 ## 9. 最终交付状态确认

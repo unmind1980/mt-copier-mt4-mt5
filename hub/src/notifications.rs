@@ -401,9 +401,9 @@ impl NotificationStore {
         if let Some(existing) = self.channels.get(&channel.id) {
             merge_unmasked_config(&mut channel.config, &existing.config, &existing.channel_type);
         }
-        // F-08: validate final unmasked URL before writing to disk
+        // F-08 & N71-02: validate final unmasked URL syntax and non-network SSRF rules before writing to disk
         if let Some(url) = channel.config.get("url").or_else(|| channel.config.get("webhook_url")).and_then(|u| u.as_str()) {
-            if let Err(e) = validate_outgoing_url_sync(url) {
+            if let Err(e) = check_url_base(url) {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
             }
         }
@@ -918,17 +918,9 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+// N71-02: Fast non-blocking synchronous SSRF syntax/IP validation (no network DNS resolution)
 pub(crate) fn validate_outgoing_url_sync(url: &str) -> Result<(), String> {
-    if let Some(host) = check_url_base(url)? {
-        use std::net::ToSocketAddrs;
-        let lookup_target = format!("{}:80", host);
-        if let Ok(addrs) = lookup_target.to_socket_addrs() {
-            for addr in addrs {
-                check_single_ip(addr.ip())?;
-            }
-        }
-    }
-    Ok(())
+    check_url_base(url).map(|_| ())
 }
 
 pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {

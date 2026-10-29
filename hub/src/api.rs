@@ -2640,15 +2640,27 @@ async fn notifications_upsert(
         b.id.trim().to_string()
     };
 
-    if let Some(url) = b.config.get("url").or_else(|| b.config.get("webhook_url")).and_then(|u| u.as_str()) {
-        if !url.contains("***") {
-            if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": e })),
-                )
-                    .into_response();
-            }
+    let notif_store = {
+        let s = st.lock_or_recover();
+        s.notif_store.clone()
+    };
+
+    // N71-02: Validate final unmasked URL asynchronously BEFORE acquiring any lock
+    let mut config_for_val = b.config.clone();
+    {
+        let store = notif_store.lock_or_recover();
+        if let Some(existing) = store.get(&id) {
+            crate::notifications::merge_unmasked_config(&mut config_for_val, &existing.config, &existing.channel_type);
+        }
+    }
+
+    if let Some(url) = config_for_val.get("url").or_else(|| config_for_val.get("webhook_url")).and_then(|u| u.as_str()) {
+        if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e })),
+            )
+                .into_response();
         }
     }
 
@@ -2663,8 +2675,7 @@ async fn notifications_upsert(
     };
 
     let (saved, err) = {
-        let s = st.lock_or_recover();
-        let mut store = s.notif_store.lock_or_recover();
+        let mut store = notif_store.lock_or_recover();
         match store.upsert(ch) {
             Ok(c) => (Some(c), None),
             Err(e) => (None, Some(e.to_string())),

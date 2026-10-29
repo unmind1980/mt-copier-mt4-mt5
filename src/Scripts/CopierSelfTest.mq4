@@ -194,6 +194,17 @@ void TestSnapshot()
    Ok("snapshot: big payload decodes all 300 positions",bigN==300);
    Ok("snapshot: big payload ticket 1 matches",bigOut[0].ticket==1);
    Ok("snapshot: big payload ticket 300 matches",bigOut[299].ticket==300);
+
+   //--- N71-01: Micro lots at 1e-8 (0.00000001) boundary encode and decode cleanly
+   CopierPos microArr[];
+   ArrayResize(microArr,1);
+   microArr[0]=MakePos("M0000001",999,"EURUSD",CP_SIDE_BUY,0.00000001,1.085,0,0,0,1780000000);
+   string microPayload=CopierEncodeSnapshot(microArr,1);
+   CopierPos microOut[];
+   ArrayResize(microOut,10);
+   int microN=CopierDecodeSnapshot(microPayload,microOut,10);
+   Ok("snapshot: 1e-8 micro lots roundtrip succeeds",microN==1);
+   OkDbl("snapshot: 1e-8 micro lots precision preserved",microOut[0].lots,0.00000001,0.000000001);
   }
 
 void TestUid()

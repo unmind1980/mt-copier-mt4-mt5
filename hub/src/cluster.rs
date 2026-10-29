@@ -634,50 +634,71 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     match sync_res {
                         Ok(res) if res.status().is_success() => {
                             if let Ok(data) = res.json::<ClusterSyncResponse>().await {
-                                let mut s = st.lock_or_recover();
+                                // N71-05: Extract component handles and paths, then perform disk I/O outside SharedState lock
+                                let (cfg, cmds, notif_store, users_path, curve_clients_path) = {
+                                    let s = st.lock_or_recover();
+                                    (
+                                        s.cfg.clone(),
+                                        s.cmds.clone(),
+                                        s.notif_store.clone(),
+                                        s.users.path().to_path_buf(),
+                                        s.cluster.curve_clients_path.clone(),
+                                    )
+                                };
+
+                                let mut file_sync_err: Option<String> = None;
+
                                 // Apply delta configs (or replace if Primary was compacted or full resync triggered)
                                 //--- F-05: symmetrical with cmds: allow replace_all(&[]) when Primary cfg is 0
                                 if full_cfg_resync {
-                                    if data.cfg_delta_lines.len() >= remote_st.cfg_lines {
-                                        let _ = s.cfg.replace_all(&data.cfg_delta_lines);
+                                    // N71-04: Validate batch completeness against response's total_cfg_lines
+                                    if data.cfg_delta_lines.len() >= data.total_cfg_lines {
+                                        let _ = cfg.replace_all(&data.cfg_delta_lines);
                                     } else {
-                                        eprintln!("[hub] WARN full cfg resync received truncated batch ({} < {}), deferring replace_all", data.cfg_delta_lines.len(), remote_st.cfg_lines);
+                                        let msg = format!("full cfg resync received truncated batch ({} < {}), deferring replace_all", data.cfg_delta_lines.len(), data.total_cfg_lines);
+                                        eprintln!("[hub] WARN {}", msg);
+                                        file_sync_err = Some(msg);
                                     }
                                 } else if !data.cfg_delta_lines.is_empty() {
-                                    let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
+                                    let _ = cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
+
                                 // Apply delta commands (or replace if Primary was compacted or full resync triggered)
                                 if full_cmd_resync {
-                                    if data.cmd_delta_lines.len() >= remote_st.cmd_lines {
-                                        let _ = s.cmds.replace_all(&data.cmd_delta_lines);
+                                    // N71-04: Validate batch completeness against response's total_cmd_lines
+                                    if data.cmd_delta_lines.len() >= data.total_cmd_lines {
+                                        let _ = cmds.replace_all(&data.cmd_delta_lines);
                                     } else {
-                                        eprintln!("[hub] WARN full cmd resync received truncated batch ({} < {}), deferring replace_all", data.cmd_delta_lines.len(), remote_st.cmd_lines);
+                                        let msg = format!("full cmd resync received truncated batch ({} < {}), deferring replace_all", data.cmd_delta_lines.len(), data.total_cmd_lines);
+                                        eprintln!("[hub] WARN {}", msg);
+                                        file_sync_err = Some(msg);
                                     }
                                 } else if !data.cmd_delta_lines.is_empty() {
-                                    let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
+                                    let _ = cmds.apply_delta_lines(&data.cmd_delta_lines);
                                 }
+
                                 // Apply full users content if updated
-                                let mut file_sync_err: Option<String> = None;
+                                let mut reload_users = false;
                                 if let Some(u_content) = data.users_content {
-                                    let p = s.users.path().to_path_buf();
-                                    let tmp = p.with_extension("json.tmp");
+                                    let tmp = users_path.with_extension("json.tmp");
                                     if let Ok(mut f) = File::create(&tmp) {
                                         let _ = f.write_all(u_content.as_bytes());
                                         let _ = f.sync_all();
                                         drop(f);
                                         //--- DEF-61-05: safe replacement with Windows lock fallback
-                                        if let Err(e) = atomic_replace_file(&tmp, &p) {
+                                        if let Err(e) = atomic_replace_file(&tmp, &users_path) {
                                             let msg = format!("users file replace failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
                                         } else {
-                                            let _ = s.users.reload();
+                                            reload_users = true;
                                         }
                                     }
                                 }
+
                                 // Apply full notification channels if updated
                                 if let Some(n_content) = data.notif_content {
-                                    let p = s.notif_store.lock_or_recover().path().to_path_buf();
+                                    let p = notif_store.lock_or_recover().path().to_path_buf();
                                     let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
                                     if let Ok(mut f) = File::create(&tmp_path) {
@@ -689,25 +710,31 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
                                         } else {
-                                            let _ = s.notif_store.lock_or_recover().load();
+                                            let _ = notif_store.lock_or_recover().load();
                                         }
                                     }
                                 }
+
                                 // P1-6: Apply curve clients content via atomic file overwrite
                                 if let Some(c_content) = data.curve_clients_content {
-                                    let p = s.cluster.curve_clients_path.clone();
-                                    let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
+                                    let tmp = format!("{}.tmp.{}", curve_clients_path.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
                                     if let Ok(mut f) = File::create(&tmp_path) {
                                         let _ = f.write_all(c_content.as_bytes());
                                         let _ = f.sync_all();
                                         drop(f);
-                                        if let Err(e) = atomic_replace_file(&tmp_path, &p) {
+                                        if let Err(e) = atomic_replace_file(&tmp_path, &curve_clients_path) {
                                             let msg = format!("curve clients file replace failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
                                         }
                                     }
+                                }
+
+                                // Re-acquire SharedState lock briefly for in-memory status updates
+                                let mut s = st.lock_or_recover();
+                                if reload_users {
+                                    let _ = s.users.reload();
                                 }
 
                                 if data.epoch > s.cluster.epoch() {

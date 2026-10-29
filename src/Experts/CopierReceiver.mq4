@@ -332,6 +332,35 @@ long    g_senderClockOffset[CP_MAX_SENDERS];
 bool    g_senderClockKnown[CP_MAX_SENDERS];
 bool    g_senderClockOffsetValid[CP_MAX_SENDERS];
 string  g_ssidSeen[CP_MAX_SENDERS];
+//--- N71-03: Track recently abandoned SSIDs per sender to ignore delayed frames from dead sessions
+#define CP_OLD_SSID_MAX 4
+string  g_ssidOld[CP_MAX_SENDERS][CP_OLD_SSID_MAX];
+int     g_ssidOldHead[CP_MAX_SENDERS];
+
+bool IsAbandonedSsid(const int si,const string ssid)
+  {
+   if(si<0 || si>=CP_MAX_SENDERS || StringLen(ssid)==0) return false;
+   for(int k=0;k<CP_OLD_SSID_MAX;k++)
+     {
+      if(g_ssidOld[si][k]==ssid) return true;
+     }
+   return false;
+  }
+
+void RecordAbandonedSsid(const int si,const string ssid)
+  {
+   if(si<0 || si>=CP_MAX_SENDERS || StringLen(ssid)==0) return;
+   int slot=g_ssidOldHead[si]%CP_OLD_SSID_MAX;
+   g_ssidOld[si][slot]=ssid;
+   g_ssidOldHead[si]=(g_ssidOldHead[si]+1)%CP_OLD_SSID_MAX;
+  }
+
+void ClearAbandonedSsids(const int si)
+  {
+   if(si<0 || si>=CP_MAX_SENDERS) return;
+   for(int k=0;k<CP_OLD_SSID_MAX;k++) g_ssidOld[si][k]="";
+   g_ssidOldHead[si]=0;
+  }
 long    g_lastMsgMs[CP_MAX_SENDERS];
 long    g_firstMsgMs[CP_MAX_SENDERS];   // first message ever heard
 long    g_lastSnapMs[CP_MAX_SENDERS];   // last ACCEPTED snapshot
@@ -1079,6 +1108,7 @@ bool LoadConfigFromInputs()
    g_lastSeq[0][CP_STREAM_SNAP]=-1;
    g_lastSeq[0][CP_STREAM_HBT]=-1;
    g_ssidSeen[0]="";
+   ClearAbandonedSsids(0);
    g_lastMsgMs[0]=0;
    g_firstMsgMs[0]=0;
    g_lastSnapMs[0]=0;
@@ -1811,6 +1841,7 @@ bool LoadConfigForHub()
       g_lastSeq[i][CP_STREAM_SNAP]=-1;
       g_lastSeq[i][CP_STREAM_HBT]=-1;
       g_ssidSeen[i]="";
+      ClearAbandonedSsids(i);
       g_lastMsgMs[i]=0;
       g_firstMsgMs[i]=0;
       g_lastSnapMs[i]=0;
@@ -6582,6 +6613,14 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    //--- the event arrived on the sender's authentic data topic (or direct mode), avoiding false SECURITY discards.
    if(g_ssidSeen[si]!=e.ssid)
      {
+      //--- N71-03: Ignore packets carrying an old, already-abandoned session SSID (delayed arrival from standby hub)
+      if(IsAbandonedSsid(si,e.ssid))
+        {
+         if(g_once.ShouldEmit("oldssid|"+g_sid[si]+"|"+e.ssid))
+            g_log.Warn("sender "+g_sid[si]+" packet carries abandoned old SSID '"+e.ssid+"' vs active '"+g_ssidSeen[si]+"' - DISCARDED");
+         return false;
+        }
+
       if(stream==CP_STREAM_EVENTS && StringLen(g_ssidSeen[si])>0)
         {
          if(g_hubOn && topic!=g_sid[si] && topic!=g_senderAcc[si] && topic!=(string)g_nid)
@@ -6589,6 +6628,10 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
             g_log.Warn("SECURITY F-02: sender "+g_sid[si]+" event carries unexpected SSID '"+e.ssid+"' vs '"+g_ssidSeen[si]+"' on topic '"+topic+"' - DISCARDED");
             return false;
            }
+        }
+      if(StringLen(g_ssidSeen[si])>0)
+        {
+         RecordAbandonedSsid(si,g_ssidSeen[si]);
         }
       g_ssidSeen[si]=e.ssid;
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
@@ -7684,6 +7727,11 @@ void OnTimer()
         {
          if(s_errs[i]==CP_ERR_NONE && s_envs[i].type==CP_T_SNAP)
            {
+            // N71-03: Skip snapshots from abandoned old sessions during drain conflation
+            int si_check=-1;
+            for(int k=0;k<g_nSenders;k++) if(g_sid[k]==s_envs[i].sid) { si_check=k; break; }
+            if(si_check>=0 && IsAbandonedSsid(si_check,s_envs[i].ssid)) continue;
+
             int slot=-1;
             uint hSid=(uint)CopierHash32(s_envs[i].sid);
             for(int s=0;s<snapSendersCount;s++)

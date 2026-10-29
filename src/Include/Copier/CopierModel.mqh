@@ -793,11 +793,16 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
             outErr=0;
             ulong deal=trade.ResultDeal();
             ulong order=trade.ResultOrder();
-            ulong posId=(deal>0)?deal:order;
+            // N71-08: In MT5, position identifier matches the initial order ticket (ResultOrder),
+            // not the fill deal ticket (ResultDeal). Prioritize order over deal.
+            ulong posId=(order>0)?order:deal;
             if(posId>0)
               {
                int mErr=0;
-               CopierModifyStops((long)posId,sym,sl,tp,mErr);
+               if(!CopierModifyStops((long)posId,sym,sl,tp,mErr))
+                 {
+                  Print("[copier] WARN: 10016 fallback open succeeded but immediate modify stops failed (pos ",posId," err ",mErr,"); converge will retry stop attachment");
+                 }
               }
            }
          else
