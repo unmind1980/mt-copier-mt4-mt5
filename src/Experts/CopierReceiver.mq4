@@ -2650,10 +2650,10 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- refusal - see CopierBackoff - so a standing condition (a broker
    //--- limit, an unsupported filling mode) backs off to hours instead of
    //--- being hammered every two seconds.
-   //--- CLOSE and TRIM actions are risk-reducing operations. They must never
+   //--- CLOSE, TRIM, and DEDUP actions are risk-reducing exit operations. They must never
    //--- be delayed by long backoff ladders (P1-01: capped at 1000ms max), protecting trading safety.
    //--- H-04 & P1-01: Enforce BlockedCapped(1000) to eliminate 200/sec hammering while bounding retry delay to 1s.
-   if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM)
+   if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
      {
       if(g_backoff.BlockedCapped(key,1000)) return false;
      }

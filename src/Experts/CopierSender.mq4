@@ -1835,53 +1835,57 @@ void HandleHubSubFrame(const CopierEnv &he)
                  +" (nothing to do for it yet - Phase 2 is read-only)");
   }
 
+//--- N74-08 & O-04: Unified direct status frame handler for fast and slow drain passes.
+//--- Ensures g_pump.Disarm() is invoked on PONG regardless of which pass drains it,
+//--- eliminating ~40 lines of duplicate code.
+void HandleDirectStatusFrame(const string raw)
+  {
+   CopierEnv se;
+   if(CopierDecodeEnv(raw,se)!=CP_ERR_NONE) return;
+   if(se.type==CP_T_PONG)
+     {
+      string pms="",pfrom="";
+      CopierKvGet(se.payload,"MS",pms);
+      CopierKvGet(se.payload,"FROM",pfrom);
+      if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
+        {
+         g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+         if(g_once.ShouldEmit("rtt|"+pfrom))
+            g_log.Info("link to "+pfrom+" measured: "
+                       +(string)g_peers.RttFor(pfrom)+" ms round trip");
+        }
+      return;
+     }
+   if(se.type==CP_T_PING)
+     {
+      string pms="",pfrom="";
+      CopierKvGet(se.payload,"MS",pms);
+      CopierKvGet(se.payload,"FROM",pfrom);
+      if(StringLen(pfrom)>0)
+        {
+         g_peers.Seen(pfrom);
+         // R47-23: Pass centralToo=false for direct PONG echo responses
+         Emit(CP_T_PONG,
+              CopierPayloadPong(CopierParseLong(pms),
+                                (string)CopierAccountLogin(),pfrom),
+              false, false);
+        }
+      return;
+     }
+   if(se.type==CP_T_STAT)
+     {
+      HandleSenderStat(se);
+      return;
+     }
+  }
+
 void OnTimer()
   {
    long now=CopierNowMs();
 
    //--- 0) Fast-path: drain incoming PONG and status BEFORE scanning positions
    int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
-   for(int i=0;i<sn;i++)
-     {
-      CopierEnv se;
-      if(CopierDecodeEnv(g_drainStatus[i],se)!=CP_ERR_NONE) continue;
-      if(se.type==CP_T_PONG)
-        {
-         string pms="",pfrom="";
-         CopierKvGet(se.payload,"MS",pms);
-         CopierKvGet(se.payload,"FROM",pfrom);
-         if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
-           {
-            g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
-            if(g_once.ShouldEmit("rtt|"+pfrom))
-               g_log.Info("link to "+pfrom+" measured: "
-                          +(string)g_peers.RttFor(pfrom)+" ms round trip");
-           }
-         continue;
-        }
-      if(se.type==CP_T_PING)
-        {
-         string pms="",pfrom="";
-         CopierKvGet(se.payload,"MS",pms);
-         CopierKvGet(se.payload,"FROM",pfrom);
-         if(StringLen(pfrom)>0)
-           {
-            g_peers.Seen(pfrom);
-            // R47-23: Pass centralToo=false for direct PONG echo responses
-            Emit(CP_T_PONG,
-                 CopierPayloadPong(CopierParseLong(pms),
-                                   (string)CopierAccountLogin(),pfrom),
-                 false, false);
-           }
-         continue;
-        }
-      // M-03: Process STAT frames arriving in first drain pass rather than silently discarding
-      if(se.type==CP_T_STAT)
-        {
-         HandleSenderStat(se);
-         continue;
-        }
-     }
+   for(int i=0;i<sn;i++) HandleDirectStatusFrame(g_drainStatus[i]);
 
    if(g_hubOn)
      {
@@ -2148,50 +2152,7 @@ void OnTimer()
    //--- sender that quietly discards what its receivers report is a worse
    //--- failure than a verbose one.
    int sn2=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);
-   for(int i=0;i<sn2;i++)
-     {
-      //--- subscription bytes arrive here too - that is how XPUB works - so
-      //--- every message is DECODED rather than assumed to be status.
-      CopierEnv se;
-      if(CopierDecodeEnv(g_drainStatus[i],se)!=CP_ERR_NONE) continue;
-
-      if(se.type==CP_T_PONG)
-        {
-         string pms="",pfrom="";
-         CopierKvGet(se.payload,"MS",pms);
-         CopierKvGet(se.payload,"FROM",pfrom);
-         if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
-           {
-            if(g_once.ShouldEmit("rtt|"+pfrom))
-               g_log.Info("link to "+pfrom+" measured: "
-                          +(string)g_peers.RttFor(pfrom)+" ms round trip");
-           }
-         continue;
-        }
-
-      if(se.type==CP_T_PING)
-        {
-         string pms="",pfrom="";
-         CopierKvGet(se.payload,"MS",pms);
-         CopierKvGet(se.payload,"FROM",pfrom);
-         if(StringLen(pfrom)>0)
-           {
-            g_peers.Seen(pfrom);
-            // R47-23: Pass centralToo=false for direct PONG echo responses
-            Emit(CP_T_PONG,
-                 CopierPayloadPong(CopierParseLong(pms),
-                                   (string)CopierAccountLogin(),pfrom),
-                 false, false);
-           }
-         continue;
-        }
-
-      if(se.type==CP_T_STAT)
-        {
-         HandleSenderStat(se);
-         continue;
-        }
-     }
+   for(int i=0;i<sn2;i++) HandleDirectStatusFrame(g_drainStatus[i]);
 
    //--- 9b) the CENTRAL channel's DOWN path.
    //---

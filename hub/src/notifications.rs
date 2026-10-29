@@ -938,6 +938,53 @@ pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// N74-02: Resolves URL, validates every resolved IP against SSRF rules,
+/// and builds a client pinned with `ClientBuilder::resolve(host, addr)` to permanently
+/// eliminate the DNS Rebinding TOCTOU race window.
+pub(crate) async fn resolve_pinned_client(
+    default_client: &reqwest::Client,
+    url_str: &str,
+) -> Result<reqwest::Client, String> {
+    if let Some(host) = check_url_base(url_str)? {
+        let parsed_url = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+        let port = parsed_url.port_or_known_default().unwrap_or(80);
+        let lookup_target = format!("{}:{}", host, port);
+
+        let mut target_addr: Option<std::net::SocketAddr> = None;
+        if let Ok(mut addrs) = tokio::net::lookup_host(&lookup_target).await {
+            while let Some(addr) = addrs.next() {
+                check_single_ip(addr.ip())?;
+                if target_addr.is_none() {
+                    target_addr = Some(addr);
+                }
+            }
+        } else {
+            use std::net::ToSocketAddrs;
+            if let Ok(addrs) = lookup_target.to_socket_addrs() {
+                for addr in addrs {
+                    check_single_ip(addr.ip())?;
+                    if target_addr.is_none() {
+                        target_addr = Some(addr);
+                    }
+                }
+            } else {
+                return Err(format!("DNS lookup failed for {}", host));
+            }
+        }
+
+        let addr = target_addr.ok_or_else(|| format!("DNS lookup yielded no addresses for {}", host))?;
+        let pinned_client = reqwest::Client::builder()
+            .resolve(&host, addr)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| format!("Failed to build pinned client: {}", e))?;
+        return Ok(pinned_client);
+    }
+    // If check_url_base returned None, it is an IP literal already validated by check_single_ip
+    Ok(default_client.clone())
+}
+
 async fn send_wecom(
     client: &reqwest::Client,
     channel: &NotificationChannel,
@@ -950,7 +997,7 @@ async fn send_wecom(
     } else {
         return Err("WeCom webhook_url or key missing".to_string());
     };
-    validate_outgoing_url(&url).await?;
+    let client = resolve_pinned_client(client, &url).await?;
 
     let fmt = format_alert(alert);
     let color_tag = match alert.kind {
@@ -1029,7 +1076,7 @@ async fn send_dingtalk(
     } else {
         return Err("DingTalk webhook_url or access_token missing".to_string());
     };
-    validate_outgoing_url(&raw_url).await?;
+    let client = resolve_pinned_client(client, &raw_url).await?;
 
     let secret = channel.config.get("secret").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1113,7 +1160,7 @@ async fn send_webhook(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Webhook URL missing".to_string())?;
 
-    validate_outgoing_url(url).await?;
+    let client = resolve_pinned_client(client, url).await?;
 
     let method_str = channel
         .config
@@ -1535,6 +1582,12 @@ mod tests {
         assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").await.is_ok());
         assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").await.is_ok());
         assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").await.is_ok());
+
+        // N74-02: resolve_pinned_client must also reject SSRF attempts
+        let def_client = reqwest::Client::new();
+        assert!(resolve_pinned_client(&def_client, "http://127.0.0.1:8080/hook").await.is_err());
+        assert!(resolve_pinned_client(&def_client, "http://localhost:8080/hook").await.is_err());
+        assert!(resolve_pinned_client(&def_client, "http://10.0.0.1/hook").await.is_err());
     }
 
     #[test]

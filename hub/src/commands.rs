@@ -408,10 +408,11 @@ impl CommandStore {
                         inner.in_flight.remove(&id);
                     }
                     inner.commands.insert(id, cmd.clone());
+                    // P0-03 & N75-01: Append valid replicated lines so Standby's journal matches Primary's
+                    // line count without inflating on duplicate/stale lines (matching config.rs N74-04).
+                    to_append.push(cmd);
+                    applied += 1;
                 }
-                // P0-03: Append all replicated lines so Standby's journal matches Primary's line count
-                to_append.push(cmd);
-                applied += 1;
             }
         }
         if !to_append.is_empty() {
@@ -833,42 +834,6 @@ impl CommandStore {
                 c.err = format!("superseded by rev {}", current_rev);
                 let snap = c.clone();
                 inner.append(&snap);
-            }
-        }
-    }
-
-    /// Defer an in-flight command when the target node is not subscribed yet.
-    ///
-    /// N56-09: this is a SCHEDULING decision, not a state transition. The old
-    /// implementation decremented `attempts` and re-appended the command to the
-    /// journal on EVERY defer - so a command aimed at an offline node was
-    /// rewritten every 2 seconds forever, the retry ladder could never reach its
-    /// end, and `command.timeout` never fired. One offline node holding a single
-    /// pending command produced roughly 30 MB of journal per day plus ~170k
-    /// fsyncs, and the operator never learned the command had not been delivered.
-    ///
-    /// Now: push `next_at` out, leave `attempts` alone, write nothing. The ladder
-    /// runs its normal course (2s -> 5s -> 15s -> 60s, ~82s total) and the command
-    /// ends as `unknown` with an alert if the node stays away. A node that comes
-    /// back inside that window still receives the command.
-    #[allow(dead_code)]
-    pub fn defer(&self, id: &str, delay: Duration) {
-        let mut inner = self.inner.lock_or_recover();
-        if let Some(c) = inner.commands.get_mut(id) {
-            if c.state == STATE_PENDING {
-                //--- R58-02: honour the ladder step that `due_gated` just consumed.
-                //---
-                //--- Overwriting next_at with a flat 2s made the command due again
-                //--- two seconds later, which consumed the NEXT step immediately:
-                //--- the 2+5+15+60 = 82s ladder actually expired in 8s. A node that
-                //--- was merely restarting (1-5s to resubscribe, plus a REG period)
-                //--- had its closeall declared `unknown` - and dropped from
-                //--- in_flight - before it could possibly answer.
-                //---
-                //--- The delay argument is kept for call-site compatibility and
-                //--- ignored on purpose: the ladder owns the cadence here, and a
-                //--- caller able to override it would just reintroduce the bug.
-                c.next_at = Instant::now() + delay;
             }
         }
     }

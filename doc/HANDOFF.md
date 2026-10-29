@@ -1341,6 +1341,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N74-06**：`hub/src/api.rs:580` 在 `/api/v1/positions` 端点中，在锁内仅提取 `pos_clone` 句柄，将 `positions_json_list` 及其庞大的 JSON AST 构造移至 `SharedState` 全局锁外执行，消灭大持仓并发查询对 ZMQ 路由转发的阻塞卡顿；
   5. **N74-10 & N74-11**：清理 `notifications.rs` 中无调用的 `validate_outgoing_url_sync` 死代码，修正 `commands.rs` 中的 `defer()` 标注。
 
+### 七十五次审计：DEDUP 快速退避补齐、钉死 Webhook IP 根除 TOCTOU、命令日志增量去重防虚增与 Positions Arc 浅拷贝（2026-10-29 23:30；全部闭环）
+
+- **修复与加固项**：
+  1. **P1-01 / N74-03 衍生**：在 `src/Experts/CopierReceiver.mq4:2656`（`PushAction`）中，为 `BlockedCapped(key, 1000)` 平仓退避守卫补齐 `|| kind==CP_ACT_DEDUP`，防止重复订单消除被默认 60s/300s/24h 的长阶梯严重阻塞，确保重复敞口能以 1 秒上限快速重试并平仓；
+  2. **N74-02**：在 `hub/src/notifications.rs` 中引入 `resolve_pinned_client()`，在请求发送前异步解析公网 IP 并校验 SSRF 规则，使用 `reqwest::ClientBuilder::resolve(&host, addr)` 强制锁定目标 IP，彻底杜绝 Webhook DNS Rebinding TOCTOU 竞态漏洞；
+  3. **N75-01**：在 `hub/src/commands.rs:412`（`apply_delta_lines`）中，将 `to_append.push(cmd); applied += 1;` 移入 `if should_insert` 块内，与 `config.rs`（N74-04）对齐，彻底杜绝备机命令日志因重复或过时状态行虚增而触发无限全量覆写死循环；
+  4. **N75-02**：在 `hub/src/positions.rs` 中将 `SenderView.items` 改为 `Arc<Vec<PositionItem>>`，使 `clone_view()` 的复杂度降为 O(1) 浅拷贝，彻底消除 `/api/v1/positions` 与每 200ms WebSocket 广播在持有 `SharedState` 全局互斥锁时深度复制数万个订单字符串的性能阻塞；
+  5. **N74-07 & N74-08 & O-01 & O-03**：在 `positions.rs` 中重构 `parse_snap` 为单趟扫描，降低 66% 快照解析扫描开销；在 `CopierSender.mq4` 抽取 `HandleDirectStatusFrame`，消除快慢车道 70 行重复代码并补齐慢车道 `g_pump.Disarm()` 遗漏；在 `main.rs` 的 `is_reachable` 中移除 `@all` 避免全局订阅假阳性；清理 `commands.rs` 中全仓零引用的 `defer()` 死代码。
+
 ---
 
 ## 9. 最终交付状态确认

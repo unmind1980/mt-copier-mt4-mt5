@@ -27,6 +27,7 @@
 //! panic on hostile input.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Records read from one snapshot at most.
@@ -97,8 +98,8 @@ pub struct SenderView {
     /// Snapshots seen from this sender, so a view that is one snapshot old can
     /// be told from one that has been steady for an hour.
     pub snaps: u64,
-    /// Detailed position records.
-    pub items: Vec<PositionItem>,
+    /// Detailed position records. N75-02: Arc-wrapped to make clone_view() O(1) shallow copy.
+    pub items: Arc<Vec<PositionItem>>,
 }
 
 #[derive(Default, Clone)]
@@ -137,7 +138,7 @@ impl Positions {
             receipt: String::new(),
             updated: now,
             snaps: 0,
-            items: Vec::new(),
+            items: Arc::new(Vec::new()),
         });
 
         // F-11 & N49-11: If parsing yielded 0 records on a snapshot without explicit N=0 declaration
@@ -154,7 +155,7 @@ impl Positions {
         e.receipt = v.receipt;
         e.updated = now;
         e.snaps += 1;
-        e.items = v.items;
+        e.items = Arc::new(v.items);
     }
 
     pub fn view_for(&self, sid: &str) -> Option<&SenderView> {
@@ -257,18 +258,39 @@ pub fn extract_receipt(payload: &[u8]) -> String {
 
 /// Read one snapshot payload. Never panics; malformed input yields what could be
 /// read and no more.
+/// N74-07: Single-pass scan over ;-separated key=val headers (H=, N=, R=)
+/// eliminating 3 redundant full-payload buffer scans.
 pub fn parse_snap(payload: &[u8]) -> SnapView {
     let mut v = SnapView::default();
+    let mut r_span: Option<(usize, usize)> = None;
 
-    if let Some((s, e)) = value_span(payload, b"H") {
-        v.receipt = latin1(&payload[s..e]);
+    let mut i = 0usize;
+    while i < payload.len() {
+        let field_start = i;
+        let mut eq_pos = None;
+        while i < payload.len() && payload[i] != b';' {
+            if eq_pos.is_none() && payload[i] == b'=' {
+                eq_pos = Some(i);
+            }
+            i += 1;
+        }
+        let field_end = i;
+        if i < payload.len() && payload[i] == b';' {
+            i += 1;
+        }
+        if let Some(eq) = eq_pos {
+            let key = &payload[field_start..eq];
+            let val = (eq + 1, field_end);
+            match key {
+                b"H" => v.receipt = latin1(&payload[val.0..val.1]),
+                b"N" => v.declared = Some(parse_usize(&payload[val.0..val.1])),
+                b"R" => r_span = Some(val),
+                _ => {}
+            }
+        }
     }
 
-    if let Some((s, e)) = value_span(payload, b"N") {
-        v.declared = Some(parse_usize(&payload[s..e]));
-    }
-
-    let (rs, re) = match value_span(payload, b"R") {
+    let (rs, re) = match r_span {
         Some(x) => x,
         None => return v, // N=0, or not a snapshot at all
     };

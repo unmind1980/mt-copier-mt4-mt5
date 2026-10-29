@@ -2832,7 +2832,8 @@ fn main() {
                     }
                     let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
                     let target_sub = format!("@{}", nid);
-                    st.subs.contains_key(&target_sub) || st.subs.contains_key("@all") || online_nodes.contains(node)
+                    // O-01: Direct subscription match or active registry record (avoid @all prefix false positive)
+                    st.subs.contains_key(&target_sub) || online_nodes.contains(node)
                 };
                 for c in cmds.due_gated(Instant::now(), effective_writes, is_reachable) {
                     if c.state == commands::STATE_UNKNOWN {
