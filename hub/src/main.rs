@@ -1708,7 +1708,10 @@ fn main() {
                         //--- that stays silent stays invisible, which is the
                         //--- right failure: silence is not a claim.
                         if ty == "REG" || ty == "HBT2" {
-                            let effective_writes = shared.lock_or_recover().writes;
+                            let (effective_writes, is_prim) = {
+                                let s = shared.lock_or_recover();
+                                (s.writes, s.cluster.is_primary())
+                            };
                             let role = envelope_kv(&payload, "ROLE");
                             let acc = envelope_kv(&payload, "ACC");
                             if acc.is_empty() {
@@ -2029,7 +2032,7 @@ fn main() {
                                                 "drift",
                                             );
                                         }
-                                    } else if hub_rev > 0 && node_rev < hub_rev && effective_writes {
+                                    } else if hub_rev > 0 && node_rev < hub_rev && effective_writes && is_prim {
                                         if let Some(r) = cfg.current(&key) {
                                             let c = cmds.issue_cfg(&key, r.rev, "", "");
                                             let throttle_key = (key.clone(), "config.repush".to_string());
@@ -2107,8 +2110,13 @@ fn main() {
                                 .map(|c| (c.node, c.kind, c.op))
                                 .unwrap_or_else(|| ("?".to_string(), String::new(), String::new()));
                             let prefix = if kind == commands::KIND_OP { "command" } else { "config" };
+                            let is_prim = shared.lock_or_recover().cluster.is_primary();
                             if id.is_empty() {
                                 println!("[hub] WARN  ACK with no ID");
+                            } else if !is_prim {
+                                // BUG-06: ADR-03 Single-Writer invariant: Standby hub MUST NOT process
+                                // ACKs or mutate commands.jsonl. Primary alone processes ACKs, and Standby
+                                // replicates acked command journals via HTTP cluster sync.
                             } else if cmds.ack(&id, ok, rev, &err) {
                                 println!(
                                     "[hub] {} {} {} ({} {}) rev {}",
@@ -2176,7 +2184,10 @@ fn main() {
                         //--- restarted with a stale ini, or lost a push, can ask
                         //--- rather than wait for the next REG comparison.
                         if ty == "CFGR" {
-                            let effective_writes = shared.lock_or_recover().writes;
+                            let (effective_writes, is_prim) = {
+                                let s = shared.lock_or_recover();
+                                (s.writes, s.cluster.is_primary())
+                            };
                             //--- CFGR DOES carry ACC (the plan's §5.2), because
                             //--- unlike an ACK there is no command id to derive
                             //--- the node from - the node is asking for
@@ -2188,7 +2199,7 @@ fn main() {
                             } else {
                                 format!("{}:{}", crole, cacc)
                             };
-                            if effective_writes {
+                            if effective_writes && is_prim {
                                 let should_log = match last_cfgr_print.get(&key) {
                                     Some(t) => t.elapsed() >= Duration::from_secs(10),
                                     None => true,

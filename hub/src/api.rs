@@ -2919,8 +2919,8 @@ async fn cluster_sync(
     let local_notif_hash = crate::cluster::file_sha256(&notif_path);
     let local_curve_hash = crate::cluster::file_sha256(&curve_clients_path);
 
-    // DEF-61-07: Bound max delta lines returned per sync batch to avoid memory spikes and network timeouts
-    const MAX_SYNC_BATCH: usize = 1000;
+    // DEF-61-07 & BUG-05: Bound max delta lines returned per sync batch (10,000 lines covers full compacted journals safely)
+    const MAX_SYNC_BATCH: usize = 10000;
     let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
         Vec::new()
     } else {

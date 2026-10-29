@@ -389,6 +389,7 @@ long             g_snapStaleMs[CP_MAX_STALE_PEERS];
 long             g_snapRcptMs[CP_MAX_STALE_PEERS];
 long             g_snapIntMs[CP_MAX_STALE_PEERS];
 long             g_snapRepairMs[CP_MAX_STALE_PEERS];
+string           g_snapLastHash[CP_MAX_STALE_PEERS]; // BUG-07: Track last reported hash for dual-hub receipt debounce
 bool             g_snapIsHub[CP_MAX_STALE_PEERS];
 int              g_snapStaleCount=0;
 
@@ -448,7 +449,8 @@ double BroadcastLots(const double actual,const double initLots=0.0)
       if(initLots>0.0 && actual<initLots)
         {
          double scaled=NormalizeDouble(FixedLotSize*(actual/initLots),CP_DIGITS_LOTS);
-         return (scaled>0.0)?scaled:0.01;
+         // BUG-08: Fall back to actual lots rather than hardcoded 0.01 to support crypto/micro lots (<0.01)
+         return (scaled>0.0)?scaled:actual;
         }
       return FixedLotSize;
      }
@@ -1237,12 +1239,16 @@ void SnapTrack(const string who,const string reported,const bool isFromHub=false
 
    //--- cadence, measured from the receipts themselves. Smoothed by halving
    //--- so one delayed heartbeat does not redefine "slow" for the next window.
-   //--- HA-01: Suppress sub-250ms redundant receipt reflections from dual Hubs
+   //--- HA-01 & BUG-07: Suppress sub-250ms redundant receipt reflections from dual Hubs
    //--- so identical dual receipts within 2-5ms do not compress g_snapIntMs down to 5ms
-   //--- and collapse the 2-second repair debounce window.
+   //--- and do not falsely double-increment g_snapStaleN.
    if(g_snapRcptMs[idx]>0)
      {
       long iv=now-g_snapRcptMs[idx];
+      if(iv>=0 && iv<250 && g_snapLastHash[idx]==reported)
+        {
+         return; // Duplicate receipt reflection within 250ms with same hash: ignore
+        }
       if(iv>=250)
         {
          if(g_snapIntMs[idx]<=0) g_snapIntMs[idx]=iv;
@@ -1250,6 +1256,7 @@ void SnapTrack(const string who,const string reported,const bool isFromHub=false
         }
      }
    g_snapRcptMs[idx]=now;
+   g_snapLastHash[idx]=reported;
 
    string activeHash=(StringLen(g_snapHash)>0)?g_snapHash:g_latestSnapHash;
 
@@ -1428,6 +1435,7 @@ int SnapStaleIndex(const string who)
    g_snapRcptMs[n]=0;
    g_snapIntMs[n]=0;
    g_snapRepairMs[n]=0;
+   g_snapLastHash[n]="";
    g_snapIsHub[n]=false;
    return n;
   }

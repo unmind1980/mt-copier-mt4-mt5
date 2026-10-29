@@ -606,8 +606,14 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         );
                     }
 
-                    let req_from_cfg_line = if cfg_lines_count > remote_st.cfg_lines { 0 } else { cfg_lines_count };
-                    let req_from_cmd_line = if cmd_lines_count > remote_st.cmd_lines { 0 } else { cmd_lines_count };
+                    let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines;
+                    let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
+
+                    // BUG-05: If command line count is equal but remote sequence is ahead,
+                    // request from line 0 and replace_all to resolve out-of-sync sequence watermark.
+                    let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
+                        || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq > local_max_cmd_seq);
+                    let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
                     let sync_req = ClusterSyncRequest {
                         from_cfg_line: req_from_cfg_line,
@@ -629,19 +635,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         Ok(res) if res.status().is_success() => {
                             if let Ok(data) = res.json::<ClusterSyncResponse>().await {
                                 let mut s = st.lock_or_recover();
-                                // Apply delta configs (or replace if Primary was compacted)
+                                // Apply delta configs (or replace if Primary was compacted or full resync triggered)
                                 //--- F-05: symmetrical with cmds: allow replace_all(&[]) when Primary cfg is 0
-                                if req_from_cfg_line == 0 && remote_st.cfg_lines < cfg_lines_count {
+                                if full_cfg_resync {
                                     let _ = s.cfg.replace_all(&data.cfg_delta_lines);
                                 } else if !data.cfg_delta_lines.is_empty() {
                                     let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
-                                // Apply delta commands (or replace if Primary was compacted)
-                                //--- N57-12: the `!is_empty()` guard meant a primary
-                                //--- compacted to zero rows produced no delta AND no
-                                //--- replace, so the standby kept its stale history.
-                                //--- replace_all(&[]) is exactly the reset needed.
-                                if req_from_cmd_line == 0 && remote_st.cmd_lines < cmd_lines_count {
+                                // Apply delta commands (or replace if Primary was compacted or full resync triggered)
+                                if full_cmd_resync {
                                     let _ = s.cmds.replace_all(&data.cmd_delta_lines);
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);

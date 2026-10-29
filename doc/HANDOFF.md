@@ -1281,6 +1281,19 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   3. **N68-02**：`hub/src/cluster.rs` 将连续在线时长维护严格置于同步请求执行完毕之后，仅在 `remote_st.role == "primary" && sync_status == "synced"` 时累加，只要发生同步错误、网络错误或非 primary 则立刻置 None，消除旧状态时序偏差并彻底落实严格对齐语义；
   4. **N68-03**：`CopierReceiver.mq4` 引入 `s_seenSnapHash` 32 位整型哈希短路，将 256 槽合流时的字符串匹配降低到单指令周期，消灭 3.2 万次字符串扫描，并移除不可达的违规兜底分支。
 
+### 六十九次审计：前端运行时异常消除、挂单入场价覆盖表、应急止损签名守卫与集群单写者加固（2026-10-29 12:10；全部闭环）
+
+- **修复与加固项**：
+  1. **BUG-01**：`hub/src/assets/dashboard.html` 在 `renderSenderCards` 函数顶部显式声明并获取 common 配置对象 `var c = ...`，彻底根除严格模式下引用未声明标识符 `c` 导致的 `ReferenceError` 运行时崩溃；
+  2. **BUG-02**：`CopierReceiver.mq4` 引入 `g_stOvPprice[]` 旁路覆盖表并在 `HandleModifyEvent` 中更新，在 `QueueModifyIfNeeded` 中统一对 `desired.pprice` 与 `g_stOvPprice` 做收敛与在途旧快照覆盖保护，彻底消除挂单改价被旧快照回滚和仅改入场价时覆盖标记提前失效；
+  3. **BUG-03**：`CopierReceiver.mq4` 的 `CopierStopSig` 签名向量扩充至 13 个字段（纳入 `local.kind` 与 `local.openPx`），并在 `wantSl<=0 || wantTp<=0` 且开启了应急止损时严禁写入有效签名，彻底杜绝首次开仓报价缺失时产生假签名导致实盘持仓终身裸奔；
+  4. **BUG-04**：`CopierReceiver.mq4` 的 `ResubscribeSenders` 退订循环中加入显式保护，禁止向 Hub 发送注销本机 `g_nid` 或登录账号的 `Unsubscribe` 指令，彻底防止误退订自身的靶向快照修复主题；
+  5. **BUG-05**：`hub/src/cluster.rs` 修复主备日志行数相等但远端序号领先时的死循环，将单次同步批次上限调整为 10,000 行，并在序号领先或行数收缩时强制从行号 0 全量拉取并调用 `replace_all`；
+  6. **BUG-06**：`hub/src/main.rs` 在 ZMQ `@hub` 的 `ACK` 分支、`REG`/`HBT2` 漂移重推分支及 `CFGR` 自愈分支加入 `is_prim` 守卫，严格恪守 ADR-03 单写者规范，杜绝 Standby 本地写日志及主备日志分叉；
+  7. **BUG-07 & BUG-08**：`CopierSender.mq4` 在 `SnapTrack` 中增加 `<250ms` 且相同 Hash 的重复收据反射丢弃保护，避免失效计数提前双计；在 `BroadcastLots` 中微手数部分平仓兜底返回 `actual`，避免加密货币等微小手数被强制放大到 `0.01`；
+  8. **BUG-09 & BUG-10**：`dashboard.html` 在 WebSocket `renderCluster` 中实时同步更新 `s.writes = cl.writes`，并在 Standby 模式下明确显示只读保护文案；`notifications.rs` 增加对 Webhook 自定义 Header 中 `host`/`content-length`/`transfer-encoding`/`connection` 等敏感头的禁止覆盖过滤；
+  9. **冻结业务规则继续锁定**：`DEF-63-03`（反向跟单无 TP 不强加止损）、`DEF-63-02`（双通道 `RefreshRisk`）与 `DEF-63-06`（`CopierClockAgeMs` 相等返回 -1）继续维持原状。
+
 ---
 
 ## 9. 最终交付状态确认

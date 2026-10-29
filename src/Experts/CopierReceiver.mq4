@@ -376,6 +376,7 @@ bool    g_stHasOv[CP_MAX_STOPS_OV];
 double  g_stOvSl[CP_MAX_STOPS_OV];
 double  g_stOvTp[CP_MAX_STOPS_OV];
 double  g_stOvOpn[CP_MAX_STOPS_OV];
+double  g_stOvPprice[CP_MAX_STOPS_OV]; // BUG-02: Pending price override table
 long    g_stLastMs[CP_MAX_STOPS_OV];
 int     g_stCount=0;
 //--- Bumped on every change to the override table. QueueModifyIfNeeded() caches
@@ -398,7 +399,7 @@ struct CopierStopSig
   {
    long              ticket;
    long              epoch;
-   double            v[11];
+   double            v[13]; // BUG-03: Expanded to 13 fields (including local.kind and local.openPx)
   };
 CopierStopSig g_stopSig[CP_STOPSIG_SLOTS];
 //--- A tripped risk switch is a STEADY STATE, not an event: the receiver is
@@ -3771,7 +3772,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          && g_stopSig[sh].v[7]==(double)local.pexpire
          && g_stopSig[sh].v[8]==desired.pprice
          && g_stopSig[sh].v[9]==desired.pstop
-         && g_stopSig[sh].v[10]==(double)desired.pexpire)
+         && g_stopSig[sh].v[10]==(double)desired.pexpire
+         && g_stopSig[sh].v[11]==(double)local.kind
+         && g_stopSig[sh].v[12]==local.openPx)
          return;
      }
 
@@ -3792,11 +3795,14 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double dSl=(g_senderCfg[si].mirrorstops)?desired.sl:0.0;
    double dTp=(g_senderCfg[si].mirrorstops)?desired.tp:0.0;
    double dOpn=desired.openPx;
+   double dPPrice=desired.pprice;
    int oi=StopsOvIndex(desired.uid,false);
    if(oi>=0 && g_stHasOv[oi])
      {
-      if(MathAbs(desired.sl-g_stOvSl[oi])<0.0000001
-         && MathAbs(desired.tp-g_stOvTp[oi])<0.0000001)
+      bool slCaughtUp=(MathAbs(desired.sl-g_stOvSl[oi])<0.0000001);
+      bool tpCaughtUp=(MathAbs(desired.tp-g_stOvTp[oi])<0.0000001);
+      bool ppriceCaughtUp=(g_stOvPprice[oi]<=0.0 || MathAbs(desired.pprice-g_stOvPprice[oi])<0.0000001);
+      if(slCaughtUp && tpCaughtUp && ppriceCaughtUp)
         {
          g_stHasOv[oi]=false;               // the snapshot caught up
          g_stOvEpoch++;                     // invalidates the stop-geometry cache
@@ -3806,6 +3812,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          dSl=(g_senderCfg[si].mirrorstops)?g_stOvSl[oi]:0.0;
          dTp=(g_senderCfg[si].mirrorstops)?g_stOvTp[oi]:0.0;
          dOpn=g_stOvOpn[oi];
+         if(g_stOvPprice[oi]>0.0) dPPrice=g_stOvPprice[oi];
         }
      }
 
@@ -3898,7 +3905,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    bool pendingDiff=false;
    if(local.kind==CP_ORD_PENDING && desired.kind==CP_ORD_PENDING)
      {
-      if(desired.pprice>0.0 && MathAbs(local.pprice-desired.pprice)>si2.point*0.5) pendingDiff=true;
+      if(dPPrice>0.0 && MathAbs(local.pprice-dPPrice)>si2.point*0.5) pendingDiff=true;
       if(desired.pstop>0.0 && MathAbs(local.pstop-desired.pstop)>si2.point*0.5) pendingDiff=true;
       if(desired.pexpire!=local.pexpire) pendingDiff=true;
      }
@@ -3908,9 +3915,13 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       //--- Nothing to change: record signature so next tick can skip immediately
       //--- MQL-01: When stop was clamped, do NOT cache in g_stopSig so when price moves away,
       //--- the mirror automatically converges to the true un-clamped stop level.
+      //--- BUG-03: If emergency stop was configured but quote was temporarily missing (wantSl<=0 or wantTp<=0),
+      //--- do NOT cache in g_stopSig, otherwise a naked position would permanently freeze without emergency stops!
+      bool emergencyMissing = (g_senderCfg[si].emergencySLPips>0.0 && wantSl<=0.0)
+                           || (g_senderCfg[si].emergencyTPPips>0.0 && wantTp<=0.0);
       if(local.ticket!=0)
         {
-         if(!clamped)
+         if(!clamped && !emergencyMissing)
            {
             g_stopSig[sh].ticket=local.ticket;
             g_stopSig[sh].epoch=g_stOvEpoch;
@@ -3925,10 +3936,12 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
             g_stopSig[sh].v[8]=desired.pprice;
             g_stopSig[sh].v[9]=desired.pstop;
             g_stopSig[sh].v[10]=(double)desired.pexpire;
+            g_stopSig[sh].v[11]=(double)local.kind;
+            g_stopSig[sh].v[12]=local.openPx;
            }
          else
            {
-            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped stop
+            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped or missing emergency stop
            }
         }
       return;
@@ -3978,7 +3991,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- different level is a different action, not a duplicate. Without
    //--- this the seen-ring would suppress it for its whole TTL and the
    //--- mirror would keep the first stop it ever saw.
-   double actPPrice = (local.kind==CP_ORD_PENDING && desired.pprice>0.0) ? desired.pprice : local.pprice;
+   double actPPrice = (local.kind==CP_ORD_PENDING && dPPrice>0.0) ? dPPrice : local.pprice;
    double actPStop  = (local.kind==CP_ORD_PENDING && desired.pstop>0.0) ? desired.pstop : local.pstop;
    long   actPExp   = (local.kind==CP_ORD_PENDING) ? desired.pexpire : local.pexpire;
 
@@ -4011,6 +4024,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
             g_stopSig[sh].v[8]=desired.pprice;
             g_stopSig[sh].v[9]=desired.pstop;
             g_stopSig[sh].v[10]=(double)desired.pexpire;
+            g_stopSig[sh].v[11]=(double)local.kind;
+            g_stopSig[sh].v[12]=local.openPx;
            }
          else
            {
@@ -5670,6 +5685,7 @@ void StopsForget(const string uid)
             g_stOvSl[i]=g_stOvSl[last];
             g_stOvTp[i]=g_stOvTp[last];
             g_stOvOpn[i]=g_stOvOpn[last];
+            g_stOvPprice[i]=g_stOvPprice[last];
             g_stLastMs[i]=g_stLastMs[last];
            }
          g_stCount--;
@@ -5698,6 +5714,7 @@ int StopsOvIndex(const string uid,const bool create)
    g_stOvSl[n]=0.0;
    g_stOvTp[n]=0.0;
    g_stOvOpn[n]=0.0;
+   g_stOvPprice[n]=0.0;
    //--- -1, not 0, for "never pushed". CopierNowMs() is a millisecond counter
    //--- that starts at zero when the terminal does, so a stop change in the
    //--- first second after attach would stamp a real 0 and read back as
@@ -5766,6 +5783,7 @@ void StopsPrune(const long now)
          g_stOvSl[i]=g_stOvSl[last];
          g_stOvTp[i]=g_stOvTp[last];
          g_stOvOpn[i]=g_stOvOpn[last];
+         g_stOvPprice[i]=g_stOvPprice[last];
          g_stLastMs[i]=g_stLastMs[last];
         }
       g_stCount--;
@@ -5822,6 +5840,9 @@ int ResubscribeSenders(const string &before[],const int beforeN)
    for(int j=0;j<beforeN;j++)
      {
       if(StringLen(before[j])==0) continue;
+      // BUG-04: Never unsubscribe receiver's own identity topic (g_nid or raw login),
+      // which receives targeted slice-B snapshot repairs from senders.
+      if(before[j]==(string)g_nid || before[j]==(string)AccountInfoInteger(ACCOUNT_LOGIN)) continue;
       bool still=false;
       for(int i=0;i<g_nSenders;i++)
          if(g_sid[i]==before[j]) { still=true; break; }
@@ -6332,6 +6353,7 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvSl[idx]=p.sl;
    g_stOvTp[idx]=p.tp;
    g_stOvOpn[idx]=p.openPx;
+   g_stOvPprice[idx]=p.pprice; // BUG-02: Protect pending order trigger price in override table
    //--- DEF-63-05: If modify event carries updated pprice, update desired table immediately
    if(p.pprice>0.0)
      {

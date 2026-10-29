@@ -1143,6 +1143,16 @@ async fn send_webhook(
     if let Some(headers) = channel.config.get("headers").and_then(|v| v.as_object()) {
         for (k, v) in headers {
             if let Some(val_str) = v.as_str() {
+                let k_lower = k.to_ascii_lowercase();
+                // BUG-10: Prohibit overriding sensitive transport/routing headers that could bypass SSRF or poison HTTP requests
+                if k_lower == "host"
+                    || k_lower == "content-length"
+                    || k_lower == "transfer-encoding"
+                    || k_lower == "connection"
+                {
+                    eprintln!("[notifications] WARN skipping prohibited header: {}", k);
+                    continue;
+                }
                 if let (Ok(hname), Ok(hval)) = (
                     reqwest::header::HeaderName::try_from(k.as_str()),
                     reqwest::header::HeaderValue::try_from(val_str),
@@ -1537,5 +1547,17 @@ mod tests {
         assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").await.is_ok());
         assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").await.is_ok());
         assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").await.is_ok());
+    }
+
+    #[test]
+    fn webhook_header_prohibition_check() {
+        let prohibited = ["host", "Host", "HOST", "content-length", "Transfer-Encoding", "connection"];
+        for h in prohibited {
+            let lower = h.to_ascii_lowercase();
+            assert!(
+                lower == "host" || lower == "content-length" || lower == "transfer-encoding" || lower == "connection",
+                "Header {} must be marked prohibited", h
+            );
+        }
     }
 }

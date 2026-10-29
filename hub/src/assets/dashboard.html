@@ -2445,7 +2445,8 @@ function updateKpiCards(nodes, pos, d){
   if(elKpiHub){
     elKpiHub.textContent = "up " + fmtAge(d.hub_uptime_secs);
     var cvOn = d.curve && d.curve.on;
-    $("kpi_hub_sub").textContent = (cvOn ? "🔒 CURVE Encrypted" : "⚠️ Plain ZMQ") + " · " + (s.writes ? "Writes ON" : "Writes OFF");
+    var wrDesc = s.writes ? "Writes ON" : ((d.cluster && d.cluster.role === "standby") ? "Standby Read-Only" : "Writes OFF");
+    $("kpi_hub_sub").textContent = (cvOn ? "🔒 CURVE Encrypted" : "⚠️ Plain ZMQ") + " · " + wrDesc;
   }
 }
 
@@ -3144,6 +3145,10 @@ function renderCluster(cl){
     if(badge) badge.style.display = "none";
     if(bar) bar.classList.add("hidden");
     return;
+  }
+  // BUG-09: Synchronize frontend s.writes state on WebSocket cluster updates
+  if(typeof cl.writes === "boolean"){
+    s.writes = cl.writes;
   }
   var isStandby = (cl.role === "standby");
   var isConflict = (typeof cl.sync_status === "string" && cl.sync_status.indexOf("conflict") === 0);
@@ -5411,10 +5416,13 @@ function serializeIni(common, senders){
 
 function renderSenderCards(senders){
   var host = $("cfgsenders_list");
+  if(!host) return;
   if(!senders || !senders.length){
     host.innerHTML = '<div class="empty">No sender sections defined yet. Click "+ Add Sender Section" or "Load Default Example" to start.</div>';
     return;
   }
+  // BUG-01: Ensure 'c' (common section) is declared and available in strict mode
+  var c = (cfgState.parsed && cfgState.parsed.common) ? cfgState.parsed.common : collectCommonFromForm();
   var html = senders.map(function(s, idx){
     var lotmode = (s.lotmode || "multiplier").toLowerCase();
     var symRows = (s.symbols || []).map(function(sym, sidx){
@@ -5952,7 +5960,8 @@ $("cfgsave").addEventListener("click", function(){
 
   if(!s.writes || (cfgState.data && !cfgState.data.writes_enabled)){
     msg.className = "opmsg bad";
-    msg.textContent = "Writes are disabled on the hub (--writes off). Restart with --writes on to deploy changes.";
+    var isStandby = (s.data && s.data.cluster && s.data.cluster.role === "standby");
+    msg.textContent = isStandby ? "Writes are disabled on Standby mirror hub (ADR-03). Deploy changes on Primary hub." : "Writes are disabled on the hub (--writes off). Restart with --writes on to deploy changes.";
     return;
   }
 
