@@ -454,7 +454,12 @@ double BroadcastLots(const double actual,const double initLots=0.0)
         }
       return FixedLotSize;
      }
-   if(LotSizeMultiplier>0.0) return NormalizeDouble(actual*LotSizeMultiplier,CP_DIGITS_LOTS);
+   if(LotSizeMultiplier>0.0)
+     {
+      double scaled=NormalizeDouble(actual*LotSizeMultiplier,CP_DIGITS_LOTS);
+      // N70-01: Fall back to actual lots if multiplier scales below precision threshold
+      return (scaled>0.0)?scaled:actual;
+     }
    return actual;
   }
 
@@ -1604,12 +1609,30 @@ void RebuildSnapshotPayload()
    static CopierPos dense[];
    static int slots[];
    int dn=g_prev.CopyToWithSlots(dense,slots);
+   int valid=0;
    for(int i=0;i<dn;i++)
      {
       int slot=slots[i];
       double initLots=(slot>=0)?g_openLots[slot]:dense[i].lots;
       dense[i].lots=BroadcastLots(dense[i].lots,initLots);
+
+      //--- N70-01: Chokepoint validation strictly mirroring CopierDecodeRec.
+      //--- Ensures every declared record in N can be 100% decoded by receiver,
+      //--- guarding against bad records restored from .st files or scaled below threshold.
+      if(dense[i].side!=CP_SIDE_BUY && dense[i].side!=CP_SIDE_SELL) continue;
+      if(dense[i].lots<=0.0) continue;
+      if(dense[i].openPx<0.0 || dense[i].sl<0.0 || dense[i].tp<0.0 || dense[i].pprice<0.0 || dense[i].pstop<0.0) continue;
+      if(StringLen(dense[i].uid)!=CP_UID_LEN || !CopierUidValid(dense[i].uid)) continue;
+      string cleanSym=CopierSanitizeSymbol(dense[i].sym);
+      if(StringLen(cleanSym)==0) continue;
+      dense[i].sym=cleanSym;
+      if(dense[i].kind!=CP_ORD_MARKET && dense[i].kind!=CP_ORD_PENDING) continue;
+      if(dense[i].kind==CP_ORD_PENDING && !CopierPendingTypeKnown(dense[i].ptype)) continue;
+
+      if(valid!=i) dense[valid]=dense[i];
+      valid++;
      }
+   dn=valid;
    g_latestSnapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_latestSnapPayload);
    // MQL-03: RebuildSnapshotPayload only updates the latest local payload.

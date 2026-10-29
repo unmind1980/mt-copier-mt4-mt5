@@ -2919,14 +2919,16 @@ async fn cluster_sync(
     let local_notif_hash = crate::cluster::file_sha256(&notif_path);
     let local_curve_hash = crate::cluster::file_sha256(&curve_clients_path);
 
-    // DEF-61-07 & BUG-05: Bound max delta lines returned per sync batch (10,000 lines covers full compacted journals safely)
+    // DEF-61-07 & BUG-05 & N70-04: Bound max delta lines returned per sync batch.
+    // Truncate only incremental deltas (from_line > 0). Full baseline resets (from_line == 0)
+    // must return complete snapshot history so replace_all does not truncate active in-flight commands.
     const MAX_SYNC_BATCH: usize = 10000;
     let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
         Vec::new()
     } else {
         crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line)
             .map(|(mut lines, _)| {
-                if lines.len() > MAX_SYNC_BATCH {
+                if req.from_cfg_line > 0 && lines.len() > MAX_SYNC_BATCH {
                     lines.truncate(MAX_SYNC_BATCH);
                 }
                 lines
@@ -2939,7 +2941,7 @@ async fn cluster_sync(
     } else {
         crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line)
             .map(|(mut lines, _, _)| {
-                if lines.len() > MAX_SYNC_BATCH {
+                if req.from_cmd_line > 0 && lines.len() > MAX_SYNC_BATCH {
                     lines.truncate(MAX_SYNC_BATCH);
                 }
                 lines

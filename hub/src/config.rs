@@ -243,6 +243,7 @@ impl ConfigStore {
         }
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
+        let mut to_append = Vec::new();
         for line in raw_lines {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
                 let node = v["node"].as_str().unwrap_or("").to_string();
@@ -267,10 +268,13 @@ impl ConfigStore {
                 if should_advance {
                     inner.current.insert(node, r.clone());
                 }
-                // P0-03: Append replicated line so Standby's journal matches Primary's line count
-                inner.append(&r)?;
+                // P0-03 & N70-05: Collect replicated line for single batch flush (eliminates per-line fsync under lock)
+                to_append.push(r);
                 applied += 1;
             }
+        }
+        if !to_append.is_empty() {
+            inner.append_many(&to_append)?;
         }
         Ok(applied)
     }
@@ -532,6 +536,38 @@ impl Inner {
             }
         }
         self.count += 1;
+        Ok(())
+    }
+
+    /// N70-05: Batch append replicated revisions with a single sync_data() disk barrier,
+    /// eliminating per-line fsync stalls while holding the inner mutex.
+    fn append_many(&mut self, revs: &[Revision]) -> std::io::Result<()> {
+        if revs.is_empty() {
+            return Ok(());
+        }
+        let mut buf = String::new();
+        for r in revs {
+            let line = json!({
+                "v": 1,
+                "node": r.node,
+                "rev": r.rev,
+                "ts": r.ts,
+                "actor": r.actor,
+                "ip": r.ip,
+                "kind": r.kind,
+                "from_rev": r.from_rev,
+                "ini": r.ini,
+            });
+            buf.push_str(&serde_json::to_string(&line).unwrap_or_else(|_| "{}".to_string()));
+            buf.push('\n');
+        }
+        if let Some(f) = self.file.as_mut() {
+            if let Err(e) = f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
+                eprintln!("[hub] CONFIG BATCH WRITE FAILED: {}", e);
+                return Err(e);
+            }
+        }
+        self.count += revs.len() as u64;
         Ok(())
     }
 }

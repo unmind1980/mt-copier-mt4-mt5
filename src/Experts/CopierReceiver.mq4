@@ -384,6 +384,15 @@ int     g_stCount=0;
 //--- feeds it has moved", and the override table is one of those inputs, so a
 //--- MODIFY event (or the snapshot catching up with one) has to invalidate it.
 long    g_stOvEpoch=1;
+CopierUidIndex g_stUidIdx; // N70-02: O(1) hash index for g_stUid table
+
+void StopsRebuildUidIndex()
+  {
+   if(g_stCount>0)
+      g_stUidIdx.BuildFromStrings(g_stUid,g_stCount);
+   else
+      g_stUidIdx.Clear();
+  }
 
 //--- Last (ticket -> inputs) seen by QueueModifyIfNeeded, so the per-tick
 //--- recomputation can be skipped when nothing changed.
@@ -3901,6 +3910,10 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                     +" mirror is now WIDER than the sender's stop");
      }
    bool clamped=(clampedSl || clampedTp);
+   //--- BUG-03 & N70-06: If emergency stop was configured but quote was temporarily missing (wantSl<=0 or wantTp<=0),
+   //--- do NOT cache in g_stopSig, otherwise a naked position would permanently freeze without emergency stops!
+   bool emergencyMissing = (g_senderCfg[si].emergencySLPips>0.0 && wantSl<=0.0)
+                        || (g_senderCfg[si].emergencyTPPips>0.0 && wantTp<=0.0);
 
    bool pendingDiff=false;
    if(local.kind==CP_ORD_PENDING && desired.kind==CP_ORD_PENDING)
@@ -3915,10 +3928,6 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       //--- Nothing to change: record signature so next tick can skip immediately
       //--- MQL-01: When stop was clamped, do NOT cache in g_stopSig so when price moves away,
       //--- the mirror automatically converges to the true un-clamped stop level.
-      //--- BUG-03: If emergency stop was configured but quote was temporarily missing (wantSl<=0 or wantTp<=0),
-      //--- do NOT cache in g_stopSig, otherwise a naked position would permanently freeze without emergency stops!
-      bool emergencyMissing = (g_senderCfg[si].emergencySLPips>0.0 && wantSl<=0.0)
-                           || (g_senderCfg[si].emergencyTPPips>0.0 && wantTp<=0.0);
       if(local.ticket!=0)
         {
          if(!clamped && !emergencyMissing)
@@ -4009,7 +4018,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(oi>=0) g_stLastMs[oi]=nowMs; // R47-18: Consume throttle window only on successful queue push
       if(local.ticket!=0)
         {
-         if(!clamped)
+         // N70-06: Check !emergencyMissing in pushed branch as well, preventing naked orders from caching fake signature
+         if(!clamped && !emergencyMissing)
            {
             g_stopSig[sh].ticket=local.ticket;
             g_stopSig[sh].epoch=g_stOvEpoch;
@@ -4029,7 +4039,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
            }
          else
            {
-            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped stop
+            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped or missing emergency stop
            }
         }
      }
@@ -5690,6 +5700,7 @@ void StopsForget(const string uid)
            }
          g_stCount--;
          g_stOvEpoch++;                 // the effective override set changed
+         StopsRebuildUidIndex();
          return;
         }
      }
@@ -5700,8 +5711,12 @@ void StopsForget(const string uid)
 //--- is a real state and returns -1: every caller MUST check before indexing.
 int StopsOvIndex(const string uid,const bool create)
   {
-   for(int i=0;i<g_stCount;i++)
-      if(g_stUid[i]==uid) return i;
+   // N70-02: O(1) hash lookup via g_stUidIdx replaces linear array scan on hot path
+   if(g_stCount>0)
+     {
+      int found=g_stUidIdx.FindInStrings(g_stUid,uid);
+      if(found>=0 && found<g_stCount && g_stUid[found]==uid) return found;
+     }
    if(!create) return -1;
    if(g_stCount>=CP_MAX_STOPS_OV)
      {
@@ -5721,6 +5736,7 @@ int StopsOvIndex(const string uid,const bool create)
    //--- "never" - which silently disables the throttle for the next change.
    g_stLastMs[n]=-1;
    g_stCount++;
+   StopsRebuildUidIndex();
    return n;
   }
 
@@ -5743,8 +5759,8 @@ void StopsPrune(const long now)
      }
    long keep=(long)maxThrottle*1000;
 
-   //--- M2 fix: Pre-mark active override UIDs in O(Desired + Acct) time using StopsOvIndex
-   //--- instead of O(Overrides * Senders * Desired) ~ 100M nested comparisons.
+   //--- M2 & N70-02 fix: Pre-mark active override UIDs in true O(Desired + Acct) time using
+   //--- O(1) g_stUidIdx hash probe instead of O(Overrides * (Senders*Desired + Acct)) string scans.
    static bool s_isOvAlive[CP_MAX_STOPS_OV];
    ArrayInitialize(s_isOvAlive,false);
    if(g_stCount>0)
@@ -5754,17 +5770,18 @@ void StopsPrune(const long now)
          int base=s*CP_MAX_POSITIONS;
          for(int d=0;d<g_desiredCount[s];d++)
            {
-            int idx=StopsOvIndex(g_desired[base+d].uid,false);
+            int idx=g_stUidIdx.FindInStrings(g_stUid,g_desired[base+d].uid);
             if(idx>=0 && idx<g_stCount) s_isOvAlive[idx]=true;
            }
         }
       for(int k=0;k<g_acctAllPosCount;k++)
         {
-         int idx=StopsOvIndex(g_acctAllPos[k].uid,false);
+         int idx=g_stUidIdx.FindInStrings(g_stUid,g_acctAllPos[k].uid);
          if(idx>=0 && idx<g_stCount) s_isOvAlive[idx]=true;
         }
      }
 
+   int pruned=0;
    for(int i=g_stCount-1;i>=0;i--)
      {
       if(g_stHasOv[i])
@@ -5787,8 +5804,10 @@ void StopsPrune(const long now)
          g_stLastMs[i]=g_stLastMs[last];
         }
       g_stCount--;
+      pruned++;
       g_stOvEpoch++;                   // the effective override set changed
      }
+   if(pruned>0) StopsRebuildUidIndex();
   }
 
 //--- A stop change, delivered as an EVENT.
@@ -6353,20 +6372,7 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvSl[idx]=p.sl;
    g_stOvTp[idx]=p.tp;
    g_stOvOpn[idx]=p.openPx;
-   g_stOvPprice[idx]=p.pprice; // BUG-02: Protect pending order trigger price in override table
-   //--- DEF-63-05: If modify event carries updated pprice, update desired table immediately
-   if(p.pprice>0.0)
-     {
-      int base=si*CP_MAX_POSITIONS;
-      for(int i=0;i<g_desiredCount[si];i++)
-        {
-         if(g_desired[base+i].uid==p.uid)
-           {
-            g_desired[base+i].pprice=p.pprice;
-            break;
-           }
-        }
-     }
+   g_stOvPprice[idx]=p.pprice; // BUG-02 & N70-03: Protected in override table only, preventing self-cancelling ppriceCaughtUp
    g_stOvEpoch++;                          // invalidates the stop-geometry cache
   }
 
@@ -6861,6 +6867,7 @@ int OnInit()
    g_onceFail.SetRepeatMs(60000);
    g_onceHbt.SetRepeatMs(60000);
    g_onceHour.SetRepeatMs(60*60*1000);
+   StopsRebuildUidIndex();
 
    //--- risk switches. Every one defaults to off, so this is a no-op unless
    //--- the operator has deliberately configured something.

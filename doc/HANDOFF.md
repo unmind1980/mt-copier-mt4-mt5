@@ -1294,6 +1294,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   8. **BUG-09 & BUG-10**：`dashboard.html` 在 WebSocket `renderCluster` 中实时同步更新 `s.writes = cl.writes`，并在 Standby 模式下明确显示只读保护文案；`notifications.rs` 增加对 Webhook 自定义 Header 中 `host`/`content-length`/`transfer-encoding`/`connection` 等敏感头的禁止覆盖过滤；
   9. **冻结业务规则继续锁定**：`DEF-63-03`（反向跟单无 TP 不强加止损）、`DEF-63-02`（双通道 `RefreshRisk`）与 `DEF-63-06`（`CopierClockAgeMs` 相等返回 -1）继续维持原状。
 
+### 七十次审计：快照编码咽喉前置校验与压缩、应急止损全出口守卫、改价覆盖去同源短路、全量同步防截断与批量刷盘（2026-10-29 13:40；全部闭环）
+
+- **修复与加固项**：
+  1. **N70-01**：`CopierSender.mq4` 将合法性校验移至 `RebuildSnapshotPayload` 编码咽喉处（`BroadcastLots` 换算后、`CopierEncodeSnapshot` 前），对非法记录就地剔除并压缩 `dn`，并在 `BroadcastLots` 中补齐乘数下溢兜底，从根源关死快照解码条数少于声明数导致的永久停跟死锁；
+  2. **N70-06**：`CopierReceiver.mq4` 在 `QueueModifyIfNeeded` 的 `pushed` 入队分支补齐 `!emergencyMissing` 守卫，彻底防止开仓瞬时报价缺失时由其它改动触发入队而产生假签名，导致实盘持仓终身裸奔；
+  3. **N70-03**：`CopierReceiver.mq4` 移除 `HandleModifyEvent` 中直接修改 `g_desired[].pprice` 的违规写入（DEF-63-05），统一由 `g_stOvPprice[]` 旁路表保护，消除 `ppriceCaughtUp` 判等两端同源短路，保证只改挂单入场价时覆盖标记不会在首个 tick 提前脱落；
+  4. **N70-04**：`hub/src/api.rs` 对全量重同步基线（`req.from_*_line == 0`）豁免 `truncate` 截断，`hub/src/cluster.rs` 增加截断批次保护拒绝执行 `replace_all`，彻底杜绝全量同步截掉备机最新在途命令；
+  5. **N70-05**：`hub/src/config.rs` 引入 `append_many` 批量刷盘机制，将 `apply_delta_lines` 改为内存单调筛选后单次写入并一次 `sync_data`，消除持全局互斥锁期间逐行 fsync 的秒级阻塞；
+  6. **N70-02**：`CopierReceiver.mq4` 引入 `CopierUidIndex g_stUidIdx` 为止损覆盖表建立哈希索引，将 `StopsOvIndex`（热路径）与 `StopsPrune` 彻底优化为真正的 O(1) 哈希查找。
+
 ---
 
 ## 9. 最终交付状态确认

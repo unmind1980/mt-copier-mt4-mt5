@@ -638,13 +638,21 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 // Apply delta configs (or replace if Primary was compacted or full resync triggered)
                                 //--- F-05: symmetrical with cmds: allow replace_all(&[]) when Primary cfg is 0
                                 if full_cfg_resync {
-                                    let _ = s.cfg.replace_all(&data.cfg_delta_lines);
+                                    if data.cfg_delta_lines.len() >= remote_st.cfg_lines {
+                                        let _ = s.cfg.replace_all(&data.cfg_delta_lines);
+                                    } else {
+                                        eprintln!("[hub] WARN full cfg resync received truncated batch ({} < {}), deferring replace_all", data.cfg_delta_lines.len(), remote_st.cfg_lines);
+                                    }
                                 } else if !data.cfg_delta_lines.is_empty() {
                                     let _ = s.cfg.apply_delta_lines(&data.cfg_delta_lines);
                                 }
                                 // Apply delta commands (or replace if Primary was compacted or full resync triggered)
                                 if full_cmd_resync {
-                                    let _ = s.cmds.replace_all(&data.cmd_delta_lines);
+                                    if data.cmd_delta_lines.len() >= remote_st.cmd_lines {
+                                        let _ = s.cmds.replace_all(&data.cmd_delta_lines);
+                                    } else {
+                                        eprintln!("[hub] WARN full cmd resync received truncated batch ({} < {}), deferring replace_all", data.cmd_delta_lines.len(), remote_st.cmd_lines);
+                                    }
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     let _ = s.cmds.apply_delta_lines(&data.cmd_delta_lines);
                                 }
