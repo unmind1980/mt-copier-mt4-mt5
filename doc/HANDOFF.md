@@ -1407,6 +1407,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **N80-05 (P3 低危)**：在 `src/Experts/CopierSender.mq4:1515` 中，移除 `if(rows<9) rows=9;` 冗余垫高逻辑，基础行数严格对齐为 8 行（7 头部 + 1 尾部留白），消灭无 Sender 连接时的底部多余黑框；
   6. **HBT2 自动发现节流加固**：在 `hub/src/main.rs:1945` 的 HBT2 自动发现新节点分支增加 500ms `wire_audit_throttle` 守卫，消灭高频未注册 HBT2 导致的磁盘日志刷盘隐患。
 
+### 八十一次审计：MT5 滑点负数下溢防御、事件泵重新武装突发重置与全链路核验（2026-10-31 01:25；全部闭环）
+
+- **修复与加固项**：
+  1. **N81-03 (P3 低危)**：在 `src/Include/Copier/CopierModel.mqh:773` 中，对 MT5 `CTrade.SetDeviationInPoints` 增加 `deviationPoints > 0 ? (ulong)deviationPoints : 0` 下界防护，杜绝配置异常或负数时因无符号转换下溢为 `18446744073709551615` 被券商报 10013 拒绝的隐患；
+  2. **N81-05 (P4 优化)**：在 `src/Include/Copier/CopierPump.mqh:42` 中，将 `ArmFast` 的突发计数重置条件优化为 `if(!m_inFlight || now > m_fastPumpUntil) m_burstCount = 0;`，使得高频连续交易事件下突发次数能够正确累积，恢复「15ms 窗口 + 500 次突发」双熔断的完整语义。
+- **澄清与审计闭环**：
+  * **N81-01**：命令阶梯耗尽正常运行仅需 82s，网络断续时受 1800s 绝对超时（已刷新 ts）约束，不会超过 3600s 告警窗口；阶梯耗尽分支不可强改 `c.ts` 以免破坏命令逻辑时间基准与复活冷却；
+  * **N81-02**：接收端状态文件实际直接复用 `CopierStateFile::Save`，第 80 轮 `CopierLotEncodable` 守卫已全量生效；
+  * **N81-04**：`alerts.rs:76` 的常量早在第 77 轮已彻底清理。
+
 ---
 
 ## 9. 最终交付状态确认

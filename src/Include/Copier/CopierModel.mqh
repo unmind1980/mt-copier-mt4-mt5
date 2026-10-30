@@ -770,7 +770,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
 #ifdef __MQL5__
    CTrade trade;
    trade.SetExpertMagicNumber((ulong)magic);
-   trade.SetDeviationInPoints((ulong)deviationPoints);
+   // N81-03: Guard against signed negative deviationPoints underflow to 18446744073709551615
+   trade.SetDeviationInPoints(deviationPoints > 0 ? (ulong)deviationPoints : 0);
    trade.SetTypeFillingBySymbol(sym);
    trade.SetAsyncMode(false);
    bool ok;

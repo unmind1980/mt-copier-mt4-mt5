@@ -39,7 +39,8 @@ public:
          effectiveTimeout=CP_PUMP_TIMEOUT_MS;
       long until=now+effectiveTimeout;
       if(until>m_fastPumpUntil) m_fastPumpUntil=until;
-      m_burstCount=0; // Reset burst counter for new intent
+      // N81-05: Reset burst counter only when re-arming from inactive or expired state
+      if(!m_inFlight || now>m_fastPumpUntil) m_burstCount=0;
       Trigger();
      }
 
