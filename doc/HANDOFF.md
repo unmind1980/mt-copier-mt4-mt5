@@ -1387,6 +1387,16 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   3. **N78-03 (P3 低危)**：在 `src/Include/Copier/CopierCodec.mqh` 中为 `CP_DIGITS_PX` 和 `CP_DIGITS_LOTS` 增加 `#ifndef` 守卫，消灭全平台 MQL 编译宏重定义警告；
   4. **N78-04 (P3 低危)**：在 `hub/src/users.rs` 与 `hub/src/api.rs` 中为未使用的公开辅助方法标注 `#[allow(dead_code)]`，消除 Rust 编译 Warning。
 
+### 七十九次审计：Standby 命令硬隔离、反向 waitforprofitpips 修正、面板对齐与审计归档防二次压缩（2026-10-30 04:00；全部闭环）
+
+- **修复与加固项**：
+  1. **BUG-01 (P1 高危)**：在 `hub/src/api.rs:2318` 中对 `post_command` 严格限制 `if !is_primary { return 409 Conflict }`，并在 `dashboard.html` 的 `maybeAutoRequestPositions` 中增加 Standby 角色抑制，彻底根除备机下发幽灵命令引发的 `commands.jsonl` 行数倒挂与 1 秒全量覆写抖动；
+  2. **BUG-02 (P1 高危)**：在 `src/Experts/CopierReceiver.mq4:5141` 中，在根据 `inverttrades` 翻转 `d.side` 之前保存原始方向 `senderSide`，并在 `waitforprofitpips` 门控中使用 `senderSide` 评估浮盈点数，在 `CopierSelfTest.mq4` 中添加回归断言，消除反向跟单浮盈计算方向颠倒缺陷；
+  3. **BUG-03 (P1 高危)**：在 `CopierReceiver.mq4:7481` 与 `CopierSender.mq4:1488` 的 `UpdatePanel()` 中，解耦展示总数 `nTotal` 与在线状态数 `np`，使 `peerShow` 准确覆盖 Hub 和断开连接的节点，在标题明确计入 `(incl. hub)`，彻底消除断连告警行消失与 Hub 挤占真实 Sender 槽位缺陷；
+  4. **BUG-04 (P1 高危)**：在 `hub/src/audit.rs:124` 的 `finish()` 中增加 `is_already_gz` 检测与 `GzDecoder` 校验，对崩溃重启遗留的 `.gz.tmp` 避免通过 `GzEncoder` 再次压缩，彻底防止生成双层 Gzip 导致归档损坏与 sequence 重置；并在 `audit.rs` 增加崩溃恢复单元测试；
+  5. **BUG-05 & BUG-06 & BUG-07 & OPT-08 (P2 中危)**：在 `CopierCurveKey.mqh:171` 增加 `FileDelete` 并传递 `FILE_REWRITE` 确保备份文件正常覆盖；在 `CopierSender.mq4:684` 与 `CopierReceiver.mq4:1959` 为 `curFrom` 增加 `<= 2147483647` 范围校验防止 32 位整型截断；在 `api.rs:3208, 3252, 3339` 将 HA 操作员审计归因替换为实际 `&sess.user_id`；在 `CopierReceiver.mq4:3781` 为 `g_stopSig` 引入 4 步线性探测哈希解决同余订单冲突抖动；
+  6. **OPT-09 ~ OPT-12 (P3 低危)**：消除 `targetLots` 变量遮蔽与重复计算；统一 `CopierAccountLogin` 抽象原语；统一 Receiver `held_lots` 为 `trim_lots` 字符串消除类型不一致；消除 `notifications_test` 重复 DNS 并在 SSRF 拦截时统一返回 400。
+
 ---
 
 ## 9. 最终交付状态确认

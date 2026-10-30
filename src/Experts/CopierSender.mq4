@@ -681,7 +681,8 @@ int BuildCurrent()
                long curFrom=from;
                for(int hops=0;hops<5;hops++)
                  {
-                  if(!OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+                  // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
+                  if(curFrom<=0 || curFrom>2147483647 || !OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
                   long prevFrom=CopierMt4FromTicket(OrderComment());
                   if(prevFrom<=0) break;
                   j=g_prev.FindByTicket(prevFrom);
@@ -1486,11 +1487,18 @@ void UpdatePanel()
    g_prev.Summary(npos,nord,lots);
 
    int np=0;
+   int nTotal=0;
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(IsHubPeerName(pnm)) continue; // F-09: hub (standalone or HA) is not a receiver peer
+      if(pnm==g_hubPeerName) continue; // skip standalone generic "hub" placeholder
+      nTotal++;
+      if(IsHubPeerName(pnm))
+        {
+         if(g_hubOn && g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
+         continue;
+        }
       if(g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
      }
    //--- header, listening, CHANNEL, active, volume, balance, connected + one
@@ -1502,8 +1510,8 @@ void UpdatePanel()
    //--- summary line. Same rule as the receiver's panel, and for the same
    //--- reason: a truncated list that does not SAY it is truncated is the
    //--- failure mode, not the truncation.
-   int peerShow=(np>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:np;
-   int peerMore=(np>peerShow)?1:0;
+   int peerShow=(nTotal>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:nTotal;
+   int peerMore=(nTotal>peerShow)?1:0;
    int rows=8+peerShow+peerMore;
    if(rows<9) rows=9;
 
@@ -1593,7 +1601,7 @@ void UpdatePanel()
      }
 
    if(peerMore)
-      g_panel.Row(r++,"  ... and "+(string)(np-peerShow)+" more receiver(s)"
+      g_panel.Row(r++,"  ... and "+(string)(nTotal-peerShow)+" more receiver(s)"
                       +" - the hub dashboard lists every one",
                   CP_PANEL_DIM);
 

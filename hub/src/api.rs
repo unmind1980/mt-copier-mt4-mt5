@@ -356,7 +356,7 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
                 n.held.map(|count| {
                     json!({
                         "count": count,
-                        "lots": (n.held_lots * 100.0).round() / 100.0,
+                        "lots": trim_lots(n.held_lots),
                         "receipt": Value::Null,
                         "orphaned": n.orphaned,
                     })
@@ -2315,7 +2315,7 @@ async fn post_command(
         (s.writes, s.cluster.is_primary(), known)
     };
 
-    if !is_read_only && !is_primary {
+    if !is_primary {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
@@ -2837,18 +2837,6 @@ async fn notifications_test(
             .into_response();
     };
 
-    if target_channel.channel_type == "webhook" {
-        if let Some(url) = target_channel.config.get("url").and_then(|u| u.as_str()) {
-            if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "ok": false, "error": e })),
-                )
-                    .into_response();
-            }
-        }
-    }
-
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(8))
@@ -2868,11 +2856,24 @@ async fn notifications_test(
 
     match crate::notifications::send_to_channel(&client, &target_channel, &test_alert).await {
         Ok(res) => Json(json!({ "ok": true, "result": res })).into_response(),
-        Err(err) => (
-            axum::http::StatusCode::BAD_GATEWAY,
-            Json(json!({ "ok": false, "error": err })),
-        )
-            .into_response(),
+        Err(err) => {
+            // OPT-12: Map SSRF/URL validation errors to 400 Bad Request uniformly across all channels (webhook, wecom, dingtalk)
+            let status = if err.contains("prohibited")
+                || err.contains("must begin with")
+                || err.contains("userinfo")
+                || err.contains("no host")
+                || err.contains("Invalid URL")
+            {
+                axum::http::StatusCode::BAD_REQUEST
+            } else {
+                axum::http::StatusCode::BAD_GATEWAY
+            };
+            (
+                status,
+                Json(json!({ "ok": false, "error": err })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -3205,7 +3206,7 @@ async fn cluster_promote(
     let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
 
     audit_rec.record(
-        "operator",
+        &sess.user_id,
         "",
         "cluster.promote",
         &format!("promoted to Primary with epoch {} (writes={})", new_epoch, current_writes),
@@ -3249,7 +3250,7 @@ async fn cluster_failback_lock(
     let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
 
     audit_rec.record(
-        "operator",
+        &sess.user_id,
         "",
         "cluster.failback_lock",
         &format!("set failback_locked={}", b.locked),
@@ -3336,7 +3337,7 @@ async fn cluster_failback_now(
                     drop(s);
                     let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
                     audit_rec.record(
-                        "operator",
+                        &sess.user_id,
                         "",
                         "cluster.manual_failback_success",
                         &format!("recovered Master identity with epoch {} (writes={})", new_epoch, current_writes),

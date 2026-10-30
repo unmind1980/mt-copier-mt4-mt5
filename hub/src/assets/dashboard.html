@@ -3026,6 +3026,8 @@ function openPositionsModal(focusKey){
 var _autoPosAt = {};
 function maybeAutoRequestPositions(n){
   if(!n || n.role !== "receiver") return;
+  // BUG-01: Standby Hub is read-only; positions replicate automatically via cluster sync
+  if(s.data && s.data.cluster && s.data.cluster.role === "standby") return;
   var held = (n.positions && n.positions.count) || 0;
   var rows = (n.positions_detail || []).length + (n.waiting_detail || []).length;
   if(held <= 0) return;

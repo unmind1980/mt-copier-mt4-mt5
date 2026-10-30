@@ -124,35 +124,52 @@ impl ArchiveShift {
     fn finish(&self, rotating: &Path, file_len: u64) -> io::Result<()> {
         let _serial = self.lock.lock_or_recover();
 
-        // 4. Compress the scratch file into a temporary .gz
-        let gz_tmp = PathBuf::from(format!(
-            "{}.gz.tmp.{}",
-            rotating.display(),
-            std::process::id()
-        ));
-        let _ = fs::remove_file(&gz_tmp);
+        let is_already_gz = rotating.to_string_lossy().contains(".gz.tmp.");
+        let gz_tmp = if is_already_gz {
+            // BUG-04: If rotating is already a .gz.tmp file from an interrupted rotation,
+            // verify it is valid Gzip. Do NOT pass it into GzEncoder for second compression.
+            if let Ok(src) = File::open(rotating) {
+                let mut decoder = GzDecoder::new(BufReader::new(src));
+                let mut buf = [0u8; 64];
+                if decoder.read(&mut buf).is_err() {
+                    eprintln!("[hub] AUDIT RECOVER: corrupted .gz.tmp leftover {}; discarding", rotating.display());
+                    let _ = fs::remove_file(rotating);
+                    return Ok(());
+                }
+            }
+            rotating.to_path_buf()
+        } else {
+            // 4. Compress the scratch file into a temporary .gz
+            let gz = PathBuf::from(format!(
+                "{}.gz.tmp.{}",
+                rotating.display(),
+                std::process::id()
+            ));
+            let _ = fs::remove_file(&gz);
 
-        let compress_res = (|| -> io::Result<()> {
-            let src = File::open(rotating)?;
-            let mut reader = BufReader::new(src);
-            let dst = File::create(&gz_tmp)?;
-            let writer = BufWriter::new(dst);
-            let mut encoder = GzEncoder::new(writer, Compression::default());
-            io::copy(&mut reader, &mut encoder)?;
-            encoder.finish()?;
-            Ok(())
-        })();
+            let compress_res = (|| -> io::Result<()> {
+                let src = File::open(rotating)?;
+                let mut reader = BufReader::new(src);
+                let dst = File::create(&gz)?;
+                let writer = BufWriter::new(dst);
+                let mut encoder = GzEncoder::new(writer, Compression::default());
+                io::copy(&mut reader, &mut encoder)?;
+                encoder.finish()?;
+                Ok(())
+            })();
 
-        if let Err(e) = compress_res {
-            eprintln!("[hub] AUDIT ROTATE: compression failed: {}", e);
-            let _ = fs::remove_file(&gz_tmp);
-            // The scratch file stays: its records are still on disk and the
-            // next start-up finishes the shift (see open_with_rotation).
-            return Err(e);
-        }
+            if let Err(e) = compress_res {
+                eprintln!("[hub] AUDIT ROTATE: compression failed: {}", e);
+                let _ = fs::remove_file(&gz);
+                // The scratch file stays: its records are still on disk and the
+                // next start-up finishes the shift (see open_with_rotation).
+                return Err(e);
+            }
 
-        // The uncompressed scratch has been safely copied into the .gz tmp.
-        let _ = fs::remove_file(rotating);
+            // The uncompressed scratch has been safely copied into the .gz tmp.
+            let _ = fs::remove_file(rotating);
+            gz
+        };
 
         // 5. Shift existing archives up (.9.gz -> .10.gz), prune, then land
         // the new one at .1.gz.
@@ -1127,6 +1144,40 @@ mod tests {
             assert_eq!(seq, 2);
             let s3 = b.record("", "", "after_crash", "", None, None, "ok");
             assert_eq!(s3, 3);
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn restart_recovers_leftover_gz_tmp_without_double_compression() {
+        let p = tmp("gztmp_recovery");
+        cleanup(&p);
+        let gz_tmp = PathBuf::from(format!("{}.rotating.99999.1.gz.tmp.99999", p.display()));
+        {
+            // BUG-04 test: uncompressed .rotating was deleted, only valid .gz.tmp exists
+            let f = File::create(&gz_tmp).unwrap();
+            let mut enc = GzEncoder::new(BufWriter::new(f), Compression::default());
+            let line = json!({
+                "v": 1, "seq": 10, "ts": 1700000000u64, "utc": "2023-11-14T22:13:20Z",
+                "actor": "admin", "ip": "127.0.0.1", "action": "test.leftover",
+                "target": "node:1", "status": "ok"
+            });
+            serde_json::to_writer(&mut enc, &line).unwrap();
+            enc.write_all(b"\n").unwrap();
+            enc.finish().unwrap();
+        }
+        assert!(gz_tmp.exists());
+        {
+            let b = Audit::open_with_rotation(&p, 500, 3).unwrap();
+            assert!(!gz_tmp.exists(), "gz.tmp should be moved to archive");
+            assert!(b.archive_path(1).exists(), "archive 1 must exist");
+            // Must be decodable by standard GzDecoder and not double-compressed
+            let (recs, _) = b.read(10, 0);
+            assert_eq!(recs.len(), 1);
+            assert_eq!(recs[0]["action"], "test.leftover");
+            assert_eq!(recs[0]["seq"], 10);
+            let (seq, _, _) = b.counts();
+            assert_eq!(seq, 10, "must recover seq=10 from archive 1");
         }
         cleanup(&p);
     }

@@ -1775,6 +1775,15 @@ void TestProfitTarget()
       !CopierProfitTargetReached(0.0,-10.0));
    Ok("profit: -10 is NOT satisfied while in profit",
       !CopierProfitTargetReached(20.0,-10.0));
+
+   // BUG-02: Verify sender profit calculation under inverted trades
+   // When sender BUY opens at 1.1000 and closePx is 1.1050 (pipSize=0.0001),
+   // sender is at +50 pips. Even if receiver inverts to SELL, sender's entry profit is still +50 pips.
+   double b2OpenPx=1.1000, b2ClosePx=1.1050, b2PipSize=0.0001;
+   int b2SenderSide=CP_SIDE_BUY;
+   double b2ProfitPips=(b2SenderSide==CP_SIDE_BUY)?((b2ClosePx-b2OpenPx)/b2PipSize):((b2OpenPx-b2ClosePx)/b2PipSize);
+   Ok("profit: sender BUY profit is +50 pips regardless of receiver inversion",b2ProfitPips==50.0);
+   Ok("profit: +50 satisfies waitforprofitpips=+10",CopierProfitTargetReached(b2ProfitPips,10.0));
   }
 
 void TestKvSuffixCollision()

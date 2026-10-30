@@ -165,10 +165,12 @@ private:
    bool              WriteFile(const string pub,const string sec,
                                const string why)
      {
-      // R47-08: Backup existing key file to .bak before replacing
+      // R47-08 & BUG-05: Backup existing key file to .bak before replacing.
+      // Explicitly delete old .bak and pass FILE_REWRITE so rotations succeed on existing .bak files.
       if(FileIsExist(m_path, m_common?FILE_COMMON:0))
         {
-         FileCopy(m_path, m_common?FILE_COMMON:0, m_path+".bak", m_common?FILE_COMMON:0);
+         FileDelete(m_path+".bak", m_common?FILE_COMMON:0);
+         FileCopy(m_path, m_common?FILE_COMMON:0, m_path+".bak", (m_common?FILE_COMMON:0)|FILE_REWRITE);
         }
       FileDelete(m_path, m_common?FILE_COMMON:0);
 

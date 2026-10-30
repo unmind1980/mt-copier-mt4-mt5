@@ -1956,7 +1956,8 @@ string ResolveUid(const CopierPos &p)
       int hops=0;
       for(;hops<5;hops++)
         {
-         if(!OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+         // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
+         if(curFrom<=0 || curFrom>2147483647 || !OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
          long prevFrom=CopierMt4FromTicket(OrderComment());
          if(prevFrom<=0) break;
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
@@ -3772,12 +3773,27 @@ bool StopsDiffer(const double have,const double want,const CopierSymInfo &si)
 // Everything is decided here and the trade call is QUEUED, like every
 // other operation: converge must never trade inline.
 //=====================================================================
+// OPT-08: Find or allocate cache slot for stop signature with 4-step probing
+//=====================================================================
+int StopSigFindSlot(const long ticket)
+  {
+   if(ticket<=0) return 0;
+   int base=(int)(((ulong)ticket^((ulong)ticket>>11))&(CP_STOPSIG_SLOTS-1));
+   for(int step=0;step<4;step++)
+     {
+      int sh=(base+step)&(CP_STOPSIG_SLOTS-1);
+      if(g_stopSig[sh].ticket==ticket || g_stopSig[sh].ticket==0) return sh;
+     }
+   return base;
+  }
+
+//=====================================================================
 void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                          const CopierPos &local)
   {
    //--- Already evaluated with exactly these inputs (and the same override
    //--- table) and the answer was "nothing to do". See CopierStopSig.
-   int sh=(int)(local.ticket&(CP_STOPSIG_SLOTS-1));
+   int sh=StopSigFindSlot(local.ticket);
    if(sh<0 || sh>=CP_STOPSIG_SLOTS) sh=0;
    if(local.ticket!=0
       && g_stopSig[sh].ticket==local.ticket
@@ -5041,11 +5057,11 @@ void ConvergeSender(const int si)
               }
            }
 
-         // N49-02: Pending order volume adjustment (cancel + re-place)
+         // N49-02 & OPT-09: Pending order volume adjustment (cancel + re-place)
          // MetaTrader broker APIs cannot modify volume on existing pending orders.
          if(d.kind==CP_ORD_PENDING && g_locScratch[li].kind==CP_ORD_PENDING)
            {
-            double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
+            if(hasQueued) targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
             CopierSymInfo si2;
             if(CopierGetSymbolInfo(g_locScratch[li].sym,si2) && targetLots>0.0 && si2.lotStep>0.0)
               {
@@ -5138,6 +5154,7 @@ void ConvergeSender(const int si)
       //--- fill - the one algorithm in this codebase that is correct for this.
       double osl=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.sl:0.0;
       double otp=(d.kind==CP_ORD_PENDING && g_senderCfg[si].mirrorstops)?d.tp:0.0;
+      int senderSide=d.side;
 
       if(g_senderCfg[si].inverttrades)
         {
@@ -5337,14 +5354,16 @@ void ConvergeSender(const int si)
          if(CopierGetSymbolInfo(rsym,pi))
            {
             double closePx=0.0;
-            if(CopierGetClosePrice(rsym,d.side,closePx))
+            // BUG-02: Use sender's original side (senderSide) to evaluate sender's profit/pullback,
+            // preventing inverttrades from flipping the evaluation direction.
+            if(CopierGetClosePrice(rsym,senderSide,closePx))
               {
                //--- Dig3/Dig5 => JPY-style 3/5-digit quoting, where a pip is
                //--- 10 points, not 1. This is the SAME rule PipSize() applies
                //--- everywhere else, and it used to be written out inline here -
                //--- two spellings of one rule is exactly how they drift apart.
                double pipSize=PipSize(pi);
-               double profitPips=(d.side==CP_SIDE_BUY)
+               double profitPips=(senderSide==CP_SIDE_BUY)
                                  ?((closePx-d.openPx)/pipSize)
                                  :((d.openPx-closePx)/pipSize);
 
@@ -5871,9 +5890,9 @@ int ResubscribeSenders(const string &before[],const int beforeN)
    for(int j=0;j<beforeN;j++)
      {
       if(StringLen(before[j])==0) continue;
-      // BUG-04: Never unsubscribe receiver's own identity topic (g_nid or raw login),
+      // BUG-04 & OPT-10: Never unsubscribe receiver's own identity topic (g_nid or raw login),
       // which receives targeted slice-B snapshot repairs from senders.
-      if(before[j]==(string)g_nid || before[j]==(string)AccountInfoInteger(ACCOUNT_LOGIN)) continue;
+      if(before[j]==(string)g_nid || before[j]==(string)CopierAccountLogin()) continue;
       bool still=false;
       for(int i=0;i<g_nSenders;i++)
          if(g_sid[i]==before[j]) { still=true; break; }
@@ -7479,11 +7498,18 @@ void UpdatePanel()
    //--- tripped, and leaving it out of the count meant the spacer below it
    //--- vanished exactly when the panel had something important to say.
    int np=0;
+   int nTotal=0;
    for(int i=0;i<CP_MAX_PEERS;i++)
      {
       string pnm=g_peers.NameAt(i);
       if(StringLen(pnm)==0) continue;
-      if(IsHubPeerName(pnm)) continue; // F-09: hub (standalone or HA) is not a sender peer
+      if(pnm==g_hubPeerName) continue; // skip standalone generic "hub" placeholder
+      nTotal++;
+      if(IsHubPeerName(pnm))
+        {
+         if(g_hubOn && g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
+         continue;
+        }
       if(g_peers.StateAt(i,CP_PEER_TIMEOUT_MS)==CP_PEER_UP) np++;
      }
    //--- The orphan block only exists when ShowOrphanedList is on. Sizing the
@@ -7494,8 +7520,9 @@ void UpdatePanel()
    int orphanRows=(ShowOrphanedList ? (1 + orphShown + ((nOrphan > orphShown) ? 1 : 0)) : 0);
    //--- Detail rows for the first few peers; the rest get ONE summary line
    //--- instead of being dropped off the bottom of the panel.
-   int peerShow=(np>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:np;
-   int peerMore=(np>peerShow)?1:0;
+   //--- BUG-03: Cap display rows by total displayable peers nTotal so down/hub peers are not hidden.
+   int peerShow=(nTotal>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:nTotal;
+   int peerMore=(nTotal>peerShow)?1:0;
    int riskRow=g_risk.AnyTripped()?1:0;
    //--- N78-02: Base rows is strictly 9. Exactly matches lines rendered in UpdatePanel.
    int rows=9+riskRow+peerShow+peerMore+orphanRows;
@@ -7625,7 +7652,7 @@ void UpdatePanel()
    //--- The rest, named as a count rather than vanished: the panel is a
    //--- rectangle and 100 peer rows do not fit on any chart.
    if(peerMore)
-      g_panel.Row(r++,"  ... and "+(string)(np-peerShow)+" more peer(s)"
+      g_panel.Row(r++,"  ... and "+(string)(nTotal-peerShow)+" more peer(s)"
                       +" - the hub dashboard lists every one",
                   CP_PANEL_DIM);
 
