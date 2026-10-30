@@ -1944,20 +1944,28 @@ fn main() {
                                             if ver.is_empty() { "?" } else { ver.as_str() },
                                             up
                                         );
-                                        audit.record(
-                                            "", "",
-                                            "node.registered",
-                                            &format!("{}:{}", role, acc),
-                                            None,
-                                            Some(serde_json::json!({
-                                                "role": role,
-                                                "acc": acc,
-                                                "name": nm,
-                                                "via": "heartbeat",
-                                                "note": "its REG was lost",
-                                            })),
-                                            "ok",
-                                        );
+                                        let throttle_key = ("wire".to_string(), "node.registered".to_string());
+                                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                                            Some(t) => t.elapsed() >= Duration::from_millis(500),
+                                            None => true,
+                                        };
+                                        if should_audit {
+                                            wire_audit_throttle.insert(throttle_key, Instant::now());
+                                            audit.record(
+                                                "", "",
+                                                "node.registered",
+                                                &format!("{}:{}", role, acc),
+                                                None,
+                                                Some(serde_json::json!({
+                                                    "role": role,
+                                                    "acc": acc,
+                                                    "name": nm,
+                                                    "via": "heartbeat",
+                                                    "note": "its REG was lost",
+                                                })),
+                                                "ok",
+                                            );
+                                        }
                                     } else if args.verbose {
                                         println!(
                                             "[hub] hbt   {:<20} up {}s",
