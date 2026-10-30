@@ -7490,12 +7490,15 @@ void UpdatePanel()
    //--- panel for rows that will not be written would leave a gap at the
    //--- bottom of the background - the panel would look broken rather than
    //--- simply shorter.
-   int orphanRows=(ShowOrphanedList?(2+CP_PANEL_ORPHAN_SHOW):0);
+   //--- N78-02: Calculate exact orphan rows drawn instead of overestimating to prevent dead gaps.
+   int orphanRows=(ShowOrphanedList ? (1 + orphShown + ((nOrphan > orphShown) ? 1 : 0)) : 0);
    //--- Detail rows for the first few peers; the rest get ONE summary line
    //--- instead of being dropped off the bottom of the panel.
    int peerShow=(np>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:np;
    int peerMore=(np>peerShow)?1:0;
-   int rows=11+peerShow+peerMore+orphanRows;
+   int riskRow=g_risk.AnyTripped()?1:0;
+   //--- N78-02: Base rows is strictly 9. Exactly matches lines rendered in UpdatePanel.
+   int rows=9+riskRow+peerShow+peerMore+orphanRows;
    g_panel.Begin(rows);
 
    int r=0;

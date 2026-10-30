@@ -294,6 +294,7 @@ impl UserStore {
     }
 
     /// Reload users from disk (used by HA cluster replication).
+    #[allow(dead_code)]
     pub fn reload(&mut self) -> Result<(), String> {
         let loaded = Self::load_at(&self.path)?;
         self.apply_loaded_users(loaded.users);

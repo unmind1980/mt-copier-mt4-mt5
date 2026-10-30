@@ -121,8 +121,12 @@ string CopierErrText(const int err)
 //=====================================================================
 // Position record: UID,TICKET,SYMBOL,SIDE,LOTS,OPENPX,SL,TP,MAGIC,OTS
 //=====================================================================
+#ifndef CP_DIGITS_PX
 #define CP_DIGITS_PX   8
+#endif
+#ifndef CP_DIGITS_LOTS
 #define CP_DIGITS_LOTS 8
+#endif
 
 string CopierEncodeRec(const CopierPos &p)
   {

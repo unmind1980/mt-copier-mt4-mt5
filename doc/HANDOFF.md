@@ -1379,6 +1379,14 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   3. **N77-03 (P3 低危)**：在 `hub/src/alerts.rs` 中清理无引用的 `COMMAND_UNKNOWN` 常量 dead code；
   4. **N77-04 (P3 低危)**：在 `src/Include/Copier/CopierSymbol.mqh` 的 `CopierClockAgeMs` 中，将 `serverNow <= (long)quoteTime` 修正为 `< (long)quoteTime`，使同一秒的鲜活报价正确返回 0 ms 而非 -1。
 
+### 七十八次审计：超时状态时间戳刷新消除告警漏报、面板动态行高对齐、宏重定义防护与死代码清理（2026-10-30 02:40；全部闭环）
+
+- **修复与加固项**：
+  1. **N78-01 (P2 中危)**：在 `hub/src/commands.rs` 中，当命令因 1800 秒绝对超时转为 `STATE_UNKNOWN` 时，将其时间戳刷新为状态转移发生时刻（`c.ts = now_secs`），彻底解决挂起超过 1 小时的离线超时命令被 `recent_unknown` 判定为过期历史记录而漏报外部告警的问题；
+  2. **N78-02 (P3 低危)**：在 `src/Experts/CopierReceiver.mq4:7498` 中，将接收端图表面板基础行高严格对齐为 9 行，并根据当前风控状态 `riskRow` 以及孤儿单实际显示数量动态计算 `orphanRows`，彻底消除正常运行状态下面板底部的黑色空白死区；
+  3. **N78-03 (P3 低危)**：在 `src/Include/Copier/CopierCodec.mqh` 中为 `CP_DIGITS_PX` 和 `CP_DIGITS_LOTS` 增加 `#ifndef` 守卫，消灭全平台 MQL 编译宏重定义警告；
+  4. **N78-04 (P3 低危)**：在 `hub/src/users.rs` 与 `hub/src/api.rs` 中为未使用的公开辅助方法标注 `#[allow(dead_code)]`，消除 Rust 编译 Warning。
+
 ---
 
 ## 9. 最终交付状态确认

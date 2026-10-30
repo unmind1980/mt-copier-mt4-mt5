@@ -746,11 +746,12 @@ impl CommandStore {
             // HUB-02, R60-06 & N72-02: Check reachability BEFORE incrementing attempts or consuming ladder.
             // If node is currently disconnected/offline, defer next check by 2 seconds without burning retry steps.
             if !is_reachable(&c.node) {
-                // N76-05: Absolute timeout for persistently unreachable nodes (1800s / 30 mins)
+                // N76-05 & N78-01: Absolute timeout for persistently unreachable nodes (1800s / 30 mins)
                 // Prevents infinite pending accumulation and enables command.unknown alert for dead nodes.
                 let now_secs = unix_secs();
                 if now_secs.saturating_sub(c.ts) >= 1800 {
                     c.state = STATE_UNKNOWN.to_string();
+                    c.ts = now_secs; // N78-01: stamp transition time so recent_unknown does not drop it as stale
                     c.err = "node unreachable for 30m (abandoned after timeout)".to_string();
                     let snapshot = c.clone();
                     out.push(snapshot.clone());

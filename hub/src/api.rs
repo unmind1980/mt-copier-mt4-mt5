@@ -370,6 +370,7 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
         .collect()
 }
 
+#[allow(dead_code)]
 fn nodes_json_list(reg: &Registry, pos: &Positions, now: Instant) -> Vec<Value> {
     let nodes: Vec<Node> = reg.sorted().into_iter().cloned().collect();
     nodes_json_list_from_nodes(&nodes, pos, now)
