@@ -395,9 +395,18 @@ impl CommandStore {
                     err: v["err"].as_str().unwrap_or("").to_string(),
                     next_at: Instant::now() + Duration::from_secs(step),
                 };
-                // R60-04: Evaluate state rank for memory state updates
+                // N76-04: Evaluate time order. Replicated lines with strictly newer ts (including revivals)
+                // take precedence. For identical ts, higher state_rank breaks ties.
                 let should_insert = match inner.commands.get(&id) {
-                    Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
+                    Some(existing) => {
+                        if cmd.ts > existing.ts {
+                            true
+                        } else if cmd.ts == existing.ts {
+                            state_rank(&cmd.state) > state_rank(&existing.state)
+                        } else {
+                            false
+                        }
+                    }
                     None => true,
                 };
                 if should_insert {
@@ -737,6 +746,18 @@ impl CommandStore {
             // HUB-02, R60-06 & N72-02: Check reachability BEFORE incrementing attempts or consuming ladder.
             // If node is currently disconnected/offline, defer next check by 2 seconds without burning retry steps.
             if !is_reachable(&c.node) {
+                // N76-05: Absolute timeout for persistently unreachable nodes (1800s / 30 mins)
+                // Prevents infinite pending accumulation and enables command.unknown alert for dead nodes.
+                let now_secs = unix_secs();
+                if now_secs.saturating_sub(c.ts) >= 1800 {
+                    c.state = STATE_UNKNOWN.to_string();
+                    c.err = "node unreachable for 30m (abandoned after timeout)".to_string();
+                    let snapshot = c.clone();
+                    out.push(snapshot.clone());
+                    changed.push(snapshot);
+                    finished.push(id);
+                    continue;
+                }
                 c.next_at = now + Duration::from_secs(2);
                 continue;
             }
@@ -1033,9 +1054,19 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
             err: v["err"].as_str().unwrap_or("").to_string(),
             next_at: Instant::now(),
         };
-        // P0-03 & R60-04: Respect state rank on replay so newer state is never regressed by older lines
+        // P0-03, R60-04 & N76-04: Journal is sequentially ordered. Later written lines take
+        // precedence over older lines. If a command was revived (unknown/acked -> pending),
+        // its ts is strictly newer so it wins. For identical ts, state_rank breaks ties.
         let should_insert = match commands.get(id) {
-            Some(existing) => state_rank(&cmd.state) >= state_rank(&existing.state),
+            Some(existing) => {
+                if cmd.ts > existing.ts {
+                    true
+                } else if cmd.ts == existing.ts {
+                    state_rank(&cmd.state) >= state_rank(&existing.state)
+                } else {
+                    false
+                }
+            }
             None => true,
         };
         if should_insert {

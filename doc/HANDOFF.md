@@ -1350,6 +1350,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N75-02**：在 `hub/src/positions.rs` 中将 `SenderView.items` 改为 `Arc<Vec<PositionItem>>`，使 `clone_view()` 的复杂度降为 O(1) 浅拷贝，彻底消除 `/api/v1/positions` 与每 200ms WebSocket 广播在持有 `SharedState` 全局互斥锁时深度复制数万个订单字符串的性能阻塞；
   5. **N74-07 & N74-08 & O-01 & O-03**：在 `positions.rs` 中重构 `parse_snap` 为单趟扫描，降低 66% 快照解析扫描开销；在 `CopierSender.mq4` 抽取 `HandleDirectStatusFrame`，消除快慢车道 70 行重复代码并补齐慢车道 `g_pump.Disarm()` 遗漏；在 `main.rs` 的 `is_reachable` 中移除 `@all` 避免全局订阅假阳性；清理 `commands.rs` 中全仓零引用的 `defer()` 死代码。
 
+### 七十六次审计：多 IP 候选钉死防双栈告警失效、Url 解析防 Query 污染、命令单调性时间戳去重与离线绝对超时（2026-10-30 00:05；全部闭环）
+
+- **修复与加固项**：
+  1. **N76-01**：在 `hub/src/notifications.rs` 中将 `resolve_pinned_client()` 升级为多地址解析绑定：使用 `resolve_to_addrs(&host, &addrs)`，并将所有解析出的合法 IP 候选排序（IPv4 优先、保持全部备选），彻底消除单地址钉死导致双栈域名在纯 IPv4 出口主机上告警全灭的问题；
+  2. **N76-02 & N76-03**：在 `check_url_base()` 中采用 `reqwest::Url::parse()` 提取标准主机名，彻底消除由于缺少根路径导致 query 参数（如 `?token=xxx`）被拼入域名引发的 DNS 硬失败；在 `validate_outgoing_url()` 与 `resolve_pinned_client()` 中为 `lookup_host` 增设 3 秒 `tokio::time::timeout`，移除非异步同步阻塞解析，消灭通知任务挂起风险；
+  3. **N76-04**：在 `hub/src/commands.rs` 中重构 `apply_delta_lines()` 与 `load()` 的版本插入判据：将纯 `state_rank` 单调假设改为「时间戳后写者胜（`cmd.ts > existing.ts`，同 ts 时按 rank 比对）」，完美支持 `issue_cfg_at` 的「终态复活（unknown/acked -> pending）」自愈路径，彻底消除复活行被丢弃导致的备机行数永久少 1、1Hz 无休止全量 sync 请求与海量冗余日志；
+  4. **N76-05**：在 `commands.rs` 的 `due_gated` 中，为不可达节点增加 30 分钟（1800 秒）绝对超时上限，达到上限后标记为 `STATE_UNKNOWN` 并移出队列触发 `ALERT` 与 `command.timeout` 审计，杜绝死节点命令永久 pending 无法感知；
+  5. **N76-06 & N76-09**：在 `hub/src/cluster.rs` 中，双 Standby 选举提权成功后立即刷新局部变量 `current_role = "primary"`，防止新 Primary 在同一 tick 内继续执行 Standby 同步逻辑并被对端较短日志意外覆盖；在 `hub/src/api.rs` 的 `topology` 端点中将全量节点的 JSON 树构造完全移出 `SharedState` 全局互斥锁，降低持锁开销至微秒级。
+
 ---
 
 ## 9. 最终交付状态确认

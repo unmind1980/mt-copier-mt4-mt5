@@ -855,17 +855,15 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
         return Err("URL must begin with http:// or https://".to_string());
     }
 
-    let authority = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
-    if authority.contains('@') {
+    // N76-02: Use reqwest::Url parser to accurately extract host without being corrupted by query (?token=) or fragment (#)
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("URL cannot contain userinfo credentials".to_string());
     }
 
-    // Handle IPv6 bracket format [fe80::...]:port or standard host:port
-    let host = if authority.starts_with('[') {
-        authority.split(']').next().unwrap_or("").trim_start_matches('[')
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
+    let host_raw = parsed.host_str().ok_or_else(|| "URL has no host".to_string())?;
+    // Handle IPv6 bracket format [fe80::...] or standard host
+    let host = host_raw.trim_start_matches('[').trim_end_matches(']');
 
     let host_lower = host.to_ascii_lowercase();
     if host_lower.starts_with("169.254.")
@@ -921,26 +919,37 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
 
 pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     if let Some(host) = check_url_base(url)? {
-        let lookup_target = format!("{}:80", host);
-        if let Ok(mut addrs) = tokio::net::lookup_host(lookup_target.clone()).await {
-            while let Some(addr) = addrs.next() {
-                check_single_ip(addr.ip())?;
-            }
-        } else {
-            use std::net::ToSocketAddrs;
-            if let Ok(addrs) = lookup_target.to_socket_addrs() {
-                for addr in addrs {
+        let parsed_url = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+        let port = parsed_url.port_or_known_default().unwrap_or(80);
+        let lookup_target = format!("{}:{}", host, port);
+        // N76-03: Add 3s timeout to DNS lookup preventing unbound task stalling
+        let lookup = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::net::lookup_host(lookup_target),
+        )
+        .await;
+
+        match lookup {
+            Ok(Ok(mut addrs)) => {
+                let mut found = false;
+                while let Some(addr) = addrs.next() {
                     check_single_ip(addr.ip())?;
+                    found = true;
+                }
+                if !found {
+                    return Err(format!("DNS lookup yielded no addresses for {}", host));
                 }
             }
+            Ok(Err(e)) => return Err(format!("DNS lookup failed for {}: {}", host, e)),
+            Err(_) => return Err(format!("DNS lookup timed out for {}", host)),
         }
     }
     Ok(())
 }
 
-/// N74-02: Resolves URL, validates every resolved IP against SSRF rules,
-/// and builds a client pinned with `ClientBuilder::resolve(host, addr)` to permanently
-/// eliminate the DNS Rebinding TOCTOU race window.
+/// N74-02 & N76-01: Resolves URL, validates every resolved IP against SSRF rules,
+/// and builds a client pinned with `ClientBuilder::resolve_to_addrs(host, &addrs)` (IPv4 prioritized)
+/// to permanently eliminate the DNS Rebinding TOCTOU race window while preserving dual-stack fallback.
 pub(crate) async fn resolve_pinned_client(
     default_client: &reqwest::Client,
     url_str: &str,
@@ -950,31 +959,35 @@ pub(crate) async fn resolve_pinned_client(
         let port = parsed_url.port_or_known_default().unwrap_or(80);
         let lookup_target = format!("{}:{}", host, port);
 
-        let mut target_addr: Option<std::net::SocketAddr> = None;
-        if let Ok(mut addrs) = tokio::net::lookup_host(&lookup_target).await {
-            while let Some(addr) = addrs.next() {
-                check_single_ip(addr.ip())?;
-                if target_addr.is_none() {
-                    target_addr = Some(addr);
-                }
-            }
-        } else {
-            use std::net::ToSocketAddrs;
-            if let Ok(addrs) = lookup_target.to_socket_addrs() {
-                for addr in addrs {
+        let mut addrs: Vec<std::net::SocketAddr> = Vec::new();
+        // N76-03: 3s timeout for DNS lookup
+        let lookup = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::net::lookup_host(&lookup_target),
+        )
+        .await;
+
+        match lookup {
+            Ok(Ok(mut it)) => {
+                while let Some(addr) = it.next() {
                     check_single_ip(addr.ip())?;
-                    if target_addr.is_none() {
-                        target_addr = Some(addr);
-                    }
+                    addrs.push(addr);
                 }
-            } else {
-                return Err(format!("DNS lookup failed for {}", host));
             }
+            Ok(Err(e)) => return Err(format!("DNS lookup failed for {}: {}", host, e)),
+            Err(_) => return Err(format!("DNS lookup timed out for {}", host)),
         }
 
-        let addr = target_addr.ok_or_else(|| format!("DNS lookup yielded no addresses for {}", host))?;
+        if addrs.is_empty() {
+            return Err(format!("DNS lookup yielded no addresses for {}", host));
+        }
+
+        // N76-01: Sort IPv4 addresses first, preserving all candidates so dual-stack hosts
+        // don't fail when connecting from IPv4-only networks.
+        addrs.sort_by_key(|a| a.is_ipv6());
+
         let pinned_client = reqwest::Client::builder()
-            .resolve(&host, addr)
+            .resolve_to_addrs(&host, &addrs)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
@@ -1582,8 +1595,10 @@ mod tests {
         assert!(validate_outgoing_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send").await.is_ok());
         assert!(validate_outgoing_url("https://oapi.dingtalk.com/robot/send").await.is_ok());
         assert!(validate_outgoing_url("https://api.telegram.org/bot123/sendMessage").await.is_ok());
+        // N76-02: Public urls without path or with query only must extract host cleanly
+        assert!(validate_outgoing_url("https://qyapi.weixin.qq.com?key=123").await.is_ok());
 
-        // N74-02: resolve_pinned_client must also reject SSRF attempts
+        // N74-02 & N76-01: resolve_pinned_client must also reject SSRF attempts
         let def_client = reqwest::Client::new();
         assert!(resolve_pinned_client(&def_client, "http://127.0.0.1:8080/hook").await.is_err());
         assert!(resolve_pinned_client(&def_client, "http://localhost:8080/hook").await.is_err());

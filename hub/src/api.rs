@@ -521,25 +521,11 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
 /// hub running an old build - one that relays nothing - reports senders and
 /// receivers and no edges. That is honest: it really does not know.
 async fn topology(State(st): State<SharedState>) -> Json<Value> {
-    let out = {
+    let now = Instant::now();
+    // N76-06: Extract state and clone nodes (O(1) with Arc items) under lock;
+    // construct all JSON ASTs completely outside the shared lock.
+    let (reg_nodes, pos_clone, edges, alerts_json, curve_val, cluster_val, counts) = {
         let s = st.lock_or_recover();
-        let now = Instant::now();
-
-        //--- Partition the ONE node list rather than building a second one.
-        //--- This used to be a fourth serialization path with its own positions
-        //--- join, which is how the three lists drifted apart in the first
-        //--- place. `nodes_json_list` already orders by account and joins
-        //--- positions, so partition is all that is left to do.
-        let all = nodes_json_list(&s.reg, &s.pos, now);
-        let mut senders: Vec<Value> = Vec::new();
-        let mut receivers: Vec<Value> = Vec::new();
-        for j in all {
-            match j["role"].as_str() {
-                Some("sender") => senders.push(j),
-                Some("receiver") => receivers.push(j),
-                _ => {}
-            }
-        }
 
         let mut edges: Vec<Value> = Vec::new();
         for (sender, recvs) in s.mirrors.iter() {
@@ -550,25 +536,39 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
             }
         }
 
-        json!({
-            "senders": Value::Array(senders),
-            "receivers": Value::Array(receivers),
-            "edges": Value::Array(edges),
-            "alerts": Value::Array(s.alerts.recent_json(20)),
-            //--- M9/§19.1. The PUBLIC key is not a secret - it is the thing
-            //--- every node's HubPublicKey input needs - so showing it on the
-            //--- dashboard is exactly as safe as printing it in the log, and
-            //--- saves the operator a trip to the console.
-            "curve": curve_json(&s),
-            "cluster": cluster_json(&s),
-            "counts": {
-                "senders": s.reg.count_by_role(Role::Sender),
-                "receivers": s.reg.count_by_role(Role::Receiver),
-                "hub_uptime_secs": now.saturating_duration_since(s.started).as_secs(),
-            }
-        })
+        let alerts_json = s.alerts.recent_json(20);
+        let curve_val = curve_json(&s);
+        let cluster_val = cluster_json(&s);
+        let counts = json!({
+            "senders": s.reg.count_by_role(Role::Sender),
+            "receivers": s.reg.count_by_role(Role::Receiver),
+            "hub_uptime_secs": now.saturating_duration_since(s.started).as_secs(),
+        });
+        let reg_nodes = s.reg.sorted().into_iter().cloned().collect::<Vec<_>>();
+        let pos_clone = s.clone_view();
+        (reg_nodes, pos_clone, edges, alerts_json, curve_val, cluster_val, counts)
     };
-    Json(out)
+
+    let all = nodes_json_list_from_nodes(&reg_nodes, &pos_clone, now);
+    let mut senders: Vec<Value> = Vec::new();
+    let mut receivers: Vec<Value> = Vec::new();
+    for j in all {
+        match j["role"].as_str() {
+            Some("sender") => senders.push(j),
+            Some("receiver") => receivers.push(j),
+            _ => {}
+        }
+    }
+
+    Json(json!({
+        "senders": Value::Array(senders),
+        "receivers": Value::Array(receivers),
+        "edges": Value::Array(edges),
+        "alerts": Value::Array(alerts_json),
+        "curve": curve_val,
+        "cluster": cluster_val,
+        "counts": counts,
+    }))
 }
 
 /// `GET /api/v1/positions` - the M3 view, as data rather than as a log line.

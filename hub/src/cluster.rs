@@ -500,7 +500,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             }
 
             // 4. Standby incremental sync
-            let current_role = {
+            let mut current_role = {
                 let s = st.lock_or_recover();
                 s.cluster.state.role.clone()
             };
@@ -520,6 +520,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let audit_rec = Arc::clone(&s.audit);
                     audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", new_ep, current_writes), None, None, "ok");
                     println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}. Writes={}.", new_ep, current_writes);
+                    // N76-09: Refresh local current_role snapshot so this newly promoted Primary
+                    // does not immediately proceed to execute Standby sync logic in the same tick.
+                    current_role = "primary".to_string();
                 }
             }
 
