@@ -1292,8 +1292,11 @@ void CopierMapInvertedStops(const bool invert,
   {
    if(invert)
      {
-      feedSl=senderTp;
-      feedTp=senderSl;
+      // LEG-01: When inverted and sender has no TP (senderTp <= 0) but has SL (senderSl > 0),
+      // use sender's SL distance as the symmetric protective stop distance for the inverted receiver,
+      // ensuring inverted positions do not trade naked without stop loss.
+      feedSl = (senderTp > 0.0) ? senderTp : senderSl;
+      feedTp = (senderTp > 0.0) ? senderSl : 0.0;
      }
    else
      {

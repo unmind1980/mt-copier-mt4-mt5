@@ -2307,6 +2307,16 @@ void TestInvertedStop()
    //--- which is why the magnitude variant exists at all
    Ok("invert: the ordinary mirror would drop such a stop entirely",
       CopierMirrorStop(1.0950,1.1000,2.0000,CP_SIDE_SELL,true)==0.0);
+
+   //--- LEG-01: sender TP=0 but SL=1.0950 (50 pips risk on BUY @1.1000).
+   //--- When inverted, receiver should use sender's SL distance (50 pips) as symmetric protective SL on SELL @2.0000
+   double feedSlZeroTp,feedTpZeroTp;
+   CopierMapInvertedStops(true,1.0950,0.0,feedSlZeroTp,feedTpZeroTp);
+   Ok("invert: sender TP=0 falls back to sender's SL distance for protection",feedSlZeroTp==1.0950);
+   Ok("invert: sender TP=0 leaves target as 0",feedTpZeroTp==0.0);
+   double slZeroTp=CopierMirrorStopInverted(feedSlZeroTp,1.1000,2.0000,CP_SIDE_SELL,true);
+   Ok("invert: protective SL lands at sender's 50-pip risk distance above entry",
+      MathAbs((slZeroTp-2.0000)-0.0050)<0.0000001);
   }
 
 void TestTradingTimes()

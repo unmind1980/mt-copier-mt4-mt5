@@ -69,11 +69,6 @@ mod silence {
     pub const NODE_OFFLINE: u64 = 600; // 10 min of repetition during one outage
     pub const CLOCK_DRIFT: u64 = 1800; // 30 min; a skewed clock is not an emergency
     pub const RISK: u64 = 300; // 5 min; risk STATs arrive once a minute
-    /// Command ids are unique per issue, so the "window" is only a
-    /// belt-and-braces guard against the same id being evaluated by two
-    /// overlapping ticks.
-    #[allow(dead_code)]
-    pub const COMMAND_UNKNOWN: u64 = 600;
 }
 
 /// How far the node's clock may MOVE between messages before it is

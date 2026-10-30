@@ -3138,7 +3138,10 @@ async fn cluster_handover_request(
     //--- stays a usable tie-breaker for every conflict that follows.
     let new_epoch = s.cluster.epoch();
     s.cluster.demote(new_epoch);
+    let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
+    drop(s);
+    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
 
     audit_rec.record(
         "cluster",
@@ -3195,8 +3198,10 @@ async fn cluster_promote(
     let new_epoch = s.cluster.promote(Some(target_ep));
     s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
     let current_writes = s.writes;
+    let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
+    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
 
     audit_rec.record(
         "operator",
@@ -3237,8 +3242,10 @@ async fn cluster_failback_lock(
     }
     let mut s = st.lock_or_recover();
     s.cluster.set_failback_lock(b.locked);
+    let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
+    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
 
     audit_rec.record(
         "operator",
@@ -3323,8 +3330,10 @@ async fn cluster_failback_now(
                     let new_epoch = s.cluster.promote(target_ep);
                     s.writes = s.writes_allowed; // P1-3: Respect CLI --writes setting
                     let current_writes = s.writes;
+                    let save_info = s.cluster.save_info();
                     let audit_rec = Arc::clone(&s.audit);
                     drop(s);
+                    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
                     audit_rec.record(
                         "operator",
                         "",

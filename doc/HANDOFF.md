@@ -1359,6 +1359,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N76-05**：在 `commands.rs` 的 `due_gated` 中，为不可达节点增加 30 分钟（1800 秒）绝对超时上限，达到上限后标记为 `STATE_UNKNOWN` 并移出队列触发 `ALERT` 与 `command.timeout` 审计，杜绝死节点命令永久 pending 无法感知；
   5. **N76-06 & N76-09**：在 `hub/src/cluster.rs` 中，双 Standby 选举提权成功后立即刷新局部变量 `current_role = "primary"`，防止新 Primary 在同一 tick 内继续执行 Standby 同步逻辑并被对端较短日志意外覆盖；在 `hub/src/api.rs` 的 `topology` 端点中将全量节点的 JSON 树构造完全移出 `SharedState` 全局互斥锁，降低持锁开销至微秒级。
 
+### 七十七次审计：反向跟单 TP=0 对称 SL 保护、集群状态机锁外化、MT5 补止损夹紧对齐与报价边界修正（2026-10-30 01:15；全部闭环）
+
+- **修复与加固项**：
+  1. **LEG-01 (P1 高危)**：在 `src/Include/Copier/CopierDefs.mqh`（`CopierMapInvertedStops`）中修复反向跟单在发送端 TP=0 时接收端止损缺失问题：当反向且 `senderTp <= 0.0` 但 `senderSl > 0.0` 时，自动采用发送端 SL 风险距离作为接收端对称止损保护距离，并在 `CopierReceiver.mq4` 补充双零无止损防抖告警，在 `CopierSelfTest.mq4` 补充回归断言，彻底消除反向仓位无止损裸奔穿仓的致命风险；
+  2. **N77-01 (P2 中危)**：在 `hub/src/cluster.rs` 中，移除 `promote()`、`demote()`、`set_failback_lock()` 内嵌的 `save()` 磁盘写操作，引入 `save_info()` 助手；在 `cluster.rs` 与 `api.rs` 的全部调用点中，持 `SharedState` 全局锁内仅更新内存状态，释放全局锁后再执行 `save_state_to_file` 磁盘写，彻底根除全局互斥锁被磁盘 fsync/rename 阻塞的隐患；
+  3. **N77-02 (P3 低危)**：在 `src/Include/Copier/CopierModel.mqh` 中，为 MT5 的 10016 fallback 光单开仓成功后的立即 modify 补充 inline `StopLevel` 夹紧逻辑（与 MT4 分支严格对齐），并在极端行情失败时由 converge 静默收敛重试，消灭注定失败的 broker 往返和无谓警告；
+  4. **N77-03 (P3 低危)**：在 `hub/src/alerts.rs` 中清理无引用的 `COMMAND_UNKNOWN` 常量 dead code；
+  5. **N77-04 (P3 低危)**：在 `src/Include/Copier/CopierSymbol.mqh` 的 `CopierClockAgeMs` 中，将 `serverNow <= (long)quoteTime` 修正为 `< (long)quoteTime`，使同一秒的鲜活报价正确返回 0 ms 而非 -1。
+
 ---
 
 ## 9. 最终交付状态确认

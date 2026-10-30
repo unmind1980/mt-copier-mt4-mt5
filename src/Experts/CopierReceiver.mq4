@@ -3882,6 +3882,12 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                                   g_senderCfg[si].emergencySLPips,si2,e);
         }
      }
+   else if(actualInverted && wantSl<=0.0 && g_senderCfg[si].emergencySLPips<=0.0)
+     {
+      // LEG-01: Inverted position where sender has neither TP nor SL, and emergencySLPips is not configured
+      if(g_once.ShouldEmit("inv_nosl|"+local.uid))
+         g_log.Warn("LEG-01: inverted position "+local.uid+" ("+local.sym+") has NO stop loss (sender has neither SL nor TP, and EmergencySLPips is 0) - running unprotected!");
+     }
    if(wantTp<=0.0 && g_senderCfg[si].emergencyTPPips>0.0)
      {
       int e=0;

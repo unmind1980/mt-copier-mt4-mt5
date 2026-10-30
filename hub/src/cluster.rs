@@ -282,12 +282,15 @@ impl ClusterManager {
         self.peer_online && self.last_peer_contact.map(|t| t.elapsed() < timeout).unwrap_or(false)
     }
 
+    pub fn save_info(&self) -> (PathBuf, ClusterStateFile) {
+        (self.state_path.clone(), self.state.clone())
+    }
+
     pub fn promote(&mut self, target_epoch: Option<u64>) -> u64 {
         let new_epoch = target_epoch.unwrap_or(self.state.epoch + 1);
         self.state.epoch = new_epoch;
         self.state.role = "primary".to_string();
         self.state.last_promoted_at = unix_secs();
-        let _ = self.save();
         new_epoch
     }
 
@@ -296,12 +299,10 @@ impl ClusterManager {
         self.state.epoch = new_epoch.max(self.state.epoch);
         self.state.role = "standby".to_string();
         self.continuous_online_start = None;
-        let _ = self.save();
     }
 
     pub fn set_failback_lock(&mut self, locked: bool) {
         self.state.failback_locked = locked;
-        let _ = self.save();
     }
 
     #[allow(dead_code)]
@@ -458,19 +459,27 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
             // 2. Check split-brain conflict and resolve (H-10 & P1-5 & P0-2)
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
-                let mut s = st.lock_or_recover();
-                let should_demote = !s.cluster.state.is_configured_primary
-                    || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
-                if should_demote {
-                    // P0-2 fix: demote must NOT bump epoch to prevent triggering peer ADR-04 demotion flip-flop
-                    s.cluster.demote(epoch);
-                    s.writes = false;
-                    s.cluster.sync_status = "conflict_demoted".to_string();
-                    let audit_rec = Arc::clone(&s.audit);
-                    audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
+                let (should_demote, save_cmd) = {
+                    let mut s = st.lock_or_recover();
+                    let should = !s.cluster.state.is_configured_primary
+                        || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
+                    if should {
+                        // P0-2 fix: demote must NOT bump epoch to prevent triggering peer ADR-04 demotion flip-flop
+                        s.cluster.demote(epoch);
+                        s.writes = false;
+                        s.cluster.sync_status = "conflict_demoted".to_string();
+                        let audit_rec = Arc::clone(&s.audit);
+                        audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
+                        (true, Some(s.cluster.save_info()))
+                    } else {
+                        s.cluster.sync_status = "conflict_master".to_string();
+                        (false, None)
+                    }
+                };
+                if let Some((p, st_file)) = save_cmd {
+                    let _ = save_state_to_file(&p, &st_file);
                     println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby keeping epoch {}", epoch);
-                } else {
-                    s.cluster.sync_status = "conflict_master".to_string();
+                } else if !should_demote {
                     eprintln!("[hub] CLUSTER CONFLICT RESOLVED: Maintaining Primary role against peer {}", remote_st.hub_id);
                 }
                 continue;
@@ -482,12 +491,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     "[hub] Peer {} has higher epoch ({} > {}). Demoting local Primary to Standby.",
                     peer_url, remote_st.epoch, epoch
                 );
-                let audit_rec = {
+                let (audit_rec, save_info) = {
                     let mut s = st.lock_or_recover();
                     s.cluster.demote(remote_st.epoch);
                     s.writes = false;
-                    Arc::clone(&s.audit)
+                    (Arc::clone(&s.audit), s.cluster.save_info())
                 };
+                let _ = save_state_to_file(&save_info.0, &save_info.1);
                 audit_rec.record(
                     "hub",
                     "",
@@ -513,12 +523,16 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     my_hub_id < remote_st.hub_id
                 };
                 if should_recover {
-                    let mut s = st.lock_or_recover();
-                    let new_ep = s.cluster.promote(None);
-                    s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
-                    let current_writes = s.writes;
-                    let audit_rec = Arc::clone(&s.audit);
-                    audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", new_ep, current_writes), None, None, "ok");
+                    let (new_ep, current_writes, save_info) = {
+                        let mut s = st.lock_or_recover();
+                        let ep = s.cluster.promote(None);
+                        s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
+                        let writes = s.writes;
+                        let audit_rec = Arc::clone(&s.audit);
+                        audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", ep, writes), None, None, "ok");
+                        (ep, writes, s.cluster.save_info())
+                    };
+                    let _ = save_state_to_file(&save_info.0, &save_info.1);
                     println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}. Writes={}.", new_ep, current_writes);
                     // N76-09: Refresh local current_role snapshot so this newly promoted Primary
                     // does not immediately proceed to execute Standby sync logic in the same tick.
@@ -529,9 +543,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             if current_role == "standby" {
                 // P1-7: Adopt higher epoch from Primary even if no file diffs
                 if remote_st.role == "primary" && remote_st.epoch > epoch {
-                    let mut s = st.lock_or_recover();
-                    s.cluster.state.epoch = remote_st.epoch;
-                    let _ = s.cluster.save();
+                    let save_info = {
+                        let mut s = st.lock_or_recover();
+                        s.cluster.state.epoch = remote_st.epoch;
+                        s.cluster.save_info()
+                    };
+                    let _ = save_state_to_file(&save_info.0, &save_info.1);
                 }
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
@@ -845,7 +862,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     if let Ok(res) = h_res {
                         if let Ok(h_data) = res.json::<HandoverResponse>().await {
                             if h_data.agreed {
-                                let (audit_rec, new_ep) = {
+                                let (audit_rec, new_ep, save_info) = {
                                     let mut s = st.lock_or_recover();
                                     // P0-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
                                     let target_ep = Some(h_data.new_epoch.max(s.cluster.epoch()) + 1);
@@ -856,8 +873,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         "[hub] ADR-10 AUTO-FAILBACK SUCCESS: Master identity recovered with epoch {}! Writes={}.",
                                         new_ep, current_writes
                                     );
-                                    (Arc::clone(&s.audit), new_ep)
+                                    (Arc::clone(&s.audit), new_ep, s.cluster.save_info())
                                 };
+                                let _ = save_state_to_file(&save_info.0, &save_info.1);
                                 audit_rec.record(
                                     "hub",
                                     "",

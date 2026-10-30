@@ -798,10 +798,35 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
             ulong posId=(order>0)?order:deal;
             if(posId>0)
               {
-               int mErr=0;
-               if(!CopierModifyStops((long)posId,sym,sl,tp,mErr))
+               // N77-02: Clamp stops against broker StopLevel inline before immediate modification,
+               // aligning with MT4 ECN/fallback behavior (N57-13) and avoiding guaranteed 10016 re-rejection.
+               double fsl=sl, ftp=tp;
+               if(fsl>0.0 || ftp>0.0)
                  {
-                  Print("[copier] WARN: 10016 fallback open succeeded but immediate modify stops failed (pos ",posId," err ",mErr,"); converge will retry stop attachment");
+                  double mkPoint=SymbolInfoDouble(sym,SYMBOL_POINT);
+                  double mkStop=(double)SymbolInfoInteger(sym,SYMBOL_TRADE_STOPS_LEVEL)*mkPoint;
+                  int    mkDig=(int)SymbolInfoInteger(sym,SYMBOL_DIGITS);
+                  double mkBid=SymbolInfoDouble(sym,SYMBOL_BID);
+                  double mkAsk=SymbolInfoDouble(sym,SYMBOL_ASK);
+                  if(mkStop>0.0)
+                    {
+                     if(side==CP_SIDE_BUY)
+                       {
+                        if(fsl>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
+                        if(ftp>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                       }
+                     else
+                       {
+                        if(fsl>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
+                        if(ftp>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                       }
+                    }
+                 }
+               int mErr=0;
+               if(!CopierModifyStops((long)posId,sym,fsl,ftp,mErr))
+                 {
+                  // If immediate clamped modify still fails (e.g. transient broker quotes),
+                  // converge will safely retry stop attachment on next tick.
                  }
               }
            }

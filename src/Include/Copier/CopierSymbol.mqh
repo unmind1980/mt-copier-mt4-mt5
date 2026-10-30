@@ -205,7 +205,9 @@ datetime CopierSymbolQuoteTime(const string sym)
 long CopierClockAgeMs(const datetime quoteTime,const long serverNow)
   {
    if(quoteTime<=0) return -1;
-   if(serverNow<=(long)quoteTime) return -1;
+   // N77-04: If serverNow == quoteTime, age is 0 ms (freshly quoted right at current second).
+   // Only quoteTime in the future (serverNow < quoteTime) is clock skew and returns -1.
+   if(serverNow<(long)quoteTime) return -1;
    return (serverNow-(long)quoteTime)*1000;
   }
 
