@@ -126,16 +126,22 @@ impl ArchiveShift {
 
         let is_already_gz = rotating.to_string_lossy().contains(".gz.tmp.");
         let gz_tmp = if is_already_gz {
-            // BUG-04: If rotating is already a .gz.tmp file from an interrupted rotation,
-            // verify it is valid Gzip. Do NOT pass it into GzEncoder for second compression.
-            if let Ok(src) = File::open(rotating) {
+            // BUG-04 & N80-03: If rotating is already a .gz.tmp file from an interrupted rotation,
+            // verify it is fully valid Gzip by decoding all the way to EOF (ensuring CRC/footer are intact).
+            let is_valid = (|| -> bool {
+                let src = match File::open(rotating) {
+                    Ok(f) => f,
+                    Err(_) => return false,
+                };
                 let mut decoder = GzDecoder::new(BufReader::new(src));
-                let mut buf = [0u8; 64];
-                if decoder.read(&mut buf).is_err() {
-                    eprintln!("[hub] AUDIT RECOVER: corrupted .gz.tmp leftover {}; discarding", rotating.display());
-                    let _ = fs::remove_file(rotating);
-                    return Ok(());
-                }
+                let mut sink = std::io::sink();
+                io::copy(&mut decoder, &mut sink).is_ok()
+            })();
+
+            if !is_valid {
+                eprintln!("[hub] AUDIT RECOVER: corrupted or truncated .gz.tmp leftover {}; discarding", rotating.display());
+                let _ = fs::remove_file(rotating);
+                return Ok(());
             }
             rotating.to_path_buf()
         } else {
@@ -1178,6 +1184,25 @@ mod tests {
             assert_eq!(recs[0]["seq"], 10);
             let (seq, _, _) = b.counts();
             assert_eq!(seq, 10, "must recover seq=10 from archive 1");
+        }
+        cleanup(&p);
+    }
+
+    #[test]
+    fn restart_discards_truncated_gz_tmp_leftover() {
+        let p = tmp("truncated_gztmp_recovery");
+        cleanup(&p);
+        let gz_tmp = PathBuf::from(format!("{}.rotating.88888.1.gz.tmp.88888", p.display()));
+        {
+            // N80-03 test: gz.tmp file is truncated (missing valid gzip footer/EOF)
+            let mut f = File::create(&gz_tmp).unwrap();
+            f.write_all(&[0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x01, 0x00, 0x00]).unwrap();
+        }
+        assert!(gz_tmp.exists());
+        {
+            let b = Audit::open_with_rotation(&p, 500, 3).unwrap();
+            assert!(!gz_tmp.exists(), "truncated gz.tmp should be cleanly removed");
+            assert!(!b.archive_path(1).exists(), "corrupted archive should not be created");
         }
         cleanup(&p);
     }

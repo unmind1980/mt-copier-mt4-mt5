@@ -477,8 +477,14 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 };
                 if let Some((p, st_file)) = save_cmd {
-                    let _ = save_state_to_file(&p, &st_file);
-                    println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby keeping epoch {}", epoch);
+                    // N80-04: Check save_state_to_file result and record error if write fails
+                    if let Err(e) = save_state_to_file(&p, &st_file) {
+                        eprintln!("[hub] CLUSTER ERR: failed to save state after split-brain demote: {}", e);
+                        let mut s = st.lock_or_recover();
+                        s.cluster.last_sync_err = format!("split-brain demote save failed: {}", e);
+                    } else {
+                        println!("[hub] CLUSTER CONFLICT RESOLVED: Demoted to Standby keeping epoch {}", epoch);
+                    }
                 } else if !should_demote {
                     eprintln!("[hub] CLUSTER CONFLICT RESOLVED: Maintaining Primary role against peer {}", remote_st.hub_id);
                 }
@@ -497,7 +503,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.writes = false;
                     (Arc::clone(&s.audit), s.cluster.save_info())
                 };
-                let _ = save_state_to_file(&save_info.0, &save_info.1);
+                if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
+                    eprintln!("[hub] CLUSTER ERR: failed to save state after stale primary demote: {}", e);
+                    let mut s = st.lock_or_recover();
+                    s.cluster.last_sync_err = format!("stale primary demote save failed: {}", e);
+                }
                 audit_rec.record(
                     "hub",
                     "",
@@ -532,7 +542,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", ep, writes), None, None, "ok");
                         (ep, writes, s.cluster.save_info())
                     };
-                    let _ = save_state_to_file(&save_info.0, &save_info.1);
+                    if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
+                        eprintln!("[hub] CLUSTER ERR: failed to save state after dual standby recovery: {}", e);
+                        let mut s = st.lock_or_recover();
+                        s.cluster.last_sync_err = format!("dual standby recovery save failed: {}", e);
+                    }
                     println!("[hub] DUAL-STANDBY DETECTED: Master identity recovered with epoch {}. Writes={}.", new_ep, current_writes);
                     // N76-09: Refresh local current_role snapshot so this newly promoted Primary
                     // does not immediately proceed to execute Standby sync logic in the same tick.
@@ -548,7 +562,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         s.cluster.state.epoch = remote_st.epoch;
                         s.cluster.save_info()
                     };
-                    let _ = save_state_to_file(&save_info.0, &save_info.1);
+                    if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
+                        eprintln!("[hub] CLUSTER ERR: failed to save state after adopting higher epoch: {}", e);
+                        let mut s = st.lock_or_recover();
+                        s.cluster.last_sync_err = format!("adopt epoch save failed: {}", e);
+                    }
                 }
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
@@ -770,9 +788,14 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     save_info
                                 };
 
-                                // N72-03: Save cluster state to disk outside the SharedState lock
+                                // N72-03 & N80-04: Save cluster state to disk outside the SharedState lock
                                 if need_save_cluster {
-                                    let _ = save_state_to_file(&state_path_to_save, &state_to_save);
+                                    if let Err(e) = save_state_to_file(&state_path_to_save, &state_to_save) {
+                                        eprintln!("[hub] CLUSTER ERR: failed to save state after sync: {}", e);
+                                        let mut s = st.lock_or_recover();
+                                        s.cluster.sync_status = "sync_err".to_string();
+                                        s.cluster.last_sync_err = format!("state save failed: {}", e);
+                                    }
                                 }
                             } else {
                                 let mut s = st.lock_or_recover();
@@ -875,7 +898,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     );
                                     (Arc::clone(&s.audit), new_ep, s.cluster.save_info())
                                 };
-                                let _ = save_state_to_file(&save_info.0, &save_info.1);
+                                if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
+                                    eprintln!("[hub] CLUSTER ERR: failed to save state after auto-failback: {}", e);
+                                    let mut s = st.lock_or_recover();
+                                    s.cluster.last_sync_err = format!("auto-failback save failed: {}", e);
+                                }
                                 audit_rec.record(
                                     "hub",
                                     "",

@@ -3143,7 +3143,9 @@ async fn cluster_handover_request(
     let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
-    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
+    if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
+        eprintln!("[hub] CLUSTER ERR: handover step-down state save failed: {}", e);
+    }
 
     audit_rec.record(
         "cluster",
@@ -3203,7 +3205,9 @@ async fn cluster_promote(
     let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
-    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
+    if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
+        eprintln!("[hub] CLUSTER ERR: operator promote state save failed: {}", e);
+    }
 
     audit_rec.record(
         &sess.user_id,
@@ -3247,7 +3251,9 @@ async fn cluster_failback_lock(
     let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
-    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
+    if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
+        eprintln!("[hub] CLUSTER ERR: failback lock state save failed: {}", e);
+    }
 
     audit_rec.record(
         &sess.user_id,
@@ -3335,7 +3341,9 @@ async fn cluster_failback_now(
                     let save_info = s.cluster.save_info();
                     let audit_rec = Arc::clone(&s.audit);
                     drop(s);
-                    let _ = crate::cluster::save_state_to_file(&save_info.0, &save_info.1);
+                    if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
+                        eprintln!("[hub] CLUSTER ERR: manual failback state save failed: {}", e);
+                    }
                     audit_rec.record(
                         &sess.user_id,
                         "",

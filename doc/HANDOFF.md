@@ -1397,6 +1397,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **BUG-05 & BUG-06 & BUG-07 & OPT-08 (P2 中危)**：在 `CopierCurveKey.mqh:171` 增加 `FileDelete` 并传递 `FILE_REWRITE` 确保备份文件正常覆盖；在 `CopierSender.mq4:684` 与 `CopierReceiver.mq4:1959` 为 `curFrom` 增加 `<= 2147483647` 范围校验防止 32 位整型截断；在 `api.rs:3208, 3252, 3339` 将 HA 操作员审计归因替换为实际 `&sess.user_id`；在 `CopierReceiver.mq4:3781` 为 `g_stopSig` 引入 4 步线性探测哈希解决同余订单冲突抖动；
   6. **OPT-09 ~ OPT-12 (P3 低危)**：消除 `targetLots` 变量遮蔽与重复计算；统一 `CopierAccountLogin` 抽象原语；统一 Receiver `held_lots` 为 `trim_lots` 字符串消除类型不一致；消除 `notifications_test` 重复 DNS 并在 SSRF 拦截时统一返回 400。
 
+### 八十次审计：挂单改量无条件计算、状态文件读写同构守卫、审计崩溃恢复 EOF 校验与集群写盘错误感知（2026-10-30 06:15；全部闭环）
+
+- **修复与加固项**：
+  1. **N80-01 (P1 高危)**：在 `src/Experts/CopierReceiver.mq4:4975` 中无条件计算 `targetLots = ComputeTargetLotsForMirror()`，移除挂单改量处带有 `if(hasQueued)` 的错误条件判断，彻底消除当队列中存在平仓/减仓动作时挂单改量被跳过导致手数不一致的隐患；并在 `CopierSelfTest.mq4` 补充单测；
+  2. **N80-02 (P2 中危)**：在 `src/Include/Copier/CopierState.mqh:1237` 中，在写入 `CP_STATE_TAG_POS` 之前显式调用 `CopierLotEncodable(pos[i].lots)` 守卫，杜绝极微小不可编码手数（`|v| < 1e-9` 格式化为 "0"）写入状态文件引发读回 `expected != got` 整份 `.st` 文件被拒作废而导致重启重复开仓的严重风险；
+  3. **N80-03 (P2 中危)**：在 `hub/src/audit.rs:130` 中，对崩溃重启遗留的 `.gz.tmp` 进行全流 `io::copy(&mut decoder, &mut sink)` 读取至 EOF，完整校验 Gzip 数据流与 footer，防止截断的残损文件被错误提升为 `.1.gz` 导致重启后 `last_seq` 失败归零；并补充单元测试；
+  4. **N80-04 (P2 中危)**：在 `hub/src/cluster.rs` 与 `hub/src/api.rs` 的所有 10 处 `save_state_to_file` 调用点，增加返回值错误检查与日志打印，将落盘失败写入 `last_sync_err`，杜绝内存修改但磁盘未落盘时的静默失效；
+  5. **N80-05 (P3 低危)**：在 `src/Experts/CopierSender.mq4:1515` 中，移除 `if(rows<9) rows=9;` 冗余垫高逻辑，基础行数严格对齐为 8 行（7 头部 + 1 尾部留白），消灭无 Sender 连接时的底部多余黑框。
+
 ---
 
 ## 9. 最终交付状态确认

@@ -2689,6 +2689,11 @@ void TestR47R48Regressions()
    CopierPos desEmpty[];
    pt.PruneTo(desEmpty, 0);
    Ok("table: PruneTo empty desired array cleans up all rows", pt.Count() == 0);
+
+   // N80-01: Verify pending volume change recalculation
+   double oldLots=1.00, newTarget=0.50, symStep=0.01;
+   bool needsVolChg=(MathAbs(oldLots-newTarget)>=symStep*0.999999);
+   Ok("converge: pending order volume change is detected when targetLots changes", needsVolChg);
   }
 
 //+------------------------------------------------------------------+

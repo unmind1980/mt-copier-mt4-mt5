@@ -1234,6 +1234,9 @@ public:
       for(int i=0;i<n && writeOk;i++)
         {
          if(StringLen(pos[i].uid)!=CP_UID_LEN) continue;
+         // N80-02: Pre-validate lots encodability to ensure written lines match Load/CopierDecodeRec decoding count.
+         // Unencodable lots (|v|<1e-9) would format to "0" and cause Load expected!=got rejection, wiping state.
+         if(!CopierLotEncodable(pos[i].lots)) continue;
          if(FileWrite(h,CP_STATE_TAG_POS+CopierEncodeRec(pos[i]))<=0) { writeOk=false; break; }
          if(i<openLotsCount && openLots[i]>0.0)
            {

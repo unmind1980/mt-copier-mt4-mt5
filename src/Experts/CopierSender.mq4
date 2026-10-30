@@ -1512,8 +1512,9 @@ void UpdatePanel()
    //--- failure mode, not the truncation.
    int peerShow=(nTotal>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:nTotal;
    int peerMore=(nTotal>peerShow)?1:0;
+   // N80-05: Exact base rows count is 8 (7 header rows + 1 trailing spacer).
+   // Do not artificially bump to 9 when nTotal==0 to prevent an extra dead black line.
    int rows=8+peerShow+peerMore;
-   if(rows<9) rows=9;
 
    g_panel.Begin(rows);
    int r=0;

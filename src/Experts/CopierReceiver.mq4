@@ -4973,10 +4973,11 @@ void ConvergeSender(const int si)
          //--- causes duplicate execution on the next tick.
          //--- NM-01: O(1) hash probe replaces nested O(N*Q) linear loop
          bool hasQueued=(g_qCloseIdx.FindInStrings(queuedCloseOrTrim,d.uid)>=0);
-         double targetLots=0.0;
+         //--- N80-01: targetLots is unconditionally computed once per matched position.
+         //--- hasQueued strictly guards seen-key clearing, NEVER suppressing lot calculation.
+         double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
          if(!hasQueued)
            {
-            targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
             if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+0.0001)
                g_seen.ForgetUidActions(g_sid[si],d.uid);
             else
@@ -5057,11 +5058,10 @@ void ConvergeSender(const int si)
               }
            }
 
-         // N49-02 & OPT-09: Pending order volume adjustment (cancel + re-place)
+         // N49-02 & N80-01: Pending order volume adjustment (cancel + re-place)
          // MetaTrader broker APIs cannot modify volume on existing pending orders.
          if(d.kind==CP_ORD_PENDING && g_locScratch[li].kind==CP_ORD_PENDING)
            {
-            if(hasQueued) targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
             CopierSymInfo si2;
             if(CopierGetSymbolInfo(g_locScratch[li].sym,si2) && targetLots>0.0 && si2.lotStep>0.0)
               {
