@@ -357,8 +357,13 @@ default is named.
 | `stopsthrottleseconds` | 2 | Minimum gap between two stop edits on one position |
 | `reopenclosedmirrors` | false | Re-open a mirror that vanished while the sender still holds it |
 | `dedupduplicates` | true | Remove a second position sharing one UID |
-| `inverttrades` | false | Mirror the opposite direction |
+| `inverttrades` | false | Mirror the opposite direction (see note below on stops) |
 | `staleseconds` | 15 | Silence from a sender stops NEW entries for it (closes and stop edits continue) |
+
+> **Note on `inverttrades` and stop loss / take profit (DEF-63-03 / LEG-01 Locked Decision)**:  
+> When mirroring in reverse, the sender's TP maps to the receiver's SL, and the sender's SL maps to the receiver's TP.  
+> If the sender EA runs without a hard take-profit (`TP=0`, typical for strategies using internal soft/virtual trailing exits), the receiver **does NOT manufacture an artificial stop loss**. Synthesizing a stop loss from the sender's SL distance would cause premature stop-outs on normal market pullbacks while the sender remains open, destroying the strategy's edge.  
+> Exits rely 100% on the sender's actual close signals. If catastrophic offline protection is desired, set `emergencyslpips` explicitly in your configuration (e.g. `emergencyslpips=250`). Reviewers and operators must not treat unmanufactured stops under `inverttrades` as a defect.
 
 **[common] — Filters & Gates**
 

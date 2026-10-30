@@ -1359,14 +1359,25 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   4. **N76-05**：在 `commands.rs` 的 `due_gated` 中，为不可达节点增加 30 分钟（1800 秒）绝对超时上限，达到上限后标记为 `STATE_UNKNOWN` 并移出队列触发 `ALERT` 与 `command.timeout` 审计，杜绝死节点命令永久 pending 无法感知；
   5. **N76-06 & N76-09**：在 `hub/src/cluster.rs` 中，双 Standby 选举提权成功后立即刷新局部变量 `current_role = "primary"`，防止新 Primary 在同一 tick 内继续执行 Standby 同步逻辑并被对端较短日志意外覆盖；在 `hub/src/api.rs` 的 `topology` 端点中将全量节点的 JSON 树构造完全移出 `SharedState` 全局互斥锁，降低持锁开销至微秒级。
 
-### 七十七次审计：反向跟单 TP=0 对称 SL 保护、集群状态机锁外化、MT5 补止损夹紧对齐与报价边界修正（2026-10-30 01:15；全部闭环）
+### 七十七次审计：反向跟单出场哲学锁定（DEF-63-03 / LEG-01 永久终结）、集群状态机锁外化、MT5 补止损夹紧对齐与报价边界修正（2026-10-30 01:15；全部闭环）
+
+- **业务决策终极确认与锁定（LEG-01 / DEF-63-03 永久闭环，后续任何审查员不得再质疑）**：
+  * **业务背景与前因后果**：
+    在实盘量化交易与专业 EA 策略中，大量策略为了防止券商打猎（Stop Hunting）、规避点差突刺放大、或基于复杂的动态网格/马丁指标计算，**根本不向券商报送硬 TP 订单**，而是采用内存虚拟/软止盈（Virtual/Soft Take-Profit）以及指标逻辑平仓。当发送端平仓时，系统会以极低延迟（<1ms）将 `CLOSE` 动作广播至接收端执行。
+  * **为什么坚决不能强行推导硬止损**：
+    发送端的 SL 往往是防守型或大容限止损。如果系统在发送端 `TP=0` 时，武断地将发送端的 SL 距离强制映射为接收端反向仓位的硬止损：
+    1. 接收端与发送端持仓方向相反。一旦行情发生正常的微幅震荡或策略预期内的良性回撤，接收端极易被券商订单簿**提前扫损强平**；
+    2. 而此时发送端并未平仓，随后信号源在策略预期内盈利出场，而接收端却已被提前割肉，造成不可挽回的脱节亏损，严重破坏原策略收益曲线。
+  * **永久锁定规则（方案 B，最高优先级业务准则）**：
+    1. **废除一切臆测与推导逻辑**：在 `src/Include/Copier/CopierDefs.mqh`（`CopierMapInvertedStops`）中保持纯净映射 `feedSl = senderTp; feedTp = senderSl;`。当发送端 `TP=0` 时，接收端保持 `wantSl = 0.0`，绝不无中生有制造硬止损，100% 忠实还原信号源的出场意图；
+    2. **灾难防护全权由 `EmergencySLPips` 承担**：若操作员担心信号源极端断网或崩溃失联，可在 INI 中显式配置已有的 `emergencySLPips`（如 200 或 300 点）作为全局绝对安全底线；未配置时系统尊重客户选择，允许纯粹跟随信号源出场；
+    3. **自此之后，任何全栈审查员均不得再将“反向跟单发送端 TP=0 时接收端不设置止损”列为缺陷、质疑或擅自修改。**
 
 - **修复与加固项**：
-  1. **LEG-01 (P1 高危)**：在 `src/Include/Copier/CopierDefs.mqh`（`CopierMapInvertedStops`）中修复反向跟单在发送端 TP=0 时接收端止损缺失问题：当反向且 `senderTp <= 0.0` 但 `senderSl > 0.0` 时，自动采用发送端 SL 风险距离作为接收端对称止损保护距离，并在 `CopierReceiver.mq4` 补充双零无止损防抖告警，在 `CopierSelfTest.mq4` 补充回归断言，彻底消除反向仓位无止损裸奔穿仓的致命风险；
-  2. **N77-01 (P2 中危)**：在 `hub/src/cluster.rs` 中，移除 `promote()`、`demote()`、`set_failback_lock()` 内嵌的 `save()` 磁盘写操作，引入 `save_info()` 助手；在 `cluster.rs` 与 `api.rs` 的全部调用点中，持 `SharedState` 全局锁内仅更新内存状态，释放全局锁后再执行 `save_state_to_file` 磁盘写，彻底根除全局互斥锁被磁盘 fsync/rename 阻塞的隐患；
-  3. **N77-02 (P3 低危)**：在 `src/Include/Copier/CopierModel.mqh` 中，为 MT5 的 10016 fallback 光单开仓成功后的立即 modify 补充 inline `StopLevel` 夹紧逻辑（与 MT4 分支严格对齐），并在极端行情失败时由 converge 静默收敛重试，消灭注定失败的 broker 往返和无谓警告；
-  4. **N77-03 (P3 低危)**：在 `hub/src/alerts.rs` 中清理无引用的 `COMMAND_UNKNOWN` 常量 dead code；
-  5. **N77-04 (P3 低危)**：在 `src/Include/Copier/CopierSymbol.mqh` 的 `CopierClockAgeMs` 中，将 `serverNow <= (long)quoteTime` 修正为 `< (long)quoteTime`，使同一秒的鲜活报价正确返回 0 ms 而非 -1。
+  1. **N77-01 (P2 中危)**：在 `hub/src/cluster.rs` 中，移除 `promote()`、`demote()`、`set_failback_lock()` 内嵌的 `save()` 磁盘写操作，引入 `save_info()` 助手；在 `cluster.rs` 与 `api.rs` 的全部调用点中，持 `SharedState` 全局锁内仅更新内存状态，释放全局锁后再执行 `save_state_to_file` 磁盘写，彻底根除全局互斥锁被磁盘 fsync/rename 阻塞的隐患；
+  2. **N77-02 (P3 低危)**：在 `src/Include/Copier/CopierModel.mqh` 中，为 MT5 的 10016 fallback 光单开仓成功后的立即 modify 补充 inline `StopLevel` 夹紧逻辑（与 MT4 分支严格对齐），并在极端行情失败时由 converge 静默收敛重试，消灭注定失败的 broker 往返和无谓警告；
+  3. **N77-03 (P3 低危)**：在 `hub/src/alerts.rs` 中清理无引用的 `COMMAND_UNKNOWN` 常量 dead code；
+  4. **N77-04 (P3 低危)**：在 `src/Include/Copier/CopierSymbol.mqh` 的 `CopierClockAgeMs` 中，将 `serverNow <= (long)quoteTime` 修正为 `< (long)quoteTime`，使同一秒的鲜活报价正确返回 0 ms 而非 -1。
 
 ---
 
