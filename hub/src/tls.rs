@@ -1219,9 +1219,7 @@ impl AcmeClient {
         fs::write(&tls_mgr.cert_paths.fullchain_pem, &cert_pem).map_err(|e| e.to_string())?;
         fs::write(&tls_mgr.cert_paths.privkey_pem, &site_key_pem).map_err(|e| e.to_string())?;
 
-        // Step 6: Reload into active acceptor
-        tls_mgr.reload_from_disk()?;
-
+        // Step 6: Mark enabled and reload into active acceptor
         {
             let mut c = tls_mgr.config.lock().unwrap();
             c.enabled = true;
@@ -1231,6 +1229,8 @@ impl AcmeClient {
             c.status.last_error = None;
             let _ = save_config(&tls_mgr.config_path, &c);
         }
+
+        tls_mgr.reload_from_disk()?;
 
         println!("[hub] TLS: ACME certificate issued and activated for {}", domain);
         Ok(())
@@ -1406,5 +1406,17 @@ BQYHCA==
         let csr_der = generate_csr_der(&sign_key, "hub.test.sslip.io").expect("csr generation failed");
         assert!(!csr_der.is_empty());
         assert_eq!(csr_der[0], 0x30); // ASN.1 SEQUENCE
+    }
+
+    #[test]
+    fn test_load_real_certs_if_exist() {
+        let cert_p = Path::new("../data/certs/fullchain.pem");
+        let key_p = Path::new("../data/certs/privkey.pem");
+        if cert_p.exists() && key_p.exists() {
+            let cert_pem = fs::read_to_string(cert_p).unwrap();
+            let key_pem = fs::read_to_string(key_p).unwrap();
+            let pfx = pem_to_pkcs12(&cert_pem, &key_pem, "testpass").expect("real cert to pkcs12 failed");
+            let _acceptor = create_tls_acceptor(&pfx, "testpass").expect("real acceptor creation failed");
+        }
     }
 }

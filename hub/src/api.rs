@@ -1881,6 +1881,46 @@ pub fn spawn(
                 if http_port > 0 && http_port != current_port {
                     crate::tls::spawn_http_challenge_and_redirect_server(Arc::clone(&tls_mgr), http_port);
                 }
+
+                // If user selected standard 443 (or custom port distinct from current_port), spawn a dedicated HTTPS listener
+                let https_port = tls_mgr.config.lock().unwrap().https_port;
+                if https_port > 0 && https_port != current_port {
+                    let st_https = st.clone();
+                    let tx_https = tx.clone();
+                    let tls_mgr_https = Arc::clone(&tls_mgr);
+                    tokio::spawn(async move {
+                        let bind_addr = format!("0.0.0.0:{}", https_port);
+                        match tokio::net::TcpListener::bind(&bind_addr).await {
+                            Ok(l) => {
+                                println!("[hub] TLS: Dedicated HTTPS listener active on https://0.0.0.0:{}", https_port);
+                                loop {
+                                    let (tcp_stream, _) = match l.accept().await {
+                                        Ok(conn) => conn,
+                                        Err(_) => continue,
+                                    };
+                                    let acceptor_opt = tls_mgr_https.acceptor.read().unwrap().clone();
+                                    let app = router(st_https.clone(), tx_https.clone());
+                                    tokio::spawn(async move {
+                                        if let Some(acceptor) = acceptor_opt {
+                                            match acceptor.accept(tcp_stream).await {
+                                                Ok(tls_stream) => {
+                                                    crate::tls::serve_stream_with_router(tls_stream, app).await;
+                                                }
+                                                Err(_) => {}
+                                            }
+                                        } else {
+                                            crate::tls::serve_stream_with_router(tcp_stream, app).await;
+                                        }
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[hub] TLS: cannot bind dedicated HTTPS listener on {}: {}", bind_addr, e);
+                            }
+                        }
+                    });
+                }
+
                 crate::tls::spawn_auto_renewal_worker(Arc::clone(&tls_mgr));
 
                 let listener = match tokio::net::TcpListener::bind(&addr).await {
