@@ -1211,6 +1211,9 @@
   #hubkeymodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
                align-items:center;justify-content:center;z-index:16}
   #hubkeymodal.hidden{display:none}
+  #sslmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
+            align-items:center;justify-content:center;z-index:16}
+  #sslmodal.hidden{display:none}
   .notifbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
             width:580px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
             box-shadow:0 8px 24px rgba(0,0,0,.15);overflow:hidden}
@@ -2075,6 +2078,9 @@
         </div>
         <div id="ssl_progress_box" style="display:none;margin-top:8px;padding:8px;background:var(--panel);border-radius:4px;border:1px dashed var(--line);color:var(--ink)">
           ⏳ <span id="ssl_progress_text">正在申请证书...</span>
+        </div>
+        <div id="ssl_error_box" style="display:none;margin-top:8px;padding:8px 10px;background:#fdecea;border:1px solid #f0b8b0;border-radius:4px;color:#8a1c10;font-size:11.5px;line-height:1.4">
+          <strong>⚠️ 申请失败:</strong> <span id="ssl_error_text"></span>
         </div>
       </div>
 
@@ -6383,14 +6389,25 @@ function refreshSslStatus(){
         $("ssl_access_box").style.display = "none";
       }
 
+      if(st.last_error){
+        $("ssl_error_box").style.display = "block";
+        $("ssl_error_text").textContent = st.last_error;
+      } else {
+        $("ssl_error_box").style.display = "none";
+      }
+
       if(st.in_progress){
         $("ssl_progress_box").style.display = "block";
         $("ssl_progress_text").textContent = "当前步骤: " + (st.progress_step || "处理中...");
+        $("ssl_btn_save").disabled = true;
+        $("ssl_btn_save").textContent = "⏳ 正在申请证书...";
         if(!sslState.pollTimer){
           sslState.pollTimer = setInterval(refreshSslStatus, 2000);
         }
       } else {
         $("ssl_progress_box").style.display = "none";
+        $("ssl_btn_save").disabled = false;
+        $("ssl_btn_save").textContent = "🚀 保存并应用设置";
         if(sslState.pollTimer){
           clearInterval(sslState.pollTimer);
           sslState.pollTimer = null;
@@ -6423,6 +6440,9 @@ function saveSslConfig(){
   var msg = $("ssl_opmsg");
   msg.className = "opmsg";
   msg.textContent = "正在提交设置并启动证书处理...";
+  $("ssl_error_box").style.display = "none";
+  $("ssl_btn_save").disabled = true;
+  $("ssl_btn_save").textContent = "⏳ 正在提交申请...";
 
   var mode = "auto";
   if($("ssl_mode_custom").checked) mode = "custom_domain";
@@ -6431,14 +6451,24 @@ function saveSslConfig(){
 
   var port = $("ssl_port_443").checked ? 443 : (parseInt($("ssl_custom_port_val").value, 10) || 6010);
   var domain = $("ssl_input_domain").value.trim();
+  if(mode === "auto" && !domain && sslState.data && sslState.data.suggested_sslip_domain){
+    domain = sslState.data.suggested_sslip_domain;
+    $("ssl_input_domain").value = domain;
+  }
   var email = $("ssl_input_email").value.trim();
   var redirect = $("ssl_chk_redirect").checked;
   var renew = $("ssl_chk_renew").checked;
+
+  function resetSaveBtn(){
+    $("ssl_btn_save").disabled = false;
+    $("ssl_btn_save").textContent = "🚀 保存并应用设置";
+  }
 
   if(mode === "import"){
     var certPem = $("ssl_import_cert").value.trim();
     var keyPem = $("ssl_import_key").value.trim();
     if(!certPem || !keyPem){
+      resetSaveBtn();
       msg.className = "opmsg bad";
       msg.textContent = "导入模式必须提供证书和私钥 PEM 文本。";
       return;
@@ -6448,6 +6478,7 @@ function saveSslConfig(){
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cert_pem: certPem, key_pem: keyPem, domain: domain || "custom-cert", https_port: port })
     }).then(function(r){ return r.json(); }).then(function(res){
+      resetSaveBtn();
       if(res.ok){
         msg.className = "opmsg ok";
         msg.textContent = res.message || "证书导入成功并已激活！";
@@ -6455,7 +6486,13 @@ function saveSslConfig(){
       } else {
         msg.className = "opmsg bad";
         msg.textContent = "导入失败: " + (res.error || "未知错误");
+        $("ssl_error_box").style.display = "block";
+        $("ssl_error_text").textContent = res.error || "未知错误";
       }
+    }).catch(function(e){
+      resetSaveBtn();
+      msg.className = "opmsg bad";
+      msg.textContent = "请求错误: " + e.message;
     });
     return;
   }
@@ -6466,6 +6503,7 @@ function saveSslConfig(){
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain: domain || "127-0-0-1.sslip.io", https_port: port })
     }).then(function(r){ return r.json(); }).then(function(res){
+      resetSaveBtn();
       if(res.ok){
         msg.className = "opmsg ok";
         msg.textContent = res.message || "自签名证书生成并激活成功！";
@@ -6473,7 +6511,13 @@ function saveSslConfig(){
       } else {
         msg.className = "opmsg bad";
         msg.textContent = "生成失败: " + (res.error || "未知错误");
+        $("ssl_error_box").style.display = "block";
+        $("ssl_error_text").textContent = res.error || "未知错误";
       }
+    }).catch(function(e){
+      resetSaveBtn();
+      msg.className = "opmsg bad";
+      msg.textContent = "请求错误: " + e.message;
     });
     return;
   }
@@ -6498,10 +6542,14 @@ function saveSslConfig(){
         sslState.pollTimer = setInterval(refreshSslStatus, 2000);
       }
     } else {
+      resetSaveBtn();
       msg.className = "opmsg bad";
       msg.textContent = "配置失败: " + (res.error || "未知错误");
+      $("ssl_error_box").style.display = "block";
+      $("ssl_error_text").textContent = res.error || "配置失败";
     }
   }).catch(function(e){
+    resetSaveBtn();
     msg.className = "opmsg bad";
     msg.textContent = "请求错误: " + e.message;
   });
