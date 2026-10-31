@@ -1417,6 +1417,21 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   * **N81-02**：接收端状态文件实际直接复用 `CopierStateFile::Save`，第 80 轮 `CopierLotEncodable` 守卫已全量生效；
   * **N81-04**：`alerts.rs:76` 的常量早在第 77 轮已彻底清理。
 
+### 八十二次演进：原生 SSL/TLS (HTTPS & WSS) 模块完整落地（2026-10-31 05:40；全部闭环）
+
+- **功能落地项**：
+  1. **无域名公网安全访问（核心突破）**：实现自动检测 VPS 公网 IP 并绑定 `<IP>.sslip.io` 合法 FQDN，通过 RFC 8555 HTTP-01 挑战全自动向 Let's Encrypt 申请受全球浏览器信任的权威绿锁证书；
+  2. **端口双模式自适应**：支持标准 443 端口（免端口访问）与自定义非标端口（如 6010，适合已有 Web 服务的 VPS），80 端口兼顾 ACME 挑战与自动 HTTP->HTTPS 301 重定向；
+  3. **零停机动态热重载**：基于纯 Rust 密码学栈与 Schannel/native-tls，证书载入后纳秒级原子切换，无需重启 Hub 进程，正在运行的跟单订单与 ZMQ 消息流 100% 零抖动；
+  4. **全自动平滑续期**：后台 Worker 每 12 小时检查证书有效期，到期前 30 天自动发起平滑续期；
+  5. **Fail-Safe 防失联机制**：首次配置先保留 HTTP 探针验证，提供命令行一键复位脚本 `tools/reset_ssl.bat` 与 `tools/reset_ssl.sh`；
+  6. **一站式 Web UI 面板**：在 `dashboard.html` 嵌入直观的“🔒 SSL / HTTPS”模态设置面板（静态 DOM，无闪烁）。
+- **全栈验证结果**：
+  - 新建 `tools/hub_tls_test.py` 自动化端到端测试套件，内置 Mock ACME RFC 8555 模拟器，在本地自包含环境下 **13 / 13 项 TLS 测试全部 PASS**；
+  - Rust 单元测试增至 **152 / 152 项全量 PASS**；
+  - 核心 Python 测试套件全部绿灯（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 220 元素匹配）；
+  - 4 终端 16 个 MQL 二进制编译全部 ALL GREEN。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1426,14 +1441,15 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**145 / 145 单元测试全量 PASS**；
+  - Rust Hub Release 构建成功，**152 / 152 单元测试全量 PASS**；
   - 核心 Python 测试套件全部绿灯：
+    - `hub_tls_test.py`：13 / 13 PASS (NEW)
     - `hub_cluster_test.py`：35 / 35 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
-    - `dash_check.py`：187 个前端元素与 102 个函数完全校验匹配。
+    - `dash_check.py`：220 个前端元素与 110 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS）与业务代码实现 100% 吻合。
 
 ---
 

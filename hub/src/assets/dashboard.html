@@ -1282,6 +1282,7 @@
     </button>
 
     <button type="button" class="btn-sm" id="header_hubkey_btn">🔑 Hub Key</button>
+    <button type="button" class="btn-sm" id="header_ssl_btn">🔒 SSL / HTTPS</button>
     <button type="button" class="btn-sm" id="header_logout_btn">Log Out</button>
   </div>
 </header>
@@ -2048,6 +2049,126 @@
       <div class="btns">
         <a id="hubkey_dl_btn" href="/api/v1/curve/hub_key" download="copier_hub.key" class="opbtn" style="text-decoration:none;display:inline-flex;align-items:center;font-weight:600">⬇️ Download Key File</a>
         <button type="button" id="hubkey_close_btn" class="btn-sec">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="sslmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="ssltitle">
+  <div class="notifbox" style="width:720px">
+    <div class="notifhead">
+      <h2 id="ssltitle">🔒 SSL / HTTPS 安全连接设置</h2>
+      <button type="button" id="sslclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="notifbody">
+      <div id="ssl_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-weight:700">运行状态: <span id="ssl_active_badge" class="pill">检测中...</span></span>
+          <span id="ssl_days_badge" style="font-family:var(--mono);color:var(--dim)"></span>
+        </div>
+        <div id="ssl_details_row" style="color:var(--dim)">
+          <div>绑定域名: <strong id="ssl_curr_domain" style="color:var(--ink)">-</strong></div>
+          <div>颁发机构: <span id="ssl_curr_issuer">-</span> | 监听端口: <span id="ssl_curr_port">-</span></div>
+          <div id="ssl_access_box" style="margin-top:6px;display:none">
+            安全入口: <a id="ssl_access_link" href="#" target="_blank" style="font-weight:600;text-decoration:underline"></a>
+          </div>
+        </div>
+        <div id="ssl_progress_box" style="display:none;margin-top:8px;padding:8px;background:var(--panel);border-radius:4px;border:1px dashed var(--line);color:var(--ink)">
+          ⏳ <span id="ssl_progress_text">正在申请证书...</span>
+        </div>
+      </div>
+
+      <div class="notifrow">
+        <label style="font-weight:600;margin-bottom:6px;display:block">证书与域名模式</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
+            <input type="radio" name="ssl_mode" id="ssl_mode_auto" value="auto" checked onchange="onSslModeChange()">
+            <div>
+              <strong style="display:block;font-size:12px">自动分配域名 (推荐)</strong>
+              <span style="font-size:11px;color:var(--dim)">检测公网 IP 并绑定 IP.sslip.io 自动申请权威 Let's Encrypt 证书</span>
+            </div>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
+            <input type="radio" name="ssl_mode" id="ssl_mode_custom" value="custom_domain" onchange="onSslModeChange()">
+            <div>
+              <strong style="display:block;font-size:12px">自有独立域名</strong>
+              <span style="font-size:11px;color:var(--dim)">使用已解析到本机 IP 的独立域名自动申请 Let's Encrypt 证书</span>
+            </div>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
+            <input type="radio" name="ssl_mode" id="ssl_mode_selfsigned" value="self_signed" onchange="onSslModeChange()">
+            <div>
+              <strong style="display:block;font-size:12px">本地自签名证书</strong>
+              <span style="font-size:11px;color:var(--dim)">离线/内网环境测试使用（浏览器会提示不受信任）</span>
+            </div>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
+            <input type="radio" name="ssl_mode" id="ssl_mode_import" value="import" onchange="onSslModeChange()">
+            <div>
+              <strong style="display:block;font-size:12px">导入已有证书</strong>
+              <span style="font-size:11px;color:var(--dim)">直接粘贴 fullchain.pem 与私钥文本（企业/商业证书）</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="notifrow" id="ssl_domain_wrap">
+        <label id="ssl_domain_label">域名 (Domain)</label>
+        <input id="ssl_input_domain" placeholder="例如: 123-45-67-89.sslip.io 或 hub.example.com" style="width:100%">
+        <span class="hint" id="ssl_domain_hint">自动探测公网 IP 中...</span>
+      </div>
+
+      <div class="notifrow" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label>HTTPS 监听端口</label>
+          <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+              <input type="radio" name="ssl_port_choice" id="ssl_port_443" value="443" checked onchange="onSslPortChoiceChange()">
+              <span>标准 443 (免输端口)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+              <input type="radio" name="ssl_port_choice" id="ssl_port_custom" value="custom" onchange="onSslPortChoiceChange()">
+              <span>自定义:</span>
+            </label>
+            <input id="ssl_custom_port_val" type="number" style="width:80px;padding:2px 6px;display:none" value="6010">
+          </div>
+        </div>
+        <div>
+          <label>管理员通知邮箱 (可选)</label>
+          <input id="ssl_input_email" type="email" placeholder="admin@example.com" style="width:100%">
+          <span class="hint">用于接收 Let's Encrypt 官方证书到期/安全通知，可留空。</span>
+        </div>
+      </div>
+
+      <div id="ssl_import_wrap" style="display:none" class="notifrow">
+        <label>证书 PEM (fullchain.pem)</label>
+        <textarea id="ssl_import_cert" rows="4" style="width:100%;font-family:var(--mono);font-size:11px" placeholder="-----BEGIN CERTIFICATE-----..."></textarea>
+        <label style="margin-top:6px;display:block">私钥 PEM (privkey.pem)</label>
+        <textarea id="ssl_import_key" rows="4" style="width:100%;font-family:var(--mono);font-size:11px" placeholder="-----BEGIN PRIVATE KEY-----..."></textarea>
+      </div>
+
+      <div class="notifrow" style="display:flex;gap:16px;align-items:center">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="ssl_chk_redirect" checked>
+          <span>自动将 HTTP 80 重定向到 HTTPS</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="ssl_chk_renew" checked>
+          <span>到期前 30 天自动平滑续期</span>
+        </label>
+      </div>
+
+      <div id="ssl_opmsg" class="opmsg" style="max-width:none"></div>
+    </div>
+
+    <div class="notiffoot">
+      <div style="display:flex;gap:8px">
+        <button type="button" id="ssl_btn_disable" class="btn-sec" style="color:var(--bad)">⛔ 停用 SSL (切回 HTTP)</button>
+        <button type="button" id="ssl_btn_renew" class="btn-sec">🔄 立即续期</button>
+      </div>
+      <div class="btns">
+        <button type="button" id="ssl_btn_cancel" class="btn-sec">关闭</button>
+        <button type="button" id="ssl_btn_save" class="btn-primary">🚀 保存并应用设置</button>
       </div>
     </div>
   </div>
@@ -6167,6 +6288,277 @@ $("cfgtargetcustom").addEventListener("keydown", function(ev){
 $("btn-open-cfg").addEventListener("click", function(){ openConfigModal(); });
 $("btn-gop-cfg").addEventListener("click", function(){ openConfigModal(); });
 
+// ============================================================================
+// SSL / TLS Modal & Operations
+// ============================================================================
+var sslState = {
+  data: null,
+  pollTimer: null
+};
+
+function openSslModal(){
+  $("sslmodal").classList.remove("hidden");
+  $("ssl_opmsg").className = "opmsg";
+  $("ssl_opmsg").textContent = "";
+  refreshSslStatus();
+}
+
+function closeSslModal(){
+  $("sslmodal").classList.add("hidden");
+  if(sslState.pollTimer){
+    clearInterval(sslState.pollTimer);
+    sslState.pollTimer = null;
+  }
+}
+
+function onSslPortChoiceChange(){
+  var isCustom = $("ssl_port_custom").checked;
+  $("ssl_custom_port_val").style.display = isCustom ? "inline-block" : "none";
+}
+
+function onSslModeChange(){
+  var mode = "auto";
+  if($("ssl_mode_custom").checked) mode = "custom_domain";
+  else if($("ssl_mode_selfsigned").checked) mode = "self_signed";
+  else if($("ssl_mode_import").checked) mode = "import";
+
+  $("ssl_import_wrap").style.display = (mode === "import") ? "block" : "none";
+  $("ssl_domain_wrap").style.display = (mode === "import") ? "none" : "block";
+
+  if(mode === "auto"){
+    $("ssl_domain_label").textContent = "自动分配域名 (Auto Domain via sslip.io)";
+    $("ssl_domain_hint").textContent = sslState.data && sslState.data.suggested_sslip_domain
+      ? "根据公网 IP 自动映射为: " + sslState.data.suggested_sslip_domain
+      : "系统将自动探测当前 VPS 公网 IP 并分配唯一 sslip.io 域名";
+    if(sslState.data && sslState.data.suggested_sslip_domain && !$("ssl_input_domain").value){
+      $("ssl_input_domain").value = sslState.data.suggested_sslip_domain;
+    }
+  } else if(mode === "custom_domain"){
+    $("ssl_domain_label").textContent = "自有独立域名 (Custom Domain)";
+    $("ssl_domain_hint").textContent = "请确保该域名的 DNS A 记录已解析至本机 VPS 公网 IP";
+  } else if(mode === "self_signed"){
+    $("ssl_domain_label").textContent = "测试域名 / IP (Domain for Self-Signed Cert)";
+    $("ssl_domain_hint").textContent = "例如: 127-0-0-1.sslip.io 或 localhost (用于内网测试)";
+  }
+}
+
+function refreshSslStatus(){
+  fetch("/api/v1/tls/status", { credentials: "same-origin" })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if(!res || !res.ok) return;
+      sslState.data = res;
+      var cfg = res.config || {};
+      var st = cfg.status || {};
+
+      var badge = $("ssl_active_badge");
+      if(cfg.enabled && st.cert_valid){
+        badge.className = "pill ok";
+        badge.textContent = "已启用 (HTTPS 保护中)";
+      } else if(st.in_progress){
+        badge.className = "pill warn";
+        badge.textContent = "正在配置/申请中...";
+      } else {
+        badge.className = "pill dim";
+        badge.textContent = "未启用 (当前为 HTTP)";
+      }
+
+      $("ssl_curr_domain").textContent = cfg.domain || "(未绑定)";
+      $("ssl_curr_issuer").textContent = st.issuer || "-";
+      $("ssl_curr_port").textContent = cfg.https_port || 443;
+
+      if(st.days_remaining !== undefined && cfg.enabled){
+        $("ssl_days_badge").textContent = "剩余 " + st.days_remaining + " 天";
+      } else {
+        $("ssl_days_badge").textContent = "";
+      }
+
+      if(cfg.enabled && cfg.domain){
+        var portPart = (cfg.https_port === 443) ? "" : (":" + cfg.https_port);
+        var url = "https://" + cfg.domain + portPart;
+        $("ssl_access_link").href = url;
+        $("ssl_access_link").textContent = url;
+        $("ssl_access_box").style.display = "block";
+      } else {
+        $("ssl_access_box").style.display = "none";
+      }
+
+      if(st.in_progress){
+        $("ssl_progress_box").style.display = "block";
+        $("ssl_progress_text").textContent = "当前步骤: " + (st.progress_step || "处理中...");
+        if(!sslState.pollTimer){
+          sslState.pollTimer = setInterval(refreshSslStatus, 2000);
+        }
+      } else {
+        $("ssl_progress_box").style.display = "none";
+        if(sslState.pollTimer){
+          clearInterval(sslState.pollTimer);
+          sslState.pollTimer = null;
+        }
+      }
+
+      if(!document.activeElement || document.activeElement.tagName !== "INPUT"){
+        if(cfg.domain) $("ssl_input_domain").value = cfg.domain;
+        else if(res.suggested_sslip_domain) $("ssl_input_domain").value = res.suggested_sslip_domain;
+
+        if(cfg.email) $("ssl_input_email").value = cfg.email;
+        if(cfg.https_port === 443){
+          $("ssl_port_443").checked = true;
+          $("ssl_port_custom").checked = false;
+        } else if(cfg.https_port) {
+          $("ssl_port_443").checked = false;
+          $("ssl_port_custom").checked = true;
+          $("ssl_custom_port_val").value = cfg.https_port;
+        }
+        onSslPortChoiceChange();
+        onSslModeChange();
+      }
+    })
+    .catch(function(e){
+      console.warn("[SSL] Failed to fetch status:", e);
+    });
+}
+
+function saveSslConfig(){
+  var msg = $("ssl_opmsg");
+  msg.className = "opmsg";
+  msg.textContent = "正在提交设置并启动证书处理...";
+
+  var mode = "auto";
+  if($("ssl_mode_custom").checked) mode = "custom_domain";
+  else if($("ssl_mode_selfsigned").checked) mode = "self_signed";
+  else if($("ssl_mode_import").checked) mode = "import";
+
+  var port = $("ssl_port_443").checked ? 443 : (parseInt($("ssl_custom_port_val").value, 10) || 6010);
+  var domain = $("ssl_input_domain").value.trim();
+  var email = $("ssl_input_email").value.trim();
+  var redirect = $("ssl_chk_redirect").checked;
+  var renew = $("ssl_chk_renew").checked;
+
+  if(mode === "import"){
+    var certPem = $("ssl_import_cert").value.trim();
+    var keyPem = $("ssl_import_key").value.trim();
+    if(!certPem || !keyPem){
+      msg.className = "opmsg bad";
+      msg.textContent = "导入模式必须提供证书和私钥 PEM 文本。";
+      return;
+    }
+    fetch("/api/v1/tls/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cert_pem: certPem, key_pem: keyPem, domain: domain || "custom-cert", https_port: port })
+    }).then(function(r){ return r.json(); }).then(function(res){
+      if(res.ok){
+        msg.className = "opmsg ok";
+        msg.textContent = res.message || "证书导入成功并已激活！";
+        refreshSslStatus();
+      } else {
+        msg.className = "opmsg bad";
+        msg.textContent = "导入失败: " + (res.error || "未知错误");
+      }
+    });
+    return;
+  }
+
+  if(mode === "self_signed"){
+    fetch("/api/v1/tls/self-signed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain: domain || "127-0-0-1.sslip.io", https_port: port })
+    }).then(function(r){ return r.json(); }).then(function(res){
+      if(res.ok){
+        msg.className = "opmsg ok";
+        msg.textContent = res.message || "自签名证书生成并激活成功！";
+        refreshSslStatus();
+      } else {
+        msg.className = "opmsg bad";
+        msg.textContent = "生成失败: " + (res.error || "未知错误");
+      }
+    });
+    return;
+  }
+
+  fetch("/api/v1/tls/configure", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mode: mode,
+      domain: domain,
+      https_port: port,
+      email: email,
+      enable_http_redirect: redirect,
+      auto_renew: renew
+    })
+  }).then(function(r){ return r.json(); }).then(function(res){
+    if(res.accepted){
+      msg.className = "opmsg ok";
+      msg.textContent = res.message || "证书申请任务已在后台启动！";
+      refreshSslStatus();
+      if(!sslState.pollTimer){
+        sslState.pollTimer = setInterval(refreshSslStatus, 2000);
+      }
+    } else {
+      msg.className = "opmsg bad";
+      msg.textContent = "配置失败: " + (res.error || "未知错误");
+    }
+  }).catch(function(e){
+    msg.className = "opmsg bad";
+    msg.textContent = "请求错误: " + e.message;
+  });
+}
+
+function disableSsl(){
+  confirmDialog({
+    title: "停用 SSL / 切回 HTTP 模式",
+    desc: "确定要关闭 SSL 加密并切回纯 HTTP 模式吗？",
+    detail: "切回后，后续连接将不再使用 TLS 加密。建议仅在证书故障或内网特殊调试时使用。",
+    danger: true,
+    confirmText: "确认停用 SSL"
+  }).then(function(ok){
+    if(!ok) return;
+    var msg = $("ssl_opmsg");
+    msg.className = "opmsg";
+    msg.textContent = "正在停用 SSL...";
+    fetch("/api/v1/tls/disable", { method: "POST" })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if(res.ok){
+          msg.className = "opmsg ok";
+          msg.textContent = res.message || "SSL 已关闭，恢复为纯 HTTP 模式。";
+          refreshSslStatus();
+        } else {
+          msg.className = "opmsg bad";
+          msg.textContent = "停用失败: " + (res.error || "未知错误");
+        }
+      });
+  });
+}
+
+function renewSsl(){
+  var msg = $("ssl_opmsg");
+  msg.className = "opmsg";
+  msg.textContent = "正在发起证书续期申请...";
+  fetch("/api/v1/tls/renew", { method: "POST" })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if(res.accepted){
+        msg.className = "opmsg ok";
+        msg.textContent = "续期申请已启动！";
+        refreshSslStatus();
+      } else {
+        msg.className = "opmsg bad";
+        msg.textContent = "续期启动失败: " + (res.error || "未知错误");
+      }
+    });
+}
+
+$("header_ssl_btn").addEventListener("click", function(){ openSslModal(); });
+$("sslclose_x").addEventListener("click", function(){ closeSslModal(); });
+$("ssl_btn_cancel").addEventListener("click", function(){ closeSslModal(); });
+$("ssl_btn_save").addEventListener("click", function(){ saveSslConfig(); });
+$("ssl_btn_disable").addEventListener("click", function(){ disableSsl(); });
+$("ssl_btn_renew").addEventListener("click", function(){ renewSsl(); });
+
 document.addEventListener("keydown", function(ev){
   if(ev.key === "Escape"){
     if(!$("cfgmodal").classList.contains("hidden")){
@@ -6180,6 +6572,9 @@ document.addEventListener("keydown", function(ev){
     }
     if(!$("posmodal").classList.contains("hidden")){
       closePositionsModal();
+    }
+    if(!$("sslmodal").classList.contains("hidden")){
+      closeSslModal();
     }
   }
 });

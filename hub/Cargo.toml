@@ -50,6 +50,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+native-tls = "0.2.18"
+tokio-native-tls = "0.3.1"
+p12 = "0.6.3"
+p256 = "0.14.0"
+sha2 = "0.11.1"
+base64 = "0.23.1"
+yasna = "0.5"
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+tower = "0.5"
+hyper = { version = "1", features = ["server", "http1", "http2"] }
 
 #--- NO ctrlc, deliberately and separately from anything above.
 #---

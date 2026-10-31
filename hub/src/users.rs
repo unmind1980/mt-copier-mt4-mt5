@@ -856,7 +856,7 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-fn os_random_bytes(dest: &mut [u8]) -> bool {
+pub(crate) fn os_random_bytes(dest: &mut [u8]) -> bool {
     #[link(name = "bcrypt")]
     extern "system" {
         fn BCryptGenRandom(
@@ -878,7 +878,7 @@ fn os_random_bytes(dest: &mut [u8]) -> bool {
 }
 
 #[cfg(not(windows))]
-fn os_random_bytes(dest: &mut [u8]) -> bool {
+pub(crate) fn os_random_bytes(dest: &mut [u8]) -> bool {
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         use std::io::Read;
         f.read_exact(dest).is_ok()

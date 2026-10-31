@@ -159,6 +159,7 @@ pub struct Shared {
     pub notif_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::alerts::Alert>>,
     pub cluster: crate::cluster::ClusterManager,
     pub writes_allowed: bool,
+    pub tls: Arc<crate::tls::TlsManager>,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -196,6 +197,10 @@ impl Shared {
             notif_tx: None,
             cluster,
             writes_allowed: writes,
+            tls: Arc::new(crate::tls::TlsManager::new(
+                std::path::Path::new("."),
+                std::path::Path::new(crate::tls::DEFAULT_TLS_CONFIG_PATH),
+            )),
         }
     }
 
@@ -356,7 +361,7 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
                 n.held.map(|count| {
                     json!({
                         "count": count,
-                        "lots": trim_lots(n.held_lots),
+                        "lots": (n.held_lots * 100.0).round() / 100.0,
                         "receipt": Value::Null,
                         "orphaned": n.orphaned,
                     })
@@ -1770,6 +1775,12 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
             "/api/v1/cluster/failback-now",
             axum::routing::post(cluster_failback_now),
         )
+        .route("/api/v1/tls/status", get(tls_status))
+        .route("/api/v1/tls/configure", axum::routing::post(tls_configure))
+        .route("/api/v1/tls/import", axum::routing::post(tls_import))
+        .route("/api/v1/tls/self-signed", axum::routing::post(tls_self_signed))
+        .route("/api/v1/tls/disable", axum::routing::post(tls_disable))
+        .route("/api/v1/tls/renew", axum::routing::post(tls_renew))
         .layer(axum::extract::Extension(tx))
         .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))
         .with_state(st)
@@ -1863,6 +1874,15 @@ pub fn spawn(
                 // Spawn the HA Cluster replication & heartbeat worker
                 crate::cluster::spawn_cluster_worker(st.clone(), std::time::Duration::from_millis(1000));
 
+                let tls_mgr = Arc::clone(&st.lock_or_recover().tls);
+                let _ = tls_mgr.reload_from_disk();
+                let http_port = tls_mgr.config.lock().unwrap().http_port;
+                let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                if http_port > 0 && http_port != current_port {
+                    crate::tls::spawn_http_challenge_and_redirect_server(Arc::clone(&tls_mgr), http_port);
+                }
+                crate::tls::spawn_auto_renewal_worker(Arc::clone(&tls_mgr));
+
                 let listener = match tokio::net::TcpListener::bind(&addr).await {
                     Ok(l) => l,
                     Err(e) => {
@@ -1870,9 +1890,32 @@ pub fn spawn(
                         return;
                     }
                 };
-                println!("[hub] dashboard + REST on http://{}", addr);
-                if let Err(e) = axum::serve(listener, router(st, tx)).await {
-                    eprintln!("[hub] API server stopped: {}", e);
+                let is_tls = tls_mgr.acceptor.read().unwrap().is_some();
+                println!(
+                    "[hub] dashboard + REST on {}://{}",
+                    if is_tls { "https" } else { "http" },
+                    addr
+                );
+
+                loop {
+                    let (tcp_stream, _) = match listener.accept().await {
+                        Ok(conn) => conn,
+                        Err(_) => continue,
+                    };
+                    let acceptor_opt = tls_mgr.acceptor.read().unwrap().clone();
+                    let app = router(st.clone(), tx.clone());
+                    tokio::spawn(async move {
+                        if let Some(acceptor) = acceptor_opt {
+                            match acceptor.accept(tcp_stream).await {
+                                Ok(tls_stream) => {
+                                    crate::tls::serve_stream_with_router(tls_stream, app).await;
+                                }
+                                Err(_) => {}
+                            }
+                        } else {
+                            crate::tls::serve_stream_with_router(tcp_stream, app).await;
+                        }
+                    });
                 }
             });
         })
@@ -3391,4 +3434,327 @@ async fn cluster_failback_now(
         )
             .into_response(),
     }
+}
+
+// ============================================================================
+// TLS / HTTPS Configuration Endpoints
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct TlsConfigureBody {
+    mode: crate::tls::TlsMode,
+    domain: Option<String>,
+    https_port: Option<u16>,
+    http_port: Option<u16>,
+    email: Option<String>,
+    enable_http_redirect: Option<bool>,
+    auto_renew: Option<bool>,
+    staging_mode: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct TlsImportBody {
+    cert_pem: String,
+    key_pem: String,
+    domain: String,
+    https_port: Option<u16>,
+}
+
+#[derive(serde::Deserialize)]
+struct TlsSelfSignedBody {
+    domain: String,
+    https_port: Option<u16>,
+}
+
+async fn tls_status(
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let cfg = {
+        let s = st.lock_or_recover();
+        let c = s.tls.config.lock().unwrap().clone();
+        c
+    };
+    let client = reqwest::Client::new();
+    let detected_ip = crate::tls::detect_public_ip(&client).await;
+    let sslip_domain = detected_ip.as_deref().map(crate::tls::format_sslip_domain);
+
+    Json(json!({
+        "ok": true,
+        "config": cfg,
+        "detected_public_ip": detected_ip,
+        "suggested_sslip_domain": sslip_domain,
+    }))
+    .into_response()
+}
+
+async fn tls_configure(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+    Json(b): Json<TlsConfigureBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (is_primary, tls_mgr, audit) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Configuration is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
+
+    let client = reqwest::Client::new();
+    let detected_ip = crate::tls::detect_public_ip(&client).await;
+
+    let target_domain = match b.mode {
+        crate::tls::TlsMode::Auto => {
+            if let Some(d) = b.domain.as_deref().filter(|s| !s.trim().is_empty()) {
+                d.trim().to_string()
+            } else if let Some(ip) = detected_ip.as_deref() {
+                crate::tls::format_sslip_domain(ip)
+            } else {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Could not auto-detect public IP. Please specify domain explicitly." })),
+                )
+                    .into_response();
+            }
+        }
+        _ => b.domain.unwrap_or_default().trim().to_string(),
+    };
+
+    if target_domain.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Domain name cannot be empty." })),
+        )
+            .into_response();
+    }
+
+    let https_port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
+    let http_port = b.http_port.unwrap_or(crate::tls::DEFAULT_HTTP_PORT);
+    let enable_redirect = b.enable_http_redirect.unwrap_or(true);
+    let auto_renew = b.auto_renew.unwrap_or(true);
+    let staging = b.staging_mode.unwrap_or(false);
+
+    {
+        let mut c = tls_mgr.config.lock().unwrap();
+        c.mode = b.mode;
+        c.domain = target_domain.clone();
+        c.https_port = https_port;
+        c.http_port = http_port;
+        c.email = b.email.clone();
+        c.enable_http_redirect = enable_redirect;
+        c.auto_renew = auto_renew;
+        c.staging_mode = staging;
+        c.status.in_progress = true;
+        c.status.progress_step = "initiating".to_string();
+        c.status.last_error = None;
+        let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
+    }
+
+    audit.record(
+        &sess.user_id,
+        "",
+        "tls.configure",
+        &target_domain,
+        None,
+        Some(json!({ "mode": format!("{:?}", b.mode), "https_port": https_port, "domain": target_domain })),
+        "ok",
+    );
+
+    // Spawn ACME enrollment job in background
+    let mgr_bg = Arc::clone(&tls_mgr);
+    let domain_bg = target_domain.clone();
+    let email_bg = b.email.clone();
+    tokio::spawn(async move {
+        let dir_url = if staging {
+            crate::tls::LETS_ENCRYPT_STAGING_DIR
+        } else {
+            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
+        };
+        let acme = crate::tls::AcmeClient::new(dir_url.to_string());
+        if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email_bg.as_deref()).await {
+            eprintln!("[hub] TLS ERR: Enrollment failed for {}: {}", domain_bg, e);
+            let mut c = mgr_bg.config.lock().unwrap();
+            c.status.in_progress = false;
+            c.status.last_error = Some(e);
+            let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+        }
+    });
+
+    (
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({
+            "accepted": true,
+            "message": format!("Certificate enrollment initiated for {}", target_domain),
+            "domain": target_domain,
+            "https_port": https_port,
+        })),
+    )
+        .into_response()
+}
+
+async fn tls_import(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+    Json(b): Json<TlsImportBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (is_primary, tls_mgr, audit) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only." })),
+        )
+            .into_response();
+    }
+
+    let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
+    match tls_mgr.apply_imported_cert(&b.cert_pem, &b.key_pem, &b.domain, port) {
+        Ok(()) => {
+            audit.record(&sess.user_id, "", "tls.import", &b.domain, None, None, "ok");
+            Json(json!({ "ok": true, "message": "Certificate imported and activated." })).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+async fn tls_self_signed(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+    Json(b): Json<TlsSelfSignedBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (is_primary, tls_mgr, audit) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only." })),
+        )
+            .into_response();
+    }
+
+    let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
+    match tls_mgr.apply_self_signed(&b.domain, port) {
+        Ok(()) => {
+            audit.record(&sess.user_id, "", "tls.self_signed", &b.domain, None, None, "ok");
+            Json(json!({ "ok": true, "message": "Self-signed certificate generated and activated." })).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+async fn tls_disable(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (is_primary, tls_mgr, audit) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only." })),
+        )
+            .into_response();
+    }
+
+    {
+        let mut acc = tls_mgr.acceptor.write().unwrap();
+        *acc = None;
+    }
+    {
+        let mut c = tls_mgr.config.lock().unwrap();
+        c.enabled = false;
+        c.status.cert_valid = false;
+        c.status.progress_step = "disabled".to_string();
+        let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
+    }
+    audit.record(&sess.user_id, "", "tls.disable", "", None, None, "ok");
+
+    Json(json!({ "ok": true, "message": "TLS disabled. Hub returned to HTTP mode." })).into_response()
+}
+
+async fn tls_renew(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+    let (is_primary, tls_mgr, audit) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only." })),
+        )
+            .into_response();
+    }
+
+    let (domain, email, staging) = {
+        let c = tls_mgr.config.lock().unwrap();
+        (c.domain.clone(), c.email.clone(), c.staging_mode)
+    };
+    if domain.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "No domain configured to renew." })),
+        )
+            .into_response();
+    }
+
+    let mgr_bg = Arc::clone(&tls_mgr);
+    let domain_bg = domain.clone();
+    tokio::spawn(async move {
+        let dir_url = if staging {
+            crate::tls::LETS_ENCRYPT_STAGING_DIR
+        } else {
+            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
+        };
+        let acme = crate::tls::AcmeClient::new(dir_url.to_string());
+        let _ = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await;
+    });
+
+    audit.record(&sess.user_id, "", "tls.renew", &domain, None, None, "ok");
+    (
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({ "accepted": true, "message": "Certificate renewal initiated." })),
+    )
+        .into_response()
 }

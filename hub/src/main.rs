@@ -81,6 +81,7 @@ mod notifications;
 mod positions;
 mod registry;
 mod stats;
+mod tls;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
