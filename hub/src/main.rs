@@ -986,7 +986,23 @@ fn main() {
 
     if let Some(role) = &args.service_install {
         let wd = args.workdir.as_deref().map(std::path::Path::new);
-        match service::win_service::install(role, wd) {
+        // Collect any custom arguments passed after --service-install <role>
+        let raw: Vec<String> = std::env::args().skip(1).collect();
+        let mut custom = Vec::new();
+        let mut skip_next = false;
+        for i in 0..raw.len() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if raw[i] == "--service-install" || raw[i] == "--workdir" {
+                skip_next = true;
+                continue;
+            }
+            custom.push(raw[i].clone());
+        }
+
+        match service::win_service::install(role, wd, &custom) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("copier-hub: service install failed: {}", e);

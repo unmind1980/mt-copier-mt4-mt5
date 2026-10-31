@@ -141,19 +141,18 @@ pub mod win_service {
         });
     }
 
-    pub fn install(role: &str, workdir: Option<&Path>) -> Result<(), String> {
+    pub fn install(role: &str, workdir: Option<&Path>, custom_args: &[String]) -> Result<(), String> {
         let (service_name, display_name, desc, default_args) = match role {
             "primary" => (
                 PRIMARY_SERVICE_NAME,
                 PRIMARY_DISPLAY_NAME,
                 "MT-Copier Central Hub (Primary Node) - High-performance ZeroMQ & HTTPS router for trade replication",
                 vec![
-                    "--service-run", PRIMARY_SERVICE_NAME,
-                    "--port", "6000",
-                    "--http", "0.0.0.0:6010",
-                    "--role", "primary",
-                    "--peer-api", "http://127.0.0.1:6011",
-                    "--peer-zmq", "tcp://127.0.0.1:6001",
+                    "--port".to_string(), "6000".to_string(),
+                    "--http".to_string(), "0.0.0.0:6010".to_string(),
+                    "--role".to_string(), "primary".to_string(),
+                    "--peer-api".to_string(), "http://127.0.0.1:6011".to_string(),
+                    "--peer-zmq".to_string(), "tcp://127.0.0.1:6001".to_string(),
                 ],
             ),
             "standby" => (
@@ -161,20 +160,19 @@ pub mod win_service {
                 STANDBY_DISPLAY_NAME,
                 "MT-Copier Central Hub (Standby Mirror Node) - High-performance ZeroMQ & HTTPS router for trade replication",
                 vec![
-                    "--service-run", STANDBY_SERVICE_NAME,
-                    "--port", "6001",
-                    "--http", "0.0.0.0:6011",
-                    "--role", "standby",
-                    "--peer-api", "http://127.0.0.1:6010",
-                    "--peer-zmq", "tcp://127.0.0.1:6000",
-                    "--cluster-state", r"standby_data\cluster_state.json",
-                    "--config", r"standby_data\config_revisions.jsonl",
-                    "--commands", r"standby_data\commands.jsonl",
-                    "--users", r"standby_data\users.json",
-                    "--notifications", r"standby_data\alert_channels.json",
-                    "--curve-clients", r"standby_data\curve_clients.txt",
-                    "--curve-keys", "curve_hub.keys",
-                    "--audit", r"standby_data\audit.jsonl",
+                    "--port".to_string(), "6001".to_string(),
+                    "--http".to_string(), "0.0.0.0:6011".to_string(),
+                    "--role".to_string(), "standby".to_string(),
+                    "--peer-api".to_string(), "http://127.0.0.1:6010".to_string(),
+                    "--peer-zmq".to_string(), "tcp://127.0.0.1:6000".to_string(),
+                    "--cluster-state".to_string(), r"standby_data\cluster_state.json".to_string(),
+                    "--config".to_string(), r"standby_data\config_revisions.jsonl".to_string(),
+                    "--commands".to_string(), r"standby_data\commands.jsonl".to_string(),
+                    "--users".to_string(), r"standby_data\users.json".to_string(),
+                    "--notifications".to_string(), r"standby_data\alert_channels.json".to_string(),
+                    "--curve-clients".to_string(), r"standby_data\curve_clients.txt".to_string(),
+                    "--curve-keys".to_string(), "curve_hub.keys".to_string(),
+                    "--audit".to_string(), r"standby_data\audit.jsonl".to_string(),
                 ],
             ),
             other => return Err(format!("Unknown service role '{}'. Use 'primary' or 'standby'.", other)),
@@ -202,10 +200,19 @@ pub mod win_service {
         })?;
 
         let mut launch_args = vec![
+            OsString::from("--service-run"),
+            OsString::from(service_name),
             OsString::from("--workdir"),
             resolved_workdir.as_os_str().to_os_string(),
         ];
-        for a in default_args {
+
+        let args_to_use = if !custom_args.is_empty() {
+            custom_args
+        } else {
+            &default_args
+        };
+
+        for a in args_to_use {
             launch_args.push(OsString::from(a));
         }
 
@@ -375,7 +382,7 @@ pub mod win_service {
     pub fn run_as_service(_name: &str) -> Result<(), String> {
         Err("Windows Service mode is only supported on Windows.".to_string())
     }
-    pub fn install(_role: &str, _workdir: Option<&Path>) -> Result<(), String> {
+    pub fn install(_role: &str, _workdir: Option<&Path>, _custom_args: &[String]) -> Result<(), String> {
         Err("Windows Service installation is only supported on Windows.".to_string())
     }
     pub fn uninstall(_role: &str) -> Result<(), String> {

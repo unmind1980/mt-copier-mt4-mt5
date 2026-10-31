@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo =======================================================================
-echo   MT-Copier - Windows Services Installation (Primary + Standby)
+echo   MT-Copier - Install Windows Service (Interactive Selector)
 echo =======================================================================
 echo.
 
@@ -38,42 +38,72 @@ if not exist "cluster_token.txt" (
         echo [cluster] Generated new cluster token: %%i
     )
 )
-if not exist "standby_data" mkdir "standby_data"
 
-echo [1/4] Installing MTCopierPrimary service (Port 6000 ZMQ / Port 6010 HTTP / Port 443 HTTPS)...
+echo Please choose which Windows Service to install on THIS computer:
+echo.
+echo   [1] Production Primary VPS  (Only Primary Hub: Port 6000 ZMQ / 6010 HTTP / 443 HTTPS)
+echo   [2] Production Standby VPS  (Only Standby Hub: Port 6001 ZMQ / 6011 HTTP)
+echo   [3] Local Dev/Test Machine  (Both Primary + Standby Hubs on this single machine)
+echo   [0] Cancel
+echo.
+set /p CHOICE="Enter choice [1, 2, 3 or 0]: "
+
+if "%CHOICE%"=="1" goto :install_primary
+if "%CHOICE%"=="2" goto :install_standby
+if "%CHOICE%"=="3" goto :install_both
+echo Cancelled.
+exit /b 0
+
+:install_primary
+echo.
+echo [1/2] Installing MTCopierPrimary service...
 "%BIN%" --service-install primary --workdir "%REPO%"
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierPrimary service.
     pause
     exit /b 1
 )
+echo [2/2] Starting MTCopierPrimary service...
+sc start MTCopierPrimary >nul 2>&1
+timeout /t 2 /nobreak >nul
+goto :verify
 
-echo [2/4] Installing MTCopierStandby service (Port 6001 ZMQ / Port 6011 HTTP)...
+:install_standby
+echo.
+if not exist "standby_data" mkdir "standby_data"
+echo [1/2] Installing MTCopierStandby service...
 "%BIN%" --service-install standby --workdir "%REPO%"
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierStandby service.
     pause
     exit /b 1
 )
+echo [2/2] Starting MTCopierStandby service...
+sc start MTCopierStandby >nul 2>&1
+timeout /t 2 /nobreak >nul
+goto :verify
 
+:install_both
+echo.
+if not exist "standby_data" mkdir "standby_data"
+echo [1/4] Installing MTCopierPrimary service...
+"%BIN%" --service-install primary --workdir "%REPO%"
+echo [2/4] Installing MTCopierStandby service...
+"%BIN%" --service-install standby --workdir "%REPO%"
 echo [3/4] Starting MTCopierPrimary service...
 sc start MTCopierPrimary >nul 2>&1
-timeout /t 2 /nobreak >nul
-
 echo [4/4] Starting MTCopierStandby service...
 sc start MTCopierStandby >nul 2>&1
 timeout /t 2 /nobreak >nul
+goto :verify
 
+:verify
 echo.
 echo =======================================================================
 echo   Current Windows Services Status:
 echo =======================================================================
-sc query MTCopierPrimary | findstr "STATE"
-sc query MTCopierStandby | findstr "STATE"
-
+sc query MTCopierPrimary 2>nul | findstr "STATE"
+sc query MTCopierStandby 2>nul | findstr "STATE"
 echo.
-echo [SUCCESS] Both services installed and configured for automatic startup on boot!
-echo   - Log file: %REPO%\hub_mtcopierprimary_service.log
-echo   - Log file: %REPO%\hub_mtcopierstandby_service.log
-echo.
+echo [SUCCESS] Service installation complete! Automatically starts on boot.
 pause
