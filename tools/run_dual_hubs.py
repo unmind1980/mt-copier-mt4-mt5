@@ -11,8 +11,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(REPO, "hub", "target", "release", "copier-hub.exe")
 
 env = os.environ.copy()
-# Fix case-insensitive dictionary collisions on Windows
-for k in ["http_proxy", "https_proxy", "all_proxy", "no_proxy"]:
+for k in ["http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]:
     env.pop(k, None)
 
 env["PATH"] = os.path.join(REPO, "third_party", "zmq-prefix", "lib") + ";" + env.get("PATH", "")
@@ -29,6 +28,13 @@ else:
         tok = f.read().strip()
 env["MTC_CLUSTER_TOKEN"] = tok
 
+log_p_out = open(os.path.join(REPO, "hub_primary.stdout.log"), "a", encoding="utf-8")
+log_p_err = open(os.path.join(REPO, "hub_primary.stderr.log"), "a", encoding="utf-8")
+log_s_out = open(os.path.join(REPO, "hub_standby.stdout.log"), "a", encoding="utf-8")
+log_s_err = open(os.path.join(REPO, "hub_standby.stderr.log"), "a", encoding="utf-8")
+
+CREATE_NEW_CONSOLE = 0x00000010
+
 # Launch Primary
 p_primary = subprocess.Popen(
     [
@@ -41,7 +47,9 @@ p_primary = subprocess.Popen(
     ],
     cwd=REPO,
     env=env,
-    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+    stdout=log_p_out,
+    stderr=log_p_err,
+    creationflags=CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
 )
 
 time.sleep(2)
@@ -66,8 +74,11 @@ p_standby = subprocess.Popen(
     ],
     cwd=REPO,
     env=env,
-    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+    stdout=log_s_out,
+    stderr=log_s_err,
+    creationflags=CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
 )
 
-print(f"[OK] Primary started (PID {p_primary.pid}) on http://0.0.0.0:6010")
-print(f"[OK] Standby started (PID {p_standby.pid}) on http://0.0.0.0:6011")
+time.sleep(1)
+print(f"[OK] Primary running (PID {p_primary.pid}) on http://0.0.0.0:6010")
+print(f"[OK] Standby running (PID {p_standby.pid}) on http://0.0.0.0:6011")
