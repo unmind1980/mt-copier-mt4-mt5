@@ -612,77 +612,80 @@ where
         .await;
 }
 
-/// Spawn a background listener on `http_port` (e.g. 80) to answer ACME HTTP-01 challenges
-/// and optionally issue 301 Permanent Redirects to the HTTPS endpoint.
-pub fn spawn_http_challenge_and_redirect_server(tls_mgr: Arc<TlsManager>, http_port: u16) {
-    tokio::spawn(async move {
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!(
-                    "[hub] TLS: HTTP challenge/redirect listener on port {} could not be bound: {}",
-                    http_port, e
-                );
-                return;
-            }
-        };
-        println!("[hub] TLS: HTTP-01 challenge & redirect listener active on http://0.0.0.0:{}", http_port);
+/// On-demand HTTP-01 challenge server that binds `http_port` (e.g. 80) dynamically only while
+/// ACME validation is in flight, and shuts down / unbinds immediately upon completion.
+pub struct TempChallengeServer {
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    pub port: u16,
+}
 
-        let mgr = Arc::clone(&tls_mgr);
-        let app = axum::Router::new()
-            .route(
-                "/.well-known/acme-challenge/:token",
-                axum::routing::get({
-                    let mgr = Arc::clone(&mgr);
-                    move |axum::extract::Path(token): axum::extract::Path<String>| {
-                        let res = mgr.get_acme_token(&token);
-                        async move {
-                            use axum::response::IntoResponse;
-                            match res {
-                                Some(auth) => (
-                                    axum::http::StatusCode::OK,
-                                    [(axum::http::header::CONTENT_TYPE, "text/plain")],
-                                    auth,
-                                )
-                                    .into_response(),
-                                None => (axum::http::StatusCode::NOT_FOUND, "Token not found").into_response(),
-                            }
-                        }
-                    }
-                }),
+impl TempChallengeServer {
+    pub async fn start(tls_mgr: Arc<TlsManager>, http_port: u16) -> Result<Self, String> {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
+        let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
+            format!(
+                "Cannot bind on-demand HTTP challenge listener on port {}: {}",
+                http_port, e
             )
-            .fallback({
+        })?;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let mgr = Arc::clone(&tls_mgr);
+        let app = axum::Router::new().route(
+            "/.well-known/acme-challenge/:token",
+            axum::routing::get({
                 let mgr = Arc::clone(&mgr);
-                move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
-                    let cfg = mgr.config.lock().unwrap().clone();
+                move |axum::extract::Path(token): axum::extract::Path<String>| {
+                    let res = mgr.get_acme_token(&token);
                     async move {
                         use axum::response::IntoResponse;
-                        if cfg.enabled && cfg.enable_http_redirect {
-                            let host_hdr = headers
-                                .get(axum::http::header::HOST)
-                                .and_then(|h| h.to_str().ok())
-                                .unwrap_or("localhost");
-                            let host_without_port = host_hdr.split(':').next().unwrap_or(host_hdr);
-                            let target_url = if cfg.https_port == 443 {
-                                format!("https://{}{}", host_without_port, uri)
-                            } else {
-                                format!("https://{}:{}{}", host_without_port, cfg.https_port, uri)
-                            };
-                            return (
-                                axum::http::StatusCode::MOVED_PERMANENTLY,
-                                [(axum::http::header::LOCATION, target_url.as_str())],
-                                "",
+                        match res {
+                            Some(auth) => (
+                                axum::http::StatusCode::OK,
+                                [(axum::http::header::CONTENT_TYPE, "text/plain")],
+                                auth,
                             )
-                                .into_response();
+                                .into_response(),
+                            None => (axum::http::StatusCode::NOT_FOUND, "Token not found").into_response(),
                         }
-                        (axum::http::StatusCode::NOT_FOUND, "Not Found").into_response()
                     }
                 }
-            });
+            }),
+        );
 
-        let _ = axum::serve(listener, app).await;
-    });
+        tokio::spawn(async move {
+            println!(
+                "[hub] TLS: On-demand HTTP challenge listener activated on http://0.0.0.0:{}",
+                http_port
+            );
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+            println!(
+                "[hub] TLS: On-demand HTTP challenge listener closed on port {}",
+                http_port
+            );
+        });
+
+        Ok(TempChallengeServer {
+            shutdown_tx: Some(shutdown_tx),
+            port: http_port,
+        })
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+impl Drop for TempChallengeServer {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 // ============================================================================
@@ -954,7 +957,7 @@ impl AcmeClient {
     /// Execute end-to-end ACME order, HTTP-01 challenge completion, and certificate enrollment.
     pub async fn enroll_certificate(
         &self,
-        tls_mgr: &TlsManager,
+        tls_mgr: &Arc<TlsManager>,
         domain: &str,
         email: Option<&str>,
     ) -> Result<(), String> {
@@ -1049,6 +1052,11 @@ impl AcmeClient {
             let mut c = tls_mgr.config.lock().unwrap();
             c.status.progress_step = "answering_challenges".to_string();
         }
+
+        let http_port = tls_mgr.config.lock().unwrap().http_port;
+        // On-Demand: Dynamically open HTTP-01 listener on port 80 ONLY during challenge verification
+        let mut temp_server = TempChallengeServer::start(Arc::clone(tls_mgr), http_port).await?;
+
         for auth_url_val in auth_urls {
             let auth_url = auth_url_val.as_str().unwrap_or_default();
             if nonce.is_empty() {
@@ -1129,6 +1137,10 @@ impl AcmeClient {
                 return Err("Timed out waiting for ACME http-01 challenge verification".to_string());
             }
         }
+
+        // Challenge verified! Immediately shut down and unbind port 80 listener (keep it stealth & closed)
+        temp_server.stop();
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Step 4: Generate site key, CSR, and finalize order
         {

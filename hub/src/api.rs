@@ -1876,11 +1876,7 @@ pub fn spawn(
 
                 let tls_mgr = Arc::clone(&st.lock_or_recover().tls);
                 let _ = tls_mgr.reload_from_disk();
-                let http_port = tls_mgr.config.lock().unwrap().http_port;
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
-                if http_port > 0 && http_port != current_port {
-                    crate::tls::spawn_http_challenge_and_redirect_server(Arc::clone(&tls_mgr), http_port);
-                }
 
                 // If user selected standard 443 (or custom port distinct from current_port), spawn a dedicated HTTPS listener
                 let https_port = tls_mgr.config.lock().unwrap().https_port;
@@ -1930,7 +1926,10 @@ pub fn spawn(
                         return;
                     }
                 };
-                let is_tls = tls_mgr.acceptor.read().unwrap().is_some();
+                let is_tls = {
+                    let c = tls_mgr.config.lock().unwrap();
+                    c.enabled && c.https_port == current_port && tls_mgr.acceptor.read().unwrap().is_some()
+                };
                 println!(
                     "[hub] dashboard + REST on {}://{}",
                     if is_tls { "https" } else { "http" },
@@ -1942,7 +1941,15 @@ pub fn spawn(
                         Ok(conn) => conn,
                         Err(_) => continue,
                     };
-                    let acceptor_opt = tls_mgr.acceptor.read().unwrap().clone();
+                    let is_https_on_main = {
+                        let c = tls_mgr.config.lock().unwrap();
+                        c.enabled && c.https_port == current_port
+                    };
+                    let acceptor_opt = if is_https_on_main {
+                        tls_mgr.acceptor.read().unwrap().clone()
+                    } else {
+                        None
+                    };
                     let app = router(st.clone(), tx.clone());
                     tokio::spawn(async move {
                         if let Some(acceptor) = acceptor_opt {
