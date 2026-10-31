@@ -60,6 +60,7 @@ yasna = "0.5"
 hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
 tower = "0.5"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
+windows-service = "0.8.1"
 
 #--- NO ctrlc, deliberately and separately from anything above.
 #---

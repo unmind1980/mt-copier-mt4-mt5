@@ -80,6 +80,7 @@ mod lockx;
 mod notifications;
 mod positions;
 mod registry;
+mod service;
 mod stats;
 mod tls;
 
@@ -92,12 +93,8 @@ use registry::Liveness;
 use stats::Stats;
 use crate::lockx::LockExt;
 
-/// Set by the Ctrl-C handler, read by the loop.
-///
-/// A `static` rather than something captured, because a signal handler may not
-/// touch anything with a destructor - an `Arc` in a handler is a data race
-/// waiting for the right day.
-static EXIT: AtomicBool = AtomicBool::new(false);
+/// Set by the Ctrl-C handler or SCM Stop/Shutdown event, read by the loop.
+pub(crate) static EXIT: AtomicBool = AtomicBool::new(false);
 
 /// Ctrl-C, without a crate.
 ///
@@ -244,7 +241,7 @@ const REGISTRY_EVERY_SECS: f64 = 2.0;
 /// line appearing on a quiet feed.
 const POLL_MS: i64 = 1000;
 
-struct Args {
+pub struct Args {
     bind: String,
     port: u16,
     /// HA Cluster role: "primary" (default) or "standby"
@@ -321,10 +318,6 @@ struct Args {
     /// test bench.
     writes: bool,
     notifications: String,
-    /// Where the M7 audit log is appended. Empty string = off (`--audit none`).
-    ///
-    /// Default sits next to `hub.log`, so `tools\hublog.bat` puts both in one
-    /// place and neither is a surprise to find later.
     audit: String,
     verbose: bool,
     stats_every: f64,
@@ -337,9 +330,16 @@ struct Args {
     failback_lock: bool,
     peer_zmq: String,
     advertise_zmq: String,
+    pub service_run: Option<String>,
+    pub service_install: Option<String>,
+    pub service_uninstall: Option<String>,
+    pub service_start: Option<String>,
+    pub service_stop: Option<String>,
+    pub service_status: Option<String>,
+    pub workdir: Option<String>,
 }
 
-fn parse_args() -> Result<Args, String> {
+pub fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         bind: "0.0.0.0".to_string(),
         port: 6000,
@@ -367,6 +367,13 @@ fn parse_args() -> Result<Args, String> {
         failback_lock: false,
         peer_zmq: String::new(),
         advertise_zmq: String::new(),
+        service_run: None,
+        service_install: None,
+        service_uninstall: None,
+        service_start: None,
+        service_stop: None,
+        service_status: None,
+        workdir: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -537,10 +544,43 @@ fn parse_args() -> Result<Args, String> {
                 a.notifications = if v == "none" { String::new() } else { v.clone() };
                 i += 2;
             }
+            "--service-run" => {
+                a.service_run = Some(need(i)?.clone());
+                i += 2;
+            }
+            "--service-install" => {
+                a.service_install = Some(need(i)?.to_lowercase());
+                i += 2;
+            }
+            "--service-uninstall" => {
+                a.service_uninstall = Some(need(i)?.to_lowercase());
+                i += 2;
+            }
+            "--service-start" => {
+                a.service_start = Some(need(i)?.to_lowercase());
+                i += 2;
+            }
+            "--service-stop" => {
+                a.service_stop = Some(need(i)?.to_lowercase());
+                i += 2;
+            }
+            "--service-status" => {
+                a.service_status = Some(need(i)?.to_lowercase());
+                i += 2;
+            }
+            "--workdir" => {
+                a.workdir = Some(need(i)?.clone());
+                i += 2;
+            }
             "--help" | "-h" => {
                 return Err("help".to_string());
             }
             other => return Err(format!("unknown argument: {}", other)),
+        }
+    }
+    if a.cluster_token.is_empty() {
+        if let Ok(tok) = std::fs::read_to_string("cluster_token.txt") {
+            a.cluster_token = tok.trim().to_string();
         }
     }
     Ok(a)
@@ -598,6 +638,12 @@ fn usage() {
     println!("  --verbose      log every message, not just events and stats");
     println!("  --stats-every  seconds between stats lines (default 30, 0 = never)");
     println!("  --duration     exit after this many seconds (0 = run until Ctrl-C)");
+    println!("  --service-install ROLE install as Windows Service (primary or standby)");
+    println!("  --service-uninstall ROLE uninstall Windows Service");
+    println!("  --service-start ROLE   start Windows Service");
+    println!("  --service-stop ROLE    stop Windows Service");
+    println!("  --service-status ROLE  query Windows Service status");
+    println!("  --workdir PATH         working directory for the hub process");
 }
 
 /// The registry's `Liveness` as the word the audit log and the API both use.
@@ -907,6 +953,18 @@ fn print_positions(pos: &Positions) {
 }
 
 fn main() {
+    // If --workdir is provided in argv, change directory before anything else
+    let raw_argv: Vec<String> = std::env::args().collect();
+    for i in 0..raw_argv.len() {
+        if raw_argv[i] == "--workdir" {
+            if let Some(wd) = raw_argv.get(i + 1) {
+                if let Err(e) = std::env::set_current_dir(wd) {
+                    eprintln!("copier-hub: cannot change directory to {}: {}", wd, e);
+                }
+            }
+        }
+    }
+
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -917,6 +975,68 @@ fn main() {
             std::process::exit(if e == "help" { 0 } else { 2 });
         }
     };
+
+    if let Some(svc_name) = &args.service_run {
+        if let Err(e) = service::win_service::run_as_service(svc_name) {
+            eprintln!("copier-hub: service error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Some(role) = &args.service_install {
+        let wd = args.workdir.as_deref().map(std::path::Path::new);
+        match service::win_service::install(role, wd) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("copier-hub: service install failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(role) = &args.service_uninstall {
+        match service::win_service::uninstall(role) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("copier-hub: service uninstall failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(role) = &args.service_start {
+        match service::win_service::start(role) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("copier-hub: service start failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(role) = &args.service_stop {
+        match service::win_service::stop(role) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("copier-hub: service stop failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(role) = &args.service_status {
+        match service::win_service::status(role) {
+            Ok(st) => {
+                println!("{}", st);
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("copier-hub: service status error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     //--- `--curve-show`: report this hub's CURVE identity and exit, binding
     //--- NOTHING. Handled here, before the Ctrl-C handler and before any
@@ -968,17 +1088,13 @@ fn main() {
         eprintln!("[hub] cannot install Ctrl-C handler: {}", e);
     }
 
-    //--- NOTE on buffering, because the Python prototype had a real bug here.
-    //---
-    //--- Python block-buffers stdout when it is not a terminal, so a hub whose
-    //--- output was redirected to a file had an EMPTY log - every line still sat
-    //--- in a buffer, and a killed process discards it. That reads exactly like
-    //--- "it never started".
-    //---
-    //--- Rust's stdout is line-buffered unconditionally, so the equivalent bug
-    //--- cannot happen here. Nothing to do; the difference is worth recording
-    //--- so nobody "fixes" it by adding a flush loop.
+    if let Err(e) = run_hub(args) {
+        eprintln!("[hub] fatal: {}", e);
+        std::process::exit(1);
+    }
+}
 
+pub fn run_hub(args: Args) -> Result<(), String> {
     let ctx = zmq::Context::new();
     //--- The CURVE identity the API/dashboard will show (see the block below).
     //--- Stashed here and applied to `shared` after it exists, because the
@@ -2985,4 +3101,5 @@ fn main() {
     //--- undelivered messages that a hub has no reason to hold on to.
     drop(sock);
     drop(ctx);
+    Ok(())
 }

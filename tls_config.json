@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "enabled": true,
+  "mode": "auto",
+  "domain": "149-135-109-18.sslip.io",
+  "https_port": 443,
+  "http_port": 80,
+  "email": "",
+  "enable_http_redirect": true,
+  "auto_renew": true,
+  "staging_mode": false,
+  "status": {
+    "cert_valid": true,
+    "issuer": "Let's Encrypt (sslip.io)",
+    "subject": "149-135-109-18.sslip.io",
+    "issued_at": 1793446820,
+    "expires_at": 1801222820,
+    "days_remaining": 89,
+    "last_error": null,
+    "in_progress": false,
+    "progress_step": "ready"
+  }
+}

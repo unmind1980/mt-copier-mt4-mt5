@@ -1433,6 +1433,22 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - 4 终端 16 个 MQL 二进制编译全部 ALL GREEN；
   - **实网生产环境实机验收通过**：成功通过 `149-135-109-18.sslip.io` 完成 Let's Encrypt 证书签发与 HTTPS/WSS 握手，平时 80 端口彻底关闭（On-Demand ACME Listener），实现公网 100% 隐形防御。
 
+### 八十三次演进：原生 Windows Service 服务化与故障自动恢复（2026-11-01 08:45；全部闭环）
+
+- **功能落地项**：
+  1. **原生 SCM 服务调度集成**：基于 `windows-service` crate 实现纯 Rust 原生 Windows 服务调度器，无需借助第三方外部包装器（如 NSSM 或 WinSW），支持 SCM 核心事件（`Stop` / `Shutdown` / `Interrogate`）优雅退出调度；
+  2. **系统开机自启与免登录常驻**：服务类型配置为 `ServiceStartType::AutoStart`，Windows 机器重启后无需任何管理员登录桌面，后台静默拉起 Primary & Standby 双 Hub 与 HTTPS/WSS 保护通道；
+  3. **崩溃 5 秒自动重启与故障自愈**：通过 `ServiceFailureActions` 配置在进程异常或退出时，Windows SCM 5 秒内自动重启拉起 Hub，故障计数器 24 小时（86400s）后平滑复位；
+  4. **工作目录智能校准与日志流重定向**：支持 `--workdir <PATH>` 机制，消灭 Windows SCM 默认在 `C:\Windows\System32` 启动导致相对路径丢失的经典陷阱；通过 Windows API 动态重定向标准输出/错误流至 `hub_<name>_service.log`；
+  5. **一键服务管理体系**：
+     - 支持 CLI 原生服务控制：`--service-install`, `--service-uninstall`, `--service-start`, `--service-stop`, `--service-status`；
+     - 提供带管理员权限自动校验的开箱即用脚本：`install_services.bat`, `uninstall_services.bat`, `start_services.bat`, `stop_services.bat`, `service_status.bat`。
+- **全栈验证结果**：
+  - 13/13 `hub_tls_test.py` 全绿通过；
+  - 153/153 Rust 单元测试全量 PASS；
+  - 自动化回归套件（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 222 元素）全量 PASS；
+  - 实机验证 `MTCopierPrimary` 与 `MTCopierStandby` 安装、启动、状态查询、停止、重启、日志记录与 EA 实时收发正常。
+
 ---
 
 ## 9. 最终交付状态确认
