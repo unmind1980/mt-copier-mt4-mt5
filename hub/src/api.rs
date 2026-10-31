@@ -1775,6 +1775,10 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
             "/api/v1/cluster/failback-now",
             axum::routing::post(cluster_failback_now),
         )
+        .route(
+            "/api/v1/cluster/peer",
+            axum::routing::get(cluster_get_peer).post(cluster_set_peer),
+        )
         .route("/api/v1/tls/status", get(tls_status))
         .route("/api/v1/tls/configure", axum::routing::post(tls_configure))
         .route("/api/v1/tls/import", axum::routing::post(tls_import))
@@ -3481,6 +3485,92 @@ async fn cluster_failback_now(
         )
             .into_response(),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct SetClusterPeerBody {
+    #[serde(default)]
+    peer_ip: String,
+    #[serde(default)]
+    peer_api_port: Option<u16>,
+    #[serde(default)]
+    peer_zmq_port: Option<u16>,
+    #[serde(default)]
+    peer_url: Option<String>,
+    #[serde(default)]
+    peer_zmq: Option<String>,
+}
+
+async fn cluster_get_peer(
+    axum::extract::Extension(_sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let s = st.lock_or_recover();
+    let is_standalone = s.cluster.peer_url.is_empty();
+    let resp = json!({
+        "ok": true,
+        "peer_url": s.cluster.peer_url,
+        "peer_zmq": s.cluster.peer_zmq,
+        "peer_online": s.cluster.peer_online,
+        "sync_status": s.cluster.sync_status,
+        "is_standalone": is_standalone,
+        "role": s.cluster.state.role,
+        "epoch": s.cluster.state.epoch,
+    });
+    Json(resp).into_response()
+}
+
+async fn cluster_set_peer(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
+    State(st): State<SharedState>,
+    Json(b): Json<SetClusterPeerBody>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if sess.role < UserRole::Admin {
+        return deny(&st, &sess, "admin");
+    }
+
+    let (new_url, new_zmq) = if let Some(url) = b.peer_url.filter(|u| !u.trim().is_empty()) {
+        (url.trim().to_string(), b.peer_zmq.unwrap_or_default())
+    } else if !b.peer_ip.trim().is_empty() {
+        let ip = b.peer_ip.trim();
+        let api_port = b.peer_api_port.unwrap_or(6010);
+        let zmq_port = b.peer_zmq_port.unwrap_or(6000);
+        (format!("http://{}:{}", ip, api_port), format!("tcp://{}:{}", ip, zmq_port))
+    } else {
+        // Clear peer -> switch cleanly to standalone mode
+        (String::new(), String::new())
+    };
+
+    let mut s = st.lock_or_recover();
+    if let Err(e) = s.cluster.set_peer(new_url.clone(), new_zmq.clone()) {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to save cluster state: {}", e) })),
+        )
+            .into_response();
+    }
+    let audit_rec = Arc::clone(&s.audit);
+    drop(s);
+
+    audit_rec.record(
+        &sess.user_id,
+        "",
+        "cluster.set_peer",
+        &format!("configured peer_url='{}', peer_zmq='{}'", new_url, new_zmq),
+        None,
+        None,
+        "ok",
+    );
+
+    Json(json!({
+        "ok": true,
+        "peer_url": new_url,
+        "peer_zmq": new_zmq,
+        "message": if new_url.is_empty() { "已切换为单机独立运行模式 (Standalone)" } else { "对端集群设置已更新并已开始连接" }
+    }))
+    .into_response()
 }
 
 // ============================================================================

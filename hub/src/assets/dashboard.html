@@ -1214,6 +1214,9 @@
   #sslmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
             align-items:center;justify-content:center;z-index:16}
   #sslmodal.hidden{display:none}
+  #peermodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
+             align-items:center;justify-content:center;z-index:16}
+  #peermodal.hidden{display:none}
   .notifbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
             width:580px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
             box-shadow:0 8px 24px rgba(0,0,0,.15);overflow:hidden}
@@ -1296,7 +1299,8 @@
     <div class="cluster-status-info">
       <span id="cluster_icon">🛡️</span>
       <span id="cluster_status_text">Cluster Status</span>
-      <span id="cluster_peer_badge" class="pill">Peer: -</span>
+      <span id="cluster_peer_badge" class="pill" style="cursor:pointer" onclick="openPeerModal()" title="点击配置对端节点 IP">Peer: -</span>
+      <button type="button" class="btn-sm" id="btn_cluster_peer_cfg" onclick="openPeerModal()" style="font-size:11px;padding:2px 8px;margin-left:6px" title="配置对端节点 IP">⚙️ 对端设置</button>
       <span id="cluster_failback_info" class="cluster-failback-text"></span>
     </div>
     <div class="cluster-actions">
@@ -2175,6 +2179,55 @@
       <div class="btns">
         <button type="button" id="ssl_btn_cancel" class="btn-sec">关闭</button>
         <button type="button" id="ssl_btn_save" class="btn-primary">🚀 保存并应用设置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="peermodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="peertitle">
+  <div class="notifbox" style="width:560px">
+    <div class="notifhead">
+      <h2 id="peertitle">🔄 集群对端节点设置 (Cluster Peer Settings)</h2>
+      <button type="button" id="peerclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
+    </div>
+    <div class="notifbody">
+      <div id="peer_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-weight:700">当前模式: <span id="peer_mode_badge" class="pill">检测中...</span></span>
+          <span id="peer_live_badge" class="pill">-</span>
+        </div>
+        <div style="color:var(--dim)">
+          <div>当前对端 API: <strong id="peer_curr_api" style="color:var(--ink)">-</strong></div>
+          <div>当前对端 ZMQ: <span id="peer_curr_zmq" style="color:var(--ink)">-</span></div>
+        </div>
+      </div>
+
+      <div class="notifrow">
+        <label>对端 VPS 公网 IP 地址</label>
+        <input id="peer_input_ip" type="text" placeholder="例如: 168.100.200.50 (单机模式请留空)" style="width:100%">
+        <span class="hint">若作为单机运行（无对端备机），请留空并点击下方的“清空对端 (单机模式)”。</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="notifrow">
+          <label>对端 Web 同步端口</label>
+          <input id="peer_input_api_port" type="number" value="6010" style="width:100%">
+          <span class="hint">默认 6010 (单机开发测试为 6011)</span>
+        </div>
+        <div class="notifrow">
+          <label>对端 ZMQ 跟单端口</label>
+          <input id="peer_input_zmq_port" type="number" value="6000" style="width:100%">
+          <span class="hint">默认 6000 (单机开发测试为 6001)</span>
+        </div>
+      </div>
+
+      <div id="peer_opmsg" class="opmsg" style="max-width:none"></div>
+    </div>
+    <div class="notiffoot">
+      <button type="button" id="peer_btn_clear" class="btn-sec" onclick="clearPeerConfig()">⏹️ 清空对端 (单机模式)</button>
+      <div class="btns">
+        <button type="button" id="peer_btn_save" class="btn-primary" onclick="savePeerConfig()">🚀 保存并应用设置</button>
+        <button type="button" id="peerclose_btn" class="btn-sec">关闭</button>
       </div>
     </div>
   </div>
@@ -6606,6 +6659,112 @@ $("ssl_btn_cancel").addEventListener("click", function(){ closeSslModal(); });
 $("ssl_btn_save").addEventListener("click", function(){ saveSslConfig(); });
 $("ssl_btn_disable").addEventListener("click", function(){ disableSsl(); });
 $("ssl_btn_renew").addEventListener("click", function(){ renewSsl(); });
+$("peerclose_x").addEventListener("click", function(){ closePeerModal(); });
+$("peerclose_btn").addEventListener("click", function(){ closePeerModal(); });
+
+function openPeerModal(){
+  var msg = $("peer_opmsg");
+  msg.className = "opmsg";
+  msg.textContent = "";
+  fetch("/api/v1/cluster/peer", { credentials: "same-origin" })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      var isStandalone = !res.peer_url;
+      $("peer_mode_badge").textContent = isStandalone ? "单机模式 (Standalone)" : "主备集群模式 (Cluster)";
+      $("peer_mode_badge").className = isStandalone ? "pill dim" : "pill ok";
+
+      if(isStandalone){
+        $("peer_live_badge").textContent = "无对端 (独立运行)";
+        $("peer_live_badge").className = "pill dim";
+        $("peer_curr_api").textContent = "(未配置)";
+        $("peer_curr_zmq").textContent = "(未配置)";
+        $("peer_input_ip").value = "";
+      } else {
+        var pOnline = res.peer_online;
+        $("peer_live_badge").textContent = pOnline ? "对端在线 (" + (res.sync_status || "synced") + ")" : "对端离线";
+        $("peer_live_badge").className = "pill " + (pOnline ? "ok" : "bad");
+        $("peer_curr_api").textContent = res.peer_url;
+        $("peer_curr_zmq").textContent = res.peer_zmq || "(默认)";
+
+        try {
+          var u = new URL(res.peer_url);
+          $("peer_input_ip").value = u.hostname;
+          if(u.port) $("peer_input_api_port").value = u.port;
+        } catch(e) {}
+      }
+    })
+    .catch(function(e){
+      console.warn("[Cluster] Failed to fetch peer status:", e);
+    });
+
+  $("peermodal").classList.remove("hidden");
+}
+
+function closePeerModal(){
+  $("peermodal").classList.add("hidden");
+}
+
+function savePeerConfig(){
+  var msg = $("peer_opmsg");
+  msg.className = "opmsg";
+  msg.textContent = "正在保存对端设置...";
+
+  var ip = $("peer_input_ip").value.trim();
+  var apiPort = parseInt($("peer_input_api_port").value, 10) || 6010;
+  var zmqPort = parseInt($("peer_input_zmq_port").value, 10) || 6000;
+
+  fetch("/api/v1/cluster/peer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      peer_ip: ip,
+      peer_api_port: apiPort,
+      peer_zmq_port: zmqPort
+    })
+  }).then(function(r){ return r.json(); }).then(function(res){
+    if(res.ok){
+      msg.className = "opmsg ok";
+      msg.textContent = res.message || "对端设置已更新并生效！";
+      setTimeout(function(){ openPeerModal(); }, 800);
+    } else {
+      msg.className = "opmsg bad";
+      msg.textContent = "设置失败: " + (res.error || "未知错误");
+    }
+  }).catch(function(e){
+    msg.className = "opmsg bad";
+    msg.textContent = "请求错误: " + e.message;
+  });
+}
+
+function clearPeerConfig(){
+  confirmDialog({
+    title: "切换为单机独立模式",
+    desc: "确定要清空对端配置并切换为单机模式吗？",
+    detail: "清空后，本节点将作为独立的单机 Hub 运行，停止与对端同步并停止下发对端拓扑。",
+    danger: false,
+    confirmText: "确认切换为单机"
+  }).then(function(ok){
+    if(!ok) return;
+    var msg = $("peer_opmsg");
+    msg.className = "opmsg";
+    msg.textContent = "正在清空对端设置...";
+    fetch("/api/v1/cluster/peer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ peer_ip: "" })
+    }).then(function(r){ return r.json(); }).then(function(res){
+      if(res.ok){
+        msg.className = "opmsg ok";
+        msg.textContent = "已切换为单机独立运行模式！";
+        $("peer_input_ip").value = "";
+        setTimeout(function(){ openPeerModal(); }, 800);
+      } else {
+        msg.className = "opmsg bad";
+        msg.textContent = "清空失败: " + (res.error || "未知错误");
+      }
+    });
+  });
+}
 
 document.addEventListener("keydown", function(ev){
   if(ev.key === "Escape"){
@@ -6623,6 +6782,9 @@ document.addEventListener("keydown", function(ev){
     }
     if(!$("sslmodal").classList.contains("hidden")){
       closeSslModal();
+    }
+    if(!$("peermodal").classList.contains("hidden")){
+      closePeerModal();
     }
   }
 });

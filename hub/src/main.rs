@@ -1274,6 +1274,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         &cluster_clients_path,
         args.role_explicit.as_deref(),
         &args.cluster_peer,
+        &args.peer_zmq,
         &args.cluster_token,
         args.failback_hours,
         args.failback_lock,
@@ -1908,12 +1909,22 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
                                 if ty == "REG" {
                                     // Phase 4: Send T=TOPOLOGY to node on registration
-                                    let (is_prim, cur_epoch, cur_role) = {
+                                    let (is_prim, cur_epoch, cur_role, dynamic_peer_zmq) = {
                                         let s = shared.lock_or_recover();
-                                        (s.cluster.is_primary(), s.cluster.epoch(), s.cluster.role().to_string())
+                                        (
+                                            s.cluster.is_primary(),
+                                            s.cluster.epoch(),
+                                            s.cluster.role().to_string(),
+                                            s.cluster.peer_zmq.clone(),
+                                        )
                                     };
-                                    let primary_ep = if is_prim { &local_zmq } else { &peer_zmq };
-                                    let standby_ep = if is_prim { &peer_zmq } else { &local_zmq };
+                                    let active_peer_zmq = if !dynamic_peer_zmq.is_empty() {
+                                        &dynamic_peer_zmq
+                                    } else {
+                                        &peer_zmq
+                                    };
+                                    let primary_ep = if is_prim { &local_zmq } else { active_peer_zmq };
+                                    let standby_ep = if is_prim { active_peer_zmq } else { &local_zmq };
                                     if !primary_ep.is_empty() || !standby_ep.is_empty() {
                                         let _ = send_topology(
                                             &sock,

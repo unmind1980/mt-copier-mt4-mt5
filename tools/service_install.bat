@@ -56,8 +56,23 @@ exit /b 0
 
 :install_primary
 echo.
+echo =======================================================================
+echo   [可选设置] 配置对端备机 VPS:
+echo   如果您的架构包含备用 VPS，请输入备机 VPS 的 IP (例如 168.100.200.50)。
+echo   如果仅单机运行 (无备机)，请直接按回车跳过 (默认单机模式):
+echo =======================================================================
+set "PEER_IP="
+set /p PEER_IP="对端备机 IP (回车留空为单机模式): "
+
+echo.
 echo [1/2] Installing MTCopierPrimary service...
-"%BIN%" --service-install primary --workdir "%REPO%"
+if "!PEER_IP!"=="" (
+    echo [模式] 单机独立运行模式 (Standalone - 无对端备机)
+    "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary
+) else (
+    echo [模式] 主备双活集群模式 (对端备机: !PEER_IP!)
+    "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000
+)
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierPrimary service.
     pause
@@ -71,8 +86,23 @@ goto :verify
 :install_standby
 echo.
 if not exist "standby_data" mkdir "standby_data"
+echo =======================================================================
+echo   [配置对端主机 VPS]:
+echo   请输入对端主机 VPS 的 IP 地址 (例如 149.135.109.18)。
+echo   若暂未就绪或稍后在 Web 界面配置，请直接按回车跳过:
+echo =======================================================================
+set "PEER_IP="
+set /p PEER_IP="对端主机 IP (回车跳过): "
+
+echo.
 echo [1/2] Installing MTCopierStandby service...
-"%BIN%" --service-install standby --workdir "%REPO%"
+if "!PEER_IP!"=="" (
+    echo [模式] 备机初始化 (等待后续通过 Web 界面关联主机)
+    "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+) else (
+    echo [模式] 备机热备连接模式 (对端主机: !PEER_IP!)
+    "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+)
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierStandby service.
     pause
@@ -86,13 +116,11 @@ goto :verify
 :install_both
 echo.
 if not exist "standby_data" mkdir "standby_data"
-echo [1/4] Installing MTCopierPrimary service...
-"%BIN%" --service-install primary --workdir "%REPO%"
-echo [2/4] Installing MTCopierStandby service...
-"%BIN%" --service-install standby --workdir "%REPO%"
-echo [3/4] Starting MTCopierPrimary service...
+echo [单机双活开发测试] 同时在本地安装 Primary(6000/6010) 与 Standby(6001/6011)...
+"%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://127.0.0.1:6011 --peer-zmq tcp://127.0.0.1:6001
+"%BIN%" --service-install standby --workdir "%REPO%" --port 6001 --http 0.0.0.0:6011 --role standby --peer-api http://127.0.0.1:6010 --peer-zmq tcp://127.0.0.1:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+echo Starting services...
 sc start MTCopierPrimary >nul 2>&1
-echo [4/4] Starting MTCopierStandby service...
 sc start MTCopierStandby >nul 2>&1
 timeout /t 2 /nobreak >nul
 goto :verify

@@ -151,8 +151,6 @@ pub mod win_service {
                     "--port".to_string(), "6000".to_string(),
                     "--http".to_string(), "0.0.0.0:6010".to_string(),
                     "--role".to_string(), "primary".to_string(),
-                    "--peer-api".to_string(), "http://127.0.0.1:6011".to_string(),
-                    "--peer-zmq".to_string(), "tcp://127.0.0.1:6001".to_string(),
                 ],
             ),
             "standby" => (
@@ -160,11 +158,9 @@ pub mod win_service {
                 STANDBY_DISPLAY_NAME,
                 "MT-Copier Central Hub (Standby Mirror Node) - High-performance ZeroMQ & HTTPS router for trade replication",
                 vec![
-                    "--port".to_string(), "6001".to_string(),
-                    "--http".to_string(), "0.0.0.0:6011".to_string(),
+                    "--port".to_string(), "6000".to_string(),
+                    "--http".to_string(), "0.0.0.0:6010".to_string(),
                     "--role".to_string(), "standby".to_string(),
-                    "--peer-api".to_string(), "http://127.0.0.1:6010".to_string(),
-                    "--peer-zmq".to_string(), "tcp://127.0.0.1:6000".to_string(),
                     "--cluster-state".to_string(), r"standby_data\cluster_state.json".to_string(),
                     "--config".to_string(), r"standby_data\config_revisions.jsonl".to_string(),
                     "--commands".to_string(), r"standby_data\commands.jsonl".to_string(),

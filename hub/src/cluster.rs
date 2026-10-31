@@ -47,6 +47,10 @@ pub struct ClusterStateFile {
     pub failback_locked: bool,
     #[serde(default)]
     pub cluster_token: String,
+    #[serde(default)]
+    pub peer_url: String,
+    #[serde(default)]
+    pub peer_zmq: String,
 }
 
 /// Status payload returned by `GET /api/v1/cluster/status`.
@@ -118,6 +122,7 @@ pub struct ClusterManager {
     pub curve_clients_path: PathBuf,
     pub state: ClusterStateFile,
     pub peer_url: String,
+    pub peer_zmq: String,
     pub cluster_token: String,
     pub peer_online: bool,
     pub last_peer_contact: Option<Instant>,
@@ -160,6 +165,7 @@ impl ClusterManager {
         curve_clients_path: &Path,
         cli_role: Option<&str>,
         peer_url: &str,
+        peer_zmq: &str,
         cluster_token: &str,
         failback_hours: f64,
         failback_lock: bool,
@@ -183,6 +189,8 @@ impl ClusterManager {
                 failback_stabilization_hours: if failback_hours > 0.0 { failback_hours } else { DEFAULT_FAILBACK_HOURS },
                 failback_locked: failback_lock,
                 cluster_token: String::new(),
+                peer_url: String::new(),
+                peer_zmq: String::new(),
             }
         };
 
@@ -201,6 +209,19 @@ impl ClusterManager {
         if failback_hours > 0.0 {
             state.failback_stabilization_hours = failback_hours;
         }
+
+        let effective_peer_url = if !peer_url.is_empty() {
+            peer_url.trim_end_matches('/').to_string()
+        } else {
+            state.peer_url.clone()
+        };
+        let effective_peer_zmq = if !peer_zmq.is_empty() {
+            peer_zmq.to_string()
+        } else {
+            state.peer_zmq.clone()
+        };
+        state.peer_url = effective_peer_url.clone();
+        state.peer_zmq = effective_peer_zmq.clone();
 
         //--- A token that has shipped inside this repository is public
         //--- knowledge, not a secret. Accepting one is equivalent to accepting
@@ -235,14 +256,15 @@ impl ClusterManager {
             state_path: state_path.to_path_buf(),
             curve_clients_path: curve_clients_path.to_path_buf(),
             state,
-            peer_url: peer_url.trim_end_matches('/').to_string(),
+            peer_url: effective_peer_url.clone(),
+            peer_zmq: effective_peer_zmq,
             cluster_token: resolved_token,
             peer_online: false,
             last_peer_contact: None,
             continuous_online_start: None,
             peer_status: None,
             last_sync_at: None,
-            sync_status: if peer_url.is_empty() { "standalone".to_string() } else { "disconnected".to_string() },
+            sync_status: if effective_peer_url.is_empty() { "standalone".to_string() } else { "disconnected".to_string() },
             last_sync_err: String::new(),
         };
 
@@ -252,6 +274,24 @@ impl ClusterManager {
 
     pub fn save(&self) -> io::Result<()> {
         save_state_to_file(&self.state_path, &self.state)
+    }
+
+    pub fn set_peer(&mut self, peer_url: String, peer_zmq: String) -> io::Result<()> {
+        let is_empty = peer_url.is_empty();
+        self.peer_url = peer_url.clone();
+        self.peer_zmq = peer_zmq.clone();
+        self.state.peer_url = peer_url;
+        self.state.peer_zmq = peer_zmq;
+        if is_empty {
+            self.peer_online = false;
+            self.sync_status = "standalone".to_string();
+            self.last_sync_err = String::new();
+            self.continuous_online_start = None;
+        } else {
+            self.sync_status = "connecting".to_string();
+            self.last_sync_err = String::new();
+        }
+        self.save()
     }
 
     pub fn is_primary(&self) -> bool {
@@ -320,8 +360,11 @@ impl ClusterManager {
                 failback_stabilization_hours: DEFAULT_FAILBACK_HOURS,
                 failback_locked: false,
                 cluster_token: DEFAULT_CLUSTER_TOKEN.to_string(),
+                peer_url: String::new(),
+                peer_zmq: String::new(),
             },
             peer_url: String::new(),
+            peer_zmq: String::new(),
             cluster_token: DEFAULT_CLUSTER_TOKEN.to_string(),
             peer_online: false,
             last_peer_contact: None,
@@ -942,6 +985,7 @@ mod tests {
             &curve_path,
             Some("primary"),
             "http://127.0.0.1:6011",
+            "tcp://127.0.0.1:6001",
             "test_token_0123456789abcdef",
             24.0,
             false,
@@ -952,6 +996,7 @@ mod tests {
         assert_eq!(cm.epoch(), 1);
         assert_eq!(cm.role(), "primary");
         assert_eq!(cm.peer_url, "http://127.0.0.1:6011");
+        assert_eq!(cm.peer_zmq, "tcp://127.0.0.1:6001");
         assert_eq!(cm.cluster_token, "test_token_0123456789abcdef");
 
         // Reload from file
@@ -960,6 +1005,7 @@ mod tests {
             &curve_path,
             None,
             "http://127.0.0.1:6011",
+            "tcp://127.0.0.1:6001",
             "test_token_0123456789abcdef",
             24.0,
             false,
@@ -968,6 +1014,8 @@ mod tests {
         assert_eq!(reloaded.hub_id(), cm.hub_id());
         assert_eq!(reloaded.epoch(), 1);
         assert!(reloaded.is_primary());
+        assert_eq!(reloaded.peer_url, "http://127.0.0.1:6011");
+        assert_eq!(reloaded.peer_zmq, "tcp://127.0.0.1:6001");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -983,6 +1031,7 @@ mod tests {
             &state_path,
             &curve_path,
             Some("standby"),
+            "",
             "",
             "",
             24.0,
