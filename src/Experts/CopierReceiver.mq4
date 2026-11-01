@@ -6385,17 +6385,29 @@ void HandleCmd(const CopierEnv &e)
       g_seen.Forget(actKey);
       g_backoff.Clear(actKey);
 
-      bool queued=PushAction(si,CP_ACT_CLOSE,uid,targetPos.sym,targetPos.side,targetPos.lots,
-                             targetPos.ticket,0,"",0.0,0.0,targetPos.kind);
+      bool alreadyQueued=ActionQueued(si,CP_ACT_CLOSE,uid,"");
+      bool queued=false;
+      if(alreadyQueued)
+        {
+         queued=true;
+        }
+      else
+        {
+         queued=PushAction(si,CP_ACT_CLOSE,uid,targetPos.sym,targetPos.side,targetPos.lots,
+                           targetPos.ticket,0,"",0.0,0.0,targetPos.kind);
+        }
 
       g_cmdId=id;
       if(queued)
         {
          string note="";
-         if(CopierSymbolFeedStale(targetPos.sym,CP_SYM_STALL_MS))
+         bool stale=CopierSymbolFeedStale(targetPos.sym,CP_SYM_STALL_MS);
+         if(stale)
             note=";NOTE=market_closed";
+         else if(alreadyQueued)
+            note=";NOTE=already_queued";
          g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev+note;
-         g_log.Warn("CMD "+id+": manual close queued for ticket #"+(string)targetTicket+" ("+targetPos.sym+" "+DoubleToString(targetPos.lots,2)+") UID="+uid+(StringLen(note)>0?" (market closed: queued)":""));
+         g_log.Warn("CMD "+id+": manual close "+(alreadyQueued?"already queued":"queued")+" for ticket #"+(string)targetTicket+" ("+targetPos.sym+" "+DoubleToString(targetPos.lots,2)+") UID="+uid+(StringLen(note)>0?" ("+note+")":""));
          g_forcePosReport=true;
         }
       else

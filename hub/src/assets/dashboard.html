@@ -1333,18 +1333,18 @@
     <div class="cluster-status-info">
       <span id="cluster_icon">🛡️</span>
       <span id="cluster_status_text">Cluster Status</span>
-      <span id="cluster_peer_badge" class="pill" style="cursor:pointer" onclick="openPeerModal()" title="点击配置对端节点 IP">Peer: -</span>
-      <button type="button" class="btn-sm" id="btn_cluster_peer_cfg" onclick="openPeerModal()" style="font-size:11px;padding:2px 8px;margin-left:6px" title="配置对端节点 IP">⚙️ 对端设置</button>
+      <span id="cluster_peer_badge" class="pill" style="cursor:pointer" onclick="openPeerModal()" title="Click to configure cluster peer IP">Peer: -</span>
+      <button type="button" class="btn-sm" id="btn_cluster_peer_cfg" onclick="openPeerModal()" style="font-size:11px;padding:2px 8px;margin-left:6px" title="Configure cluster peer IP">⚙️ Peer Settings</button>
       <span id="cluster_failback_info" class="cluster-failback-text"></span>
     </div>
     <div class="cluster-actions">
       <button type="button" class="btn-sm btn-warn" id="btn_cluster_promote" onclick="onClusterPromote()">⚡ Promote to Primary</button>
-      <button type="button" class="btn-sm" id="btn_cluster_failback_now" onclick="onClusterFailbackNow()">⚡ 立即安全回切</button>
-      <label class="cluster-lock-label" title="锁定备机为 Master，禁止自动回切">
+      <button type="button" class="btn-sm" id="btn_cluster_failback_now" onclick="onClusterFailbackNow()">⚡ Failback Now</button>
+      <label class="cluster-lock-label" title="Lock standby as Primary (prevent auto-failback)">
         <input type="checkbox" id="chk_failback_lock" onchange="onToggleFailbackLock(this.checked)">
-        <span>锁定备机为 Master</span>
+        <span>Lock as Master</span>
       </label>
-      <a href="#" target="_blank" class="btn-sm" id="link_peer_console" style="display:none; text-decoration:none;">🔗 跳转对端控制台</a>
+      <a href="#" target="_blank" class="btn-sm" id="link_peer_console" style="display:none; text-decoration:none;">🔗 Open Peer Console</a>
     </div>
   </div>
 </div>
@@ -1518,10 +1518,10 @@
                 <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
                 <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
                 <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
-                <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none;background:#f8fafc;color:var(--dim)" onclick="resetPosSort()">↺ 恢复默认排序</button>
-                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="开启后平仓单笔直接下发，跳过确认弹窗">
+                <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none;background:#f8fafc;color:var(--dim)" onclick="resetPosSort()">↺ Reset Sort</button>
+                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="Close orders immediately on click without confirmation dialog">
                   <input type="checkbox" id="chk_fast_close" onchange="onToggleFastClose(this.checked)">
-                  <span style="color:var(--ink)">⚡ 极速平仓模式</span>
+                  <span style="color:var(--ink)">⚡ Fast Close Mode</span>
                 </label>
               </div>
 
@@ -1529,30 +1529,29 @@
                 <table id="pos_rec_table">
                   <thead>
                     <tr>
-                      <th class="pos-th-sort" onclick="togglePosSort('status')" title="点击排序">Status / Stage <span id="pos_sort_status" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('ticket')" title="点击排序">Ticket / UID <span id="pos_sort_ticket" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('symbol')" title="点击排序">Symbol <span id="pos_sort_symbol" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('side')" title="点击排序">Side <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="点击按手数大小排序">Volume <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('price')" title="点击按价格排序">Price <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('status')" title="Click to sort">Status / Stage <span id="pos_sort_status" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('ticket')" title="Click to sort">Ticket / UID <span id="pos_sort_ticket" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('symbol')" title="Click to sort">Symbol <span id="pos_sort_symbol" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('side')" title="Click to sort">Side <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="Click to sort by volume">Volume <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('price')" title="Click to sort by price">Price <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
                       <th class="num">SL / TP</th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="点击按盈亏排序">Profit <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="点击按隔夜利息排序">Swap <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('details')" title="点击排序">Pipeline Reason / Details <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="Click to sort by profit">Profit <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="Click to sort by swap">Swap <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('details')" title="Click to sort">Pipeline Reason / Details <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
                       <th style="text-align:center">Action</th>
                     </tr>
                   </thead>
                   <tbody id="pos_rec_tbody"></tbody>
                   <tfoot id="pos_rec_tfoot">
                     <tr class="pos-subtotal-row">
-                      <td colspan="4" style="text-align:right;font-weight:700">Subtotal 合计 (<span id="subtotal_orders_count">0</span> 笔):</td>
+                      <td colspan="4" style="text-align:right;font-weight:700">Subtotal (<span id="subtotal_orders_count">0</span> orders):</td>
                       <td class="num" style="font-family:var(--mono);font-weight:700;font-size:13px" id="subtotal_volume">0.00</td>
-                      <td class="num" style="color:var(--dim)">-</td>
-                      <td class="num" style="color:var(--dim)">- / -</td>
+                      <td></td>
+                      <td></td>
                       <td class="num" style="font-weight:700;font-size:13px" id="subtotal_profit">$0.00</td>
                       <td class="num" style="font-weight:700;font-size:13px" id="subtotal_swap">$0.00</td>
-                      <td style="color:var(--dim);font-size:11.5px">Real-time aggregate</td>
-                      <td style="text-align:center;color:var(--dim)">-</td>
+                      <td colspan="2"></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -2132,107 +2131,107 @@
 <div id="sslmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="ssltitle">
   <div class="notifbox" style="width:720px">
     <div class="notifhead">
-      <h2 id="ssltitle">🔒 SSL / HTTPS 安全连接设置</h2>
+      <h2 id="ssltitle">🔒 SSL / HTTPS Settings</h2>
       <button type="button" id="sslclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="notifbody">
       <div id="ssl_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-weight:700">运行状态: <span id="ssl_active_badge" class="pill">检测中...</span></span>
+          <span style="font-weight:700">Status: <span id="ssl_active_badge" class="pill">Checking...</span></span>
           <span id="ssl_days_badge" style="font-family:var(--mono);color:var(--dim)"></span>
         </div>
         <div id="ssl_details_row" style="color:var(--dim)">
-          <div>绑定域名: <strong id="ssl_curr_domain" style="color:var(--ink)">-</strong></div>
-          <div>颁发机构: <span id="ssl_curr_issuer">-</span> | 监听端口: <span id="ssl_curr_port">-</span></div>
+          <div>Domain: <strong id="ssl_curr_domain" style="color:var(--ink)">-</strong></div>
+          <div>Issuer: <span id="ssl_curr_issuer">-</span> | Port: <span id="ssl_curr_port">-</span></div>
           <div id="ssl_access_box" style="margin-top:6px;display:none">
-            安全入口: <a id="ssl_access_link" href="#" target="_blank" style="font-weight:600;text-decoration:underline"></a>
+            Secure URL: <a id="ssl_access_link" href="#" target="_blank" style="font-weight:600;text-decoration:underline"></a>
           </div>
         </div>
         <div id="ssl_progress_box" style="display:none;margin-top:8px;padding:8px;background:var(--panel);border-radius:4px;border:1px dashed var(--line);color:var(--ink)">
-          ⏳ <span id="ssl_progress_text">正在申请证书...</span>
+          ⏳ <span id="ssl_progress_text">Requesting certificate...</span>
         </div>
         <div id="ssl_error_box" style="display:none;margin-top:8px;padding:8px 10px;background:#fdecea;border:1px solid #f0b8b0;border-radius:4px;color:#8a1c10;font-size:11.5px;line-height:1.4">
-          <strong>⚠️ 申请失败:</strong> <span id="ssl_error_text"></span>
+          <strong>⚠️ Error:</strong> <span id="ssl_error_text"></span>
         </div>
       </div>
 
       <div class="notifrow">
-        <label style="font-weight:600;margin-bottom:6px;display:block">证书与域名模式</label>
+        <label style="font-weight:600;margin-bottom:6px;display:block">Certificate &amp; Domain Mode</label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_auto" value="auto" checked onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">自动分配域名 (推荐)</strong>
-              <span style="font-size:11px;color:var(--dim)">检测公网 IP 并绑定 IP.sslip.io 自动申请权威 Let's Encrypt 证书</span>
+              <strong style="display:block;font-size:12px">Auto Domain (Recommended)</strong>
+              <span style="font-size:11px;color:var(--dim)">Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_custom" value="custom_domain" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">自有独立域名</strong>
-              <span style="font-size:11px;color:var(--dim)">使用已解析到本机 IP 的独立域名自动申请 Let's Encrypt 证书</span>
+              <strong style="display:block;font-size:12px">Custom Domain</strong>
+              <span style="font-size:11px;color:var(--dim)">Uses a domain name whose DNS A record points to this VPS</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_selfsigned" value="self_signed" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">本地自签名证书</strong>
-              <span style="font-size:11px;color:var(--dim)">离线/内网环境测试使用（浏览器会提示不受信任）</span>
+              <strong style="display:block;font-size:12px">Self-Signed Certificate</strong>
+              <span style="font-size:11px;color:var(--dim)">For offline or intranet testing (browser will show untrusted warning)</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_import" value="import" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">导入已有证书</strong>
-              <span style="font-size:11px;color:var(--dim)">直接粘贴 fullchain.pem 与私钥文本（企业/商业证书）</span>
+              <strong style="display:block;font-size:12px">Import Existing Certificate</strong>
+              <span style="font-size:11px;color:var(--dim)">Paste fullchain.pem and private key text directly</span>
             </div>
           </label>
         </div>
       </div>
 
       <div class="notifrow" id="ssl_domain_wrap">
-        <label id="ssl_domain_label">域名 (Domain)</label>
-        <input id="ssl_input_domain" placeholder="例如: 123-45-67-89.sslip.io 或 hub.example.com" style="width:100%">
-        <span class="hint" id="ssl_domain_hint">自动探测公网 IP 中...</span>
+        <label id="ssl_domain_label">Domain Name</label>
+        <input id="ssl_input_domain" placeholder="e.g. 123-45-67-89.sslip.io or hub.example.com" style="width:100%">
+        <span class="hint" id="ssl_domain_hint">Detecting public IP...</span>
       </div>
 
       <div class="notifrow" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
-          <label>HTTPS 监听端口</label>
+          <label>HTTPS Listen Port</label>
           <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
             <label style="display:flex;align-items:center;gap:4px;font-size:12px">
               <input type="radio" name="ssl_port_choice" id="ssl_port_443" value="443" checked onchange="onSslPortChoiceChange()">
-              <span>标准 443 (免输端口)</span>
+              <span>Standard 443 (Default)</span>
             </label>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px">
               <input type="radio" name="ssl_port_choice" id="ssl_port_custom" value="custom" onchange="onSslPortChoiceChange()">
-              <span>自定义:</span>
+              <span>Custom:</span>
             </label>
             <input id="ssl_custom_port_val" type="number" style="width:80px;padding:2px 6px;display:none" value="6010">
           </div>
         </div>
         <div>
-          <label>管理员通知邮箱 (可选)</label>
+          <label>Admin Notification Email (Optional)</label>
           <input id="ssl_input_email" type="email" placeholder="admin@example.com" style="width:100%">
-          <span class="hint">用于接收 Let's Encrypt 官方证书到期/安全通知，可留空。</span>
+          <span class="hint">For Let's Encrypt expiry and security notices, optional.</span>
         </div>
       </div>
 
       <div id="ssl_import_wrap" style="display:none" class="notifrow">
-        <label>证书 PEM (fullchain.pem)</label>
+        <label>Certificate PEM (fullchain.pem)</label>
         <textarea id="ssl_import_cert" rows="4" style="width:100%;font-family:var(--mono);font-size:11px" placeholder="-----BEGIN CERTIFICATE-----..."></textarea>
-        <label style="margin-top:6px;display:block">私钥 PEM (privkey.pem)</label>
+        <label style="margin-top:6px;display:block">Private Key PEM (privkey.pem)</label>
         <textarea id="ssl_import_key" rows="4" style="width:100%;font-family:var(--mono);font-size:11px" placeholder="-----BEGIN PRIVATE KEY-----..."></textarea>
       </div>
 
       <div class="notifrow" style="display:flex;gap:16px;align-items:center">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="平常完全关闭 80 端口隐藏，仅在续期/申请时临时开放 10 秒供 Let's Encrypt 校验">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="Port 80 is closed by default to prevent port scanning; opens temporarily for 10s only during ACME challenge">
           <input type="checkbox" id="ssl_chk_redirect" checked disabled>
-          <span>按需临时启用 80 端口 (平时彻底关闭隐形，防扫描)</span>
+          <span>On-demand port 80 challenge listener (closed during normal operation)</span>
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="ssl_chk_renew" checked>
-          <span>到期前 30 天自动平滑续期</span>
+          <span>Auto-renew 30 days before expiration</span>
         </label>
       </div>
 
@@ -2241,12 +2240,12 @@
 
     <div class="notiffoot">
       <div style="display:flex;gap:8px">
-        <button type="button" id="ssl_btn_disable" class="btn-sec" style="color:var(--bad)">⛔ 停用 SSL (切回 HTTP)</button>
-        <button type="button" id="ssl_btn_renew" class="btn-sec">🔄 立即续期</button>
+        <button type="button" id="ssl_btn_disable" class="btn-sec" style="color:var(--bad)">⛔ Disable SSL (HTTP Mode)</button>
+        <button type="button" id="ssl_btn_renew" class="btn-sec">🔄 Renew Now</button>
       </div>
       <div class="btns">
-        <button type="button" id="ssl_btn_cancel" class="btn-sec">关闭</button>
-        <button type="button" id="ssl_btn_save" class="btn-primary">🚀 保存并应用设置</button>
+        <button type="button" id="ssl_btn_cancel" class="btn-sec">Close</button>
+        <button type="button" id="ssl_btn_save" class="btn-primary">🚀 Save &amp; Apply</button>
       </div>
     </div>
   </div>
@@ -2255,47 +2254,47 @@
 <div id="peermodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="peertitle">
   <div class="notifbox" style="width:560px">
     <div class="notifhead">
-      <h2 id="peertitle">🔄 集群对端节点设置 (Cluster Peer Settings)</h2>
+      <h2 id="peertitle">🔄 Cluster Peer Settings</h2>
       <button type="button" id="peerclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="notifbody">
       <div id="peer_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-weight:700">当前模式: <span id="peer_mode_badge" class="pill">检测中...</span></span>
+          <span style="font-weight:700">Current Mode: <span id="peer_mode_badge" class="pill">Checking...</span></span>
           <span id="peer_live_badge" class="pill">-</span>
         </div>
         <div style="color:var(--dim)">
-          <div>当前对端 API: <strong id="peer_curr_api" style="color:var(--ink)">-</strong></div>
-          <div>当前对端 ZMQ: <span id="peer_curr_zmq" style="color:var(--ink)">-</span></div>
+          <div>Peer API: <strong id="peer_curr_api" style="color:var(--ink)">-</strong></div>
+          <div>Peer ZMQ: <span id="peer_curr_zmq" style="color:var(--ink)">-</span></div>
         </div>
       </div>
 
       <div class="notifrow">
-        <label>对端 VPS 公网 IP 地址</label>
-        <input id="peer_input_ip" type="text" placeholder="例如: 168.100.200.50 (单机模式请留空)" style="width:100%">
-        <span class="hint">若作为单机运行（无对端备机），请留空并点击下方的“清空对端 (单机模式)”。</span>
+        <label>Peer VPS Public IP Address</label>
+        <input id="peer_input_ip" type="text" placeholder="e.g. 168.100.200.50 (leave blank for standalone)" style="width:100%">
+        <span class="hint">Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.</span>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="notifrow">
-          <label>对端 Web 同步端口</label>
+          <label>Peer Web API Port</label>
           <input id="peer_input_api_port" type="number" value="6010" style="width:100%">
-          <span class="hint">默认 6010 (单机开发测试为 6011)</span>
+          <span class="hint">Default 6010 (or 6011 for local test)</span>
         </div>
         <div class="notifrow">
-          <label>对端 ZMQ 跟单端口</label>
+          <label>Peer ZMQ Replication Port</label>
           <input id="peer_input_zmq_port" type="number" value="6000" style="width:100%">
-          <span class="hint">默认 6000 (单机开发测试为 6001)</span>
+          <span class="hint">Default 6000 (or 6001 for local test)</span>
         </div>
       </div>
 
       <div id="peer_opmsg" class="opmsg" style="max-width:none"></div>
     </div>
     <div class="notiffoot">
-      <button type="button" id="peer_btn_clear" class="btn-sec" onclick="clearPeerConfig()">⏹️ 清空对端 (单机模式)</button>
+      <button type="button" id="peer_btn_clear" class="btn-sec" onclick="clearPeerConfig()">⏹️ Clear Peer (Standalone Mode)</button>
       <div class="btns">
-        <button type="button" id="peer_btn_save" class="btn-primary" onclick="savePeerConfig()">🚀 保存并应用设置</button>
-        <button type="button" id="peerclose_btn" class="btn-sec">关闭</button>
+        <button type="button" id="peer_btn_save" class="btn-primary" onclick="savePeerConfig()">🚀 Save &amp; Apply</button>
+        <button type="button" id="peerclose_btn" class="btn-sec">Close</button>
       </div>
     </div>
   </div>
@@ -2316,7 +2315,7 @@
         <div id="confirmdetail" class="confirm-detail"></div>
         <label id="confirm_fast_close_label" style="display:none;align-items:center;gap:6px;cursor:pointer;margin-top:12px;font-size:12px;color:var(--ink);font-weight:600">
           <input type="checkbox" id="chk_dialog_fast_close">
-          <span>记住选择，开启极速平仓模式 (本次后续不再弹窗提示)</span>
+          <span>Remember choice &amp; enable Fast Close mode (no prompt for subsequent closes)</span>
         </label>
       </div>
     </div>
@@ -2438,7 +2437,7 @@ function renderPosActionNotice(){
     (n.desc ? ('    <div style="font-size:12px;opacity:.9;margin-top:2px">' + esc(n.desc) + '</div>') : '') +
     '  </div>' +
     '</div>' +
-    '<button type="button" class="ban-close" onclick="closePosActionBanner()" title="关闭提示">✕</button>';
+    '<button type="button" class="ban-close" onclick="closePosActionBanner()" title="Dismiss notice">✕</button>';
 }
 
 function togglePosSort(col){
@@ -2539,7 +2538,7 @@ function api(path, opts){
       return r.json().catch(function(){ return {}; }).then(function(j){
         var msg = (j && j.error) ? j.error : (path + " -> " + r.status);
         if(r.status === 409){
-          alert("操作受限 (409 Conflict):\n" + msg + "\n\n备用节点处于只读状态，请在主节点执行写操作，或先手动提权。");
+          alert("Operation restricted (409 Conflict):\n" + msg + "\n\nThis standby mirror node is in read-only mode. Please perform write operations on the primary node, or promote this node first.");
         }
         var err = new Error(msg);
         err.status = r.status;
@@ -3243,8 +3242,8 @@ function renderPosNodeDetail(){
           var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
           var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[p.ticket]);
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
-          var btnText = isTicketQueued ? "⏱️ 已排队待平" : "❌ 平仓";
-          var btnTitle = isTicketQueued ? "已在接收端成功排队，待周一开市后券商自动平仓" : ("平仓单笔 #" + esc(p.ticket));
+          var btnText = isTicketQueued ? "⏱️ Queued for Close" : "❌ Close";
+          var btnTitle = isTicketQueued ? "Queued on receiver; broker will execute upon Monday market open" : ("Close order #" + esc(p.ticket));
           var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
@@ -3589,14 +3588,14 @@ function onCloseSinglePosition(nodeKey, ticket, symbol, side, lots, profit){
   }
 
   var profitText = (profit > 0 ? "+" : "") + Number(profit).toFixed(2);
-  var descHtml = "确认立即平仓订单 <strong>#" + esc(ticket) + "</strong> (" + esc(symbol) + " " + esc(side) + " " + esc(lots) + " lots, 盈亏: " + profitText + ") 吗？";
+  var descHtml = "Are you sure you want to close order <strong>#" + esc(ticket) + "</strong> (" + esc(symbol) + " " + esc(side) + " " + esc(lots) + " lots, Profit: " + profitText + ") immediately?";
 
   confirmDialog({
-    title: "确认平仓单笔订单",
+    title: "Confirm Close Single Order",
     desc: descHtml,
     showFastClose: true,
     danger: true,
-    confirmText: "立即平仓"
+    confirmText: "Close Order"
   }).then(function(ok){
     if(!ok) return;
     var dChk = $("chk_dialog_fast_close");
@@ -3611,11 +3610,11 @@ function executeCloseSingle(nodeKey, ticket){
   var btn = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
   if(btn){
     btn.disabled = true;
-    btn.textContent = "⏳ 平仓中...";
+    btn.textContent = "⏳ Closing...";
   }
 
-  showPosActionNotice("正在向接收端下发平仓指令 #" + ticket + "...", "请稍候，平仓请求正在穿透 ZeroMQ 控制通道...", "info");
-  showToast("平仓指令下发中", "正在下发订单 #" + ticket + " 平仓指令...", "info");
+  showPosActionNotice("Dispatching close command for #" + ticket + "...", "Please wait, routing via ZeroMQ control stream...", "info");
+  showToast("Close Dispatched", "Dispatching close command for order #" + ticket + "...", "info");
 
   var msgEl = $("pos_foot_msg") || $("gmsg");
 
@@ -3624,11 +3623,11 @@ function executeCloseSingle(nodeKey, ticket){
     if(b){
       b.disabled = false;
       if(isQueuedMarketClosed){
-        b.textContent = "⏱️ 已排队待平";
+        b.textContent = "⏱️ Queued for Close";
         b.className = "pos-close-single-btn queued";
-        b.title = "已在接收端成功排队，待周一开市后券商自动平仓";
+        b.title = "Queued on receiver; broker will execute upon Monday market open";
       } else {
-        b.textContent = "❌ 平仓";
+        b.textContent = "❌ Close";
         b.className = "pos-close-single-btn";
       }
     }
@@ -3641,29 +3640,34 @@ function executeCloseSingle(nodeKey, ticket){
   sendCommand(nodeKey, "close", msgEl, { ticket: ticket }, function(ok, j){
     clearTimeout(safeTimer);
     var isMktClosed = (j && typeof j === "object" && j.err && j.err.indexOf("market_closed") >= 0);
-    if(isMktClosed){
+    var isAlreadyQueued = (j && typeof j === "object" && j.err && j.err.indexOf("already_queued") >= 0);
+    if(isMktClosed || isAlreadyQueued){
       if(!s.queuedCloseTickets) s.queuedCloseTickets = {};
       s.queuedCloseTickets[ticket] = true;
     }
-    resetBtn(isMktClosed);
+    resetBtn(isMktClosed || isAlreadyQueued);
     if(ok){
       if(isMktClosed){
-        showPosActionNotice("【周末休市排队中】订单 #" + ticket + " 已在接收端成功排队待平！",
-          "当前外汇市场处于周末闭市状态 (Market Closed)。平仓指令已进入接收端优先执行队列，待周一开市后经纪商将自动撮合成交。", "warn");
-        showToast("已排队待平 (休市)", "订单 #" + ticket + " 已排队，待周一开市后自动撮合成交", "warn");
+        showPosActionNotice("[Market Closed · Queued] Order #" + ticket + " queued for execution!",
+          "Foreign exchange markets are closed for the weekend. The close order has been accepted into the receiver priority queue and will be executed by the broker as soon as the market opens on Monday.", "warn");
+        showToast("Queued for Close (Market Closed)", "Order #" + ticket + " queued, broker will execute upon market open.", "warn");
+      } else if(isAlreadyQueued){
+        showPosActionNotice("Order #" + ticket + " is already in the execution queue",
+          "This order has already been queued for closing and is waiting for broker matching.", "info");
+        showToast("Already Queued", "Order #" + ticket + " is already queued for close", "info");
       } else {
-        showPosActionNotice("✅ 订单 #" + ticket + " 平仓指令已送达接收端执行中", "接收端已确认处理平仓动作。", "ok");
-        showToast("平仓指令已送达", "订单 #" + ticket + " 正在执行平仓", "ok");
+        showPosActionNotice("✅ Order #" + ticket + " close instruction received", "Receiver confirmed action queueing.", "ok");
+        showToast("Close Dispatched", "Order #" + ticket + " close in progress", "ok");
       }
     } else {
-      var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "命令被拒绝"));
+      var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "Command rejected"));
       if(errMsg.indexOf("unknown op close") >= 0){
-        showPosActionNotice("⚠️ 平仓失败：接收端 EA 仍运行旧版本",
-          "请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！", "bad");
-        showToast("平仓失败", "接收端 EA 仍为旧版，请切换图表周期重新加载", "bad");
+        showPosActionNotice("⚠️ Close Rejected: Receiver EA running older build",
+          "Please switch timeframe on the chart or press F7 in MT4 to reload the latest EA binary!", "bad");
+        showToast("Close Failed", "Receiver running old EA build, reload required", "bad");
       } else {
-        showPosActionNotice("⚠️ 平仓指令未能执行：#" + ticket, errMsg, "bad");
-        showToast("平仓未执行", "订单 #" + ticket + ": " + errMsg, "bad");
+        showPosActionNotice("⚠️ Close instruction could not execute: #" + ticket, errMsg, "bad");
+        showToast("Close Not Executed", "Order #" + ticket + ": " + errMsg, "bad");
       }
     }
   });
@@ -3776,7 +3780,7 @@ function renderCluster(cl){
     bar.className = "cluster-bar " + (isConflict ? "conflict" : (isStandby ? "standby" : "primary"));
     
     $("cluster_icon").textContent = isConflict ? "❌" : (isStandby ? "⚠️" : "🛡️");
-    var roleDesc = isConflict ? "双主冲突 (Split-Brain Conflict · 已锁定)" : (isStandby ? "备用热备节点 (Standby · 只读镜像)" : "主节点 (Primary · 读写激活)");
+    var roleDesc = isConflict ? "Split-Brain Conflict (Locked)" : (isStandby ? "Standby Node (Read-Only Mirror)" : "Primary Node (Active R/W)");
     $("cluster_status_text").textContent = roleDesc + " [Epoch " + cl.epoch + "]";
 
     // Peer status indicator
@@ -3798,7 +3802,7 @@ function renderCluster(cl){
       if(!cl.peer_url){
         fbEl.textContent = "";
       } else if(cl.failback_locked){
-        fbEl.textContent = "• [自动回切已锁定]";
+        fbEl.textContent = "• [Auto-Failback Locked]";
       } else if(cl.is_configured_primary && isStandby){
         var requiredSecs = (cl.failback_stabilization_hours || 24.0) * 3600;
         var curSecs = cl.continuous_online_secs || 0;
@@ -3807,9 +3811,9 @@ function renderCluster(cl){
         var totH = (cl.failback_stabilization_hours || 24.0).toFixed(1);
         var remH = (remSecs / 3600).toFixed(1);
         if(remSecs <= 0){
-          fbEl.textContent = "• [主机已达标 " + curH + "h/" + totH + "h · 正在自动回切...]";
+          fbEl.textContent = "• [Primary stabilized " + curH + "h/" + totH + "h · Initiating auto-failback...]";
         } else {
-          fbEl.textContent = "• [主机连续在线 " + curH + "h/" + totH + "h · 约 " + remH + " 小时后自动回切为 Master]";
+          fbEl.textContent = "• [Primary online " + curH + "h/" + totH + "h · Auto-failback in ~" + remH + " hrs]";
         }
       } else {
         fbEl.textContent = "";
@@ -3850,40 +3854,40 @@ function renderCluster(cl){
 
 function onClusterPromote(){
   confirmDialog({
-    title: "⚡ 接管提升为主节点 (Promote to Primary)",
-    desc: "确定要将此备用节点提升为主节点 (Primary) 吗？<br><br><b>⚠️ 严格前置要求</b>：请先确认原主节点已下线或隔离，防止产生双主冲突！",
+    title: "⚡ Promote to Primary",
+    desc: "Are you sure you want to promote this Standby node to Primary?<br><br><b>⚠️ Important Precondition</b>: Please ensure the original Primary node is offline or isolated to prevent split-brain conflicts!",
     danger: true,
-    confirmText: "确认提权接管",
-    cancelText: "取消"
+    confirmText: "Confirm Promotion",
+    cancelText: "Cancel"
   }).then(function(ok){
     if(!ok) return;
     api("/api/v1/cluster/promote", { method: "POST" })
       .then(function(res){
-        alert("提权成功！当前节点已升级为 Primary (Epoch " + res.epoch + ")，写闸门已激活。");
+        alert("Promotion successful! This node is now Primary (Epoch " + res.epoch + "), writes enabled.");
         refresh();
       })
       .catch(function(e){
-        alert("提权失败: " + e.message);
+        alert("Promotion failed: " + e.message);
       });
   });
 }
 
 function onClusterFailbackNow(){
   confirmDialog({
-    title: "⚡ 立即触发安全回切 (Force Safe Failback)",
-    desc: "确定要立即向当前主节点发起安全交接握手，夺回 Master 身份吗？<br><br><b>交接保障</b>：当前主节点将先关闭写闸并降级，本机再接管为 Master，全过程零双写窗口。",
+    title: "⚡ Trigger Safe Failback Now",
+    desc: "Initiate safe handover handshake with the current Primary node to reclaim Master role?<br><br><b>Handover Safety</b>: The current Primary will disable writes and demote first, then this node assumes Master with zero dual-write window.",
     danger: false,
-    confirmText: "立即安全回切",
-    cancelText: "取消"
+    confirmText: "Failback Now",
+    cancelText: "Cancel"
   }).then(function(ok){
     if(!ok) return;
     api("/api/v1/cluster/failback-now", { method: "POST" })
       .then(function(res){
-        alert("回切成功！当前节点已夺回 Master 身份 (Epoch " + res.epoch + ")，写闸门已激活。");
+        alert("Failback successful! Reclaimed Master role (Epoch " + res.epoch + "), writes enabled.");
         refresh();
       })
       .catch(function(e){
-        alert("回切失败: " + e.message);
+        alert("Failback failed: " + e.message);
       });
   });
 }
@@ -3896,7 +3900,7 @@ function onToggleFailbackLock(locked){
   }).then(function(){
     refresh();
   }).catch(function(e){
-    alert("设置回切锁定失败: " + e.message);
+    alert("Failed to update failback lock: " + e.message);
   });
 }
 
@@ -4764,7 +4768,9 @@ function pollCommand(poll, cid, msgEl, attempt, cb){
         if(msgEl){
           msgEl.className = "opmsg ok";
           if(j.err && j.err.indexOf("market_closed") >= 0){
-            msgEl.textContent = cid + " · 已在接收端排队待执行 (周末/闭市 Market Closed)";
+            msgEl.textContent = cid + " · Queued on receiver (Market Closed for weekend)";
+          } else if(j.err && j.err.indexOf("already_queued") >= 0){
+            msgEl.textContent = cid + " · Already in execution queue";
           } else {
             msgEl.textContent = cid + " · acked by the node";
           }
@@ -4774,7 +4780,7 @@ function pollCommand(poll, cid, msgEl, attempt, cb){
         if(msgEl){
           msgEl.className = "opmsg bad";
           if(j.err && j.err.indexOf("unknown op close") >= 0){
-            msgEl.textContent = cid + " · 接收端运行旧版 EA，请在 MT4 图表切换周期或按 F7 重新加载！";
+            msgEl.textContent = cid + " · Receiver running old EA build, please switch timeframe or press F7 in MT4 to reload!";
           } else {
             msgEl.textContent = cid + " · rejected: " + (j.err || "no reason given");
           }
@@ -6849,19 +6855,19 @@ function onSslModeChange(){
   $("ssl_domain_wrap").style.display = (mode === "import") ? "none" : "block";
 
   if(mode === "auto"){
-    $("ssl_domain_label").textContent = "自动分配域名 (Auto Domain via sslip.io)";
+    $("ssl_domain_label").textContent = "Auto Domain via sslip.io";
     $("ssl_domain_hint").textContent = sslState.data && sslState.data.suggested_sslip_domain
-      ? "根据公网 IP 自动映射为: " + sslState.data.suggested_sslip_domain
-      : "系统将自动探测当前 VPS 公网 IP 并分配唯一 sslip.io 域名";
+      ? "Automatically maps public IP to: " + sslState.data.suggested_sslip_domain
+      : "System automatically probes public IP and provisions unique sslip.io domain";
     if(sslState.data && sslState.data.suggested_sslip_domain && !$("ssl_input_domain").value){
       $("ssl_input_domain").value = sslState.data.suggested_sslip_domain;
     }
   } else if(mode === "custom_domain"){
-    $("ssl_domain_label").textContent = "自有独立域名 (Custom Domain)";
-    $("ssl_domain_hint").textContent = "请确保该域名的 DNS A 记录已解析至本机 VPS 公网 IP";
+    $("ssl_domain_label").textContent = "Custom Domain";
+    $("ssl_domain_hint").textContent = "Please ensure the DNS A record for this domain points to this VPS public IP";
   } else if(mode === "self_signed"){
-    $("ssl_domain_label").textContent = "测试域名 / IP (Domain for Self-Signed Cert)";
-    $("ssl_domain_hint").textContent = "例如: 127-0-0-1.sslip.io 或 localhost (用于内网测试)";
+    $("ssl_domain_label").textContent = "Domain for Self-Signed Cert";
+    $("ssl_domain_hint").textContent = "e.g. 127-0-0-1.sslip.io or localhost (for local test)";
   }
 }
 
@@ -6877,21 +6883,21 @@ function refreshSslStatus(){
       var badge = $("ssl_active_badge");
       if(cfg.enabled && st.cert_valid){
         badge.className = "pill ok";
-        badge.textContent = "已启用 (HTTPS 保护中)";
+        badge.textContent = "Enabled (HTTPS Active)";
       } else if(st.in_progress){
         badge.className = "pill warn";
-        badge.textContent = "正在配置/申请中...";
+        badge.textContent = "Configuring / Requesting...";
       } else {
         badge.className = "pill dim";
-        badge.textContent = "未启用 (当前为 HTTP)";
+        badge.textContent = "Disabled (HTTP Mode)";
       }
 
-      $("ssl_curr_domain").textContent = cfg.domain || "(未绑定)";
+      $("ssl_curr_domain").textContent = cfg.domain || "(None)";
       $("ssl_curr_issuer").textContent = st.issuer || "-";
       $("ssl_curr_port").textContent = cfg.https_port || 443;
 
       if(st.days_remaining !== undefined && cfg.enabled){
-        $("ssl_days_badge").textContent = "剩余 " + st.days_remaining + " 天";
+        $("ssl_days_badge").textContent = st.days_remaining + " days left";
       } else {
         $("ssl_days_badge").textContent = "";
       }
@@ -6915,16 +6921,16 @@ function refreshSslStatus(){
 
       if(st.in_progress){
         $("ssl_progress_box").style.display = "block";
-        $("ssl_progress_text").textContent = "当前步骤: " + (st.progress_step || "处理中...");
+        $("ssl_progress_text").textContent = "Step: " + (st.progress_step || "Processing...");
         $("ssl_btn_save").disabled = true;
-        $("ssl_btn_save").textContent = "⏳ 正在申请证书...";
+        $("ssl_btn_save").textContent = "⏳ Requesting cert...";
         if(!sslState.pollTimer){
           sslState.pollTimer = setInterval(refreshSslStatus, 2000);
         }
       } else {
         $("ssl_progress_box").style.display = "none";
         $("ssl_btn_save").disabled = false;
-        $("ssl_btn_save").textContent = "🚀 保存并应用设置";
+        $("ssl_btn_save").textContent = "🚀 Save & Apply";
         if(sslState.pollTimer){
           clearInterval(sslState.pollTimer);
           sslState.pollTimer = null;
@@ -6956,10 +6962,10 @@ function refreshSslStatus(){
 function saveSslConfig(){
   var msg = $("ssl_opmsg");
   msg.className = "opmsg";
-  msg.textContent = "正在提交设置并启动证书处理...";
+  msg.textContent = "Submitting settings and initiating certificate workflow...";
   $("ssl_error_box").style.display = "none";
   $("ssl_btn_save").disabled = true;
-  $("ssl_btn_save").textContent = "⏳ 正在提交申请...";
+  $("ssl_btn_save").textContent = "⏳ Submitting request...";
 
   var mode = "auto";
   if($("ssl_mode_custom").checked) mode = "custom_domain";
@@ -6978,7 +6984,7 @@ function saveSslConfig(){
 
   function resetSaveBtn(){
     $("ssl_btn_save").disabled = false;
-    $("ssl_btn_save").textContent = "🚀 保存并应用设置";
+    $("ssl_btn_save").textContent = "🚀 Save & Apply";
   }
 
   if(mode === "import"){
@@ -6987,7 +6993,7 @@ function saveSslConfig(){
     if(!certPem || !keyPem){
       resetSaveBtn();
       msg.className = "opmsg bad";
-      msg.textContent = "导入模式必须提供证书和私钥 PEM 文本。";
+      msg.textContent = "Import mode requires both fullchain.pem and private key PEM text.";
       return;
     }
     fetch("/api/v1/tls/import", {
@@ -6998,18 +7004,18 @@ function saveSslConfig(){
       resetSaveBtn();
       if(res.ok){
         msg.className = "opmsg ok";
-        msg.textContent = res.message || "证书导入成功并已激活！";
+        msg.textContent = res.message || "Certificate imported and activated successfully!";
         refreshSslStatus();
       } else {
         msg.className = "opmsg bad";
-        msg.textContent = "导入失败: " + (res.error || "未知错误");
+        msg.textContent = "Import failed: " + (res.error || "Unknown error");
         $("ssl_error_box").style.display = "block";
-        $("ssl_error_text").textContent = res.error || "未知错误";
+        $("ssl_error_text").textContent = res.error || "Unknown error";
       }
     }).catch(function(e){
       resetSaveBtn();
       msg.className = "opmsg bad";
-      msg.textContent = "请求错误: " + e.message;
+      msg.textContent = "Request failed: " + e.message;
     });
     return;
   }
@@ -7023,18 +7029,18 @@ function saveSslConfig(){
       resetSaveBtn();
       if(res.ok){
         msg.className = "opmsg ok";
-        msg.textContent = res.message || "自签名证书生成并激活成功！";
+        msg.textContent = res.message || "Self-signed certificate generated and activated!";
         refreshSslStatus();
       } else {
         msg.className = "opmsg bad";
-        msg.textContent = "生成失败: " + (res.error || "未知错误");
+        msg.textContent = "Generation failed: " + (res.error || "Unknown error");
         $("ssl_error_box").style.display = "block";
-        $("ssl_error_text").textContent = res.error || "未知错误";
+        $("ssl_error_text").textContent = res.error || "Unknown error";
       }
     }).catch(function(e){
       resetSaveBtn();
       msg.className = "opmsg bad";
-      msg.textContent = "请求错误: " + e.message;
+      msg.textContent = "Request failed: " + e.message;
     });
     return;
   }
@@ -7053,7 +7059,7 @@ function saveSslConfig(){
   }).then(function(r){ return r.json(); }).then(function(res){
     if(res.accepted){
       msg.className = "opmsg ok";
-      msg.textContent = res.message || "证书申请任务已在后台启动！";
+      msg.textContent = res.message || "Certificate provisioning task started in background!";
       refreshSslStatus();
       if(!sslState.pollTimer){
         sslState.pollTimer = setInterval(refreshSslStatus, 2000);
@@ -7061,39 +7067,39 @@ function saveSslConfig(){
     } else {
       resetSaveBtn();
       msg.className = "opmsg bad";
-      msg.textContent = "配置失败: " + (res.error || "未知错误");
+      msg.textContent = "Configuration failed: " + (res.error || "Unknown error");
       $("ssl_error_box").style.display = "block";
-      $("ssl_error_text").textContent = res.error || "配置失败";
+      $("ssl_error_text").textContent = res.error || "Configuration failed";
     }
   }).catch(function(e){
     resetSaveBtn();
     msg.className = "opmsg bad";
-    msg.textContent = "请求错误: " + e.message;
+    msg.textContent = "Request failed: " + e.message;
   });
 }
 
 function disableSsl(){
   confirmDialog({
-    title: "停用 SSL / 切回 HTTP 模式",
-    desc: "确定要关闭 SSL 加密并切回纯 HTTP 模式吗？",
-    detail: "切回后，后续连接将不再使用 TLS 加密。建议仅在证书故障或内网特殊调试时使用。",
+    title: "Disable SSL / Revert to HTTP",
+    desc: "Are you sure you want to disable SSL encryption and revert to HTTP?",
+    detail: "Subsequent connections will not use TLS encryption. Recommended only for troubleshooting or private networks.",
     danger: true,
-    confirmText: "确认停用 SSL"
+    confirmText: "Disable SSL"
   }).then(function(ok){
     if(!ok) return;
     var msg = $("ssl_opmsg");
     msg.className = "opmsg";
-    msg.textContent = "正在停用 SSL...";
+    msg.textContent = "Disabling SSL...";
     fetch("/api/v1/tls/disable", { method: "POST" })
       .then(function(r){ return r.json(); })
       .then(function(res){
         if(res.ok){
           msg.className = "opmsg ok";
-          msg.textContent = res.message || "SSL 已关闭，恢复为纯 HTTP 模式。";
+          msg.textContent = res.message || "SSL disabled, reverted to HTTP mode.";
           refreshSslStatus();
         } else {
           msg.className = "opmsg bad";
-          msg.textContent = "停用失败: " + (res.error || "未知错误");
+          msg.textContent = "Disable failed: " + (res.error || "Unknown error");
         }
       });
   });
@@ -7102,17 +7108,17 @@ function disableSsl(){
 function renewSsl(){
   var msg = $("ssl_opmsg");
   msg.className = "opmsg";
-  msg.textContent = "正在发起证书续期申请...";
+  msg.textContent = "Initiating certificate renewal...";
   fetch("/api/v1/tls/renew", { method: "POST" })
     .then(function(r){ return r.json(); })
     .then(function(res){
       if(res.accepted){
         msg.className = "opmsg ok";
-        msg.textContent = "续期申请已启动！";
+        msg.textContent = "Renewal task started!";
         refreshSslStatus();
       } else {
         msg.className = "opmsg bad";
-        msg.textContent = "续期启动失败: " + (res.error || "未知错误");
+        msg.textContent = "Renewal failed: " + (res.error || "Unknown error");
       }
     });
 }
@@ -7134,21 +7140,21 @@ function openPeerModal(){
     .then(function(r){ return r.json(); })
     .then(function(res){
       var isStandalone = !res.peer_url;
-      $("peer_mode_badge").textContent = isStandalone ? "单机模式 (Standalone)" : "主备集群模式 (Cluster)";
+      $("peer_mode_badge").textContent = isStandalone ? "Standalone Mode" : "Cluster Mode";
       $("peer_mode_badge").className = isStandalone ? "pill dim" : "pill ok";
 
       if(isStandalone){
-        $("peer_live_badge").textContent = "无对端 (独立运行)";
+        $("peer_live_badge").textContent = "Standalone (No Peer)";
         $("peer_live_badge").className = "pill dim";
-        $("peer_curr_api").textContent = "(未配置)";
-        $("peer_curr_zmq").textContent = "(未配置)";
+        $("peer_curr_api").textContent = "(Not configured)";
+        $("peer_curr_zmq").textContent = "(Not configured)";
         $("peer_input_ip").value = "";
       } else {
         var pOnline = res.peer_online;
-        $("peer_live_badge").textContent = pOnline ? "对端在线 (" + (res.sync_status || "synced") + ")" : "对端离线";
+        $("peer_live_badge").textContent = pOnline ? "Peer Online (" + (res.sync_status || "synced") + ")" : "Peer Offline";
         $("peer_live_badge").className = "pill " + (pOnline ? "ok" : "bad");
         $("peer_curr_api").textContent = res.peer_url;
-        $("peer_curr_zmq").textContent = res.peer_zmq || "(默认)";
+        $("peer_curr_zmq").textContent = res.peer_zmq || "(Default)";
 
         try {
           var u = new URL(res.peer_url);
@@ -7171,7 +7177,7 @@ function closePeerModal(){
 function savePeerConfig(){
   var msg = $("peer_opmsg");
   msg.className = "opmsg";
-  msg.textContent = "正在保存对端设置...";
+  msg.textContent = "Saving peer settings...";
 
   var ip = $("peer_input_ip").value.trim();
   var apiPort = parseInt($("peer_input_api_port").value, 10) || 6010;
@@ -7188,30 +7194,30 @@ function savePeerConfig(){
   }).then(function(r){ return r.json(); }).then(function(res){
     if(res.ok){
       msg.className = "opmsg ok";
-      msg.textContent = res.message || "对端设置已更新并生效！";
+      msg.textContent = res.message || "Peer settings saved and applied!";
       setTimeout(function(){ openPeerModal(); }, 800);
     } else {
       msg.className = "opmsg bad";
-      msg.textContent = "设置失败: " + (res.error || "未知错误");
+      msg.textContent = "Save failed: " + (res.error || "Unknown error");
     }
   }).catch(function(e){
     msg.className = "opmsg bad";
-    msg.textContent = "请求错误: " + e.message;
+    msg.textContent = "Request error: " + e.message;
   });
 }
 
 function clearPeerConfig(){
   confirmDialog({
-    title: "切换为单机独立模式",
-    desc: "确定要清空对端配置并切换为单机模式吗？",
-    detail: "清空后，本节点将作为独立的单机 Hub 运行，停止与对端同步并停止下发对端拓扑。",
+    title: "Switch to Standalone Mode",
+    desc: "Are you sure you want to clear peer configuration and switch to Standalone mode?",
+    detail: "This node will run as an isolated single hub, stopping synchronization and peer topology broadcast.",
     danger: false,
-    confirmText: "确认切换为单机"
+    confirmText: "Switch to Standalone"
   }).then(function(ok){
     if(!ok) return;
     var msg = $("peer_opmsg");
     msg.className = "opmsg";
-    msg.textContent = "正在清空对端设置...";
+    msg.textContent = "Clearing peer settings...";
     fetch("/api/v1/cluster/peer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -7219,12 +7225,12 @@ function clearPeerConfig(){
     }).then(function(r){ return r.json(); }).then(function(res){
       if(res.ok){
         msg.className = "opmsg ok";
-        msg.textContent = "已切换为单机独立运行模式！";
+        msg.textContent = "Switched to Standalone mode!";
         $("peer_input_ip").value = "";
         setTimeout(function(){ openPeerModal(); }, 800);
       } else {
         msg.className = "opmsg bad";
-        msg.textContent = "清空失败: " + (res.error || "未知错误");
+        msg.textContent = "Clear failed: " + (res.error || "Unknown error");
       }
     });
   });

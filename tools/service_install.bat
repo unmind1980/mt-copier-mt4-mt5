@@ -12,7 +12,7 @@ if %errorLevel% neq 0 (
     echo [ERROR] Administrator privileges are required to install Windows Services.
     echo.
     echo   Please right-click this batch file and choose:
-    echo   "Run as administrator" (以管理员身份运行)
+    echo   "Run as administrator"
     echo.
     pause
     exit /b 1
@@ -57,20 +57,20 @@ exit /b 0
 :install_primary
 echo.
 echo =======================================================================
-echo   [可选设置] 配置对端备机 VPS:
-echo   如果您的架构包含备用 VPS，请输入备机 VPS 的 IP (例如 168.100.200.50)。
-echo   如果仅单机运行 (无备机)，请直接按回车跳过 (默认单机模式):
+echo   [Optional] Configure Peer Standby VPS:
+echo   If your architecture includes a Standby VPS, enter its IP (e.g. 168.100.200.50).
+echo   If running standalone without a standby, press Enter to skip (default):
 echo =======================================================================
 set "PEER_IP="
-set /p PEER_IP="对端备机 IP (回车留空为单机模式): "
+set /p PEER_IP="Peer Standby IP (Enter to leave blank for Standalone): "
 
 echo.
 echo [1/2] Installing MTCopierPrimary service...
 if "!PEER_IP!"=="" (
-    echo [模式] 单机独立运行模式 (Standalone - 无对端备机)
+    echo [Mode] Standalone Mode (No peer standby configured)
     "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary
 ) else (
-    echo [模式] 主备双活集群模式 (对端备机: !PEER_IP!)
+    echo [Mode] HA Cluster Mode (Peer standby: !PEER_IP!)
     "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000
 )
 if %errorLevel% neq 0 (
@@ -87,20 +87,20 @@ goto :verify
 echo.
 if not exist "standby_data" mkdir "standby_data"
 echo =======================================================================
-echo   [配置对端主机 VPS]:
-echo   请输入对端主机 VPS 的 IP 地址 (例如 149.135.109.18)。
-echo   若暂未就绪或稍后在 Web 界面配置，请直接按回车跳过:
+echo   [Configure Peer Primary VPS]:
+echo   Enter the IP address of the Primary VPS (e.g. 149.135.109.18).
+echo   Or press Enter to skip and configure later in Web UI:
 echo =======================================================================
 set "PEER_IP="
-set /p PEER_IP="对端主机 IP (回车跳过): "
+set /p PEER_IP="Peer Primary IP (Enter to skip): "
 
 echo.
 echo [1/2] Installing MTCopierStandby service...
 if "!PEER_IP!"=="" (
-    echo [模式] 备机初始化 (等待后续通过 Web 界面关联主机)
+    echo [Mode] Standby Initializing (Configure Primary in Web UI later)
     "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 ) else (
-    echo [模式] 备机热备连接模式 (对端主机: !PEER_IP!)
+    echo [Mode] Standby Mirror Mode (Peer primary: !PEER_IP!)
     "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 )
 if %errorLevel% neq 0 (
@@ -116,7 +116,7 @@ goto :verify
 :install_both
 echo.
 if not exist "standby_data" mkdir "standby_data"
-echo [单机双活开发测试] 同时在本地安装 Primary(6000/6010) 与 Standby(6001/6011)...
+echo [Local Dual HA Dev/Test] Installing Primary (6000/6010) and Standby (6001/6011)...
 "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://127.0.0.1:6011 --peer-zmq tcp://127.0.0.1:6001
 "%BIN%" --service-install standby --workdir "%REPO%" --port 6001 --http 0.0.0.0:6011 --role standby --peer-api http://127.0.0.1:6010 --peer-zmq tcp://127.0.0.1:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 echo Starting services...
