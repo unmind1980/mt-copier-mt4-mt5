@@ -2248,6 +2248,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             let ok = envelope_kv(&payload, "OK") == "1";
                             let rev: u64 = envelope_kv(&payload, "REV").parse().unwrap_or(0);
                             let err = envelope_kv(&payload, "ERR");
+                            let note = envelope_kv(&payload, "NOTE");
+                            let ack_msg = if !err.is_empty() { err.clone() } else { note };
                             //--- The node and the KIND are derived from the
                             //--- COMMAND, not from the message. An ACK carries no
                             //--- ACC - it does not need one, because the id it
@@ -2269,7 +2271,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 // BUG-06: ADR-03 Single-Writer invariant: Standby hub MUST NOT process
                                 // ACKs or mutate commands.jsonl. Primary alone processes ACKs, and Standby
                                 // replicates acked command journals via HTTP cluster sync.
-                            } else if cmds.ack(&id, ok, rev, &err) {
+                            } else if cmds.ack(&id, ok, rev, &ack_msg) {
                                 println!(
                                     "[hub] {} {} {} ({} {}) rev {}",
                                     who,

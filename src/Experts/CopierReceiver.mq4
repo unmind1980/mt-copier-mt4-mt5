@@ -6391,13 +6391,16 @@ void HandleCmd(const CopierEnv &e)
       g_cmdId=id;
       if(queued)
         {
-         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
-         g_log.Warn("CMD "+id+": manual close queued for ticket #"+(string)targetTicket+" ("+targetPos.sym+" "+DoubleToString(targetPos.lots,2)+") UID="+uid);
+         string note="";
+         if(CopierSymbolFeedStale(targetPos.sym,CP_SYM_STALL_MS))
+            note=";NOTE=market_closed";
+         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev+note;
+         g_log.Warn("CMD "+id+": manual close queued for ticket #"+(string)targetTicket+" ("+targetPos.sym+" "+DoubleToString(targetPos.lots,2)+") UID="+uid+(StringLen(note)>0?" (market closed: queued)":""));
          g_forcePosReport=true;
         }
       else
         {
-         g_cmdAck="ID="+id+";OK=0;REASON=queue_full;REV="+(string)g_cfgRev;
+         g_cmdAck="ID="+id+";OK=0;ERR=queue_full;REV="+(string)g_cfgRev;
          g_log.Error("CMD "+id+": manual close failed to queue for ticket #"+(string)targetTicket+" (queue full)");
         }
       SendCfgAck(g_cmdAck);

@@ -3359,7 +3359,48 @@ function executeCloseSingle(nodeKey, ticket){
     msgEl.textContent = "正在向接收端下发平仓指令 #" + ticket + "...";
   }
 
-  sendCommand(nodeKey, "close", msgEl, { ticket: ticket });
+  var resetBtn = function(isQueuedMarketClosed){
+    var b = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
+    if(b){
+      b.disabled = false;
+      if(isQueuedMarketClosed){
+        b.textContent = "⏱️ 已排队待平";
+        b.title = "已在接收端成功排队，待周一开市后券商自动平仓";
+      } else {
+        b.textContent = "❌ 平仓";
+      }
+    }
+    s.lastPosRowsHtml = null; // Invalidate DOM cache so subsequent renders won't get stuck
+  };
+
+  // Safe timeout: button resets after 3.5s at latest, preventing permanent freeze
+  var safeTimer = setTimeout(function(){ resetBtn(false); }, 3500);
+
+  sendCommand(nodeKey, "close", msgEl, { ticket: ticket }, function(ok, j){
+    clearTimeout(safeTimer);
+    var isMktClosed = (j && typeof j === "object" && j.err && j.err.indexOf("market_closed") >= 0);
+    resetBtn(isMktClosed);
+    if(ok){
+      if(msgEl){
+        msgEl.className = "opmsg ok";
+        if(isMktClosed){
+          msgEl.textContent = "✅ 订单 #" + ticket + " 已在接收端成功排队！当前处于周末休市 (Market Closed)，待周一开盘后经纪商将自动撮合成交。";
+        } else {
+          msgEl.textContent = "✅ 订单 #" + ticket + " 平仓指令已送达接收端执行中...";
+        }
+      }
+    } else {
+      if(msgEl){
+        msgEl.className = "opmsg bad";
+        var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "命令被拒绝"));
+        if(errMsg.indexOf("unknown op close") >= 0){
+          msgEl.textContent = "⚠️ 平仓失败：接收端 EA 仍运行旧版本，请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！";
+        } else {
+          msgEl.textContent = "⚠️ 平仓指令未能执行：#" + ticket + " (" + errMsg + ")";
+        }
+      }
+    }
+  });
 
   setTimeout(function(){
     var curN = (s.data && s.data.nodes) ? s.data.nodes.find(function(x){ return x.key === nodeKey; }) : null;
@@ -4386,7 +4427,7 @@ function startWS(){
 // Feedback is written into the .opmsg span of the same row. renderNodes never
 // overwrites that span (it only updates dot/k/nm/ps/st), so a status survives
 // the once-per-second re-render until the row SET itself changes.
-function sendCommand(k, op, msgEl, extraPayload){
+function sendCommand(k, op, msgEl, extraPayload, cb){
   if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing " + op + "…"; }
   var url = "/api/v1/nodes/" + encodeURIComponent(k) + "/commands";
   var payloadObj = { op: op };
@@ -4404,10 +4445,9 @@ function sendCommand(k, op, msgEl, extraPayload){
   }).then(function(r){
     return r.json().then(function(j){ return { status: r.status, j: j }; });
   }).then(function(res){
-    //--- N56-15: never swallow the outcome. With no message element the old
-    //--- code returned here, which made every refusal invisible.
     if(!msgEl){
       console.warn("[sendCommand] " + op + " -> HTTP " + res.status + " " + JSON.stringify(res.j || {}));
+      if(typeof cb === "function") cb(res.status < 300, res.j);
       return;
     }
     if(res.j && res.j.error){
@@ -4416,22 +4456,21 @@ function sendCommand(k, op, msgEl, extraPayload){
         ? " — " + res.j.detail
         : (res.j.known ? " (known: " + res.j.known.join(", ") + ")" : "");
       msgEl.textContent = res.j.error + extra;
+      if(typeof cb === "function") cb(false, res.j.error);
     } else if(res.j && (res.j.command_id || res.j.id)){
-      //--- The 202 body names it `command_id` (`id` is the audit record's
-      //--- field); both are accepted so this can never degrade to a bare
-      //--- status code again - which is exactly what it did show, because
-      //--- the first cut read `id` and fell through to the fallback.
       var cid = res.j.command_id || res.j.id;
       msgEl.className = "opmsg ok";
       msgEl.textContent = "issued " + cid + " · " + (res.j.state || "?");
-      pollCommand(res.j.poll, cid, msgEl, 0);
+      pollCommand(res.j.poll, cid, msgEl, 0, cb);
     } else {
       msgEl.className = "opmsg warn";
       msgEl.textContent = "HTTP " + res.status;
+      if(typeof cb === "function") cb(false, "HTTP " + res.status);
     }
   }).catch(function(e){
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
     else console.error("[sendCommand] request failed:", e);
+    if(typeof cb === "function") cb(false, e.message);
   });
 }
 
@@ -4443,26 +4482,48 @@ function sendCommand(k, op, msgEl, extraPayload){
 //--- A receiver running the OLD build, or with AcceptCommands=false, shows
 //--- up here as rejected (it answers OK=0) or as pending climbing to
 //--- unknown - which is the honest picture of "the node did not obey".
-function pollCommand(poll, cid, msgEl, attempt){
-  if(!poll || !msgEl) return;
+function pollCommand(poll, cid, msgEl, attempt, cb){
+  if(!poll) return;
   setTimeout(function(){
     api(poll).then(function(j){
-      if(!j || !j.state) return;
+      if(!j || !j.state){
+        if(typeof cb === "function") cb(false, "no response");
+        return;
+      }
       if(j.state === "pending" && attempt < 1){
-        pollCommand(poll, cid, msgEl, attempt + 1);
+        pollCommand(poll, cid, msgEl, attempt + 1, cb);
         return;
       }
       if(j.state === "acked"){
-        msgEl.className = "opmsg ok";
-        msgEl.textContent = cid + " · acked by the node";
+        if(msgEl){
+          msgEl.className = "opmsg ok";
+          if(j.err && j.err.indexOf("market_closed") >= 0){
+            msgEl.textContent = cid + " · 已在接收端排队待执行 (周末/闭市 Market Closed)";
+          } else {
+            msgEl.textContent = cid + " · acked by the node";
+          }
+        }
+        if(typeof cb === "function") cb(true, j);
       } else if(j.state === "rejected"){
-        msgEl.className = "opmsg bad";
-        msgEl.textContent = cid + " · rejected: " + (j.err || "no reason given");
+        if(msgEl){
+          msgEl.className = "opmsg bad";
+          if(j.err && j.err.indexOf("unknown op close") >= 0){
+            msgEl.textContent = cid + " · 接收端运行旧版 EA，请在 MT4 图表切换周期或按 F7 重新加载！";
+          } else {
+            msgEl.textContent = cid + " · rejected: " + (j.err || "no reason given");
+          }
+        }
+        if(typeof cb === "function") cb(false, j.err || "rejected");
       } else {
-        msgEl.className = "opmsg warn";
-        msgEl.textContent = cid + " · " + j.state + (j.err ? " (" + j.err + ")" : "");
+        if(msgEl){
+          msgEl.className = "opmsg warn";
+          msgEl.textContent = cid + " · " + j.state + (j.err ? " (" + j.err + ")" : "");
+        }
+        if(typeof cb === "function") cb(false, j.state);
       }
-    }).catch(function(){ /* the row may have been rebuilt; nothing to say */ });
+    }).catch(function(e){
+      if(typeof cb === "function") cb(false, e.message);
+    });
   }, attempt === 0 ? 2500 : 10000);
 }
 
