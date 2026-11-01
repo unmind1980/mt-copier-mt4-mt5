@@ -1317,7 +1317,7 @@
 
   <div class="nav-tools">
     <div class="zoom-box" title="Font size 11px - 18px in 0.5 steps. Type a value or pick one from the list.">
-      <span style="color:var(--dim)">Font:</span>
+      <span style="color:var(--dim)" data-i18n="nav.font_label">Font:</span>
       <div class="zoom-picker">
         <input type="number" class="zoom-input" id="zoomRange"
                min="11" max="18" step="0.5" value="13.5"
@@ -1329,7 +1329,7 @@
 
     <button type="button" class="btn-theme" id="theme_toggle" onclick="toggleTheme()">
       <span id="theme_icon">🌙</span>
-      <span id="theme_text">Night Mode</span>
+      <span id="theme_text" data-i18n="nav.night_mode">Night Mode</span>
     </button>
 
     <div class="lang-selector-wrap" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);padding:3px 8px;border-radius:6px;border:1px solid var(--line);font-size:12px">
@@ -1340,7 +1340,7 @@
       </select>
     </div>
 
-    <button type="button" class="btn-sm" id="header_hubkey_btn">🔑 Hub Key</button>
+    <button type="button" class="btn-sm" id="header_hubkey_btn" data-i18n="nav.hub_key_btn">🔑 Hub Key</button>
     <button type="button" class="btn-sm" id="header_ssl_btn" data-i18n="nav.btn_ssl">🔒 SSL / HTTPS</button>
     <button type="button" class="btn-sm" id="header_logout_btn" data-i18n="nav.btn_logout">Log Out</button>
   </div>
@@ -1420,19 +1420,19 @@
     <div class="gops-group">
       <button type="button" class="btn-sm opbtn" id="btn-view-pos" data-i18n="nodes.btn_inspect">📊 Positions</button>
       <button type="button" class="btn-sm opbtn" id="btn-gop-cfg" data-i18n="nodes.btn_config">⚙️ Receiver Config</button>
-      <button type="button" class="btn-sm opbtn" id="btn-gop-notif">🔔 Notifications</button>
-      <button type="button" class="btn-sm opbtn" id="btn-download-hub-key">🔑 Hub Key</button>
-      <button type="button" class="btn-sm btn-primary opbtn" id="btn-open-cfg">+ Configure Receiver</button>
+      <button type="button" class="btn-sm opbtn" id="btn-gop-notif" data-i18n="gops.btn_notif">🔔 Notifications</button>
+      <button type="button" class="btn-sm opbtn" id="btn-download-hub-key" data-i18n="gops.btn_hub_key">🔑 Hub Key</button>
+      <button type="button" class="btn-sm btn-primary opbtn" id="btn-open-cfg" data-i18n="gops.btn_cfg_receiver">+ Configure Receiver</button>
     </div>
     <span class="opmsg" id="gmsg"></span>
   </section>
 
   <section id="nodes-sec">
     <h2>
-      <span>Terminals &amp; Nodes <span id="ncount"></span></span>
+      <span><span data-i18n="nodes.title">Terminals &amp; Nodes</span> <span id="ncount"></span></span>
       <div style="display:flex;gap:8px;align-items:center">
-        <button type="button" class="btn-sm" id="btn-batch-pause">Batch Pause</button>
-        <button type="button" class="btn-sm" id="btn-batch-reload">Batch Reload</button>
+        <button type="button" class="btn-sm" id="btn-batch-pause" data-i18n="nodes.batch_pause">Batch Pause</button>
+        <button type="button" class="btn-sm" id="btn-batch-reload" data-i18n="nodes.batch_reload">Batch Reload</button>
       </div>
     </h2>
     <div id="nodes"><div class="empty">loading</div></div>
@@ -1440,14 +1440,14 @@
 
   <div class="grid-2col-topo">
     <section id="topo">
-      <h2>Topology <span id="tcount"></span></h2>
+      <h2><span data-i18n="topo.title">Topology</span> <span id="tcount"></span></h2>
       <div id="topobody"><div class="empty">loading</div></div>
     </section>
 
     <section id="msgcenter-card" class="msg-center-card">
       <h2>
-        <span>📢 Message Center &amp; Activity Log (Recent 20)</span>
-        <button type="button" class="btn-sm" id="btn-dismiss-alerts" style="font-size:11px">Dismiss All (Mark Read)</button>
+        <span data-i18n="msgcenter.title">📢 Message Center &amp; Activity Log (Recent 20)</span>
+        <button type="button" class="btn-sm" id="btn-dismiss-alerts" style="font-size:11px" data-i18n="msgcenter.dismiss_all_read">Dismiss All (Mark Read)</button>
       </h2>
       <div id="alerts" class="msg-center-body"></div>
     </section>
@@ -1456,8 +1456,8 @@
   <!-- Notification Channels (Telegram / WeCom / DingTalk / Webhook) -->
   <section id="notif-sec" class="hidden">
     <h2>
-      <span>Notification Channels (Telegram / WeCom / DingTalk / Webhook) <span id="notifcount"></span></span>
-      <button type="button" class="opbtn" id="btn-add-notif" style="text-transform:none;letter-spacing:normal;font-weight:600">+ Add Channel</button>
+      <span><span data-i18n="notif.title">Notification Channels (Telegram / WeCom / DingTalk / Webhook)</span> <span id="notifcount"></span></span>
+      <button type="button" class="opbtn" id="btn-add-notif" style="text-transform:none;letter-spacing:normal;font-weight:600" data-i18n="notif.add_btn">+ Add Channel</button>
     </h2>
     <div id="notifbody"><div class="empty">loading</div></div>
   </section>
@@ -1465,17 +1465,17 @@
   <!-- M9: user management. Rendered ONLY for an admin (a 403 on the users
        endpoint hides it) - the server is the gate, this is just the chrome. -->
   <section id="users-sec" class="hidden">
-    <h2>Users <span id="ucount"></span></h2>
+    <h2><span data-i18n="users.title">Users</span> <span id="ucount"></span></h2>
     <div id="usersbody"><div class="empty">loading</div></div>
     <form id="userform">
-      <input id="uid" placeholder="user id" autocapitalize="off" style="flex:0 0 160px">
-      <input id="upass" type="password" placeholder="password (min 8 chars)" style="flex:0 0 200px">
+      <input id="uid" placeholder="user id" data-i18n-placeholder="users.ph_userid" autocapitalize="off" style="flex:0 0 160px">
+      <input id="upass" type="password" placeholder="password (min 8 chars)" data-i18n-placeholder="users.ph_password" style="flex:0 0 200px">
       <select id="urole" style="flex:0 0 120px">
         <option value="viewer">viewer</option>
         <option value="operator">operator</option>
         <option value="admin">admin</option>
       </select>
-      <button type="submit">add / update</button>
+      <button type="submit" data-i18n="users.btn_addupdate">add / update</button>
       <span id="uerr"></span><span id="uok"></span>
     </form>
   </section>
@@ -1486,8 +1486,8 @@
   <div class="cockpit-layout">
     <div class="cockpit-sidebar">
       <div class="cockpit-sidebar-head">
-        <span>Connected Terminals (<span id="cockpit_node_count">0</span>)</span>
-        <span style="font-size:11px;color:var(--dim)">Click to focus</span>
+        <span><span data-i18n="cockpit.connected_terminals">Connected Terminals</span> (<span id="cockpit_node_count">0</span>)</span>
+        <span style="font-size:11px;color:var(--dim)" data-i18n="cockpit.click_to_focus">Click to focus</span>
       </div>
       <div id="cockpit_node_list"></div>
     </div>
@@ -1496,11 +1496,11 @@
       <div id="cockpit_detail_view" class="cockpit-detail-container">
         <div class="poshead-embedded">
           <div style="display:flex;align-items:center;gap:10px">
-            <h2 id="postitle">📊 Positions &amp; Waiting Inspection <span id="pcount"></span></h2>
+            <h2 id="postitle">📊 <span data-i18n="cockpit.inspection_title">Positions &amp; Waiting Inspection</span> <span id="pcount"></span></h2>
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <div class="pos-node-selector-wrap" style="display:flex;align-items:center;gap:6px">
-              <label for="pos_node_select" class="pos-select-label" style="font-size:12px;color:var(--dim)">Switch Node:</label>
+              <label for="pos_node_select" class="pos-select-label" style="font-size:12px;color:var(--dim)" data-i18n="cockpit.switch_node">Switch Node:</label>
               <select id="pos_node_select" class="pos-node-select" style="padding:4px 8px;font:12px var(--mono);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px"></select>
             </div>
             <div class="pos-node-nav" style="display:flex;gap:4px">
@@ -1601,7 +1601,7 @@
   </div>
 </div>
 
-<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="pwdlink" style="color:inherit">(change password)</a> · <a href="#" id="logout" style="color:inherit">(log out)</a></footer>
+<footer id="foot"><span id="writes-state">loading command state…</span> · <a href="#" id="pwdlink" style="color:inherit" data-i18n="footer.change_pwd">(change password)</a> · <a href="#" id="logout" style="color:inherit" data-i18n="footer.logout">(log out)</a></footer>
 
 <div id="pwdlg" class="hidden">
   <form id="pwdform">
@@ -2103,7 +2103,7 @@
 <div id="hubkeymodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="hubkeytitle">
   <div class="notifbox" style="width:640px">
     <div class="notifhead">
-      <h2 id="hubkeytitle">🔑 Hub Public Key File (copier_hub.key)</h2>
+      <h2 id="hubkeytitle" data-i18n="hubkey.modal_title">🔑 Hub Public Key File (copier_hub.key)</h2>
       <button type="button" id="hubkeyclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="notifbody">
@@ -2113,26 +2113,26 @@
       </div>
       <div id="hubkey_content_wrap">
         <div class="notifrow">
-          <label>Hub CurveZMQ Public Key</label>
+          <label data-i18n="hubkey.label">Hub CurveZMQ Public Key</label>
           <div style="display:flex;gap:8px;align-items:center">
             <input id="hubkey_val" readonly style="flex:1;background:var(--bg);font-weight:600" value="">
-            <button type="button" id="hubkey_copybtn" class="btn-sec" style="padding:6px 12px">Copy</button>
+            <button type="button" id="hubkey_copybtn" class="btn-sec" style="padding:6px 12px" data-i18n="hubkey.copy_btn">Copy</button>
           </div>
-          <span class="hint" id="hubkey_learn_hint">40-character Z85 public key. Safe to distribute to all nodes.</span>
+          <span class="hint" id="hubkey_learn_hint" data-i18n="hubkey.hint">40-character Z85 public key. Safe to distribute to all nodes.</span>
         </div>
 
         <div style="margin:14px 0 6px 0;padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);font-size:12px;line-height:1.6">
-          <strong style="color:var(--ink);display:block;margin-bottom:6px">📁 Deployment Instructions (No manual input needed in EA):</strong>
+          <strong style="color:var(--ink);display:block;margin-bottom:6px" data-i18n="hubkey.instr_title">📁 Deployment Instructions (No manual input needed in EA):</strong>
           <ol style="margin:0;padding-left:18px;color:var(--dim)">
-            <li>Click <strong>⬇️ Download Key File</strong> below to save <code>copier_hub.key</code>.</li>
-            <li>In MT4 / MT5, click <em>File → Open Data Folder</em>.</li>
-            <li>Place <code>copier_hub.key</code> into:
+            <li data-i18n="hubkey.instr_step1">Click ⬇️ Download Key File below to save copier_hub.key.</li>
+            <li data-i18n="hubkey.instr_step2">In MT4 / MT5, click File → Open Data Folder.</li>
+            <li><span data-i18n="hubkey.instr_step3">Place copier_hub.key into:</span>
               <ul style="margin:4px 0;padding-left:16px">
-                <li><code>MQL4\Files\</code> (for MT4) or <code>MQL5\Files\</code> (for MT5), <strong>OR</strong></li>
-                <li><code>Terminal\Common\Files\</code> (shared across ALL MT4/MT5 terminals on this computer!).</li>
+                <li><code>MQL4\Files\</code> (for MT4) or <code>MQL5\Files\</code> (for MT5), <strong data-i18n="hubkey.instr_step3_or">OR</strong></li>
+                <li><code>Terminal\Common\Files\</code> <span data-i18n="hubkey.instr_step3_common">(shared across ALL MT4/MT5 terminals on this computer!).</span></li>
               </ul>
             </li>
-            <li>Attach <code>CopierSender</code> or <code>CopierReceiver</code> with <code>Mode = Central (Hub)</code>. The EA automatically detects and loads the key file!</li>
+            <li data-i18n="hubkey.instr_step4">Attach CopierSender or CopierReceiver with Mode = Central (Hub). The EA automatically detects and loads the key file!</li>
           </ol>
         </div>
       </div>
@@ -2140,8 +2140,8 @@
     <div class="notiffoot">
       <div></div>
       <div class="btns">
-        <a id="hubkey_dl_btn" href="/api/v1/curve/hub_key" download="copier_hub.key" class="opbtn" style="text-decoration:none;display:inline-flex;align-items:center;font-weight:600">⬇️ Download Key File</a>
-        <button type="button" id="hubkey_close_btn" class="btn-sec">Close</button>
+        <a id="hubkey_dl_btn" href="/api/v1/curve/hub_key" download="copier_hub.key" class="opbtn" style="text-decoration:none;display:inline-flex;align-items:center;font-weight:600" data-i18n="hubkey.download_btn">⬇️ Download Key File</a>
+        <button type="button" id="hubkey_close_btn" class="btn-sec" data-i18n="hubkey.close_btn">Close</button>
       </div>
     </div>
   </div>
@@ -2150,20 +2150,20 @@
 <div id="sslmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="ssltitle">
   <div class="notifbox" style="width:720px">
     <div class="notifhead">
-      <h2 id="ssltitle">🔒 SSL / HTTPS Settings</h2>
+      <h2 id="ssltitle" data-i18n="ssl.title">🔒 SSL / HTTPS Settings</h2>
       <button type="button" id="sslclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="notifbody">
       <div id="ssl_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-weight:700">Status: <span id="ssl_active_badge" class="pill">Checking...</span></span>
+          <span style="font-weight:700"><span data-i18n="ssl.status">Status:</span> <span id="ssl_active_badge" class="pill">Checking...</span></span>
           <span id="ssl_days_badge" style="font-family:var(--mono);color:var(--dim)"></span>
         </div>
         <div id="ssl_details_row" style="color:var(--dim)">
-          <div>Domain: <strong id="ssl_curr_domain" style="color:var(--ink)">-</strong></div>
-          <div>Issuer: <span id="ssl_curr_issuer">-</span> | Port: <span id="ssl_curr_port">-</span></div>
+          <div><span data-i18n="ssl.domain">Domain:</span> <strong id="ssl_curr_domain" style="color:var(--ink)">-</strong></div>
+          <div><span data-i18n="ssl.issuer">Issuer:</span> <span id="ssl_curr_issuer">-</span> | <span data-i18n="ssl.port">Port:</span> <span id="ssl_curr_port">-</span></div>
           <div id="ssl_access_box" style="margin-top:6px;display:none">
-            Secure URL: <a id="ssl_access_link" href="#" target="_blank" style="font-weight:600;text-decoration:underline"></a>
+            <span data-i18n="ssl.secure_url">Secure URL:</span> <a id="ssl_access_link" href="#" target="_blank" style="font-weight:600;text-decoration:underline"></a>
           </div>
         </div>
         <div id="ssl_progress_box" style="display:none;margin-top:8px;padding:8px;background:var(--panel);border-radius:4px;border:1px dashed var(--line);color:var(--ink)">
@@ -2175,64 +2175,64 @@
       </div>
 
       <div class="notifrow">
-        <label style="font-weight:600;margin-bottom:6px;display:block">Certificate &amp; Domain Mode</label>
+        <label style="font-weight:600;margin-bottom:6px;display:block" data-i18n="ssl.mode_title">Certificate &amp; Domain Mode</label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_auto" value="auto" checked onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">Auto Domain (Recommended)</strong>
-              <span style="font-size:11px;color:var(--dim)">Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert</span>
+              <strong style="display:block;font-size:12px" data-i18n="ssl.mode_auto">Auto Domain (Recommended)</strong>
+              <span style="font-size:11px;color:var(--dim)" data-i18n="ssl.mode_auto_desc">Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_custom" value="custom_domain" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">Custom Domain</strong>
-              <span style="font-size:11px;color:var(--dim)">Uses a domain name whose DNS A record points to this VPS</span>
+              <strong style="display:block;font-size:12px" data-i18n="ssl.mode_custom">Custom Domain</strong>
+              <span style="font-size:11px;color:var(--dim)" data-i18n="ssl.mode_custom_desc">Uses a domain name whose DNS A record points to this VPS</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_selfsigned" value="self_signed" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">Self-Signed Certificate</strong>
-              <span style="font-size:11px;color:var(--dim)">For offline or intranet testing (browser will show untrusted warning)</span>
+              <strong style="display:block;font-size:12px" data-i18n="ssl.mode_selfsigned">Self-Signed Certificate</strong>
+              <span style="font-size:11px;color:var(--dim)" data-i18n="ssl.mode_selfsigned_desc">For offline or intranet testing (browser will show untrusted warning)</span>
             </div>
           </label>
           <label style="display:flex;align-items:flex-start;gap:6px;padding:8px;border:1px solid var(--line);border-radius:6px;cursor:pointer;background:var(--bg)">
             <input type="radio" name="ssl_mode" id="ssl_mode_import" value="import" onchange="onSslModeChange()">
             <div>
-              <strong style="display:block;font-size:12px">Import Existing Certificate</strong>
-              <span style="font-size:11px;color:var(--dim)">Paste fullchain.pem and private key text directly</span>
+              <strong style="display:block;font-size:12px" data-i18n="ssl.mode_import">Import Existing Certificate</strong>
+              <span style="font-size:11px;color:var(--dim)" data-i18n="ssl.mode_import_desc">Paste fullchain.pem and private key text directly</span>
             </div>
           </label>
         </div>
       </div>
 
       <div class="notifrow" id="ssl_domain_wrap">
-        <label id="ssl_domain_label">Domain Name</label>
-        <input id="ssl_input_domain" placeholder="e.g. 123-45-67-89.sslip.io or hub.example.com" style="width:100%">
+        <label id="ssl_domain_label" data-i18n="ssl.input_domain_label">Domain Name</label>
+        <input id="ssl_input_domain" placeholder="e.g. 123-45-67-89.sslip.io or hub.example.com" data-i18n-placeholder="ssl.input_domain_placeholder" style="width:100%">
         <span class="hint" id="ssl_domain_hint">Detecting public IP...</span>
       </div>
 
       <div class="notifrow" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
-          <label>HTTPS Listen Port</label>
+          <label data-i18n="ssl.input_port_label">HTTPS Listen Port</label>
           <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
             <label style="display:flex;align-items:center;gap:4px;font-size:12px">
               <input type="radio" name="ssl_port_choice" id="ssl_port_443" value="443" checked onchange="onSslPortChoiceChange()">
-              <span>Standard 443 (Default)</span>
+              <span data-i18n="ssl.port_443">Standard 443 (Default)</span>
             </label>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px">
               <input type="radio" name="ssl_port_choice" id="ssl_port_custom" value="custom" onchange="onSslPortChoiceChange()">
-              <span>Custom:</span>
+              <span data-i18n="ssl.port_custom">Custom:</span>
             </label>
             <input id="ssl_custom_port_val" type="number" style="width:80px;padding:2px 6px;display:none" value="6010">
           </div>
         </div>
         <div>
-          <label>Admin Notification Email (Optional)</label>
+          <label data-i18n="ssl.input_email_label">Admin Notification Email (Optional)</label>
           <input id="ssl_input_email" type="email" placeholder="admin@example.com" style="width:100%">
-          <span class="hint">For Let's Encrypt expiry and security notices, optional.</span>
+          <span class="hint" data-i18n="ssl.input_email_hint">For Let's Encrypt expiry and security notices, optional.</span>
         </div>
       </div>
 
@@ -2246,11 +2246,11 @@
       <div class="notifrow" style="display:flex;gap:16px;align-items:center">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer" title="Port 80 is closed by default to prevent port scanning; opens temporarily for 10s only during ACME challenge">
           <input type="checkbox" id="ssl_chk_redirect" checked disabled>
-          <span>On-demand port 80 challenge listener (closed during normal operation)</span>
+          <span data-i18n="ssl.chk_ondemand_80">On-demand port 80 challenge listener (closed during normal operation)</span>
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="ssl_chk_renew" checked>
-          <span>Auto-renew 30 days before expiration</span>
+          <span data-i18n="ssl.chk_auto_renew">Auto-renew 30 days before expiration</span>
         </label>
       </div>
 
@@ -2259,12 +2259,12 @@
 
     <div class="notiffoot">
       <div style="display:flex;gap:8px">
-        <button type="button" id="ssl_btn_disable" class="btn-sec" style="color:var(--bad)">⛔ Disable SSL (HTTP Mode)</button>
-        <button type="button" id="ssl_btn_renew" class="btn-sec">🔄 Renew Now</button>
+        <button type="button" id="ssl_btn_disable" class="btn-sec" style="color:var(--bad)" data-i18n="ssl.btn_disable">⛔ Disable SSL (HTTP Mode)</button>
+        <button type="button" id="ssl_btn_renew" class="btn-sec" data-i18n="ssl.btn_renew">🔄 Renew Now</button>
       </div>
       <div class="btns">
-        <button type="button" id="ssl_btn_cancel" class="btn-sec">Close</button>
-        <button type="button" id="ssl_btn_save" class="btn-primary">🚀 Save &amp; Apply</button>
+        <button type="button" id="ssl_btn_cancel" class="btn-sec" data-i18n="ssl.btn_close">Close</button>
+        <button type="button" id="ssl_btn_save" class="btn-primary" data-i18n="ssl.btn_save">🚀 Save &amp; Apply</button>
       </div>
     </div>
   </div>
@@ -2273,47 +2273,47 @@
 <div id="peermodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="peertitle">
   <div class="notifbox" style="width:560px">
     <div class="notifhead">
-      <h2 id="peertitle">🔄 Cluster Peer Settings</h2>
+      <h2 id="peertitle" data-i18n="cluster.modal_title">🔄 Cluster Peer Settings</h2>
       <button type="button" id="peerclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="notifbody">
       <div id="peer_status_card" style="padding:12px;background:var(--bg);border-radius:6px;border:1px solid var(--line);margin-bottom:14px;font-size:12px;line-height:1.6">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <span style="font-weight:700">Current Mode: <span id="peer_mode_badge" class="pill">Checking...</span></span>
+          <span style="font-weight:700"><span data-i18n="cluster.current_mode">Current Mode:</span> <span id="peer_mode_badge" class="pill">Checking...</span></span>
           <span id="peer_live_badge" class="pill">-</span>
         </div>
         <div style="color:var(--dim)">
-          <div>Peer API: <strong id="peer_curr_api" style="color:var(--ink)">-</strong></div>
-          <div>Peer ZMQ: <span id="peer_curr_zmq" style="color:var(--ink)">-</span></div>
+          <div><span data-i18n="cluster.peer_api">Peer API:</span> <strong id="peer_curr_api" style="color:var(--ink)">-</strong></div>
+          <div><span data-i18n="cluster.peer_zmq">Peer ZMQ:</span> <span id="peer_curr_zmq" style="color:var(--ink)">-</span></div>
         </div>
       </div>
 
       <div class="notifrow">
-        <label>Peer VPS Public IP Address</label>
-        <input id="peer_input_ip" type="text" placeholder="e.g. 168.100.200.50 (leave blank for standalone)" style="width:100%">
-        <span class="hint">Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.</span>
+        <label data-i18n="cluster.input_ip_label">Peer VPS Public IP Address</label>
+        <input id="peer_input_ip" type="text" placeholder="e.g. 168.100.200.50 (leave blank for standalone)" data-i18n-placeholder="cluster.input_ip_placeholder" style="width:100%">
+        <span class="hint" data-i18n="cluster.input_ip_hint">Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.</span>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="notifrow">
-          <label>Peer Web API Port</label>
+          <label data-i18n="cluster.input_api_port_label">Peer Web API Port</label>
           <input id="peer_input_api_port" type="number" value="6010" style="width:100%">
-          <span class="hint">Default 6010 (or 6011 for local test)</span>
+          <span class="hint" data-i18n="cluster.input_api_port_hint">Default 6010 (or 6011 for local test)</span>
         </div>
         <div class="notifrow">
-          <label>Peer ZMQ Replication Port</label>
+          <label data-i18n="cluster.input_zmq_port_label">Peer ZMQ Replication Port</label>
           <input id="peer_input_zmq_port" type="number" value="6000" style="width:100%">
-          <span class="hint">Default 6000 (or 6001 for local test)</span>
+          <span class="hint" data-i18n="cluster.input_zmq_port_hint">Default 6000 (or 6001 for local test)</span>
         </div>
       </div>
 
       <div id="peer_opmsg" class="opmsg" style="max-width:none"></div>
     </div>
     <div class="notiffoot">
-      <button type="button" id="peer_btn_clear" class="btn-sec" onclick="clearPeerConfig()">⏹️ Clear Peer (Standalone Mode)</button>
+      <button type="button" id="peer_btn_clear" class="btn-sec" onclick="clearPeerConfig()" data-i18n="cluster.btn_clear">⏹️ Clear Peer (Standalone Mode)</button>
       <div class="btns">
-        <button type="button" id="peer_btn_save" class="btn-primary" onclick="savePeerConfig()">🚀 Save &amp; Apply</button>
-        <button type="button" id="peerclose_btn" class="btn-sec">Close</button>
+        <button type="button" id="peer_btn_save" class="btn-primary" onclick="savePeerConfig()" data-i18n="cluster.btn_save">🚀 Save &amp; Apply</button>
+        <button type="button" id="peerclose_btn" class="btn-sec" data-i18n="cluster.btn_close">Close</button>
       </div>
     </div>
   </div>
@@ -2334,23 +2334,23 @@
         <div id="confirmdetail" class="confirm-detail"></div>
         <label id="confirm_fast_close_label" style="display:none;align-items:center;gap:6px;cursor:pointer;margin-top:12px;font-size:12px;color:var(--ink);font-weight:600">
           <input type="checkbox" id="chk_dialog_fast_close">
-          <span>Remember choice &amp; enable Fast Close mode (no prompt for subsequent closes)</span>
+          <span data-i18n="cockpit.remember_fast_close">Remember choice &amp; enable Fast Close mode (no prompt for subsequent closes)</span>
         </label>
       </div>
     </div>
     <div class="confirmfoot">
-      <button type="button" id="confirmcancelbtn" class="btn-sec">Cancel</button>
-      <button type="button" id="confirmokbtn" class="btn-danger">Confirm</button>
+      <button type="button" id="confirmcancelbtn" class="btn-sec" data-i18n="common.cancel">Cancel</button>
+      <button type="button" id="confirmokbtn" class="btn-danger" data-i18n="common.confirm">Confirm</button>
     </div>
   </div>
 </div>
 
 <div id="login" class="hidden">
   <form id="loginform">
-    <h2>mt-copier hub — sign in</h2>
-    <input id="user" placeholder="user id" autocomplete="username" autocapitalize="off">
-    <input id="pass" type="password" placeholder="password" autocomplete="current-password">
-    <button type="submit">sign in</button>
+    <h2 data-i18n="auth.login_title">mt-copier hub — sign in</h2>
+    <input id="user" placeholder="user id" data-i18n-placeholder="auth.ph_user" autocomplete="username" autocapitalize="off">
+    <input id="pass" type="password" placeholder="password" data-i18n-placeholder="auth.ph_pass" autocomplete="current-password">
+    <button type="submit" data-i18n="auth.btn_signin">sign in</button>
     <div id="loginerr"></div>
   </form>
 </div>
@@ -2412,13 +2412,28 @@ var I18N_BUILTIN = {
       "error": "Error",
       "warning": "Warning",
       "success": "Success",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "active": "Active",
+      "disabled": "Disabled",
+      "delete": "Delete",
+      "edit": "Edit",
+      "test": "Test",
+      "enable": "Enable",
+      "disable": "Disable",
+      "password": "Password",
+      "switch": "Switch"
     },
     "nav": {
       "tab_dash": "Main Dashboard",
       "tab_cockpit": "Split Cockpit",
       "btn_ssl": "🔒 SSL / HTTPS",
-      "btn_logout": "Log Out"
+      "btn_logout": "Log Out",
+      "font_label": "Font:",
+      "night_mode": "Night Mode",
+      "day_mode": "Day Mode",
+      "hub_key_btn": "🔑 Hub Key"
     },
     "kpi": {
       "terminals": "Active Terminals",
@@ -2428,11 +2443,14 @@ var I18N_BUILTIN = {
       "inspect_arrow": "Click to inspect →"
     },
     "gops": {
-      "title": "Global Receiver Operations",
-      "pause_all": "⏸️ Pause All",
-      "resume_all": "▶️ Resume All",
-      "close_all": "⚠️ Close All Positions",
+      "title": "Global Operations:",
+      "pause_all": "⏸️ Pause ALL",
+      "resume_all": "▶️ Resume ALL",
+      "close_all": "🛑 CLOSE ALL (Every Receiver)",
       "reload_all": "🔄 Reload All INI",
+      "btn_notif": "🔔 Notifications",
+      "btn_hub_key": "🔑 Hub Key",
+      "btn_cfg_receiver": "+ Configure Receiver",
       "confirm_global_close_title": "⚠️ Dangerous Action: Global Close All",
       "confirm_global_close_desc": "Close ALL positions across EVERY receiver?",
       "confirm_global_close_detail": "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
@@ -2443,30 +2461,48 @@ var I18N_BUILTIN = {
       "confirm_global_pause_btn": "Pause All Receivers"
     },
     "nodes": {
+      "title": "Terminals & Nodes",
+      "batch_pause": "Batch Pause",
+      "batch_reload": "Batch Reload",
       "th_role": "Role",
-      "th_node_id": "Node ID / Name",
-      "th_account": "Account / Broker",
-      "th_liveness": "Liveness",
-      "th_ping": "Latency",
-      "th_financials": "Equity / Balance",
-      "th_positions": "Open Positions",
+      "th_account_terminal": "Account & Terminal Name",
+      "th_ping": "Latency (Ping)",
+      "th_status": "Status",
+      "th_positions": "Positions",
+      "th_volume": "Volume",
+      "th_equity": "Equity",
+      "th_balance": "Balance",
+      "th_gating": "Gating & Delays",
       "th_actions": "Actions",
       "btn_inspect": "🔍 Positions",
-      "btn_config": "⚙️ Config",
+      "btn_config": "Visual Config",
       "btn_pause": "Pause",
       "btn_resume": "Resume",
       "btn_close_all": "Close All",
+      "empty": "no node has registered yet",
       "confirm_close_all_title": "Confirm Close All Positions",
       "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
       "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
     },
     "cockpit": {
+      "connected_terminals": "Connected Terminals",
+      "click_to_focus": "Click to focus",
+      "inspection_title": "Positions & Waiting Inspection",
+      "switch_node": "Switch Node:",
       "back_to_dash": "Back to Dashboard",
-      "nav_prev": "◀ Prev Node",
-      "nav_next": "Next Node ▶",
+      "nav_prev": "◀ Prev",
+      "nav_next": "Next ▶",
       "auto_updates_1min": "Auto-updates 1 min",
       "btn_request_update": "🔄 Request Update",
       "btn_requesting": "⏳ Requesting…",
+      "btn_query_ini": "🔄 Query Live INI",
+      "btn_pause_node": "Pause Node",
+      "btn_resume_node": "Resume Node",
+      "btn_close_all": "Close All",
+      "account_label": "Account:",
+      "eq_label": "Eq:",
+      "bal_label": "Bal:",
+      "paused_no_mirrors": "PAUSED (No new mirrors)",
       "table_title": "📋 Line-by-Line Orders & Positions",
       "filter_all": "All",
       "filter_opened": "Opened",
@@ -2497,19 +2533,22 @@ var I18N_BUILTIN = {
       "confirm_close_btn": "Close Order",
       "remember_fast_close": "Remember choice & enable Fast Close mode (no prompt for subsequent closes)",
       "summary_title": "📦 Position & Mirror Summary Statistics",
-      "managed_mirrors": "Managed Mirrors",
-      "managed_mirrors_sub": "Active copier mirror positions managed by engine",
-      "orphan_manual": "Orphan / Manual Positions",
-      "orphan_manual_sub": "External or manual orders with non-copier magic",
-      "no_orphan_manual_sub": "No untracked or manual positions",
-      "gross_account_open": "Gross Account Open",
-      "gross_account_open_sub": "Total open positions currently active on this terminal",
+      "summary_managed_mirrors": "Managed Mirrors",
+      "summary_managed_sub": "Active copier mirror positions managed by engine",
+      "summary_orphan_manual": "Orphan / Manual Positions",
+      "summary_orphan_sub_active": "External or manual orders with non-copier magic",
+      "summary_orphan_sub_none": "No untracked or manual positions",
+      "summary_gross_open": "Gross Account Open",
+      "summary_gross_sub": "Total open positions currently active on this terminal",
+      "orders_unit": "orders",
+      "positions_unit": "positions",
       "pipeline_synced": "Pipeline Execution: All Orders Synchronized",
       "pipeline_synced_sub": "(0 in broker queue · 0 gate delayed · 0 market closed)",
       "stage_broker_queue": "⚡ 1. Broker Queue",
       "stage_gate_delayed": "⏱️ 2. Gate Delayed",
       "stage_mkt_closed": "🔒 3. Market Closed",
-      "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):"
+      "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):",
+      "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh"
     },
     "notices": {
       "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",
@@ -2532,6 +2571,15 @@ var I18N_BUILTIN = {
       "failback_now": "⚡ Failback Now",
       "lock_master": "Lock as Master",
       "open_peer_console": "🔗 Open Peer Console",
+      "role_primary": "Primary Node (Active R/W) [Epoch {epoch}]",
+      "role_standby": "Standby Node (Read-Only Mirror) [Epoch {epoch}]",
+      "role_conflict": "Split-Brain Conflict (Locked) [Epoch {epoch}]",
+      "peer_none": "Peer: None",
+      "peer_online": "Peer: Online ({status})",
+      "peer_offline": "Peer: Offline",
+      "failback_locked": "• [Auto-Failback Locked]",
+      "failback_stabilizing": "• [Primary online {curH}h/{totH}h · Auto-failback in ~{remH} hrs]",
+      "failback_ready": "• [Primary stabilized {curH}h/{totH}h · Initiating auto-failback...]",
       "modal_title": "🔄 Cluster Peer Settings",
       "current_mode": "Current Mode:",
       "peer_api": "Peer API:",
@@ -2554,6 +2602,10 @@ var I18N_BUILTIN = {
       "issuer": "Issuer:",
       "port": "Port:",
       "secure_url": "Secure URL:",
+      "status_enabled": "Enabled (HTTPS Active)",
+      "status_in_progress": "Configuring / Requesting...",
+      "status_disabled": "Disabled (HTTP Mode)",
+      "days_remaining": "{days} days left",
       "mode_title": "Certificate & Domain Mode",
       "mode_auto": "Auto Domain (Recommended)",
       "mode_auto_desc": "Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert",
@@ -2565,6 +2617,9 @@ var I18N_BUILTIN = {
       "mode_import_desc": "Paste fullchain.pem and private key text directly",
       "input_domain_label": "Domain Name",
       "input_domain_placeholder": "e.g. 123-45-67-89.sslip.io or hub.example.com",
+      "input_domain_hint_auto": "Automatically maps public IP to: {domain}",
+      "input_domain_hint_custom": "Please ensure the DNS A record for this domain points to this VPS public IP",
+      "input_domain_hint_self": "e.g. 127-0-0-1.sslip.io or localhost (for local test)",
       "input_port_label": "HTTPS Listen Port",
       "port_443": "Standard 443 (Default)",
       "port_custom": "Custom:",
@@ -2576,6 +2631,86 @@ var I18N_BUILTIN = {
       "btn_renew": "🔄 Renew Now",
       "btn_save": "🚀 Save & Apply",
       "btn_close": "Close"
+    },
+    "hubkey": {
+      "modal_title": "🔑 Hub Public Key File (copier_hub.key)",
+      "label": "Hub CurveZMQ Public Key",
+      "hint": "40-character Z85 public key. Safe to distribute to all nodes.",
+      "copy_btn": "Copy",
+      "copied_btn": "Copied!",
+      "instr_title": "📁 Deployment Instructions (No manual input needed in EA):",
+      "instr_step1": "Click ⬇️ Download Key File below to save copier_hub.key.",
+      "instr_step2": "In MT4 / MT5, click File → Open Data Folder.",
+      "instr_step3": "Place copier_hub.key into:",
+      "instr_step3_or": "OR",
+      "instr_step3_common": "(shared across ALL MT4/MT5 terminals on this computer!).",
+      "instr_step4": "Attach CopierSender or CopierReceiver with Mode = Central (Hub). The EA automatically detects and loads the key file!",
+      "download_btn": "⬇️ Download Key File",
+      "close_btn": "Close"
+    },
+    "topo": {
+      "title": "Topology",
+      "stats": "{senders} sender(s) · {receivers} receiver(s)"
+    },
+    "msgcenter": {
+      "title": "📢 Message Center & Activity Log (Recent 20)",
+      "dismiss_all": "Dismiss All ({count} unread)",
+      "dismiss_all_read": "Dismiss All (Mark Read)",
+      "empty": "No recent system events logged yet.",
+      "time_now": "just now",
+      "time_m": "{m}m ago",
+      "time_h": "{h}h ago",
+      "time_d": "{d}d ago",
+      "mark_read": "Mark as read"
+    },
+    "notif": {
+      "title": "Notification Channels (Telegram / WeCom / DingTalk / Webhook)",
+      "add_btn": "+ Add Channel",
+      "th_name": "Name",
+      "th_type": "Type",
+      "th_severity": "Min Severity",
+      "th_status": "Status",
+      "th_target": "Target Info",
+      "th_actions": "Actions",
+      "btn_test": "Test",
+      "btn_edit": "Edit",
+      "btn_delete": "Delete",
+      "btn_enable": "Enable",
+      "btn_disable": "Disable",
+      "status_enabled": "Active",
+      "status_disabled": "Disabled"
+    },
+    "users": {
+      "title": "Users",
+      "count_label": "{count} user(s)",
+      "th_user": "user",
+      "th_role": "role",
+      "th_state": "state",
+      "state_active": "active",
+      "state_disabled": "disabled",
+      "btn_password": "password",
+      "btn_disable": "disable",
+      "btn_enable": "enable",
+      "btn_delete": "delete",
+      "footnote": "add / update needs a password; disable, enable and role changes keep the existing one. The last admin cannot be deleted, demoted or disabled.",
+      "ph_userid": "user id",
+      "ph_password": "password (min 8 chars)",
+      "btn_addupdate": "add / update",
+      "role_viewer": "viewer",
+      "role_operator": "operator",
+      "role_admin": "admin"
+    },
+    "footer": {
+      "cmd_off_note": "commands are OFF: this hub started with --writes off. Restart without --writes off (or with --writes on) to issue operational commands.",
+      "cmd_on_note": "operational commands target receivers; the EA acts on them once M5b lands. Each click issues a command via the M5a hub endpoint and shows its command_id.",
+      "change_pwd": "(change password)",
+      "logout": "(log out)"
+    },
+    "auth": {
+      "login_title": "mt-copier hub — sign in",
+      "ph_user": "user id",
+      "ph_pass": "password",
+      "btn_signin": "sign in"
     }
   },
   "zh-CN": {
@@ -2591,13 +2726,28 @@ var I18N_BUILTIN = {
       "error": "错误",
       "warning": "警告",
       "success": "成功",
-      "unknown": "未知"
+      "unknown": "未知",
+      "copy": "复制",
+      "copied": "已复制！",
+      "active": "启用",
+      "disabled": "停用",
+      "delete": "删除",
+      "edit": "编辑",
+      "test": "测试",
+      "enable": "启用",
+      "disable": "停用",
+      "password": "密码",
+      "switch": "切换"
     },
     "nav": {
       "tab_dash": "总览看板",
       "tab_cockpit": "监控驾驶舱",
       "btn_ssl": "🔒 SSL / HTTPS",
-      "btn_logout": "退出"
+      "btn_logout": "退出",
+      "font_label": "字号:",
+      "night_mode": "夜间模式",
+      "day_mode": "日间模式",
+      "hub_key_btn": "🔑 节点公钥"
     },
     "kpi": {
       "terminals": "活跃交易端",
@@ -2607,11 +2757,14 @@ var I18N_BUILTIN = {
       "inspect_arrow": "点击查看明细 →"
     },
     "gops": {
-      "title": "全局接收端统一操作",
+      "title": "全局接收端统一操作:",
       "pause_all": "⏸️ 全局暂停跟单",
       "resume_all": "▶️ 全局恢复跟单",
-      "close_all": "⚠️ 一键平掉全部持仓",
+      "close_all": "🛑 一键平掉全部持仓 (所有接收端)",
       "reload_all": "🔄 全局重载 INI 配置",
+      "btn_notif": "🔔 通知设置",
+      "btn_hub_key": "🔑 节点公钥",
+      "btn_cfg_receiver": "+ 配置接收端",
       "confirm_global_close_title": "⚠️ 高危操作: 全局一键平仓",
       "confirm_global_close_desc": "确定要平掉所有接收端上的全部持仓吗？",
       "confirm_global_close_detail": "此操作将立即向所有连接的接收端下发市价平仓指令，无法撤销。",
@@ -2622,30 +2775,48 @@ var I18N_BUILTIN = {
       "confirm_global_pause_btn": "确认暂停"
     },
     "nodes": {
+      "title": "交易终端与节点",
+      "batch_pause": "批量暂停",
+      "batch_reload": "批量重载",
       "th_role": "角色",
-      "th_node_id": "节点 ID / 别名",
-      "th_account": "账号 / 券商平台",
-      "th_liveness": "在线状态",
-      "th_ping": "通信延迟",
-      "th_financials": "净值 / 余额",
-      "th_positions": "当前持仓",
+      "th_account_terminal": "账号与终端名称",
+      "th_ping": "延迟 (Ping)",
+      "th_status": "状态",
+      "th_positions": "持仓数",
+      "th_volume": "手数",
+      "th_equity": "净值",
+      "th_balance": "余额",
+      "th_gating": "流控与延时",
       "th_actions": "管理操作",
       "btn_inspect": "🔍 检查持仓",
-      "btn_config": "⚙️ 可视化配置",
+      "btn_config": "可视化配置",
       "btn_pause": "暂停",
       "btn_resume": "恢复",
       "btn_close_all": "全部平仓",
+      "empty": "当前尚无节点接入注册",
       "confirm_close_all_title": "确认全部平仓",
       "confirm_close_all_desc": "确定要平掉接收端 <code>{key}</code> 的所有持仓吗？",
       "confirm_close_all_detail": "此操作将立即市价平掉该接收端持有的所有镜像仓位，无法撤销。"
     },
     "cockpit": {
+      "connected_terminals": "已连线终端",
+      "click_to_focus": "点击切换检视",
+      "inspection_title": "持仓明细与排队检验",
+      "switch_node": "切换节点:",
       "back_to_dash": "返回总览看板",
-      "nav_prev": "◀ 上一个节点",
-      "nav_next": "下一个节点 ▶",
+      "nav_prev": "◀ 上一个",
+      "nav_next": "下一个 ▶",
       "auto_updates_1min": "每分钟自动更新",
       "btn_request_update": "🔄 立即请求更新",
       "btn_requesting": "⏳ 请求中…",
+      "btn_query_ini": "🔄 查询实时 INI",
+      "btn_pause_node": "暂停节点",
+      "btn_resume_node": "恢复节点",
+      "btn_close_all": "全部平仓",
+      "account_label": "账号:",
+      "eq_label": "净值:",
+      "bal_label": "余额:",
+      "paused_no_mirrors": "已暂停 (停止跟单开仓)",
       "table_title": "📋 逐笔订单与持仓明细",
       "filter_all": "全部",
       "filter_opened": "已开仓",
@@ -2676,19 +2847,22 @@ var I18N_BUILTIN = {
       "confirm_close_btn": "立即平仓",
       "remember_fast_close": "记住选择并开启极速平仓模式 (本次后续不再弹窗提示)",
       "summary_title": "📦 仓位与镜像流转统计汇总",
-      "managed_mirrors": "跟单托管仓位",
-      "managed_mirrors_sub": "由跟单系统引擎自动管理的有效镜像仓位",
-      "orphan_manual": "外部/手动单",
-      "orphan_manual_sub": "非跟单 Magic 的手动下单或外部 EA 仓位",
-      "no_orphan_manual_sub": "无外部或手动持仓",
-      "gross_account_open": "账户总持仓量",
-      "gross_account_open_sub": "该终端当前持有的所有开仓单总计",
+      "summary_managed_mirrors": "跟单托管仓位",
+      "summary_managed_sub": "由跟单系统引擎自动管理的有效镜像仓位",
+      "summary_orphan_manual": "外部/手动单",
+      "summary_orphan_sub_active": "非跟单 Magic 的手动下单或外部 EA 仓位",
+      "summary_orphan_sub_none": "无外部或手动持仓",
+      "summary_gross_open": "账户总持仓量",
+      "summary_gross_sub": "该终端当前持有的所有开仓单总计",
+      "orders_unit": "笔订单",
+      "positions_unit": "个仓位",
       "pipeline_synced": "流转执行状态: 所有订单均已同步",
       "pipeline_synced_sub": "(0 排队中 · 0 延时防抖 · 0 休市等待)",
       "stage_broker_queue": "⚡ 1. 券商调度队列",
       "stage_gate_delayed": "⏱️ 2. 安全防抖延迟",
       "stage_mkt_closed": "🔒 3. 市场休市等待",
-      "orders_waiting_strip": "{total} 笔订单等待开仓 ({lots} 手):"
+      "orders_waiting_strip": "{total} 笔订单等待开仓 ({lots} 手):",
+      "telemetry_stream_foot": "接收端: {node} · 默认 60 秒同步 · 点击「立即请求更新」强制刷新"
     },
     "notices": {
       "mkt_closed_title": "【周末休市排队中】订单 #{ticket} 已排队待平！",
@@ -2711,6 +2885,15 @@ var I18N_BUILTIN = {
       "failback_now": "⚡ 立即安全回切",
       "lock_master": "锁定备机为 Master",
       "open_peer_console": "🔗 打开对端控制台",
+      "role_primary": "主节点 (Primary · 读写启用) [世代 {epoch}]",
+      "role_standby": "备用节点 (Standby · 只读镜像) [世代 {epoch}]",
+      "role_conflict": "双主冲突 (Split-Brain Conflict · 已锁定) [世代 {epoch}]",
+      "peer_none": "对端: 无",
+      "peer_online": "对端: 在线 ({status})",
+      "peer_offline": "对端: 离线",
+      "failback_locked": "• [自动回切已锁定]",
+      "failback_stabilizing": "• [主机连续在线 {curH}h/{totH}h · 约 {remH} 小时后自动回切为 Master]",
+      "failback_ready": "• [主机已达标 {curH}h/{totH}h · 正在自动回切...]",
       "modal_title": "🔄 集群对端节点设置 (Cluster Peer Settings)",
       "current_mode": "当前运行模式:",
       "peer_api": "对端 API:",
@@ -2733,6 +2916,10 @@ var I18N_BUILTIN = {
       "issuer": "颁发机构:",
       "port": "监听端口:",
       "secure_url": "安全入口:",
+      "status_enabled": "已启用 (HTTPS 保护中)",
+      "status_in_progress": "正在设置 / 申请证书中...",
+      "status_disabled": "未启用 (当前为 HTTP 模式)",
+      "days_remaining": "剩余 {days} 天",
       "mode_title": "证书与域名模式",
       "mode_auto": "自动分配域名 (推荐)",
       "mode_auto_desc": "检测公网 IP 并绑定 IP.sslip.io 自动申请权威 Let's Encrypt 证书",
@@ -2744,6 +2931,9 @@ var I18N_BUILTIN = {
       "mode_import_desc": "直接粘贴 fullchain.pem 与私钥文本（企业/商业证书）",
       "input_domain_label": "域名 (Domain)",
       "input_domain_placeholder": "例如: 123-45-67-89.sslip.io 或 hub.example.com",
+      "input_domain_hint_auto": "根据公网 IP 自动映射为: {domain}",
+      "input_domain_hint_custom": "请确保该域名的 DNS A 记录已解析至本机 VPS 公网 IP",
+      "input_domain_hint_self": "例如: 127-0-0-1.sslip.io 或 localhost (用于内网测试)",
       "input_port_label": "HTTPS 监听端口",
       "port_443": "标准 443 (免输端口)",
       "port_custom": "自定义:",
@@ -2755,6 +2945,86 @@ var I18N_BUILTIN = {
       "btn_renew": "🔄 立即续期",
       "btn_save": "🚀 保存并应用设置",
       "btn_close": "关闭"
+    },
+    "hubkey": {
+      "modal_title": "🔑 节点公钥凭证 (copier_hub.key)",
+      "label": "Hub CurveZMQ 公钥",
+      "hint": "40 位 Z85 格式公钥，可安全分发给所有节点。",
+      "copy_btn": "复制公钥",
+      "copied_btn": "已复制！",
+      "instr_title": "📁 部署指引 (终端 EA 无需手动输入):",
+      "instr_step1": "点击下方 ⬇️ 下载密钥文件 保存 copier_hub.key。",
+      "instr_step2": "在 MT4 / MT5 终端顶部点击 文件 → 打开数据文件夹。",
+      "instr_step3": "将 copier_hub.key 放置于以下路径:",
+      "instr_step3_or": "或",
+      "instr_step3_common": "(此电脑上所有 MT4/MT5 终端共享目录)。",
+      "instr_step4": "将 CopierSender 或 CopierReceiver EA 挂载于图表，并设置 Mode = Central (Hub)，EA 将自动识别并加载密钥！",
+      "download_btn": "⬇️ 下载密钥文件",
+      "close_btn": "关闭"
+    },
+    "topo": {
+      "title": "网络拓扑图",
+      "stats": "{senders} 个发送端 · {receivers} 个接收端"
+    },
+    "msgcenter": {
+      "title": "📢 消息中心与系统日志 (最近 20 条)",
+      "dismiss_all": "全部已读 ({count} 条未读)",
+      "dismiss_all_read": "全部标记为已读",
+      "empty": "当前尚无任何系统事件记录。",
+      "time_now": "刚刚",
+      "time_m": "{m} 分钟前",
+      "time_h": "{h} 小时前",
+      "time_d": "{d} 天前",
+      "mark_read": "标记为已读"
+    },
+    "notif": {
+      "title": "告警通知渠道 (Telegram / 企业微信 / 钉钉 / 自定义 Webhook)",
+      "add_btn": "+ 新增通知渠道",
+      "th_name": "名称",
+      "th_type": "类型",
+      "th_severity": "最低触发等级",
+      "th_status": "状态",
+      "th_target": "目标信息",
+      "th_actions": "管理操作",
+      "btn_test": "测试发送",
+      "btn_edit": "编辑",
+      "btn_delete": "删除",
+      "btn_enable": "启用",
+      "btn_disable": "停用",
+      "status_enabled": "已启用",
+      "status_disabled": "已停用"
+    },
+    "users": {
+      "title": "系统用户管理",
+      "count_label": "{count} 位用户",
+      "th_user": "用户账号",
+      "th_role": "角色权限",
+      "th_state": "账号状态",
+      "state_active": "正常使用",
+      "state_disabled": "已停用",
+      "btn_password": "修改密码",
+      "btn_disable": "停用账号",
+      "btn_enable": "启用账号",
+      "btn_delete": "删除用户",
+      "footnote": "新增/更新用户必须设置密码；停用、启用或修改角色会保留现有密码。最后一位管理员（admin）无法删除、降权或停用。",
+      "ph_userid": "用户账号 ID",
+      "ph_password": "登录密码 (至少 8 位字符)",
+      "btn_addupdate": "新增 / 更新用户",
+      "role_viewer": "访客 (viewer)",
+      "role_operator": "操作员 (operator)",
+      "role_admin": "管理员 (admin)"
+    },
+    "footer": {
+      "cmd_off_note": "操作指令已关闭：此 Hub 以 --writes off 启动。请以 --writes on 重启 Hub 以发布暂停/恢复/平仓指令。",
+      "cmd_on_note": "所有操作指令均直接向接收端终端下发，点击后即刻生成唯一指令编号并由 ZMQ 实时同步执行。",
+      "change_pwd": "(修改密码)",
+      "logout": "(退出登录)"
+    },
+    "auth": {
+      "login_title": "mt-copier hub — 登录系统",
+      "ph_user": "用户账号 ID",
+      "ph_pass": "密码",
+      "btn_signin": "登录系统"
     }
   }
 };
@@ -2848,10 +3118,20 @@ function applyI18n(){
   s.lastSndHtml = null;
   s.nodeKeys = null;
   s.nodeRows = null;
+  s.cockpitKeys = null;
+  s.cockpitRows = null;
+
   renderPosNodeDetail();
-  if(s.data && s.data.nodes){
-    renderNodes(s.data.nodes);
+  if(s.data){
+    if(s.data.nodes) renderNodes(s.data.nodes);
+    if(s.data.nodes) renderCockpit(s.data.nodes, s.data.positions);
+    if(s.data.cluster) renderCluster(s.data.cluster);
+    if(s.data.alerts) renderAlerts(s.data.alerts);
   }
+  if(s.users && s.users.rows) renderUsers(s.users.rows);
+  if(s.channels) renderNotifications(s.channels);
+  refreshWritesState();
+  updateThemeBtn(localStorage.getItem("mtc_theme") || "light");
 }
 window.applyI18n = applyI18n;
 
@@ -3470,31 +3750,31 @@ function renderPosNodeDetail(){
   // 1. Node Banner
   var dotClass = "dot " + (n.liveness || "offline");
   var finStr = formatFinancials(n);
-  var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">PAUSED (No new mirrors)</span>' : '';
+  var pausedBadge = n.paused ? '<span class="pzchip" style="margin-left:4px">' + t("cockpit.paused_no_mirrors") + '</span>' : '';
   var riskBadge = (n.risk && n.risk !== "ok") ? '<span class="pill" style="color:var(--bad);border-color:#f0b8b0;background:#fdecea;margin-left:4px" title="Risk limit tripped: ' + esc(n.risk) + '">⚠️ ' + esc(n.risk) + '</span>' : '';
 
   var nodeActions = "";
   if(n.role === "receiver"){
     var pzOp = n.paused ? "resume" : "pause";
-    var pzText = n.paused ? "Resume Node" : "Pause Node";
+    var pzText = n.paused ? t("cockpit.btn_resume_node") : t("cockpit.btn_pause_node");
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">📥 Visual Config</button> ' +
-      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'reqcfg\')">🔄 Query Live INI</button> ' +
+      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">' + t("nodes.btn_config") + '</button> ' +
+      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'reqcfg\')">' + t("cockpit.btn_query_ini") + '</button> ' +
       '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
-      '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">Close All</button>' +
+      '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">' + t("cockpit.btn_close_all") + '</button>' +
       '</div>';
   } else {
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm" onclick="openPositionsView(\'' + esc(n.key) + '\')">🔍 Inspect Positions</button>' +
+      '<button type="button" class="btn-sm" onclick="openPositionsView(\'' + esc(n.key) + '\')">' + t("nodes.btn_inspect") + '</button>' +
       '</div>';
   }
 
   var finParts = [];
   if(typeof n.equity === "number"){
-    finParts.push("Eq: <strong>$" + n.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
+    finParts.push(t("cockpit.eq_label") + " <strong>$" + n.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
   }
   if(typeof n.balance === "number"){
-    finParts.push("Bal: <strong>$" + n.balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
+    finParts.push(t("cockpit.bal_label") + " <strong>$" + n.balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + "</strong>");
   }
   var finSpan = finParts.length ? ('<span>\u00b7 ' + finParts.join(" &middot; ") + '</span>') : '';
 
@@ -3509,8 +3789,8 @@ function renderPosNodeDetail(){
     (n.ver ? ('      <span class="ver-tag">v' + esc(n.ver) + '</span>') : '') +
     '    </div>' +
     '    <div class="node-banner-sub">' +
-    '      <span>Account: <strong>' + esc(n.acc || "-") + '</strong></span>' +
-    '      <span>\u00b7 Status: <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>' +
+    '      <span>' + t("cockpit.account_label") + ' <strong>' + esc(n.acc || "-") + '</strong></span>' +
+    '      <span>\u00b7 ' + t("common.status") + ': <strong style="text-transform:capitalize">' + esc(n.liveness || "offline") + '</strong></span>' +
     finSpan +
     '    </div>' +
     '  </div>' +
@@ -3543,19 +3823,19 @@ function renderPosNodeDetail(){
     // A. Currently Held Positions Cards
     var heldHtml =
       '<div class="pos-card">' +
-      '  <div class="pos-card-label">Managed Mirrors</div>' +
-      '  <div class="pos-card-val">' + posCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">(' + esc(posLots) + ' lots)</span></div>' +
-      '  <div class="pos-card-sub">Active copier mirror positions managed by engine</div>' +
+      '  <div class="pos-card-label">' + t("cockpit.summary_managed_mirrors") + '</div>' +
+      '  <div class="pos-card-val">' + posCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">(' + esc(posLots) + ' ' + t("cockpit.th_volume").toLowerCase() + ')</span></div>' +
+      '  <div class="pos-card-sub">' + t("cockpit.summary_managed_sub") + '</div>' +
       '</div>' +
       '<div class="pos-card">' +
-      '  <div class="pos-card-label">Orphan / Manual Positions</div>' +
-      '  <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">orders</span></div>' +
-      '  <div class="pos-card-sub">' + (orphan > 0 ? 'External or manual orders with non-copier magic' : 'No untracked or manual positions') + '</div>' +
+      '  <div class="pos-card-label">' + t("cockpit.summary_orphan_manual") + '</div>' +
+      '  <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>' +
+      '  <div class="pos-card-sub">' + (orphan > 0 ? t("cockpit.summary_orphan_sub_active") : t("cockpit.summary_orphan_sub_none")) + '</div>' +
       '</div>' +
       '<div class="pos-card">' +
-      '  <div class="pos-card-label">Gross Account Open</div>' +
-      '  <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>' +
-      '  <div class="pos-card-sub">Total open positions currently active on this terminal</div>' +
+      '  <div class="pos-card-label">' + t("cockpit.summary_gross_open") + '</div>' +
+      '  <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>' +
+      '  <div class="pos-card-sub">' + t("cockpit.summary_gross_sub") + '</div>' +
       '</div>';
 
     if(s.lastHeldHtml !== heldHtml){
@@ -3568,41 +3848,41 @@ function renderPosNodeDetail(){
     if(totalWait > 0){
       waitHtml += '<div class="waiting-strip active">';
       waitHtml += '  <span class="waiting-strip-icon">⏳</span>';
-      waitHtml += '  <span class="waiting-strip-text"><strong>' + totalWait + ' Orders Waiting to Open (' + waitLots.toFixed(2) + ' lots):</strong> ' + queued + ' in broker queue &middot; ' + delayed + ' gate delayed &middot; ' + mktClosed + ' market closed</span>';
+      waitHtml += '  <span class="waiting-strip-text"><strong>' + t("cockpit.orders_waiting_strip", { total: totalWait, lots: waitLots.toFixed(2) }) + '</strong> ' + queued + ' · ' + delayed + ' · ' + mktClosed + '</span>';
       waitHtml += '</div>';
 
       waitHtml += '<div class="waiting-pipeline-grid">';
       waitHtml += '  <div class="waiting-stage-card ' + (queued > 0 ? 'has-items' : '') + '">';
       waitHtml += '    <div class="waiting-stage-head">';
-      waitHtml += '      <span class="waiting-stage-name">⚡ 1. Broker Queue</span>';
+      waitHtml += '      <span class="waiting-stage-name">' + t("cockpit.stage_broker_queue") + '</span>';
       waitHtml += '      <span class="waiting-stage-badge ' + (queued > 0 ? 'active' : 'idle') + '">' + (queued > 0 ? 'Active' : 'Idle') + '</span>';
       waitHtml += '    </div>';
-      waitHtml += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">queued</span></div>';
+      waitHtml += '    <div class="waiting-stage-count">' + queued + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>';
       waitHtml += '    <div class="waiting-stage-desc">Trade instruction waiting in local broker dispatch queue for order filling.</div>';
       waitHtml += '  </div>';
 
       waitHtml += '  <div class="waiting-stage-card ' + (delayed > 0 ? 'has-items' : '') + '">';
       waitHtml += '    <div class="waiting-stage-head">';
-      waitHtml += '      <span class="waiting-stage-name">⏱️ 2. Gate Delayed</span>';
+      waitHtml += '      <span class="waiting-stage-name">' + t("cockpit.stage_gate_delayed") + '</span>';
       waitHtml += '      <span class="waiting-stage-badge ' + (delayed > 0 ? 'active' : 'idle') + '">' + (delayed > 0 ? 'Active' : 'Idle') + '</span>';
       waitHtml += '    </div>';
-      waitHtml += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">delayed</span></div>';
+      waitHtml += '    <div class="waiting-stage-count">' + delayed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>';
       waitHtml += '    <div class="waiting-stage-desc">Held by anti-stack debouncing, open-delay timer, or pullback/spread safety gates.</div>';
       waitHtml += '  </div>';
 
       waitHtml += '  <div class="waiting-stage-card ' + (mktClosed > 0 ? 'has-items' : '') + '">';
       waitHtml += '    <div class="waiting-stage-head">';
-      waitHtml += '      <span class="waiting-stage-name">🔒 3. Market Closed</span>';
+      waitHtml += '      <span class="waiting-stage-name">' + t("cockpit.stage_mkt_closed") + '</span>';
       waitHtml += '      <span class="waiting-stage-badge ' + (mktClosed > 0 ? 'active' : 'idle') + '">' + (mktClosed > 0 ? 'Active' : 'Idle') + '</span>';
       waitHtml += '    </div>';
-      waitHtml += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">mkt closed</span></div>';
+      waitHtml += '    <div class="waiting-stage-count">' + mktClosed + ' <span style="font-size:12px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>';
       waitHtml += '    <div class="waiting-stage-desc">Market is closed or quotes halted outside configured trading schedule.</div>';
       waitHtml += '  </div>';
       waitHtml += '</div>';
     } else {
       waitHtml += '<div class="waiting-strip clear">';
       waitHtml += '  <span class="waiting-strip-icon">✓</span>';
-      waitHtml += '  <span class="waiting-strip-text"><strong>Pipeline Execution: All Orders Synchronized</strong> (0 in broker queue &middot; 0 gate delayed &middot; 0 market closed)</span>';
+      waitHtml += '  <span class="waiting-strip-text"><strong>' + t("cockpit.pipeline_synced") + '</strong> ' + t("cockpit.pipeline_synced_sub") + '</span>';
       waitHtml += '</div>';
     }
 
@@ -3763,8 +4043,8 @@ function renderPosNodeDetail(){
           var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
           var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[p.ticket]);
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
-          var btnText = isTicketQueued ? "⏱️ Queued for Close" : "❌ Close";
-          var btnTitle = isTicketQueued ? "Queued on receiver; broker will execute upon Monday market open" : ("Close order #" + esc(p.ticket));
+          var btnText = isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close");
+          var btnTitle = isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket));
           var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
@@ -3879,7 +4159,7 @@ function renderPosNodeDetail(){
     }
 
     if($("pos_foot_msg")){
-      $("pos_foot_msg").textContent = "Receiver: " + n.key + " · Routine sync every 60s · Click 'Request Update' for on-demand refresh";
+      $("pos_foot_msg").textContent = t("cockpit.telemetry_stream_foot", { node: n.key });
     }
 
   } else {
@@ -4043,11 +4323,11 @@ function maybeAutoRequestPositions(n){
 
 function confirmCloseAllNode(k){
   confirmDialog({
-    title: "Confirm Close All Positions",
-    desc: "Close ALL positions on receiver <code>" + esc(k) + "</code>?",
-    detail: "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+    title: t("nodes.confirm_close_all_title"),
+    desc: t("nodes.confirm_close_all_desc", { key: k }),
+    detail: t("nodes.confirm_close_all_detail"),
     danger: true,
-    confirmText: "Close All Positions"
+    confirmText: t("nodes.btn_close_all")
   }).then(function(ok){
     //--- N56-15: pass a message element.
     //---
@@ -4115,14 +4395,20 @@ function onCloseSinglePosition(nodeKey, ticket, symbol, side, lots, profit){
   }
 
   var profitText = (profit > 0 ? "+" : "") + Number(profit).toFixed(2);
-  var descHtml = "Are you sure you want to close order <strong>#" + esc(ticket) + "</strong> (" + esc(symbol) + " " + esc(side) + " " + esc(lots) + " lots, Profit: " + profitText + ") immediately?";
+  var descHtml = t("cockpit.confirm_close_desc", {
+    ticket: ticket,
+    symbol: symbol,
+    side: side,
+    lots: lots,
+    profit: profitText
+  });
 
   confirmDialog({
-    title: "Confirm Close Single Order",
+    title: t("cockpit.confirm_close_title"),
     desc: descHtml,
     showFastClose: true,
     danger: true,
-    confirmText: "Close Order"
+    confirmText: t("cockpit.confirm_close_btn")
   }).then(function(ok){
     if(!ok) return;
     var dChk = $("chk_dialog_fast_close");
@@ -4137,11 +4423,11 @@ function executeCloseSingle(nodeKey, ticket){
   var btn = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
   if(btn){
     btn.disabled = true;
-    btn.textContent = "⏳ Closing...";
+    btn.textContent = t("cockpit.btn_closing");
   }
 
-  showPosActionNotice("Dispatching close command for #" + ticket + "...", "Please wait, routing via ZeroMQ control stream...", "info");
-  showToast("Close Dispatched", "Dispatching close command for order #" + ticket + "...", "info");
+  showPosActionNotice(t("notices.toast_dispatched", { ticket: ticket }), t("cockpit.btn_requesting"), "info");
+  showToast(t("notices.close_dispatched_title", { ticket: ticket }), t("notices.toast_dispatched", { ticket: ticket }), "info");
 
   var msgEl = $("pos_foot_msg") || $("gmsg");
 
@@ -4150,12 +4436,13 @@ function executeCloseSingle(nodeKey, ticket){
     if(b){
       b.disabled = false;
       if(isQueuedMarketClosed){
-        b.textContent = "⏱️ Queued for Close";
+        b.textContent = t("cockpit.btn_queued_close");
         b.className = "pos-close-single-btn queued";
-        b.title = "Queued on receiver; broker will execute upon Monday market open";
+        b.title = t("cockpit.btn_queued_tooltip");
       } else {
-        b.textContent = "❌ Close";
+        b.textContent = t("cockpit.btn_close");
         b.className = "pos-close-single-btn";
+        b.title = t("cockpit.btn_close") + " #" + ticket;
       }
     }
     s.lastPosRowsHtml = null; // Invalidate DOM cache so subsequent renders won't get stuck
@@ -4175,26 +4462,26 @@ function executeCloseSingle(nodeKey, ticket){
     resetBtn(isMktClosed || isAlreadyQueued);
     if(ok){
       if(isMktClosed){
-        showPosActionNotice("[Market Closed · Queued] Order #" + ticket + " queued for execution!",
-          "Foreign exchange markets are closed for the weekend. The close order has been accepted into the receiver priority queue and will be executed by the broker as soon as the market opens on Monday.", "warn");
-        showToast("Queued for Close (Market Closed)", "Order #" + ticket + " queued, broker will execute upon market open.", "warn");
+        showPosActionNotice(t("notices.mkt_closed_title", { ticket: ticket }),
+          t("notices.mkt_closed_desc"), "warn");
+        showToast(t("notices.mkt_closed_title", { ticket: ticket }), t("notices.toast_queued_mkt", { ticket: ticket }), "warn");
       } else if(isAlreadyQueued){
-        showPosActionNotice("Order #" + ticket + " is already in the execution queue",
-          "This order has already been queued for closing and is waiting for broker matching.", "info");
-        showToast("Already Queued", "Order #" + ticket + " is already queued for close", "info");
+        showPosActionNotice(t("notices.already_queued_title", { ticket: ticket }),
+          t("notices.already_queued_desc"), "info");
+        showToast(t("notices.already_queued_title", { ticket: ticket }), t("notices.toast_already_queued", { ticket: ticket }), "info");
       } else {
-        showPosActionNotice("✅ Order #" + ticket + " close instruction received", "Receiver confirmed action queueing.", "ok");
-        showToast("Close Dispatched", "Order #" + ticket + " close in progress", "ok");
+        showPosActionNotice(t("notices.close_dispatched_title", { ticket: ticket }), t("notices.close_dispatched_desc"), "ok");
+        showToast(t("notices.close_dispatched_title", { ticket: ticket }), t("notices.toast_dispatched", { ticket: ticket }), "ok");
       }
     } else {
       var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "Command rejected"));
       if(errMsg.indexOf("unknown op close") >= 0){
-        showPosActionNotice("⚠️ Close Rejected: Receiver EA running older build",
-          "Please switch timeframe on the chart or press F7 in MT4 to reload the latest EA binary!", "bad");
-        showToast("Close Failed", "Receiver running old EA build, reload required", "bad");
+        showPosActionNotice(t("notices.close_failed_old_ea_title"),
+          t("notices.close_failed_old_ea_desc"), "bad");
+        showToast(t("notices.close_failed_old_ea_title"), t("notices.close_failed_old_ea_desc"), "bad");
       } else {
-        showPosActionNotice("⚠️ Close instruction could not execute: #" + ticket, errMsg, "bad");
-        showToast("Close Not Executed", "Order #" + ticket + ": " + errMsg, "bad");
+        showPosActionNotice(t("notices.close_failed_title", { ticket: ticket }), errMsg, "bad");
+        showToast(t("notices.close_failed_title", { ticket: ticket }), errMsg, "bad");
       }
     }
   });
@@ -4307,18 +4594,18 @@ function renderCluster(cl){
     bar.className = "cluster-bar " + (isConflict ? "conflict" : (isStandby ? "standby" : "primary"));
     
     $("cluster_icon").textContent = isConflict ? "❌" : (isStandby ? "⚠️" : "🛡️");
-    var roleDesc = isConflict ? "Split-Brain Conflict (Locked)" : (isStandby ? "Standby Node (Read-Only Mirror)" : "Primary Node (Active R/W)");
-    $("cluster_status_text").textContent = roleDesc + " [Epoch " + cl.epoch + "]";
+    var roleDesc = isConflict ? t("cluster.role_conflict", { epoch: cl.epoch }) : (isStandby ? t("cluster.role_standby", { epoch: cl.epoch }) : t("cluster.role_primary", { epoch: cl.epoch }));
+    $("cluster_status_text").textContent = roleDesc;
 
     // Peer status indicator
     var pBadge = $("cluster_peer_badge");
     if(pBadge){
       if(!cl.peer_url){
-        pBadge.textContent = "Peer: None";
+        pBadge.textContent = t("cluster.peer_none");
         pBadge.className = "pill";
       } else {
         var pOnline = cl.peer_online;
-        pBadge.textContent = "Peer: " + (pOnline ? "Online (" + (cl.sync_status || "synced") + ")" : "Offline");
+        pBadge.textContent = pOnline ? t("cluster.peer_online", { status: cl.sync_status || "synced" }) : t("cluster.peer_offline");
         pBadge.className = "pill " + (pOnline ? "ok" : "bad");
       }
     }
@@ -4329,7 +4616,7 @@ function renderCluster(cl){
       if(!cl.peer_url){
         fbEl.textContent = "";
       } else if(cl.failback_locked){
-        fbEl.textContent = "• [Auto-Failback Locked]";
+        fbEl.textContent = t("cluster.failback_locked");
       } else if(cl.is_configured_primary && isStandby){
         var requiredSecs = (cl.failback_stabilization_hours || 24.0) * 3600;
         var curSecs = cl.continuous_online_secs || 0;
@@ -4338,9 +4625,9 @@ function renderCluster(cl){
         var totH = (cl.failback_stabilization_hours || 24.0).toFixed(1);
         var remH = (remSecs / 3600).toFixed(1);
         if(remSecs <= 0){
-          fbEl.textContent = "• [Primary stabilized " + curH + "h/" + totH + "h · Initiating auto-failback...]";
+          fbEl.textContent = t("cluster.failback_ready", { curH: curH, totH: totH });
         } else {
-          fbEl.textContent = "• [Primary online " + curH + "h/" + totH + "h · Auto-failback in ~" + remH + " hrs]";
+          fbEl.textContent = t("cluster.failback_stabilizing", { curH: curH, totH: totH, remH: remH });
         }
       } else {
         fbEl.textContent = "";
@@ -4469,7 +4756,7 @@ function updateThemeBtn(theme){
   var icon = $("theme_icon");
   var txt = $("theme_text");
   if(icon) icon.textContent = theme === "light" ? "🌙" : "☀️";
-  if(txt) txt.textContent = theme === "light" ? "Night Mode" : "Day Mode";
+  if(txt) txt.textContent = theme === "light" ? t("nav.night_mode") : t("nav.day_mode");
 }
 
 // --- Dynamic Font Scaling Slider ---
@@ -4723,20 +5010,20 @@ function renderAlerts(alerts){
     s.alertDomRows = {};
 
     if(!s.eventLog.length){
-      bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>No recent system events logged yet.</span></div>';
+      bar.innerHTML = '<div class="empty-alerts"><span class="dot online"></span><span>' + t("msgcenter.empty") + '</span></div>';
     } else {
       var items = s.eventLog.map(function(ev){
         var isRead = !!s.readEventKeys[ev.id];
         var diff = Math.max(0, nowSec - (ev.ts || nowSec));
-        var ago = "just now";
-        if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
-        else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
-        else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
+        var ago = t("msgcenter.time_now");
+        if(diff >= 60 && diff < 3600) ago = t("msgcenter.time_m", { m: Math.floor(diff / 60) });
+        else if(diff >= 3600 && diff < 86400) ago = t("msgcenter.time_h", { h: Math.floor(diff / 3600) });
+        else if(diff >= 86400) ago = t("msgcenter.time_d", { d: Math.floor(diff / 86400) });
         var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
 
         var cardCls = isRead ? "msg-item is-read" : ("msg-item unread " + ev.sev);
         var badgeCls = "msg-badge " + ev.sev;
-        var readBtnHtml = isRead ? '' : '<button type="button" class="ax" data-read-ev="' + esc(ev.id) + '" title="Mark as read">✓</button>';
+        var readBtnHtml = isRead ? '' : '<button type="button" class="ax" data-read-ev="' + esc(ev.id) + '" title="' + t("msgcenter.mark_read") + '">✓</button>';
 
         return '<div class="' + cardCls + '" data-evid="' + esc(ev.id) + '">' +
                '  <div class="msg-row-top">' +
@@ -4773,10 +5060,10 @@ function renderAlerts(alerts){
       var row = s.alertDomRows ? s.alertDomRows[ev.id] : null;
       if(!row || !row.timeEl) return;
       var diff = Math.max(0, nowSec - (ev.ts || nowSec));
-      var ago = "just now";
-      if(diff >= 60 && diff < 3600) ago = Math.floor(diff / 60) + "m ago";
-      else if(diff >= 3600 && diff < 86400) ago = Math.floor(diff / 3600) + "h ago";
-      else if(diff >= 86400) ago = Math.floor(diff / 86400) + "d ago";
+      var ago = t("msgcenter.time_now");
+      if(diff >= 60 && diff < 3600) ago = t("msgcenter.time_m", { m: Math.floor(diff / 60) });
+      else if(diff >= 3600 && diff < 86400) ago = t("msgcenter.time_h", { h: Math.floor(diff / 3600) });
+      else if(diff >= 86400) ago = t("msgcenter.time_d", { d: Math.floor(diff / 86400) });
       var when = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : "";
       var newTimeText = ago + " (" + when + ")";
       if(row.timeEl.textContent !== newTimeText){
@@ -4788,7 +5075,7 @@ function renderAlerts(alerts){
   // Update button label with unread indicator
   var dBtn = $("btn-dismiss-alerts");
   if(dBtn){
-    dBtn.textContent = unreadCount > 0 ? ("Dismiss All (" + unreadCount + " unread)") : "Dismiss All (Mark Read)";
+    dBtn.textContent = unreadCount > 0 ? t("msgcenter.dismiss_all", { count: unreadCount }) : t("msgcenter.dismiss_all_read");
     dBtn.className = unreadCount > 0 ? "btn-sm btn-primary" : "btn-sm";
   }
 }
@@ -4805,20 +5092,20 @@ function renderAlerts(alerts){
 function renderNodes(nodes){
   var host = $("nodes");
   if(!nodes.length){
-    host.innerHTML = '<div class="empty">no node has registered yet</div>';
+    host.innerHTML = '<div class="empty">' + t("nodes.empty") + '</div>';
     s.nodeKeys = null; s.nodeRows = null;
     return;
   }
   var keys = nodes.map(function(n){ return n.key; }).join("" + String.fromCharCode(0) + "");
   if(keys !== s.nodeKeys){
     var rows = nodes.map(function(n){
-      var pzText = n.paused ? "Resume" : "Pause";
+      var pzText = n.paused ? t("nodes.btn_resume") : t("nodes.btn_pause");
       var pzOp = n.paused ? "resume" : "pause";
       var ops = (n.role === "receiver")
-        ? "<button class='btn-sm opbtn' data-op='config'>Visual Config</button> " +
+        ? "<button class='btn-sm opbtn' data-op='config'>" + t("nodes.btn_config") + "</button> " +
           "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>" +
           "<span class='opmsg'></span>"
-        : "<button class='btn-sm opbtn' data-op='inspect'>Inspect Positions</button>" +
+        : "<button class='btn-sm opbtn' data-op='inspect'>" + t("nodes.btn_inspect") + "</button>" +
           "<span class='opmsg'></span>";
       return "<tr data-k='" + esc(n.key) + "'>" +
              "<td class='role-cell'><span class='role-pill'></span></td>" +
@@ -4835,16 +5122,16 @@ function renderNodes(nodes){
     }).join("");
     host.innerHTML =
       "<div class='table-scroll'><table class='hub-table'><thead><tr>" +
-      "<th>Role</th>" +
-      "<th>Account &amp; Terminal Name</th>" +
-      "<th>Latency (Ping)</th>" +
-      "<th>Status</th>" +
-      "<th class='num'>Positions</th>" +
-      "<th class='num'>Volume</th>" +
-      "<th class='num'>Equity</th>" +
-      "<th class='num'>Balance</th>" +
-      "<th>Gating &amp; Delays</th>" +
-      "<th style='text-align:center'>Actions</th>" +
+      "<th>" + t("nodes.th_role") + "</th>" +
+      "<th>" + t("nodes.th_account_terminal") + "</th>" +
+      "<th>" + t("nodes.th_ping") + "</th>" +
+      "<th>" + t("nodes.th_status") + "</th>" +
+      "<th class='num'>" + t("nodes.th_positions") + "</th>" +
+      "<th class='num'>" + t("nodes.th_volume") + "</th>" +
+      "<th class='num'>" + t("nodes.th_equity") + "</th>" +
+      "<th class='num'>" + t("nodes.th_balance") + "</th>" +
+      "<th>" + t("nodes.th_gating") + "</th>" +
+      "<th style='text-align:center'>" + t("nodes.th_actions") + "</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table></div>";
     s.nodeKeys = keys;
     s.nodeRows = {};
@@ -5409,21 +5696,21 @@ function onGlobalClick(ev){
   var op = btn.getAttribute("data-gop");
   if(op === "closeall"){
     confirmDialog({
-      title: "⚠️ Dangerous Action: Global Close All",
-      desc: "Close ALL positions across EVERY receiver?",
-      detail: "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
+      title: t("gops.confirm_global_close_title"),
+      desc: t("gops.confirm_global_close_desc"),
+      detail: t("gops.confirm_global_close_detail"),
       danger: true,
-      confirmText: "Yes, Close All Positions"
+      confirmText: t("gops.confirm_global_close_btn")
     }).then(function(ok){
       if(ok) sendGlobal(op);
     });
   } else if(op === "pause"){
     confirmDialog({
-      title: "Pause All Receivers",
-      desc: "Pause copying on ALL receivers?",
-      detail: "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+      title: t("gops.confirm_global_pause_title"),
+      desc: t("gops.confirm_global_pause_desc"),
+      detail: t("gops.confirm_global_pause_detail"),
       danger: true,
-      confirmText: "Pause All Receivers"
+      confirmText: t("gops.confirm_global_pause_btn")
     }).then(function(ok){
       if(ok) sendGlobal(op);
     });
@@ -5441,11 +5728,9 @@ function refreshWritesState(){
     var f = $("writes-state");
     if(!f) return;
     if(!s.writes){
-      f.textContent = "commands are OFF: this hub started with --writes off. " +
-        "Restart without --writes off (or with --writes on) to issue operational commands (pause / resume / close-all / reload).";
+      f.textContent = t("footer.cmd_off_note");
     } else {
-      f.textContent = "operational commands target receivers; the EA acts on them once M5b lands. " +
-        "Each click issues a command via the M5a hub endpoint and shows its command_id.";
+      f.textContent = t("footer.cmd_on_note");
     }
   }).catch(function(){
     var f = $("writes-state");
@@ -5471,11 +5756,11 @@ function startDashboard(){
   if(btnBatchP){
     btnBatchP.addEventListener("click", function(){
       confirmDialog({
-        title: "Pause All Receivers",
-        desc: "Pause copying on ALL receivers?",
-        detail: "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+        title: t("gops.confirm_global_pause_title"),
+        desc: t("gops.confirm_global_pause_desc"),
+        detail: t("gops.confirm_global_pause_detail"),
         danger: true,
-        confirmText: "Pause All Receivers"
+        confirmText: t("gops.confirm_global_pause_btn")
       }).then(function(ok){
         if(ok) sendGlobal("pause");
       });
@@ -5626,22 +5911,20 @@ function loadUsers(){
 }
 function renderUsers(users){
   s.users.rows = users;
-  $("ucount").textContent = users.length + " user(s)";
+  $("ucount").textContent = t("users.count_label", { count: users.length });
   $("usersbody").innerHTML =
-    "<table><thead><tr><th>user</th><th>role</th><th>state</th><th></th></tr></thead><tbody>" +
+    "<table><thead><tr><th>" + t("users.th_user") + "</th><th>" + t("users.th_role") + "</th><th>" + t("users.th_state") + "</th><th></th></tr></thead><tbody>" +
     users.map(function(u){
       return "<tr data-u='" + esc(u.id) + "'>" +
              "<td class='k'>" + esc(u.id) + "</td>" +
              "<td>" + esc(u.role) + "</td>" +
-             "<td>" + (u.disabled ? "disabled" : "active") + "</td>" +
-             "<td class='ops'><button data-act='pwd'>password</button> " +
-             "<button data-act='toggle'>" + (u.disabled ? "enable" : "disable") +
-             "</button> <button data-act='del'>delete</button></td></tr>";
+             "<td>" + (u.disabled ? t("users.state_disabled") : t("users.state_active")) + "</td>" +
+             "<td class='ops'><button data-act='pwd'>" + t("users.btn_password") + "</button> " +
+             "<button data-act='toggle'>" + (u.disabled ? t("users.btn_enable") : t("users.btn_disable")) +
+             "</button> <button data-act='del'>" + t("users.btn_delete") + "</button></td></tr>";
     }).join("") +
     "</tbody></table>" +
-    "<p style='color:var(--dim);font-size:12px;margin:6px 0 0'>add / update needs a password;" +
-    " disable, enable and role changes keep the existing one. The last admin cannot be" +
-    " deleted, demoted or disabled.</p>";
+    "<p style='color:var(--dim);font-size:12px;margin:6px 0 0'>" + t("users.footnote") + "</p>";
 }
 function openAdminPasswordReset(user){
   adminPasswordTarget = user.id;
@@ -5809,14 +6092,14 @@ $("hubkey_copybtn").addEventListener("click", function(){
   var btn = $("hubkey_copybtn");
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(key).then(function(){
-      btn.textContent = "Copied!";
-      setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+      btn.textContent = t("hubkey.copied_btn");
+      setTimeout(function(){ btn.textContent = t("hubkey.copy_btn"); }, 1500);
     });
   } else {
     $("hubkey_val").select();
     document.execCommand("copy");
-    btn.textContent = "Copied!";
-    setTimeout(function(){ btn.textContent = "Copy"; }, 1500);
+    btn.textContent = t("hubkey.copied_btn");
+    setTimeout(function(){ btn.textContent = t("hubkey.copy_btn"); }, 1500);
   }
 });
 //--- Identity is applied through ONE function, from BOTH paths that learn it
@@ -6000,18 +6283,18 @@ function renderNotifications(channels){
   }
   var isViewer = (s.userRole === "viewer");
   var html = '<table class="notiftbl"><thead><tr>' +
-             '<th>Name</th><th>Type</th><th>Min Severity</th><th>Status</th><th>Target Info</th>' +
-             (isViewer ? '' : '<th style="text-align:right">Actions</th>') +
+             '<th>' + t("notif.th_name") + '</th><th>' + t("notif.th_type") + '</th><th>' + t("notif.th_severity") + '</th><th>' + t("notif.th_status") + '</th><th>' + t("notif.th_target") + '</th>' +
+             (isViewer ? '' : '<th style="text-align:right">' + t("notif.th_actions") + '</th>') +
              '</tr></thead><tbody>' +
              channels.map(function(c){
                var sev = (c.min_severity === "critical") ? '<span style="color:var(--bad);font-weight:600">Critical Only</span>' : 'Warning &amp; Critical';
-               var st = c.enabled ? '<span class="dot online"></span>Active' : '<span class="dot offline"></span>Disabled';
+               var st = c.enabled ? ('<span class="dot online"></span>' + t("notif.status_enabled")) : ('<span class="dot offline"></span>' + t("notif.status_disabled"));
                var ops = isViewer ? '' :
                  '<td class="ops" style="text-align:right">' +
-                 '<button class="opbtn" data-nact="test" title="Send a test alert now">Test</button> ' +
-                 '<button class="opbtn" data-nact="edit">Edit</button> ' +
-                 '<button class="opbtn" data-nact="toggle">' + (c.enabled ? "Disable" : "Enable") + '</button> ' +
-                 '<button class="opbtn danger" data-nact="del">Delete</button>' +
+                 '<button class="opbtn" data-nact="test" title="Send a test alert now">' + t("notif.btn_test") + '</button> ' +
+                 '<button class="opbtn" data-nact="edit">' + t("notif.btn_edit") + '</button> ' +
+                 '<button class="opbtn" data-nact="toggle">' + (c.enabled ? t("notif.btn_disable") : t("notif.btn_enable")) + '</button> ' +
+                 '<button class="opbtn danger" data-nact="del">' + t("notif.btn_delete") + '</button>' +
                  '</td>';
                return '<tr data-nid="' + esc(c.id) + '">' +
                       '<td style="font-weight:600">' + esc(c.name) + '</td>' +
