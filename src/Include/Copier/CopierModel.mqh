@@ -467,6 +467,8 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.openPx=PositionGetDouble(POSITION_PRICE_OPEN);
       p.sl=PositionGetDouble(POSITION_SL);
       p.tp=PositionGetDouble(POSITION_TP);
+      p.profit=PositionGetDouble(POSITION_PROFIT);
+      p.swap=PositionGetDouble(POSITION_SWAP);
       //--- POSITION_IDENTIFIER is server-stable; POSITION_TICKET is not
       p.ticket=(long)PositionGetInteger(POSITION_IDENTIFIER);
       p.magic=(long)PositionGetInteger(POSITION_MAGIC);
@@ -506,6 +508,8 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.openPx=OrderGetDouble(ORDER_PRICE_OPEN);   // the trigger price
       p.sl=OrderGetDouble(ORDER_SL);
       p.tp=OrderGetDouble(ORDER_TP);
+      p.profit=0.0;
+      p.swap=0.0;
       //--- the ORDER ticket, which is also what the position's
       //--- POSITION_IDENTIFIER becomes when this order fills. That is what
       //--- carries the UID across activation without any extra machinery.
@@ -546,6 +550,8 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.openPx=OrderOpenPrice();
       p.sl=OrderStopLoss();
       p.tp=OrderTakeProfit();
+      p.profit=OrderProfit();
+      p.swap=OrderSwap();
       p.ticket=(long)OrderTicket();
       p.magic=(long)OrderMagicNumber();
       p.openTime=(long)OrderOpenTime();
@@ -563,6 +569,8 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
          p.side=CopierPendingSide(pt);
          p.kind=CP_ORD_PENDING;
          p.ptype=pt;
+         p.profit=0.0;
+         p.swap=0.0;
          p.pprice=OrderOpenPrice();                   // the trigger price
          p.pstop=0.0;                                 // MT4 has no stop-limit
          p.pexpire=(long)OrderExpiration();

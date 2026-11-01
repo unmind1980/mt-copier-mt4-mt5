@@ -277,6 +277,8 @@ fn node_json(n: &Node, now: Instant) -> Value {
                 "magic": p.magic,
                 "managed": p.managed,
                 "comment": p.comment,
+                "profit": p.profit,
+                "swap": p.swap,
             })).collect())
         } else {
             Value::Null
@@ -2383,15 +2385,41 @@ async fn post_command(
 
     //--- Parse the operation. Accept either `{"op":"pause"}` or the bare word
     //--- `pause`, because a CLI or a curl one-liner should not have to wrap it.
-    let op = {
+    let (op, args, is_force) = {
         let body = body.trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-            v.get("op")
+            let op_str = v.get("op")
                 .and_then(|x| x.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| body.to_string())
+                .unwrap_or(body)
+                .to_string();
+            let mut args_str = v.get("args")
+                .map(|x| {
+                    if let Some(s) = x.as_str() {
+                        s.to_string()
+                    } else if let Some(n) = x.as_i64() {
+                        n.to_string()
+                    } else {
+                        x.to_string()
+                    }
+                })
+                .unwrap_or_default();
+            if args_str.is_empty() {
+                if let Some(t) = v.get("ticket") {
+                    args_str = if let Some(s) = t.as_str() {
+                        s.to_string()
+                    } else if let Some(n) = t.as_i64() {
+                        n.to_string()
+                    } else {
+                        t.to_string()
+                    };
+                }
+            }
+            let force = v.get("force")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            (op_str, args_str, force)
         } else {
-            body.to_string()
+            (body.to_string(), String::new(), false)
         }
     };
 
@@ -2455,6 +2483,43 @@ async fn post_command(
             .into_response();
     }
 
+    if op == "close" && args.trim().is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "close command requires ticket in 'args' or 'ticket' field",
+                "op": op,
+            })),
+        )
+            .into_response();
+    }
+
+    static LAST_REQPOS: std::sync::Mutex<Option<std::collections::HashMap<String, Instant>>> = std::sync::Mutex::new(None);
+    if op == "reqpos" && !is_force {
+        let mut guard = LAST_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if let Some(last_t) = map.get(&id) {
+            if last_t.elapsed() < Duration::from_secs(30) {
+                return (
+                    axum::http::StatusCode::ACCEPTED,
+                    Json(json!({
+                        "accepted": true,
+                        "coalesced": true,
+                        "node": id,
+                        "op": "reqpos",
+                        "message": "coalesced: positions request within 30s window",
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        map.insert(id.clone(), Instant::now());
+    } else if op == "reqpos" {
+        let mut guard = LAST_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        map.insert(id.clone(), Instant::now());
+    }
+
     let actor = sess.user_id.clone();
     //--- Out of the state lock: the command journal fsyncs, the audit fsyncs,
     //--- and neither needs the lock the router thread is waiting on.
@@ -2462,14 +2527,14 @@ async fn post_command(
         let s = st.lock_or_recover();
         (Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
-    let cmd = cmds.issue_op(&id, &op, "", &actor, "");
+    let cmd = cmds.issue_op(&id, &op, &args, &actor, "");
     audit.record(
         &actor,
         "",
         "command.issued",
         &id,
         None,
-        Some(json!({ "id": cmd.id, "op": op, "known_node": known })),
+        Some(json!({ "id": cmd.id, "op": op, "args": args, "known_node": known })),
         "ok",
     );
 

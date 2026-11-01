@@ -798,6 +798,7 @@ string           g_senderAcc[CP_MAX_SENDERS];
 CopierTradingTimes g_hours;  // IncludeTradingTimes / DayTradingTimes, server time
 CopierSeenRing  g_fillDropped; // UIDs given up on - sticky, so it is not
                                // re-derived and re-alerted every pass
+CopierManualClosedRing g_manualClosed; // Manually closed positions by operator; prevents converge from re-opening
 CopierRisk      g_risk;      // circuit breakers (all off unless configured)
 //--- Our own exposure, refreshed once per tick so every sender's converge
 //--- pass gates against the SAME numbers. Computing it per sender would let
@@ -2634,7 +2635,8 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- keyExtra distinguishes actions that share a kind and a UID but are
    //--- genuinely different, e.g. two successive partial closes to two
    //--- different target volumes, or two successive stop changes
-   string key=g_sid[si]+":"+(string)kind+":"+uid+keyExtra;
+   string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
+   string key=sname+":"+(string)kind+":"+uid+keyExtra;
    //--- an idempotent state assignment is guarded by the state comparison
    //--- on every converge pass, NOT by the "already done" ring - see
    //--- CopierSeenRingApplies() for the pilot failure this caused
@@ -3149,7 +3151,7 @@ void ExecuteQueue()
 
          if(a.kind==CP_ACT_TRIM)
             ok=CopierClosePartial(a.ticket,a.lots,a.sym,a.side,
-                                  g_magic[a.senderIdx],
+                                  (a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS ? g_magic[a.senderIdx] : 0),
                                   CopierCommentForUid(a.uid,a.senderTicket),
                                   dev,err);
          else
@@ -3193,21 +3195,24 @@ void ExecuteQueue()
               {
                sAddedCount[a.senderIdx]++;
                sAddedLots[a.senderIdx]+=a.lots;
+               g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
+                                +a.uid);
+               //--- Consumed: the expected re-open has now landed. Clear it so a
+               //--- subsequent manual close within the 5-minute TTL is not
+               //--- mistakenly re-opened under ReopenClosedMirrors=false.
+               g_reopenExpected.Forget(g_sid[a.senderIdx]+":"+a.uid);
               }
-            g_everOpened.Add(g_sid[a.senderIdx]+":"+(string)CP_ACT_OPEN+":"
-                             +a.uid);
-            //--- Consumed: the expected re-open has now landed. Clear it so a
-            //--- subsequent manual close within the 5-minute TTL is not
-            //--- mistakenly re-opened under ReopenClosedMirrors=false.
-            g_reopenExpected.Forget(g_sid[a.senderIdx]+":"+a.uid);
            }
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
            {
             if(a.ordKind==CP_ORD_MARKET)
               {
-               if(g_ourPositions>0) g_ourPositions--;
-               if(g_ourCount>0) g_ourCount--;
-               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               if(a.senderIdx>=0)
+                 {
+                  if(g_ourPositions>0) g_ourPositions--;
+                  if(g_ourCount>0) g_ourCount--;
+                  g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+                 }
                if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                  {
                   //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
@@ -3220,9 +3225,12 @@ void ExecuteQueue()
             else if(a.ordKind==CP_ORD_PENDING)
               {
                // N49-10: Pending order deletion reduces pending count and total count/lots
-               if(g_ourPending>0) g_ourPending--;
-               if(g_ourCount>0) g_ourCount--;
-               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               if(a.senderIdx>=0)
+                 {
+                  if(g_ourPending>0) g_ourPending--;
+                  if(g_ourCount>0) g_ourCount--;
+                  g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+                 }
                if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                  {
                   sAddedCount[a.senderIdx]--;
@@ -4548,7 +4556,9 @@ string EncodeReceiverPositions()
                  +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM
                  +(string)g_acctAllPos[i].magic+CP_SEP_ITEM
                  +(string)isManaged+CP_SEP_ITEM
-                 +CopierSanitizeComment(cmt);
+                 +CopierSanitizeComment(cmt)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].profit,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].swap,2);
       sb.Add(rec);
       count++;
       //--- CP_MAX_POSITIONS, not 128. 128 was a leftover from when the
@@ -4961,8 +4971,8 @@ void ConvergeSender(const int si)
      {
       CopierPos d=g_desired[base+i];
 
-      //--- the operator asked us to leave this one alone (IgnoreUids)
-      if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
+      //--- the operator asked us to leave this one alone (IgnoreUids or manually closed by operator)
+      if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid) || g_manualClosed.Has(d.uid)) continue;
 
       int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
@@ -5532,6 +5542,39 @@ void ConvergeSender(const int si)
         {
          ForgetSenderPeakLots(g_locScratch[i].uid);
          StopsForget(g_locScratch[i].uid);
+        }
+     }
+
+   //--- Garbage collect manually closed UIDs that the sender no longer holds in desired set
+   if(g_manualClosed.Count()>0 && g_desiredCount[si]>=0 && StringLen(g_snapHash[si])>0)
+     {
+      for(int m=g_manualClosed.Count()-1; m>=0; m--)
+        {
+         string mUid=g_manualClosed.GetUid(m);
+         if(StringLen(mUid)==0) continue;
+         bool senderStillHolds=false;
+         for(int d=0; d<g_desiredCount[si]; d++)
+           {
+            if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
+           }
+         if(!senderStillHolds)
+           {
+            bool anyHolds=false;
+            for(int os=0; os<g_nSenders; os++)
+              {
+               int obase=os*CP_MAX_POSITIONS;
+               for(int od=0; od<g_desiredCount[os]; od++)
+                 {
+                  if(g_desired[obase+od].uid==mUid) { anyHolds=true; break; }
+                 }
+               if(anyHolds) break;
+              }
+            if(!anyHolds)
+              {
+               g_log.Info("ManualClosed GC: UID "+mUid+" was closed by operator and sender no longer holds it. Removed from ignore table.");
+               g_manualClosed.Forget(mUid);
+              }
+           }
         }
      }
   }
@@ -6173,11 +6216,10 @@ void HandleCfg(const CopierEnv &e)
 // on every retry instead of a fresh failure each time.
 void HandleCmd(const CopierEnv &e)
   {
-   string id="",op="";
+   string id="",op="",args="";
    CopierKvGet(e.payload,"ID",id);
    CopierKvGet(e.payload,"OP",op);
-   //--- ARGS is reserved and ignored here, on purpose. A future op that
-   //--- needs parameters reads them itself; today's four take none.
+   CopierKvGet(e.payload,"ARGS",args);
 
    //--- No ID means there is nothing to acknowledge against, and the hub
    //--- would retry forever against a node that cannot answer.
@@ -6286,6 +6328,77 @@ void HandleCmd(const CopierEnv &e)
          g_cmdCloseAllId=id;
          g_cmdAck="ID="+id+";OK=0;REASON=queue_full_queued_"+(string)n+"_of_"+(string)total+";REV="+(string)g_cfgRev;
          g_log.Error("CMD "+id+": closeall queued "+(string)n+" of "+(string)total+" ("+(string)failed+" queue full) - continuing background retry");
+        }
+      SendCfgAck(g_cmdAck);
+      return;
+     }
+
+   if(op=="close")
+     {
+      long targetTicket=StringToInteger(args);
+      if(targetTicket<=0)
+        {
+         string tstr="";
+         if(CopierKvGet(args,"ticket",tstr) || CopierKvGet(args,"TICKET",tstr))
+            targetTicket=StringToInteger(tstr);
+        }
+      if(targetTicket<=0)
+        {
+         g_cmdId=id;
+         g_cmdAck="ID="+id+";OK=0;ERR=invalid ticket in close command";
+         SendCfgAck(g_cmdAck);
+         g_log.Error("CMD "+id+": close failed - invalid ticket \""+args+"\"");
+         return;
+        }
+
+      int an=CopierReadPositions(g_scanScratch,CP_MAX_POSITIONS);
+      int foundIdx=-1;
+      for(int i=0;i<an;i++)
+        {
+         if(g_scanScratch[i].ticket==targetTicket)
+           {
+            foundIdx=i;
+            break;
+           }
+        }
+
+      if(foundIdx<0)
+        {
+         g_cmdId=id;
+         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev+";NOTE=ticket_not_found_or_already_closed";
+         SendCfgAck(g_cmdAck);
+         g_log.Warn("CMD "+id+": ticket #"+(string)targetTicket+" not found or already closed.");
+         return;
+        }
+
+      CopierPos targetPos=g_scanScratch[foundIdx];
+      int si=MagicToSender(targetPos.magic);
+      string uid=ResolveUid(targetPos);
+      if(StringLen(uid)==0)
+         uid="#t"+(string)targetPos.ticket;
+
+      // Add to manual closed table so it is NEVER restored while sender holds it
+      g_manualClosed.Add(uid,targetPos.ticket);
+
+      string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
+      string actKey=sname+":"+(string)CP_ACT_CLOSE+":"+uid;
+      g_seen.Forget(actKey);
+      g_backoff.Clear(actKey);
+
+      bool queued=PushAction(si,CP_ACT_CLOSE,uid,targetPos.sym,targetPos.side,targetPos.lots,
+                             targetPos.ticket,0,"",0.0,0.0,targetPos.kind);
+
+      g_cmdId=id;
+      if(queued)
+        {
+         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+         g_log.Warn("CMD "+id+": manual close queued for ticket #"+(string)targetTicket+" ("+targetPos.sym+" "+DoubleToString(targetPos.lots,2)+") UID="+uid);
+         g_forcePosReport=true;
+        }
+      else
+        {
+         g_cmdAck="ID="+id+";OK=0;REASON=queue_full;REV="+(string)g_cfgRev;
+         g_log.Error("CMD "+id+": manual close failed to queue for ticket #"+(string)targetTicket+" (queue full)");
         }
       SendCfgAck(g_cmdAck);
       return;

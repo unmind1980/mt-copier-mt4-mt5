@@ -431,6 +431,8 @@ struct CopierPos
    double            openPx;
    double            sl;
    double            tp;
+   double            profit;   // floating profit/loss
+   double            swap;     // accrued swap/rollover
    long              ticket;   // MT4: order ticket / MT5: POSITION_IDENTIFIER
    long              magic;
    long              openTime; // broker server time, seconds

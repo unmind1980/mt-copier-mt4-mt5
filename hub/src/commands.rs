@@ -112,8 +112,8 @@ pub const COMMAND_JOURNAL_COMPACT_BYTES: u64 = 8 * 1024 * 1024;
 /// a command: `POST {"op":"paus"}` that were accepted would sit on the ladder
 /// for 82 seconds and then be reported as `unknown`, which reads like "the
 /// node did not answer" rather than "you misspelled it".
-pub const OPS: [&str; 6] = [
-    "pause", "resume", "closeall", "reload", "reqpos", "reqcfg",
+pub const OPS: [&str; 7] = [
+    "pause", "resume", "closeall", "close", "reload", "reqpos", "reqcfg",
 ];
 
 fn state_rank(st: &str) -> u8 {

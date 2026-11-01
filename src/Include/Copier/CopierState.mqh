@@ -1373,5 +1373,94 @@ public:
      }
   };
 
+//=====================================================================
+// Dynamic ring for operator manually closed orders.
+// Prevents converge loop from re-opening a position closed by operator
+// while sender still holds it. Entries are automatically garbage-collected
+// (del/forgotten) once the sender itself closes/drops the position.
+//=====================================================================
+#define CP_MAX_MANUAL_CLOSED 256
+
+class CopierManualClosedRing
+  {
+private:
+   string            m_uid[CP_MAX_MANUAL_CLOSED];
+   long              m_ticket[CP_MAX_MANUAL_CLOSED];
+   int               m_n;
+
+public:
+                     CopierManualClosedRing(): m_n(0)
+     {
+      for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; }
+     }
+
+   void Add(const string uid, const long ticket)
+     {
+      if(StringLen(uid)==0 && ticket<=0) return;
+      for(int i=0;i<m_n;i++)
+        {
+         if((StringLen(uid)>0 && m_uid[i]==uid) || (ticket>0 && m_ticket[i]==ticket))
+            return;
+        }
+      if(m_n<CP_MAX_MANUAL_CLOSED)
+        {
+         m_uid[m_n]=uid;
+         m_ticket[m_n]=ticket;
+         m_n++;
+        }
+      else
+        {
+         for(int i=0;i<CP_MAX_MANUAL_CLOSED-1;i++)
+           {
+            m_uid[i]=m_uid[i+1];
+            m_ticket[i]=m_ticket[i+1];
+           }
+         m_uid[CP_MAX_MANUAL_CLOSED-1]=uid;
+         m_ticket[CP_MAX_MANUAL_CLOSED-1]=ticket;
+        }
+     }
+
+   bool Has(const string uid) const
+     {
+      if(m_n<=0 || StringLen(uid)==0) return false;
+      for(int i=0;i<m_n;i++)
+        {
+         if(m_uid[i]==uid) return true;
+        }
+      return false;
+     }
+
+   bool HasTicket(const long ticket) const
+     {
+      if(m_n<=0 || ticket<=0) return false;
+      for(int i=0;i<m_n;i++)
+        {
+         if(m_ticket[i]==ticket) return true;
+        }
+      return false;
+     }
+
+   void Forget(const string uid)
+     {
+      if(m_n<=0 || StringLen(uid)==0) return;
+      int j=0;
+      while(j<m_n)
+        {
+         if(m_uid[j]==uid)
+           {
+            m_n--;
+            m_uid[j]=m_uid[m_n];
+            m_ticket[j]=m_ticket[m_n];
+            m_uid[m_n]="";
+            m_ticket[m_n]=0;
+           }
+         else j++;
+        }
+     }
+
+   int Count() const { return m_n; }
+   string GetUid(const int idx) const { if(idx>=0 && idx<m_n) return m_uid[idx]; return ""; }
+  };
+
 #endif
 //+------------------------------------------------------------------+

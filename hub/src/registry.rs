@@ -160,6 +160,8 @@ pub struct ReceiverPositionItem {
     pub magic: i64,
     pub managed: bool,
     pub comment: String,
+    pub profit: f64,
+    pub swap: f64,
 }
 
 /// One waiting order in the receiver execution pipeline.
@@ -208,6 +210,16 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
         } else {
             String::new()
         };
+        let profit: f64 = if fields.len() >= 11 {
+            fields[10].parse().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let swap: f64 = if fields.len() >= 12 {
+            fields[11].parse().unwrap_or(0.0)
+        } else {
+            0.0
+        };
         items.push(ReceiverPositionItem {
             ticket,
             symbol,
@@ -219,6 +231,8 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
             magic,
             managed,
             comment,
+            profit,
+            swap,
         });
     }
     items

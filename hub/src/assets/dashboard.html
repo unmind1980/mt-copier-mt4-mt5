@@ -966,6 +966,13 @@
   .pos-filter-btn:hover{background:var(--panel);color:var(--ink);border-color:var(--dim)}
   .pos-filter-btn.active{background:var(--accent);color:#ffffff;border-color:var(--accent);font-weight:600;box-shadow:0 1px 2px rgba(37,99,235,0.25)}
 
+  .profit-pos{color:var(--ok)}
+  .profit-neg{color:var(--bad)}
+  .profit-zero{color:var(--dim)}
+  .pos-close-single-btn{padding:3px 9px;font-size:11px;font-weight:600;border-radius:4px;background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-border);cursor:pointer;transition:all .15s ease;white-space:nowrap}
+  .pos-close-single-btn:hover:not(:disabled){background:var(--bad);color:#ffffff}
+  .pos-close-single-btn:disabled{opacity:.55;cursor:not-allowed}
+
   /* Responsive Mobile Layout (@media max-width: 768px) */
   @media(max-width:768px){
     header{padding:10px 14px}
@@ -1481,11 +1488,15 @@
                 <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
                 <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
                 <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
+                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="开启后平仓单笔直接下发，跳过确认弹窗">
+                  <input type="checkbox" id="chk_fast_close" onchange="onToggleFastClose(this.checked)">
+                  <span style="color:var(--ink)">⚡ 极速平仓模式</span>
+                </label>
               </div>
 
               <div id="pos_rec_table_wrap" class="pos-table-wrap">
                 <table id="pos_rec_table">
-                  <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th>Pipeline Reason / Details</th></tr></thead>
+                  <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th class="num">Profit</th><th class="num">Swap</th><th>Pipeline Reason / Details</th><th style="text-align:center">Action</th></tr></thead>
                   <tbody id="pos_rec_tbody"></tbody>
                 </table>
                 <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
@@ -2246,6 +2257,10 @@
       <div class="confirm-content">
         <div id="confirmdesc" class="confirm-desc">Are you sure?</div>
         <div id="confirmdetail" class="confirm-detail"></div>
+        <label id="confirm_fast_close_label" style="display:none;align-items:center;gap:6px;cursor:pointer;margin-top:12px;font-size:12px;color:var(--ink);font-weight:600">
+          <input type="checkbox" id="chk_dialog_fast_close">
+          <span>记住选择，开启极速平仓模式 (本次后续不再弹窗提示)</span>
+        </label>
       </div>
     </div>
     <div class="confirmfoot">
@@ -2325,6 +2340,12 @@ function confirmDialog(opts){
     } else {
       detailEl.innerHTML = "";
       detailEl.classList.add("hidden");
+    }
+    var fcLabel = $("confirm_fast_close_label");
+    var fcChk = $("chk_dialog_fast_close");
+    if(fcLabel){
+      fcLabel.style.display = opts.showFastClose ? "inline-flex" : "none";
+      if(fcChk) fcChk.checked = false;
     }
     $("confirmicon").textContent = opts.icon || (opts.danger ? "⚠️" : "ℹ️");
     var okBtn = $("confirmokbtn");
@@ -2993,6 +3014,16 @@ function renderPosNodeDetail(){
           var priceStr = (p.open_px && Number(p.open_px) > 0) ? Number(p.open_px).toFixed(5) : "-";
           var slStr = (p.sl && Number(p.sl) > 0) ? Number(p.sl).toFixed(5) : "-";
           var tpStr = (p.tp && Number(p.tp) > 0) ? Number(p.tp).toFixed(5) : "-";
+          var pVal = (p.profit !== undefined && p.profit !== null) ? Number(p.profit) : 0.0;
+          var swVal = (p.swap !== undefined && p.swap !== null) ? Number(p.swap) : 0.0;
+          var pClass = pVal > 0 ? "profit-pos" : (pVal < 0 ? "profit-neg" : "profit-zero");
+          var swClass = swVal > 0 ? "profit-pos" : (swVal < 0 ? "profit-neg" : "profit-zero");
+          var pSign = pVal > 0 ? "+" : "";
+          var swSign = swVal > 0 ? "+" : "";
+          var profitHtml = '<span class="' + pClass + '" style="font-weight:700;font-family:var(--mono)">' + pSign + pVal.toFixed(2) + '</span>';
+          var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
+          var closeActionHtml = '<button type="button" class="pos-close-single-btn" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="平仓单笔 #' + esc(p.ticket) + '">❌ 平仓</button>';
+
           var details = p.managed
             ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
             : ('Manual / External (Magic: #' + p.magic + ')' + (p.comment ? (' · ' + esc(p.comment)) : ''));
@@ -3004,7 +3035,10 @@ function renderPosNodeDetail(){
                  '  <td class="num" style="font-family:var(--mono)">' + esc(p.lots) + '</td>' +
                  '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
                  '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
+                 '  <td class="num">' + profitHtml + '</td>' +
+                 '  <td class="num">' + swapHtml + '</td>' +
                  '  <td style="font-size:12px;color:var(--dim)">' + details + '</td>' +
+                 '  <td style="text-align:center">' + closeActionHtml + '</td>' +
                  '</tr>';
         } else {
           var w = entry.item;
@@ -3030,7 +3064,10 @@ function renderPosNodeDetail(){
                  '  <td class="num" style="font-family:var(--mono)">' + esc(w.lots) + '</td>' +
                  '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
                  '  <td class="num" style="font-family:var(--mono);color:var(--dim)">- / -</td>' +
+                 '  <td class="num" style="font-family:var(--mono);color:var(--dim)">-</td>' +
+                 '  <td class="num" style="font-family:var(--mono);color:var(--dim)">-</td>' +
                  '  <td style="font-size:12px;font-weight:600;color:var(--ink)">' + icon + esc(w.reason || "-") + '</td>' +
+                 '  <td style="text-align:center;font-size:11px;color:var(--dim)">Queued</td>' +
                  '</tr>';
         }
       }).join("");
@@ -3267,7 +3304,7 @@ function requestPosUpdate(){
     msg.className = "opmsg";
     msg.textContent = "Requesting immediate position table from " + k + "…";
   }
-  sendCommand(k, "reqpos", msg);
+  sendCommand(k, "reqpos", msg, { force: true });
   setTimeout(function(){
     s.posRequestInFlight = false;
     var b = $("pos_refresh_btn");
@@ -3275,7 +3312,83 @@ function requestPosUpdate(){
       b.disabled = false;
       b.textContent = "🔄 Request Update";
     }
-  }, 3000);
+  }, 1500);
+}
+
+var _fastCloseEnabled = false;
+function onToggleFastClose(val){
+  _fastCloseEnabled = !!val;
+  var c = $("chk_fast_close");
+  if(c) c.checked = _fastCloseEnabled;
+}
+
+function onCloseSinglePosition(nodeKey, ticket, symbol, side, lots, profit){
+  if(_fastCloseEnabled){
+    executeCloseSingle(nodeKey, ticket);
+    return;
+  }
+
+  var profitText = (profit > 0 ? "+" : "") + Number(profit).toFixed(2);
+  var descHtml = "确认立即平仓订单 <strong>#" + esc(ticket) + "</strong> (" + esc(symbol) + " " + esc(side) + " " + esc(lots) + " lots, 盈亏: " + profitText + ") 吗？";
+
+  confirmDialog({
+    title: "确认平仓单笔订单",
+    desc: descHtml,
+    showFastClose: true,
+    danger: true,
+    confirmText: "立即平仓"
+  }).then(function(ok){
+    if(!ok) return;
+    var dChk = $("chk_dialog_fast_close");
+    if(dChk && dChk.checked){
+      onToggleFastClose(true);
+    }
+    executeCloseSingle(nodeKey, ticket);
+  });
+}
+
+function executeCloseSingle(nodeKey, ticket){
+  var btn = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
+  if(btn){
+    btn.disabled = true;
+    btn.textContent = "⏳ 平仓中...";
+  }
+  var msgEl = $("pos_foot_msg") || $("gmsg");
+  if(msgEl){
+    msgEl.className = "opmsg";
+    msgEl.textContent = "正在向接收端下发平仓指令 #" + ticket + "...";
+  }
+
+  sendCommand(nodeKey, "close", msgEl, { ticket: ticket });
+
+  setTimeout(function(){
+    var curN = (s.data && s.data.nodes) ? s.data.nodes.find(function(x){ return x.key === nodeKey; }) : null;
+    if(curN && (s.selectedPosNode === nodeKey || ($("pos_node_select") && $("pos_node_select").value === nodeKey))){
+      sendCommand(nodeKey, "reqpos", null, { force: true });
+    }
+  }, 2000);
+}
+
+var _posAutoPollTimer = null;
+function startPosAutoPoll(){
+  stopPosAutoPoll();
+  _posAutoPollTimer = setInterval(function(){
+    var curTab = localStorage.getItem("mtc_active_tab");
+    if(curTab !== "cockpit" || document.hidden){
+      return;
+    }
+    var k = s.selectedPosNode || ($("pos_node_select") ? $("pos_node_select").value : "");
+    if(k && k.startsWith("receiver:") && (!s.data || !s.data.cluster || s.data.cluster.role !== "standby")){
+      sendCommand(k, "reqpos", null, { force: false });
+    }
+  }, 60000);
+}
+
+function stopPosAutoPoll(){
+  if(_posAutoPollTimer){
+    clearInterval(_posAutoPollTimer);
+    _posAutoPollTimer = null;
+  }
 }
 
 // ---------------------------------------------------------------- render
@@ -3494,12 +3607,14 @@ function switchMainTab(tab){
     if(vCockpit) vCockpit.style.display = "flex";
     localStorage.setItem("mtc_active_tab", "cockpit");
     renderCockpit(s.data && s.data.nodes || [], s.data && s.data.positions || []);
+    startPosAutoPoll();
   } else {
     if(bCockpit) bCockpit.classList.remove("active");
     if(bDash) bDash.classList.add("active");
     if(vCockpit) vCockpit.style.display = "none";
     if(vDash) vDash.style.display = "flex";
     localStorage.setItem("mtc_active_tab", "dash");
+    stopPosAutoPoll();
   }
 }
 
@@ -4271,13 +4386,21 @@ function startWS(){
 // Feedback is written into the .opmsg span of the same row. renderNodes never
 // overwrites that span (it only updates dot/k/nm/ps/st), so a status survives
 // the once-per-second re-render until the row SET itself changes.
-function sendCommand(k, op, msgEl){
+function sendCommand(k, op, msgEl, extraPayload){
   if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing " + op + "…"; }
   var url = "/api/v1/nodes/" + encodeURIComponent(k) + "/commands";
+  var payloadObj = { op: op };
+  if(extraPayload && typeof extraPayload === "object"){
+    for(var key in extraPayload){
+      if(Object.prototype.hasOwnProperty.call(extraPayload, key)){
+        payloadObj[key] = extraPayload[key];
+      }
+    }
+  }
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ op: op })
+    body: JSON.stringify(payloadObj)
   }).then(function(r){
     return r.json().then(function(j){ return { status: r.status, j: j }; });
   }).then(function(res){
@@ -4576,7 +4699,20 @@ function startDashboard(){
   var savedTab = localStorage.getItem("mtc_active_tab");
   if(savedTab === "cockpit"){
     switchMainTab("cockpit");
+  } else {
+    stopPosAutoPoll();
   }
+
+  document.addEventListener("visibilitychange", function(){
+    if(document.hidden){
+      stopPosAutoPoll();
+    } else {
+      var curTab = localStorage.getItem("mtc_active_tab");
+      if(curTab === "cockpit"){
+        startPosAutoPoll();
+      }
+    }
+  });
 
     // Split Cockpit sidebar click listener delegation
   var cList = $("cockpit_node_list");

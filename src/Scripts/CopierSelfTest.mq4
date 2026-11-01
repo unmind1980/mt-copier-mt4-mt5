@@ -83,6 +83,7 @@ CopierPos MakePos(const string uid,const long tkt,const string sym,const int sid
    CopierPos p;
    p.uid=uid; p.ticket=tkt; p.sym=sym; p.cmt=""; p.side=side;
    p.lots=lots; p.openPx=px; p.sl=sl; p.tp=tp; p.magic=magic; p.openTime=ots;
+   p.profit=0.0; p.swap=0.0;
    p.used=true;
    return p;
   }

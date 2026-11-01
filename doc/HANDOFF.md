@@ -1449,6 +1449,30 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - 自动化回归套件（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 222 元素）全量 PASS；
   - 实机验证 `MTCopierPrimary` 与 `MTCopierStandby` 安装、启动、状态查询、停止、重启、日志记录与 EA 实时收发正常。
 
+### 八十四次演进：持仓实时 Profit / Swap 穿透、单笔极速遥控平仓与按需防抖（2026-11-01 11:30；全部闭环）
+
+- **功能落地项**：
+  1. **底层真实浮盈与隔夜息采集**：
+     - `CopierModel.mqh` 采集 MT4 `OrderProfit() / OrderSwap()` 与 MT5 `POSITION_PROFIT / POSITION_SWAP`；
+     - `EncodeReceiverPositions` 扩展协议传输 `,profit,swap`，完全不参与也绝不破坏 Sender 快照指纹 Hashing 原理，保证 100% 向后兼容；
+  2. **单笔订单遥控平仓与动态忽略表垃圾回收（Anti-Reopen GC）**：
+     - 支持 `op == "close"`，以 `ticket` 唯一定位平仓目标，同时支持 Managed 托管单与 Manual 手动单；
+     - 平仓时将该单 UID 记录入 `g_manualClosed` 动态忽略表，彻底解决“信号源仍持仓导致接收端刚平仓又被误以为漏单而自动重开”的致命死锁；
+     - **全自动生命周期回收**：在每次 Converge 快照核对时，若检测到 Sender 已经退出并平掉了该单，接收端自动将该 UID 从忽略表彻底 DEL 释放，零泄漏、永不膨胀；
+  3. **30s 服务端防抖聚合与 Request Update 强制穿透**：
+     - Hub 端针对 `reqpos` 实现全局 30 秒聚合防抖，多管理员多页面同时在线时自动合并请求，避免 EA 遭受高频查询轰炸；
+     - 人工点击 `[🔄 Request Update]` 传递 `{ force: true }`，直接强制穿透 30s 锁，立即唤醒 EA 刷新；
+  4. **国际化视觉与免确认极速平仓**：
+     - Web UI 遵循国际金融色彩标准：利润 > 0 为绿色、利润 < 0 为红色、利息同步配色；
+     - 每一行 OPENED 订单右侧新增 `❌ 平仓` 按钮，点击时按钮立即置灰指示 `⏳ 平仓中...`，并在 2 秒后自动刷新；
+     - 确认弹窗支持勾选“记住选择，本次开启极速平仓”，顶部常驻快捷开关 `[ ] ⚡ 极速平仓模式`；
+     - 按需轮询：仅在处于 Cockpit 视图且页面可见时才激活 60s 轮询，页面最小化或切走时立刻销毁定时器。
+- **全栈验证结果**：
+  - 13/13 `hub_tls_test.py` 全绿通过；
+  - 153/153 Rust 单元测试全量 PASS；
+  - 4 终端 16 个 MQL 二进制编译全部 0 errors, 0 warnings (ALL GREEN)；
+  - 自动化回归套件（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 236 元素）全量 PASS。
+
 ---
 
 ## 9. 最终交付状态确认
