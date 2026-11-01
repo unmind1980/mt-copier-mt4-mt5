@@ -972,6 +972,33 @@
   .pos-close-single-btn{padding:3px 9px;font-size:11px;font-weight:600;border-radius:4px;background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-border);cursor:pointer;transition:all .15s ease;white-space:nowrap}
   .pos-close-single-btn:hover:not(:disabled){background:var(--bad);color:#ffffff}
   .pos-close-single-btn:disabled{opacity:.55;cursor:not-allowed}
+  .pos-close-single-btn.queued{background:#fffbeb;color:#b45309;border-color:#fde68a}
+  .pos-close-single-btn.queued:hover{background:#fef3c7}
+
+  /* Action Notice Banner directly on top of table */
+  .pos-action-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-radius:8px;font-size:12.5px;margin:8px 0;box-shadow:0 1px 3px rgba(0,0,0,0.04);transition:all .2s ease}
+  .pos-action-banner.warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+  .pos-action-banner.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+  .pos-action-banner.info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  .pos-action-banner.bad{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+  .pos-action-banner .ban-close{background:none;border:none;cursor:pointer;font-size:16px;color:inherit;opacity:.65;padding:2px 6px;line-height:1}
+  .pos-action-banner .ban-close:hover{opacity:1}
+
+  /* Table Header Sorting & Subtotal Styling */
+  .pos-th-sort{cursor:pointer;user-select:none;transition:background .15s ease;white-space:nowrap}
+  .pos-th-sort:hover{background:rgba(37,99,235,0.06);color:var(--accent)}
+  .sort-indicator{display:inline-block;margin-left:4px;font-size:11px;color:var(--dim);vertical-align:middle;opacity:.45}
+  .pos-th-sort.active .sort-indicator{opacity:1;color:var(--accent);font-weight:700}
+  .pos-subtotal-row td{background:var(--panel);border-top:2px solid var(--line);border-bottom:2px solid var(--line);padding:9px 12px;font-size:12.5px}
+
+  /* Global Toast Notifications */
+  #toast_container{position:fixed;top:24px;right:24px;z-index:99999;display:flex;flex-direction:column;gap:10px;pointer-events:none}
+  .toast-item{pointer-events:auto;min-width:280px;max-width:400px;padding:12px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,0.12);display:flex;align-items:flex-start;gap:10px;animation:toastIn .25s ease;transition:opacity .3s ease}
+  .toast-item.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+  .toast-item.warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+  .toast-item.bad{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+  .toast-item.info{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  @keyframes toastIn{from{transform:translateY(-12px);opacity:0}to{transform:translateY(0);opacity:1}}
 
   /* Responsive Mobile Layout (@media max-width: 768px) */
   @media(max-width:768px){
@@ -1473,6 +1500,9 @@
               <!-- Proposal C: Compact Waiting Pipeline status strip directly above the table -->
               <div id="pos_rec_waiting_wrap"></div>
 
+              <!-- Action Feedback Notification Banner (Directly under pipeline strip and above table) -->
+              <div id="pos_action_banner" style="display:none"></div>
+
               <!-- Main Orders & Positions Table (Top Priority, occupies primary view) -->
               <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
                 <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
@@ -1488,6 +1518,7 @@
                 <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
                 <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
                 <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
+                <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none;background:#f8fafc;color:var(--dim)" onclick="resetPosSort()">↺ 恢复默认排序</button>
                 <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="开启后平仓单笔直接下发，跳过确认弹窗">
                   <input type="checkbox" id="chk_fast_close" onchange="onToggleFastClose(this.checked)">
                   <span style="color:var(--ink)">⚡ 极速平仓模式</span>
@@ -1496,8 +1527,34 @@
 
               <div id="pos_rec_table_wrap" class="pos-table-wrap">
                 <table id="pos_rec_table">
-                  <thead><tr><th>Status / Stage</th><th>Ticket / UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Price</th><th class="num">SL / TP</th><th class="num">Profit</th><th class="num">Swap</th><th>Pipeline Reason / Details</th><th style="text-align:center">Action</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th class="pos-th-sort" onclick="togglePosSort('status')" title="点击排序">Status / Stage <span id="pos_sort_status" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('ticket')" title="点击排序">Ticket / UID <span id="pos_sort_ticket" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('symbol')" title="点击排序">Symbol <span id="pos_sort_symbol" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('side')" title="点击排序">Side <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="点击按手数大小排序">Volume <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('price')" title="点击按价格排序">Price <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
+                      <th class="num">SL / TP</th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="点击按盈亏排序">Profit <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="点击按隔夜利息排序">Swap <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('details')" title="点击排序">Pipeline Reason / Details <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
+                      <th style="text-align:center">Action</th>
+                    </tr>
+                  </thead>
                   <tbody id="pos_rec_tbody"></tbody>
+                  <tfoot id="pos_rec_tfoot">
+                    <tr class="pos-subtotal-row">
+                      <td colspan="4" style="text-align:right;font-weight:700">Subtotal 合计 (<span id="subtotal_orders_count">0</span> 笔):</td>
+                      <td class="num" style="font-family:var(--mono);font-weight:700;font-size:13px" id="subtotal_volume">0.00</td>
+                      <td class="num" style="color:var(--dim)">-</td>
+                      <td class="num" style="color:var(--dim)">- / -</td>
+                      <td class="num" style="font-weight:700;font-size:13px" id="subtotal_profit">$0.00</td>
+                      <td class="num" style="font-weight:700;font-size:13px" id="subtotal_swap">$0.00</td>
+                      <td style="color:var(--dim);font-size:11.5px">Real-time aggregate</td>
+                      <td style="text-align:center;color:var(--dim)">-</td>
+                    </tr>
+                  </tfoot>
                 </table>
                 <div id="pos_rec_empty" class="waiting-banner clear" style="margin-top:10px;display:none"></div>
               </div>
@@ -2280,6 +2337,8 @@
   </form>
 </div>
 
+<div id="toast_container"></div>
+
 <script>
 "use strict";
 // ---------------------------------------------------------------- state
@@ -2297,6 +2356,10 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           dismissedAlerts:{},
           selectedPosNode: null,
           posDetailFilter: "all",
+          posSortCol: null,
+          posSortDir: "none",
+          posActionNotice: null,
+          queuedCloseTickets: {},
           lastPosNodeKey: null,
           lastPosRowsHtml: null,
           lastHeldHtml: null,
@@ -2315,6 +2378,99 @@ function setPosDetailFilter(f){
   renderPosNodeDetail();
 }
 window.setPosDetailFilter = setPosDetailFilter;
+
+function showToast(title, desc, type){
+  var container = $("toast_container");
+  if(!container) return;
+  var item = document.createElement("div");
+  item.className = "toast-item " + (type || "info");
+  var icon = (type === "ok") ? "✅" : ((type === "warn") ? "🔒" : ((type === "bad") ? "⚠️" : "ℹ️"));
+  item.innerHTML = '<span style="font-size:16px;flex-shrink:0">' + icon + '</span>' +
+    '<div style="flex:1">' +
+    '  <div style="font-weight:700;font-size:13px">' + esc(title) + '</div>' +
+    (desc ? ('  <div style="font-size:12px;opacity:.9;margin-top:2px">' + esc(desc) + '</div>') : '') +
+    '</div>' +
+    '<button type="button" style="background:none;border:none;cursor:pointer;font-size:15px;color:inherit;opacity:.65;padding:0 2px" onclick="this.parentNode.remove()">✕</button>';
+  container.appendChild(item);
+  setTimeout(function(){
+    item.style.opacity = "0";
+    setTimeout(function(){ if(item.parentNode) item.parentNode.removeChild(item); }, 300);
+  }, 4500);
+}
+
+function showPosActionNotice(title, desc, type){
+  s.posActionNotice = {
+    title: title,
+    desc: desc,
+    type: type || "info",
+    ts: Date.now()
+  };
+  renderPosActionNotice();
+}
+
+function closePosActionBanner(){
+  s.posActionNotice = null;
+  var b = $("pos_action_banner");
+  if(b){
+    b.style.display = "none";
+    b.innerHTML = "";
+  }
+}
+window.closePosActionBanner = closePosActionBanner;
+
+function renderPosActionNotice(){
+  var b = $("pos_action_banner");
+  if(!b) return;
+  if(!s.posActionNotice || (Date.now() - s.posActionNotice.ts > 30000)){
+    b.style.display = "none";
+    b.innerHTML = "";
+    return;
+  }
+  var n = s.posActionNotice;
+  var icon = (n.type === "ok") ? "✅" : ((n.type === "warn") ? "🔒" : ((n.type === "bad") ? "⚠️" : "ℹ️"));
+  b.className = "pos-action-banner " + n.type;
+  b.style.display = "flex";
+  b.innerHTML =
+    '<div style="display:flex;align-items:center;gap:10px">' +
+    '  <span style="font-size:18px;flex-shrink:0">' + icon + '</span>' +
+    '  <div>' +
+    '    <div style="font-weight:700;font-size:13px">' + esc(n.title) + '</div>' +
+    (n.desc ? ('    <div style="font-size:12px;opacity:.9;margin-top:2px">' + esc(n.desc) + '</div>') : '') +
+    '  </div>' +
+    '</div>' +
+    '<button type="button" class="ban-close" onclick="closePosActionBanner()" title="关闭提示">✕</button>';
+}
+
+function togglePosSort(col){
+  if(s.posSortCol === col){
+    if(s.posSortDir === "asc"){
+      s.posSortDir = "desc";
+    } else if(s.posSortDir === "desc"){
+      s.posSortCol = null;
+      s.posSortDir = "none";
+    } else {
+      s.posSortDir = "asc";
+    }
+  } else {
+    s.posSortCol = col;
+    if(col === "profit" || col === "volume" || col === "swap" || col === "ticket"){
+      s.posSortDir = "desc";
+    } else {
+      s.posSortDir = "asc";
+    }
+  }
+  s.lastPosRowsHtml = null;
+  renderPosNodeDetail();
+}
+window.togglePosSort = togglePosSort;
+
+function resetPosSort(){
+  s.posSortCol = null;
+  s.posSortDir = "none";
+  s.lastPosRowsHtml = null;
+  renderPosNodeDetail();
+}
+window.resetPosSort = resetPosSort;
 
 function $(id){ return document.getElementById(id); }
 function esc(x){
@@ -2985,6 +3141,27 @@ function renderPosNodeDetail(){
       bUnman.className = "pos-filter-btn" + (curFilter === "unmanaged" ? " active" : "");
     }
 
+    renderPosActionNotice();
+
+    var sortCols = ["status", "ticket", "symbol", "side", "volume", "price", "profit", "swap", "details"];
+    for(var sci = 0; sci < sortCols.length; sci++){
+      var scName = sortCols[sci];
+      var sIconEl = $("pos_sort_" + scName);
+      if(sIconEl){
+        if(s.posSortCol === scName){
+          sIconEl.textContent = (s.posSortDir === "asc") ? "▲" : "▼";
+          sIconEl.parentNode.classList.add("active");
+        } else {
+          sIconEl.textContent = "⇅";
+          sIconEl.parentNode.classList.remove("active");
+        }
+      }
+    }
+    var bSortReset = $("pos_sort_reset_btn");
+    if(bSortReset){
+      bSortReset.style.display = (s.posSortCol && s.posSortDir !== "none") ? "" : "none";
+    }
+
     var displayItems = [];
     if(curFilter === "all"){
       displayItems = opened.map(function(p){ return { type:"opened", item:p }; })
@@ -2997,6 +3174,48 @@ function renderPosNodeDetail(){
       displayItems = managedOrders.map(function(p){ return { type:"opened", item:p }; });
     } else if(curFilter === "unmanaged"){
       displayItems = unmanagedOrders.map(function(p){ return { type:"opened", item:p }; });
+    }
+
+    // Apply active column sorting
+    if(s.posSortCol && s.posSortDir !== "none"){
+      var sortC = s.posSortCol;
+      var isAsc = (s.posSortDir === "asc");
+      displayItems.sort(function(a, b){
+        var itemA = a.item;
+        var itemB = b.item;
+        var valA, valB;
+        if(sortC === "ticket"){
+          valA = Number(itemA.ticket) || 0;
+          valB = Number(itemB.ticket) || 0;
+        } else if(sortC === "symbol"){
+          valA = String(itemA.symbol || "").toUpperCase();
+          valB = String(itemB.symbol || "").toUpperCase();
+        } else if(sortC === "side"){
+          valA = String(itemA.side || "").toUpperCase();
+          valB = String(itemB.side || "").toUpperCase();
+        } else if(sortC === "volume"){
+          valA = Number(itemA.lots) || 0.0;
+          valB = Number(itemB.lots) || 0.0;
+        } else if(sortC === "price"){
+          valA = Number(itemA.open_px) || 0.0;
+          valB = Number(itemB.open_px) || 0.0;
+        } else if(sortC === "profit"){
+          valA = (itemA.profit !== undefined && itemA.profit !== null) ? Number(itemA.profit) : 0.0;
+          valB = (itemB.profit !== undefined && itemB.profit !== null) ? Number(itemB.profit) : 0.0;
+        } else if(sortC === "swap"){
+          valA = (itemA.swap !== undefined && itemA.swap !== null) ? Number(itemA.swap) : 0.0;
+          valB = (itemB.swap !== undefined && itemB.swap !== null) ? Number(itemB.swap) : 0.0;
+        } else if(sortC === "status"){
+          valA = (a.type === "opened" ? 1 : 0);
+          valB = (b.type === "opened" ? 1 : 0);
+        } else if(sortC === "details"){
+          valA = String(itemA.comment || itemA.reason || "");
+          valB = String(itemB.comment || itemB.reason || "");
+        }
+        if(valA < valB) return isAsc ? -1 : 1;
+        if(valA > valB) return isAsc ? 1 : -1;
+        return 0;
+      });
     }
 
     var tableEl = $("pos_rec_table");
@@ -3022,7 +3241,11 @@ function renderPosNodeDetail(){
           var swSign = swVal > 0 ? "+" : "";
           var profitHtml = '<span class="' + pClass + '" style="font-weight:700;font-family:var(--mono)">' + pSign + pVal.toFixed(2) + '</span>';
           var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
-          var closeActionHtml = '<button type="button" class="pos-close-single-btn" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="平仓单笔 #' + esc(p.ticket) + '">❌ 平仓</button>';
+          var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[p.ticket]);
+          var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
+          var btnText = isTicketQueued ? "⏱️ 已排队待平" : "❌ 平仓";
+          var btnTitle = isTicketQueued ? "已在接收端成功排队，待周一开市后券商自动平仓" : ("平仓单笔 #" + esc(p.ticket));
+          var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
             ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
@@ -3078,8 +3301,45 @@ function renderPosNodeDetail(){
         $("pos_rec_tbody").innerHTML = dRows;
         s.lastPosRowsHtml = dRows;
       }
+
+      // Calculate and update Subtotals
+      var subLots = 0.0;
+      var subProfit = 0.0;
+      var subSwap = 0.0;
+      for(var k = 0; k < displayItems.length; k++){
+        var itm = displayItems[k];
+        if(itm.type === "opened"){
+          subLots += Number(itm.item.lots) || 0.0;
+          subProfit += (itm.item.profit !== undefined && itm.item.profit !== null) ? Number(itm.item.profit) : 0.0;
+          subSwap += (itm.item.swap !== undefined && itm.item.swap !== null) ? Number(itm.item.swap) : 0.0;
+        } else if(itm.type === "waiting"){
+          subLots += Number(itm.item.lots) || 0.0;
+        }
+      }
+
+      if($("subtotal_orders_count")) $("subtotal_orders_count").textContent = displayItems.length;
+      if($("subtotal_volume")) $("subtotal_volume").textContent = subLots.toFixed(2);
+
+      var subPEl = $("subtotal_profit");
+      if(subPEl){
+        var subPClass = subProfit > 0 ? "profit-pos" : (subProfit < 0 ? "profit-neg" : "profit-zero");
+        var subPSign = subProfit > 0 ? "+" : "";
+        subPEl.className = "num " + subPClass;
+        subPEl.textContent = subPSign + subProfit.toFixed(2);
+      }
+
+      var subSwEl = $("subtotal_swap");
+      if(subSwEl){
+        var subSwClass = subSwap > 0 ? "profit-pos" : (subSwap < 0 ? "profit-neg" : "profit-zero");
+        var subSwSign = subSwap > 0 ? "+" : "";
+        subSwEl.className = "num " + subSwClass;
+        subSwEl.textContent = subSwSign + subSwap.toFixed(2);
+      }
+
+      if($("pos_rec_tfoot")) $("pos_rec_tfoot").style.display = "";
     } else {
       if(tableEl) tableEl.style.display = "none";
+      if($("pos_rec_tfoot")) $("pos_rec_tfoot").style.display = "none";
       if(emptyEl){
         emptyEl.style.display = "";
         emptyEl.innerHTML =
@@ -3353,11 +3613,11 @@ function executeCloseSingle(nodeKey, ticket){
     btn.disabled = true;
     btn.textContent = "⏳ 平仓中...";
   }
+
+  showPosActionNotice("正在向接收端下发平仓指令 #" + ticket + "...", "请稍候，平仓请求正在穿透 ZeroMQ 控制通道...", "info");
+  showToast("平仓指令下发中", "正在下发订单 #" + ticket + " 平仓指令...", "info");
+
   var msgEl = $("pos_foot_msg") || $("gmsg");
-  if(msgEl){
-    msgEl.className = "opmsg";
-    msgEl.textContent = "正在向接收端下发平仓指令 #" + ticket + "...";
-  }
 
   var resetBtn = function(isQueuedMarketClosed){
     var b = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
@@ -3365,39 +3625,45 @@ function executeCloseSingle(nodeKey, ticket){
       b.disabled = false;
       if(isQueuedMarketClosed){
         b.textContent = "⏱️ 已排队待平";
+        b.className = "pos-close-single-btn queued";
         b.title = "已在接收端成功排队，待周一开市后券商自动平仓";
       } else {
         b.textContent = "❌ 平仓";
+        b.className = "pos-close-single-btn";
       }
     }
     s.lastPosRowsHtml = null; // Invalidate DOM cache so subsequent renders won't get stuck
   };
 
-  // Safe timeout: button resets after 3.5s at latest, preventing permanent freeze
-  var safeTimer = setTimeout(function(){ resetBtn(false); }, 3500);
+  // Safe timeout: button resets after 10s at latest, preventing permanent freeze
+  var safeTimer = setTimeout(function(){ resetBtn(false); }, 10000);
 
   sendCommand(nodeKey, "close", msgEl, { ticket: ticket }, function(ok, j){
     clearTimeout(safeTimer);
     var isMktClosed = (j && typeof j === "object" && j.err && j.err.indexOf("market_closed") >= 0);
+    if(isMktClosed){
+      if(!s.queuedCloseTickets) s.queuedCloseTickets = {};
+      s.queuedCloseTickets[ticket] = true;
+    }
     resetBtn(isMktClosed);
     if(ok){
-      if(msgEl){
-        msgEl.className = "opmsg ok";
-        if(isMktClosed){
-          msgEl.textContent = "✅ 订单 #" + ticket + " 已在接收端成功排队！当前处于周末休市 (Market Closed)，待周一开盘后经纪商将自动撮合成交。";
-        } else {
-          msgEl.textContent = "✅ 订单 #" + ticket + " 平仓指令已送达接收端执行中...";
-        }
+      if(isMktClosed){
+        showPosActionNotice("【周末休市排队中】订单 #" + ticket + " 已在接收端成功排队待平！",
+          "当前外汇市场处于周末闭市状态 (Market Closed)。平仓指令已进入接收端优先执行队列，待周一开市后经纪商将自动撮合成交。", "warn");
+        showToast("已排队待平 (休市)", "订单 #" + ticket + " 已排队，待周一开市后自动撮合成交", "warn");
+      } else {
+        showPosActionNotice("✅ 订单 #" + ticket + " 平仓指令已送达接收端执行中", "接收端已确认处理平仓动作。", "ok");
+        showToast("平仓指令已送达", "订单 #" + ticket + " 正在执行平仓", "ok");
       }
     } else {
-      if(msgEl){
-        msgEl.className = "opmsg bad";
-        var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "命令被拒绝"));
-        if(errMsg.indexOf("unknown op close") >= 0){
-          msgEl.textContent = "⚠️ 平仓失败：接收端 EA 仍运行旧版本，请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！";
-        } else {
-          msgEl.textContent = "⚠️ 平仓指令未能执行：#" + ticket + " (" + errMsg + ")";
-        }
+      var errMsg = (typeof j === "string" ? j : (j && j.err ? j.err : "命令被拒绝"));
+      if(errMsg.indexOf("unknown op close") >= 0){
+        showPosActionNotice("⚠️ 平仓失败：接收端 EA 仍运行旧版本",
+          "请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！", "bad");
+        showToast("平仓失败", "接收端 EA 仍为旧版，请切换图表周期重新加载", "bad");
+      } else {
+        showPosActionNotice("⚠️ 平仓指令未能执行：#" + ticket, errMsg, "bad");
+        showToast("平仓未执行", "订单 #" + ticket + ": " + errMsg, "bad");
       }
     }
   });
