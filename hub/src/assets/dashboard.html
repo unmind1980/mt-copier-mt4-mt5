@@ -1296,11 +1296,11 @@
   <div class="main-tabs">
     <button type="button" class="tab-trigger active" id="tab_btn_dash" onclick="switchMainTab('dash')">
       <span>📊</span>
-      <span>Main Dashboard</span>
+      <span data-i18n="nav.tab_dash">Main Dashboard</span>
     </button>
     <button type="button" class="tab-trigger" id="tab_btn_cockpit" onclick="switchMainTab('cockpit')">
       <span>🎛️</span>
-      <span>Split Cockpit</span>
+      <span data-i18n="nav.tab_cockpit">Split Cockpit</span>
     </button>
   </div>
 
@@ -1321,9 +1321,17 @@
       <span id="theme_text">Night Mode</span>
     </button>
 
+    <div class="lang-selector-wrap" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);padding:3px 8px;border-radius:6px;border:1px solid var(--line);font-size:12px">
+      <span style="font-size:13px">🌐</span>
+      <select id="lang_select" onchange="setLanguage(this.value)" style="background:none;border:none;color:var(--ink);font-size:12px;font-weight:600;cursor:pointer;outline:none">
+        <option value="en">English</option>
+        <option value="zh-CN">简体中文</option>
+      </select>
+    </div>
+
     <button type="button" class="btn-sm" id="header_hubkey_btn">🔑 Hub Key</button>
-    <button type="button" class="btn-sm" id="header_ssl_btn">🔒 SSL / HTTPS</button>
-    <button type="button" class="btn-sm" id="header_logout_btn">Log Out</button>
+    <button type="button" class="btn-sm" id="header_ssl_btn" data-i18n="nav.btn_ssl">🔒 SSL / HTTPS</button>
+    <button type="button" class="btn-sm" id="header_logout_btn" data-i18n="nav.btn_logout">Log Out</button>
   </div>
 </header>
 
@@ -1334,17 +1342,17 @@
       <span id="cluster_icon">🛡️</span>
       <span id="cluster_status_text">Cluster Status</span>
       <span id="cluster_peer_badge" class="pill" style="cursor:pointer" onclick="openPeerModal()" title="Click to configure cluster peer IP">Peer: -</span>
-      <button type="button" class="btn-sm" id="btn_cluster_peer_cfg" onclick="openPeerModal()" style="font-size:11px;padding:2px 8px;margin-left:6px" title="Configure cluster peer IP">⚙️ Peer Settings</button>
+      <button type="button" class="btn-sm" id="btn_cluster_peer_cfg" onclick="openPeerModal()" style="font-size:11px;padding:2px 8px;margin-left:6px" title="Configure cluster peer IP" data-i18n="cluster.peer_settings">⚙️ Peer Settings</button>
       <span id="cluster_failback_info" class="cluster-failback-text"></span>
     </div>
     <div class="cluster-actions">
-      <button type="button" class="btn-sm btn-warn" id="btn_cluster_promote" onclick="onClusterPromote()">⚡ Promote to Primary</button>
-      <button type="button" class="btn-sm" id="btn_cluster_failback_now" onclick="onClusterFailbackNow()">⚡ Failback Now</button>
+      <button type="button" class="btn-sm btn-warn" id="btn_cluster_promote" onclick="onClusterPromote()" data-i18n="cluster.promote_primary">⚡ Promote to Primary</button>
+      <button type="button" class="btn-sm" id="btn_cluster_failback_now" onclick="onClusterFailbackNow()" data-i18n="cluster.failback_now">⚡ Failback Now</button>
       <label class="cluster-lock-label" title="Lock standby as Primary (prevent auto-failback)">
         <input type="checkbox" id="chk_failback_lock" onchange="onToggleFailbackLock(this.checked)">
-        <span>Lock as Master</span>
+        <span data-i18n="cluster.lock_master">Lock as Master</span>
       </label>
-      <a href="#" target="_blank" class="btn-sm" id="link_peer_console" style="display:none; text-decoration:none;">🔗 Open Peer Console</a>
+      <a href="#" target="_blank" class="btn-sm" id="link_peer_console" style="display:none; text-decoration:none;" data-i18n="cluster.open_peer_console">🔗 Open Peer Console</a>
     </div>
   </div>
 </div>
@@ -1355,7 +1363,7 @@
   <div class="kpi-grid">
     <div class="kpi-card" id="kpi_card_nodes">
       <div class="kpi-card-head">
-        <span class="kpi-title">Active Terminals</span>
+        <span class="kpi-title" data-i18n="kpi.terminals">Active Terminals</span>
         <span class="kpi-icon">🖥️</span>
       </div>
       <div class="kpi-value" id="kpi_nodes_val">-</div>
@@ -1364,16 +1372,16 @@
     
     <div class="kpi-card" id="kpi_card_pos" style="cursor:pointer" title="Click to view open positions breakdown">
       <div class="kpi-card-head">
-        <span class="kpi-title">Open Positions</span>
+        <span class="kpi-title" data-i18n="kpi.open_positions">Open Positions</span>
         <span class="kpi-icon">📊</span>
       </div>
       <div class="kpi-value" id="kpi_pos_val">-</div>
-      <div class="kpi-subtitle" id="kpi_pos_sub">Click to inspect &rarr;</div>
+      <div class="kpi-subtitle" id="kpi_pos_sub" data-i18n="kpi.inspect_arrow">Click to inspect &rarr;</div>
     </div>
 
     <div class="kpi-card" id="kpi_card_wait" style="cursor:pointer" title="Click to view receiver waiting telemetry">
       <div class="kpi-card-head">
-        <span class="kpi-title">Waiting to Open</span>
+        <span class="kpi-title" data-i18n="kpi.waiting">Waiting to Open</span>
         <span class="kpi-icon">⏳</span>
       </div>
       <div class="kpi-value" id="kpi_wait_val">-</div>
@@ -1382,7 +1390,7 @@
 
     <div class="kpi-card" id="kpi_card_hub">
       <div class="kpi-card-head">
-        <span class="kpi-title">Hub Status</span>
+        <span class="kpi-title" data-i18n="kpi.hub_engine">Hub Router Engine</span>
         <span class="kpi-icon">⚡</span>
       </div>
       <div class="kpi-value" id="kpi_hub_val">-</div>
@@ -1392,15 +1400,15 @@
 
   <section id="globalops" class="gops-ribbon">
     <div class="gops-group">
-      <span class="gops-title-label">Global Operations: <span id="gstate" style="display:none"></span></span>
-      <button type="button" class="btn-sm btn-danger opbtn" data-gop="closeall">🛑 CLOSE ALL (Every Receiver)</button>
-      <button type="button" class="btn-sm opbtn" data-gop="pause">⏸️ Pause ALL</button>
-      <button type="button" class="btn-sm opbtn" data-gop="resume">▶️ Resume ALL</button>
+      <span class="gops-title-label"><span data-i18n="gops.title">Global Operations:</span> <span id="gstate" style="display:none"></span></span>
+      <button type="button" class="btn-sm btn-danger opbtn" data-gop="closeall" data-i18n="gops.close_all">🛑 CLOSE ALL (Every Receiver)</button>
+      <button type="button" class="btn-sm opbtn" data-gop="pause" data-i18n="gops.pause_all">⏸️ Pause ALL</button>
+      <button type="button" class="btn-sm opbtn" data-gop="resume" data-i18n="gops.resume_all">▶️ Resume ALL</button>
     </div>
     <div class="gops-divider"></div>
     <div class="gops-group">
-      <button type="button" class="btn-sm opbtn" id="btn-view-pos">📊 Positions</button>
-      <button type="button" class="btn-sm opbtn" id="btn-gop-cfg">⚙️ Receiver Config</button>
+      <button type="button" class="btn-sm opbtn" id="btn-view-pos" data-i18n="nodes.btn_inspect">📊 Positions</button>
+      <button type="button" class="btn-sm opbtn" id="btn-gop-cfg" data-i18n="nodes.btn_config">⚙️ Receiver Config</button>
       <button type="button" class="btn-sm opbtn" id="btn-gop-notif">🔔 Notifications</button>
       <button type="button" class="btn-sm opbtn" id="btn-download-hub-key">🔑 Hub Key</button>
       <button type="button" class="btn-sm btn-primary opbtn" id="btn-open-cfg">+ Configure Receiver</button>
@@ -1485,9 +1493,9 @@
               <select id="pos_node_select" class="pos-node-select" style="padding:4px 8px;font:12px var(--mono);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px"></select>
             </div>
             <div class="pos-node-nav" style="display:flex;gap:4px">
-              <button type="button" id="pos_prev_btn" class="btn-sm" title="Previous node">◀ Prev</button>
-              <button type="button" id="pos_next_btn" class="btn-sm" title="Next node">Next ▶</button>
-              <button type="button" id="posclose_x" class="btn-sm" onclick="switchMainTab('dash')" title="Back to Dashboard">✕ Back</button>
+              <button type="button" id="pos_prev_btn" class="btn-sm" title="Previous node" data-i18n="cockpit.nav_prev">◀ Prev</button>
+              <button type="button" id="pos_next_btn" class="btn-sm" title="Next node" data-i18n="cockpit.nav_next">Next ▶</button>
+              <button type="button" id="posclose_x" class="btn-sm" onclick="switchMainTab('dash')" title="Back to Dashboard" data-i18n="cockpit.back_to_dash" data-i18n-title="cockpit.back_to_dash">✕ Back</button>
             </div>
           </div>
         </div>
@@ -1505,10 +1513,10 @@
 
               <!-- Main Orders & Positions Table (Top Priority, occupies primary view) -->
               <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;margin-bottom:8px;flex-wrap:wrap;gap:10px">
-                <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0">📋 Line-by-Line Orders &amp; Positions</div>
+                <div id="pos_rec_table_title" class="pos-section-title" style="margin-bottom:0" data-i18n="cockpit.table_title">📋 Line-by-Line Orders &amp; Positions</div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>Auto-updates 1 min</span>
-                  <button type="button" id="pos_refresh_btn" class="btn-sm" onclick="requestPosUpdate()" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:5px 12px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer">🔄 Request Update</button>
+                  <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span><span data-i18n="cockpit.auto_updates_1min">Auto-updates 1 min</span></span>
+                  <button type="button" id="pos_refresh_btn" class="btn-sm" onclick="requestPosUpdate()" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;padding:5px 12px;background:#eff6ff;color:var(--accent);border-color:#bfdbfe;border-radius:6px;cursor:pointer" data-i18n="cockpit.btn_request_update">🔄 Request Update</button>
                 </div>
               </div>
 
@@ -1529,23 +1537,23 @@
                 <table id="pos_rec_table">
                   <thead>
                     <tr>
-                      <th class="pos-th-sort" onclick="togglePosSort('status')" title="Click to sort">Status / Stage <span id="pos_sort_status" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('ticket')" title="Click to sort">Ticket / UID <span id="pos_sort_ticket" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('symbol')" title="Click to sort">Symbol <span id="pos_sort_symbol" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('side')" title="Click to sort">Side <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="Click to sort by volume">Volume <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('price')" title="Click to sort by price">Price <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
-                      <th class="num">SL / TP</th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="Click to sort by profit">Profit <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="Click to sort by swap">Swap <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
-                      <th class="pos-th-sort" onclick="togglePosSort('details')" title="Click to sort">Pipeline Reason / Details <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
-                      <th style="text-align:center">Action</th>
+                      <th class="pos-th-sort" onclick="togglePosSort('status')" title="Click to sort"><span data-i18n="cockpit.th_status">Status / Stage</span> <span id="pos_sort_status" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('ticket')" title="Click to sort"><span data-i18n="cockpit.th_ticket">Ticket / UID</span> <span id="pos_sort_ticket" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('symbol')" title="Click to sort"><span data-i18n="cockpit.th_symbol">Symbol</span> <span id="pos_sort_symbol" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('side')" title="Click to sort"><span data-i18n="cockpit.th_side">Side</span> <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="Click to sort by volume"><span data-i18n="cockpit.th_volume">Volume</span> <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('price')" title="Click to sort by price"><span data-i18n="cockpit.th_price">Price</span> <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
+                      <th class="num" data-i18n="cockpit.th_sltp">SL / TP</th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="Click to sort by profit"><span data-i18n="cockpit.th_profit">Profit</span> <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="Click to sort by swap"><span data-i18n="cockpit.th_swap">Swap</span> <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
+                      <th class="pos-th-sort" onclick="togglePosSort('details')" title="Click to sort"><span data-i18n="cockpit.th_details">Pipeline Reason / Details</span> <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
+                      <th style="text-align:center" data-i18n="cockpit.th_action">Action</th>
                     </tr>
                   </thead>
                   <tbody id="pos_rec_tbody"></tbody>
                   <tfoot id="pos_rec_tfoot">
                     <tr class="pos-subtotal-row">
-                      <td colspan="4" style="text-align:right;font-weight:700">Subtotal (<span id="subtotal_orders_count">0</span> orders):</td>
+                      <td colspan="4" style="text-align:right;font-weight:700" id="subtotal_orders_label">Subtotal (<span id="subtotal_orders_count">0</span> orders):</td>
                       <td class="num" style="font-family:var(--mono);font-weight:700;font-size:13px" id="subtotal_volume">0.00</td>
                       <td></td>
                       <td></td>
@@ -1559,7 +1567,7 @@
               </div>
 
               <!-- Summary Cards placed at the bottom as final summary statistics -->
-              <div class="pos-section-title" style="margin-top:24px">📦 Position &amp; Mirror Summary Statistics</div>
+              <div class="pos-section-title" style="margin-top:24px" data-i18n="cockpit.summary_title">📦 Position &amp; Mirror Summary Statistics</div>
               <div id="pos_rec_held_cards" class="pos-card-grid"></div>
             </div>
 
@@ -1574,7 +1582,7 @@
 
         <div class="posfoot-embedded">
           <span class="opmsg" id="pos_foot_msg" style="flex:1">Real-time telemetry streamed via ZeroMQ STAT and SNAP streams</span>
-          <button type="button" id="posclose_btn" class="btn-sm" onclick="switchMainTab('dash')">Back to Dashboard</button>
+          <button type="button" id="posclose_btn" class="btn-sm" onclick="switchMainTab('dash')" data-i18n="cockpit.back_to_dash">Back to Dashboard</button>
         </div>
       </div>
 
@@ -2371,6 +2379,513 @@ var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
           // does not - see renderNodes/renderPositions.
           nodeKeys:null, nodeRows:null, posKeys:null, posRows:null };
 
+function $(id){ return document.getElementById(id); }
+function esc(x){
+  return String(x).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+
+// ---------------------------------------------------------------- i18n
+var I18N_BUILTIN = {
+  "en": {
+    "common": {
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "close": "Close",
+      "save": "Save",
+      "apply": "Apply",
+      "status": "Status",
+      "actions": "Actions",
+      "loading": "Loading...",
+      "error": "Error",
+      "warning": "Warning",
+      "success": "Success",
+      "unknown": "Unknown"
+    },
+    "nav": {
+      "tab_dash": "Main Dashboard",
+      "tab_cockpit": "Split Cockpit",
+      "btn_ssl": "🔒 SSL / HTTPS",
+      "btn_logout": "Log Out"
+    },
+    "kpi": {
+      "terminals": "Active Terminals",
+      "open_positions": "Open Positions",
+      "waiting": "Waiting to Open",
+      "hub_engine": "Hub Router Engine",
+      "inspect_arrow": "Click to inspect →"
+    },
+    "gops": {
+      "title": "Global Receiver Operations",
+      "pause_all": "⏸️ Pause All",
+      "resume_all": "▶️ Resume All",
+      "close_all": "⚠️ Close All Positions",
+      "reload_all": "🔄 Reload All INI",
+      "confirm_global_close_title": "⚠️ Dangerous Action: Global Close All",
+      "confirm_global_close_desc": "Close ALL positions across EVERY receiver?",
+      "confirm_global_close_detail": "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
+      "confirm_global_close_btn": "Yes, Close All Positions",
+      "confirm_global_pause_title": "Pause All Receivers",
+      "confirm_global_pause_desc": "Pause copying on ALL receivers?",
+      "confirm_global_pause_detail": "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+      "confirm_global_pause_btn": "Pause All Receivers"
+    },
+    "nodes": {
+      "th_role": "Role",
+      "th_node_id": "Node ID / Name",
+      "th_account": "Account / Broker",
+      "th_liveness": "Liveness",
+      "th_ping": "Latency",
+      "th_financials": "Equity / Balance",
+      "th_positions": "Open Positions",
+      "th_actions": "Actions",
+      "btn_inspect": "🔍 Positions",
+      "btn_config": "⚙️ Config",
+      "btn_pause": "Pause",
+      "btn_resume": "Resume",
+      "btn_close_all": "Close All",
+      "confirm_close_all_title": "Confirm Close All Positions",
+      "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
+      "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
+    },
+    "cockpit": {
+      "back_to_dash": "Back to Dashboard",
+      "nav_prev": "◀ Prev Node",
+      "nav_next": "Next Node ▶",
+      "auto_updates_1min": "Auto-updates 1 min",
+      "btn_request_update": "🔄 Request Update",
+      "btn_requesting": "⏳ Requesting…",
+      "table_title": "📋 Line-by-Line Orders & Positions",
+      "filter_all": "All",
+      "filter_opened": "Opened",
+      "filter_waiting": "Waiting",
+      "filter_managed": "Managed",
+      "filter_unmanaged": "Orphan / Manual",
+      "btn_reset_sort": "↺ Reset Sort",
+      "fast_close_mode": "⚡ Fast Close Mode",
+      "fast_close_tooltip": "Close orders immediately on click without confirmation dialog",
+      "th_status": "Status / Stage",
+      "th_ticket": "Ticket / UID",
+      "th_symbol": "Symbol",
+      "th_side": "Side",
+      "th_volume": "Volume",
+      "th_price": "Price",
+      "th_sltp": "SL / TP",
+      "th_profit": "Profit",
+      "th_swap": "Swap",
+      "th_details": "Pipeline Reason / Details",
+      "th_action": "Action",
+      "btn_close": "❌ Close",
+      "btn_closing": "⏳ Closing...",
+      "btn_queued_close": "⏱️ Queued for Close",
+      "btn_queued_tooltip": "Queued on receiver; broker will execute upon Monday market open",
+      "subtotal_label": "Subtotal ({count} orders):",
+      "confirm_close_title": "Confirm Close Single Order",
+      "confirm_close_desc": "Are you sure you want to close order <strong>#{ticket}</strong> ({symbol} {side} {lots} lots, Profit: {profit}) immediately?",
+      "confirm_close_btn": "Close Order",
+      "remember_fast_close": "Remember choice & enable Fast Close mode (no prompt for subsequent closes)",
+      "summary_title": "📦 Position & Mirror Summary Statistics",
+      "managed_mirrors": "Managed Mirrors",
+      "managed_mirrors_sub": "Active copier mirror positions managed by engine",
+      "orphan_manual": "Orphan / Manual Positions",
+      "orphan_manual_sub": "External or manual orders with non-copier magic",
+      "no_orphan_manual_sub": "No untracked or manual positions",
+      "gross_account_open": "Gross Account Open",
+      "gross_account_open_sub": "Total open positions currently active on this terminal",
+      "pipeline_synced": "Pipeline Execution: All Orders Synchronized",
+      "pipeline_synced_sub": "(0 in broker queue · 0 gate delayed · 0 market closed)",
+      "stage_broker_queue": "⚡ 1. Broker Queue",
+      "stage_gate_delayed": "⏱️ 2. Gate Delayed",
+      "stage_mkt_closed": "🔒 3. Market Closed",
+      "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):"
+    },
+    "notices": {
+      "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",
+      "mkt_closed_desc": "Foreign exchange markets are closed for the weekend. The close order has been accepted into the receiver priority queue and will be executed by the broker as soon as the market opens on Monday.",
+      "already_queued_title": "Order #{ticket} is already in the execution queue",
+      "already_queued_desc": "This order has already been queued for closing and is waiting for broker matching.",
+      "close_dispatched_title": "✅ Order #{ticket} close instruction received",
+      "close_dispatched_desc": "Receiver confirmed action queueing.",
+      "close_failed_old_ea_title": "⚠️ Close Rejected: Receiver EA running older build",
+      "close_failed_old_ea_desc": "Please switch timeframe on the chart or press F7 in MT4 to reload the latest EA binary!",
+      "close_failed_title": "⚠️ Close instruction could not execute: #{ticket}",
+      "toast_dispatched": "Dispatching close command for order #{ticket}...",
+      "toast_queued_mkt": "Order #{ticket} queued, broker will execute upon market open.",
+      "toast_already_queued": "Order #{ticket} is already queued for close"
+    },
+    "cluster": {
+      "title": "Cluster Status",
+      "peer_settings": "⚙️ Peer Settings",
+      "promote_primary": "⚡ Promote to Primary",
+      "failback_now": "⚡ Failback Now",
+      "lock_master": "Lock as Master",
+      "open_peer_console": "🔗 Open Peer Console",
+      "modal_title": "🔄 Cluster Peer Settings",
+      "current_mode": "Current Mode:",
+      "peer_api": "Peer API:",
+      "peer_zmq": "Peer ZMQ:",
+      "input_ip_label": "Peer VPS Public IP Address",
+      "input_ip_placeholder": "e.g. 168.100.200.50 (leave blank for standalone)",
+      "input_ip_hint": "Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.",
+      "input_api_port_label": "Peer Web API Port",
+      "input_api_port_hint": "Default 6010 (or 6011 for local test)",
+      "input_zmq_port_label": "Peer ZMQ Replication Port",
+      "input_zmq_port_hint": "Default 6000 (or 6001 for local test)",
+      "btn_clear": "⏹️ Clear Peer (Standalone Mode)",
+      "btn_save": "🚀 Save & Apply",
+      "btn_close": "Close"
+    },
+    "ssl": {
+      "title": "🔒 SSL / HTTPS Settings",
+      "status": "Status:",
+      "domain": "Domain:",
+      "issuer": "Issuer:",
+      "port": "Port:",
+      "secure_url": "Secure URL:",
+      "mode_title": "Certificate & Domain Mode",
+      "mode_auto": "Auto Domain (Recommended)",
+      "mode_auto_desc": "Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert",
+      "mode_custom": "Custom Domain",
+      "mode_custom_desc": "Uses a domain name whose DNS A record points to this VPS",
+      "mode_selfsigned": "Self-Signed Certificate",
+      "mode_selfsigned_desc": "For offline or intranet testing (browser will show untrusted warning)",
+      "mode_import": "Import Existing Certificate",
+      "mode_import_desc": "Paste fullchain.pem and private key text directly",
+      "input_domain_label": "Domain Name",
+      "input_domain_placeholder": "e.g. 123-45-67-89.sslip.io or hub.example.com",
+      "input_port_label": "HTTPS Listen Port",
+      "port_443": "Standard 443 (Default)",
+      "port_custom": "Custom:",
+      "input_email_label": "Admin Notification Email (Optional)",
+      "input_email_hint": "For Let's Encrypt expiry and security notices, optional.",
+      "chk_ondemand_80": "On-demand port 80 challenge listener (closed during normal operation)",
+      "chk_auto_renew": "Auto-renew 30 days before expiration",
+      "btn_disable": "⛔ Disable SSL (HTTP Mode)",
+      "btn_renew": "🔄 Renew Now",
+      "btn_save": "🚀 Save & Apply",
+      "btn_close": "Close"
+    }
+  },
+  "zh-CN": {
+    "common": {
+      "confirm": "确认",
+      "cancel": "取消",
+      "close": "关闭",
+      "save": "保存",
+      "apply": "应用",
+      "status": "状态",
+      "actions": "操作",
+      "loading": "加载中...",
+      "error": "错误",
+      "warning": "警告",
+      "success": "成功",
+      "unknown": "未知"
+    },
+    "nav": {
+      "tab_dash": "总览看板",
+      "tab_cockpit": "持仓明细与待排队检查",
+      "btn_ssl": "🔒 SSL / HTTPS 设置",
+      "btn_logout": "退出登录"
+    },
+    "kpi": {
+      "terminals": "活跃交易端",
+      "open_positions": "当前持仓单",
+      "waiting": "排队等待开仓",
+      "hub_engine": "Hub 路由引擎",
+      "inspect_arrow": "点击查看明细 →"
+    },
+    "gops": {
+      "title": "全局接收端统一操作",
+      "pause_all": "⏸️ 全局暂停跟单",
+      "resume_all": "▶️ 全局恢复跟单",
+      "close_all": "⚠️ 一键平掉全部持仓",
+      "reload_all": "🔄 全局重载 INI 配置",
+      "confirm_global_close_title": "⚠️ 高危操作: 全局一键平仓",
+      "confirm_global_close_desc": "确定要平掉所有接收端上的全部持仓吗？",
+      "confirm_global_close_detail": "此操作将立即向所有连接的接收端下发市价平仓指令，无法撤销。",
+      "confirm_global_close_btn": "确认一键平仓",
+      "confirm_global_pause_title": "全局暂停跟单",
+      "confirm_global_pause_desc": "确定要暂停所有接收端的跟单吗？",
+      "confirm_global_pause_detail": "所有接收端将停止接收信号源的新开仓指令，直到恢复跟单。当前已持有的仓位保持不变。",
+      "confirm_global_pause_btn": "确认暂停"
+    },
+    "nodes": {
+      "th_role": "角色",
+      "th_node_id": "节点 ID / 别名",
+      "th_account": "账号 / 券商平台",
+      "th_liveness": "在线状态",
+      "th_ping": "通信延迟",
+      "th_financials": "净值 / 余额",
+      "th_positions": "当前持仓",
+      "th_actions": "管理操作",
+      "btn_inspect": "🔍 检查持仓",
+      "btn_config": "⚙️ 可视化配置",
+      "btn_pause": "暂停",
+      "btn_resume": "恢复",
+      "btn_close_all": "全部平仓",
+      "confirm_close_all_title": "确认全部平仓",
+      "confirm_close_all_desc": "确定要平掉接收端 <code>{key}</code> 的所有持仓吗？",
+      "confirm_close_all_detail": "此操作将立即市价平掉该接收端持有的所有镜像仓位，无法撤销。"
+    },
+    "cockpit": {
+      "back_to_dash": "返回总览看板",
+      "nav_prev": "◀ 上一个节点",
+      "nav_next": "下一个节点 ▶",
+      "auto_updates_1min": "每分钟自动更新",
+      "btn_request_update": "🔄 立即请求更新",
+      "btn_requesting": "⏳ 请求中…",
+      "table_title": "📋 逐笔订单与持仓明细",
+      "filter_all": "全部",
+      "filter_opened": "已开仓",
+      "filter_waiting": "等待中",
+      "filter_managed": "跟单托管单",
+      "filter_unmanaged": "手动/外部单",
+      "btn_reset_sort": "↺ 恢复默认排序",
+      "fast_close_mode": "⚡ 极速平仓模式",
+      "fast_close_tooltip": "开启后点击平仓直接下发指令，跳过二次确认弹窗",
+      "th_status": "状态 / 阶段",
+      "th_ticket": "订单号 / UID",
+      "th_symbol": "品种",
+      "th_side": "方向",
+      "th_volume": "手数",
+      "th_price": "开仓价",
+      "th_sltp": "止损 / 止盈",
+      "th_profit": "浮动盈亏",
+      "th_swap": "隔夜利息",
+      "th_details": "流转原因 / 备注",
+      "th_action": "操作",
+      "btn_close": "❌ 平仓",
+      "btn_closing": "⏳ 平仓中...",
+      "btn_queued_close": "⏱️ 已排队待平",
+      "btn_queued_tooltip": "已在接收端成功排队，待周一开市后券商自动撮合成交",
+      "subtotal_label": "合计 ({count} 笔订单):",
+      "confirm_close_title": "确认单笔订单平仓",
+      "confirm_close_desc": "确定要立即平仓订单 <strong>#{ticket}</strong> ({symbol} {side} {lots} 手, 盈亏: {profit}) 吗？",
+      "confirm_close_btn": "立即平仓",
+      "remember_fast_close": "记住选择并开启极速平仓模式 (本次后续不再弹窗提示)",
+      "summary_title": "📦 仓位与镜像流转统计汇总",
+      "managed_mirrors": "跟单托管仓位",
+      "managed_mirrors_sub": "由跟单系统引擎自动管理的有效镜像仓位",
+      "orphan_manual": "外部/手动单",
+      "orphan_manual_sub": "非跟单 Magic 的手动下单或外部 EA 仓位",
+      "no_orphan_manual_sub": "无外部或手动持仓",
+      "gross_account_open": "账户总持仓量",
+      "gross_account_open_sub": "该终端当前持有的所有开仓单总计",
+      "pipeline_synced": "流转执行状态: 所有订单均已同步",
+      "pipeline_synced_sub": "(0 排队中 · 0 延时防抖 · 0 休市等待)",
+      "stage_broker_queue": "⚡ 1. 券商调度队列",
+      "stage_gate_delayed": "⏱️ 2. 安全防抖延迟",
+      "stage_mkt_closed": "🔒 3. 市场休市等待",
+      "orders_waiting_strip": "{total} 笔订单等待开仓 ({lots} 手):"
+    },
+    "notices": {
+      "mkt_closed_title": "【周末休市排队中】订单 #{ticket} 已排队待平！",
+      "mkt_closed_desc": "当前外汇市场处于周末闭市状态 (Market Closed)。平仓指令已进入接收端优先执行队列，待周一开盘后经纪商将自动撮合成交。",
+      "already_queued_title": "订单 #{ticket} 已在执行队列中",
+      "already_queued_desc": "该订单已经处于平仓排队列表中，正在等待券商撮合执行。",
+      "close_dispatched_title": "✅ 订单 #{ticket} 平仓指令已送达接收端",
+      "close_dispatched_desc": "接收端已确认处理平仓动作并加入队列。",
+      "close_failed_old_ea_title": "⚠️ 平仓失败：接收端 EA 仍运行旧版本",
+      "close_failed_old_ea_desc": "请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！",
+      "close_failed_title": "⚠️ 平仓指令未能执行：#{ticket}",
+      "toast_dispatched": "正在下发订单 #{ticket} 平仓指令...",
+      "toast_queued_mkt": "订单 #{ticket} 已排队，待周一开盘后自动撮合成交。",
+      "toast_already_queued": "订单 #{ticket} 已经在平仓排队中"
+    },
+    "cluster": {
+      "title": "集群状态",
+      "peer_settings": "⚙️ 对端设置",
+      "promote_primary": "⚡ 提升为主节点",
+      "failback_now": "⚡ 立即安全回切",
+      "lock_master": "锁定备机为 Master",
+      "open_peer_console": "🔗 打开对端控制台",
+      "modal_title": "🔄 集群对端节点设置 (Cluster Peer Settings)",
+      "current_mode": "当前运行模式:",
+      "peer_api": "对端 API:",
+      "peer_zmq": "对端 ZMQ:",
+      "input_ip_label": "对端 VPS 公网 IP 地址",
+      "input_ip_placeholder": "例如: 168.100.200.50 (单机模式请留空)",
+      "input_ip_hint": "若作为单机运行（无对端备机），请留空并点击下方的“清空对端 (单机模式)”。",
+      "input_api_port_label": "对端 Web 同步端口",
+      "input_api_port_hint": "默认 6010 (单机开发测试为 6011)",
+      "input_zmq_port_label": "对端 ZMQ 跟单端口",
+      "input_zmq_port_hint": "默认 6000 (单机开发测试为 6001)",
+      "btn_clear": "⏹️ 清空对端 (单机模式)",
+      "btn_save": "🚀 保存并应用设置",
+      "btn_close": "关闭"
+    },
+    "ssl": {
+      "title": "🔒 SSL / HTTPS 安全连接设置",
+      "status": "运行状态:",
+      "domain": "绑定域名:",
+      "issuer": "颁发机构:",
+      "port": "监听端口:",
+      "secure_url": "安全入口:",
+      "mode_title": "证书与域名模式",
+      "mode_auto": "自动分配域名 (推荐)",
+      "mode_auto_desc": "检测公网 IP 并绑定 IP.sslip.io 自动申请权威 Let's Encrypt 证书",
+      "mode_custom": "自有独立域名",
+      "mode_custom_desc": "使用已解析到本机 IP 的独立域名自动申请 Let's Encrypt 证书",
+      "mode_selfsigned": "本地自签名证书",
+      "mode_selfsigned_desc": "离线/内网环境测试使用（浏览器会提示不受信任）",
+      "mode_import": "导入已有证书",
+      "mode_import_desc": "直接粘贴 fullchain.pem 与私钥文本（企业/商业证书）",
+      "input_domain_label": "域名 (Domain)",
+      "input_domain_placeholder": "例如: 123-45-67-89.sslip.io 或 hub.example.com",
+      "input_port_label": "HTTPS 监听端口",
+      "port_443": "标准 443 (免输端口)",
+      "port_custom": "自定义:",
+      "input_email_label": "管理员通知邮箱 (可选)",
+      "input_email_hint": "用于接收 Let's Encrypt 官方证书到期/安全通知，可留空。",
+      "chk_ondemand_80": "按需临时启用 80 端口 (平时彻底关闭隐形，防扫描)",
+      "chk_auto_renew": "到期前 30 天自动平滑续期",
+      "btn_disable": "⛔ 停用 SSL (切回 HTTP)",
+      "btn_renew": "🔄 立即续期",
+      "btn_save": "🚀 保存并应用设置",
+      "btn_close": "关闭"
+    }
+  }
+};
+
+function t(key, params){
+  var lang = (s.i18n && s.i18n.currentLang) ? s.i18n.currentLang : "en";
+  var dict = (s.i18n && s.i18n.locales) ? (s.i18n.locales[lang] || s.i18n.locales["en"] || I18N_BUILTIN["en"]) : I18N_BUILTIN["en"];
+  var fallbackDict = I18N_BUILTIN["en"];
+
+  function getVal(d, k){
+    if(!d) return null;
+    var parts = k.split(".");
+    var curr = d;
+    for(var i = 0; i < parts.length; i++){
+      if(curr && typeof curr === "object" && parts[i] in curr){
+        curr = curr[parts[i]];
+      } else {
+        return null;
+      }
+    }
+    return typeof curr === "string" ? curr : null;
+  }
+
+  var val = getVal(dict, key);
+  if(val === null){
+    val = getVal(fallbackDict, key);
+  }
+  if(val === null){
+    return key;
+  }
+  if(params && typeof params === "object"){
+    val = val.replace(/\{(\w+)\}/g, function(_, k){
+      return (params[k] !== undefined && params[k] !== null) ? params[k] : "{" + k + "}";
+    });
+  }
+  return val;
+}
+window.t = t;
+
+function setLanguage(lang){
+  if(!s.i18n) s.i18n = {};
+  s.i18n.currentLang = lang;
+  localStorage.setItem("mtc_lang", lang);
+  var sel = $("lang_select");
+  if(sel && sel.value !== lang) sel.value = lang;
+
+  if(!s.i18n.locales[lang] && lang !== "en" && lang !== "zh-CN"){
+    fetch("/api/v1/locales/" + encodeURIComponent(lang))
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        s.i18n.locales[lang] = data;
+        applyI18n();
+      })
+      .catch(function(e){
+        console.warn("[i18n] Failed to load external locale " + lang + ":", e);
+        applyI18n();
+      });
+  } else {
+    applyI18n();
+  }
+}
+window.setLanguage = setLanguage;
+
+function applyI18n(){
+  var elems = document.querySelectorAll("[data-i18n]");
+  for(var i = 0; i < elems.length; i++){
+    var k = elems[i].getAttribute("data-i18n");
+    if(k){
+      elems[i].textContent = t(k);
+    }
+  }
+  var titleElems = document.querySelectorAll("[data-i18n-title]");
+  for(var j = 0; j < titleElems.length; j++){
+    var kt = titleElems[j].getAttribute("data-i18n-title");
+    if(kt){
+      titleElems[j].setAttribute("title", t(kt));
+    }
+  }
+  var phElems = document.querySelectorAll("[data-i18n-placeholder]");
+  for(var m = 0; m < phElems.length; m++){
+    var kp = phElems[m].getAttribute("data-i18n-placeholder");
+    if(kp){
+      phElems[m].setAttribute("placeholder", t(kp));
+    }
+  }
+
+  s.lastPosRowsHtml = null;
+  s.lastHeldHtml = null;
+  s.lastWaitingHtml = null;
+  s.lastBannerHtml = null;
+  s.lastSndHtml = null;
+  s.nodeKeys = null;
+  s.nodeRows = null;
+  renderPosNodeDetail();
+  if(s.data && s.data.nodes){
+    renderNodes(s.data.nodes);
+  }
+}
+window.applyI18n = applyI18n;
+
+function initI18n(){
+  var saved = localStorage.getItem("mtc_lang");
+  if(!saved){
+    saved = (navigator.language && navigator.language.toLowerCase().startsWith("zh")) ? "zh-CN" : "en";
+  }
+  s.i18n = {
+    currentLang: saved,
+    locales: {
+      "en": I18N_BUILTIN["en"],
+      "zh-CN": I18N_BUILTIN["zh-CN"]
+    },
+    available: [
+      { code: "en", name: "English" },
+      { code: "zh-CN", name: "简体中文" }
+    ]
+  };
+
+  fetch("/api/v1/locales")
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data && Array.isArray(data.locales)){
+        var sel = $("lang_select");
+        for(var i = 0; i < data.locales.length; i++){
+          var item = data.locales[i];
+          if(item.code !== "en" && item.code !== "zh-CN"){
+            s.i18n.available.push(item);
+            if(sel){
+              var opt = document.createElement("option");
+              opt.value = item.code;
+              opt.textContent = item.name || item.code;
+              sel.appendChild(opt);
+            }
+          }
+        }
+      }
+      setLanguage(saved);
+    })
+    .catch(function(){
+      setLanguage(saved);
+    });
+}
+
 function setPosDetailFilter(f){
   if(s.posDetailFilter === f) return;
   s.posDetailFilter = f;
@@ -2471,12 +2986,6 @@ function resetPosSort(){
 }
 window.resetPosSort = resetPosSort;
 
-function $(id){ return document.getElementById(id); }
-function esc(x){
-  return String(x).replace(/[&<>"']/g, function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-  });
-}
 function fmtAge(sec){
   sec = Math.max(0, Math.round(sec));
   if(sec < 60) return sec + "s ago";
@@ -3105,38 +3614,38 @@ function renderPosNodeDetail(){
     var curFilter = s.posDetailFilter || "all";
     var inFlight = !!s.posRequestInFlight;
 
-    $("pos_rec_table_title").textContent = "📋 Line-by-Line Orders & Positions (" + totalOrders + " total)";
+    $("pos_rec_table_title").textContent = t("cockpit.table_title") + " (" + totalOrders + ")";
     var rBtn = $("pos_refresh_btn");
     if(rBtn){
       rBtn.disabled = inFlight;
-      rBtn.textContent = inFlight ? "⏳ Requesting…" : "🔄 Request Update";
-      rBtn.title = "Request immediate position table update from receiver terminal " + esc(n.key);
+      rBtn.textContent = inFlight ? t("cockpit.btn_requesting") : t("cockpit.btn_request_update");
+      rBtn.title = t("cockpit.btn_request_update") + " - " + esc(n.key);
     }
 
     // Update filter toolbar buttons in-place (no DOM destruction, smooth hover & instant clicks)
     var bAll = $("pos_filter_all");
     if(bAll){
-      bAll.textContent = "All (" + totalOrders + ")";
+      bAll.textContent = t("cockpit.filter_all") + " (" + totalOrders + ")";
       bAll.className = "pos-filter-btn" + (curFilter === "all" ? " active" : "");
     }
     var bOp = $("pos_filter_opened");
     if(bOp){
-      bOp.textContent = "Opened (" + opened.length + ")";
+      bOp.textContent = t("cockpit.filter_opened") + " (" + opened.length + ")";
       bOp.className = "pos-filter-btn" + (curFilter === "opened" ? " active" : "");
     }
     var bWait = $("pos_filter_waiting");
     if(bWait){
-      bWait.textContent = "Waiting (" + waiting.length + ")";
+      bWait.textContent = t("cockpit.filter_waiting") + " (" + waiting.length + ")";
       bWait.className = "pos-filter-btn" + (curFilter === "waiting" ? " active" : "");
     }
     var bMan = $("pos_filter_managed");
     if(bMan){
-      bMan.textContent = "Managed (" + managedOrders.length + ")";
+      bMan.textContent = t("cockpit.filter_managed") + " (" + managedOrders.length + ")";
       bMan.className = "pos-filter-btn" + (curFilter === "managed" ? " active" : "");
     }
     var bUnman = $("pos_filter_unmanaged");
     if(bUnman){
-      bUnman.textContent = "Orphan / Manual (" + unmanagedOrders.length + ")";
+      bUnman.textContent = t("cockpit.filter_unmanaged") + " (" + unmanagedOrders.length + ")";
       bUnman.className = "pos-filter-btn" + (curFilter === "unmanaged" ? " active" : "");
     }
 
@@ -3158,6 +3667,7 @@ function renderPosNodeDetail(){
     }
     var bSortReset = $("pos_sort_reset_btn");
     if(bSortReset){
+      bSortReset.textContent = t("cockpit.btn_reset_sort");
       bSortReset.style.display = (s.posSortCol && s.posSortDir !== "none") ? "" : "none";
     }
 
@@ -3316,7 +3826,13 @@ function renderPosNodeDetail(){
         }
       }
 
-      if($("subtotal_orders_count")) $("subtotal_orders_count").textContent = displayItems.length;
+      if($("subtotal_orders_label")) {
+        $("subtotal_orders_label").innerHTML = t("cockpit.subtotal_label", {
+          count: '<span>' + displayItems.length + '</span>'
+        });
+      } else if($("subtotal_orders_count")) {
+        $("subtotal_orders_count").textContent = displayItems.length;
+      }
       if($("subtotal_volume")) $("subtotal_volume").textContent = subLots.toFixed(2);
 
       var subPEl = $("subtotal_profit");
@@ -5312,6 +5828,7 @@ function setRole(user, role){
   $("btn-add-notif").classList.toggle("hidden", role === "viewer");
   if(canNotif) loadNotifications();
 }
+initI18n();
 api("/api/v1/whoami").then(function(j){
   $("login").classList.add("hidden");
   setRole(j.user, j.role);

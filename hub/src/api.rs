@@ -999,6 +999,8 @@ async fn require_session(
         //--- an unauthenticated caller to learn.
         || path == "/healthz"
         || path == "/readyz"
+        || path == "/api/v1/locales"
+        || path.starts_with("/api/v1/locales/")
     {
         return next.run(req).await;
     }
@@ -1789,6 +1791,8 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
         .route("/api/v1/tls/self-signed", axum::routing::post(tls_self_signed))
         .route("/api/v1/tls/disable", axum::routing::post(tls_disable))
         .route("/api/v1/tls/renew", axum::routing::post(tls_renew))
+        .route("/api/v1/locales", get(locales_list))
+        .route("/api/v1/locales/:code", get(locale_get))
         .layer(axum::extract::Extension(tx))
         .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))
         .with_state(st)
@@ -3991,4 +3995,89 @@ async fn tls_renew(
         Json(json!({ "accepted": true, "message": "Certificate renewal initiated." })),
     )
         .into_response()
+}
+
+// ============================================================================
+// I18N / Locales Endpoints
+// ============================================================================
+
+async fn locales_list() -> Json<Value> {
+    let mut list = Vec::new();
+    let locales_dir = std::path::Path::new("locales");
+    if locales_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(locales_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
+                    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if stem == "template" {
+                        continue;
+                    }
+                    if let Ok(content) = std::fs::read_to_string(&p) {
+                        if let Ok(v) = serde_json::from_str::<Value>(&content) {
+                            let name = v
+                                .get("meta")
+                                .and_then(|m| m.get("name"))
+                                .and_then(|n| n.as_str())
+                                .unwrap_or(stem);
+                            let code = v
+                                .get("meta")
+                                .and_then(|m| m.get("code"))
+                                .and_then(|c| c.as_str())
+                                .unwrap_or(stem);
+                            list.push(json!({
+                                "code": code,
+                                "name": name
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    list.sort_by(|a, b| {
+        let code_a = a.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        let code_b = b.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        code_a.cmp(code_b)
+    });
+    Json(json!({ "locales": list }))
+}
+
+async fn locale_get(Path(code): Path<String>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if code.is_empty()
+        || code.len() > 32
+        || !code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid locale code" })),
+        )
+            .into_response();
+    }
+    let file_path = std::path::Path::new("locales").join(format!("{}.json", code));
+    if !file_path.exists() {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "locale not found" })),
+        )
+            .into_response();
+    }
+    match std::fs::read_to_string(&file_path) {
+        Ok(content) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/json; charset=utf-8",
+            )],
+            content,
+        )
+            .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("cannot read locale: {}", e) })),
+        )
+            .into_response(),
+    }
 }
