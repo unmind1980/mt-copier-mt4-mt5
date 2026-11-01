@@ -20,8 +20,8 @@
     "unknown": "Неизвестно"
   },
   "nav": {
-    "tab_dash": "Панель управления",
-    "tab_cockpit": "Инспекция позиций и очереди",
+    "tab_dash": "Дашборд",
+    "tab_cockpit": "Кокпит",
     "btn_ssl": "🔒 SSL / HTTPS",
     "btn_logout": "Выйти"
   },

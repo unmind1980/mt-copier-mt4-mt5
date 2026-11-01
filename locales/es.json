@@ -20,10 +20,10 @@
     "unknown": "Desconocido"
   },
   "nav": {
-    "tab_dash": "Panel de Control",
-    "tab_cockpit": "Inspección de Posiciones y Cola",
-    "btn_ssl": "🔒 Ajustes SSL / HTTPS",
-    "btn_logout": "Cerrar Sesión"
+    "tab_dash": "Dashboard",
+    "tab_cockpit": "Cockpit",
+    "btn_ssl": "🔒 SSL / HTTPS",
+    "btn_logout": "Salir"
   },
   "kpi": {
     "terminals": "Terminales Activos",

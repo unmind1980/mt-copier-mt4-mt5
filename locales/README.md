@@ -49,6 +49,7 @@ You do not need to worry about breaking the interface if your translation is sti
 |---|---|---|
 | *(Built-in)* | **English (en)** | Core baseline compiled inside binary |
 | *(Built-in)* | **简体中文 (zh-CN)** | Core Chinese compiled inside binary |
+| `zh-TW.json` | **繁體中文 (zh-TW)** | External Drop-in Plugin |
 | `ja.json` | **日本語 (ja)** | External Drop-in Plugin |
 | `ru.json` | **Русский (ru)** | External Drop-in Plugin |
 | `es.json` | **Español (es)** | External Drop-in Plugin |

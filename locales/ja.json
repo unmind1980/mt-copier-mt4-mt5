@@ -21,8 +21,8 @@
   },
   "nav": {
     "tab_dash": "ダッシュボード",
-    "tab_cockpit": "保有ポジション・待機キュー監査",
-    "btn_ssl": "🔒 SSL / HTTPS設定",
+    "tab_cockpit": "コックピット",
+    "btn_ssl": "🔒 SSL / HTTPS",
     "btn_logout": "ログアウト"
   },
   "kpi": {

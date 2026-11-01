@@ -95,7 +95,7 @@
   header.app-nav {
     background: var(--panel);
     border-bottom: 1px solid var(--line);
-    padding: 10px 24px;
+    padding: 8px 18px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -103,28 +103,30 @@
     top: 0;
     z-index: 100;
     box-shadow: 0 1px 2px rgba(0,0,0,.03);
-    flex-wrap: wrap;
-    gap: 12px;
+    flex-wrap: nowrap;
+    gap: 10px;
   }
-  .brand-zone { display: flex; align-items: center; gap: 12px; }
+  .brand-zone { display: flex; align-items: center; gap: 8px; flex-shrink: 1; min-width: 0; }
   .brand-logo {
-    width: 28px; height: 28px; border-radius: 7px;
+    width: 26px; height: 26px; border-radius: 7px;
     background: linear-gradient(135deg, #2563eb, #06b6d4);
     display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 15px; font-weight: 800;
+    color: #fff; font-size: 14px; font-weight: 800;
     box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+    flex-shrink: 0;
   }
-  .brand-text h1 { font-size: 15.5px; font-weight: 700; color: var(--ink); margin: 0; }
-  .brand-text .header-pills { display: flex; gap: 6px; align-items: center; margin-top: 2px; flex-wrap: wrap; }
+  .brand-text h1 { font-size: 14.5px; font-weight: 700; color: var(--ink); margin: 0; white-space: nowrap; }
+  .brand-text .header-pills { display: flex; gap: 4px; align-items: center; margin-top: 2px; flex-wrap: nowrap; overflow: hidden; }
 
   /* Navigation Center Tabs */
   .main-tabs {
-    display: flex; gap: 6px; background: var(--surface-header); padding: 4px; border-radius: 8px; border: 1px solid var(--line);
+    display: flex; gap: 4px; background: var(--surface-header); padding: 3px; border-radius: 8px; border: 1px solid var(--line);
+    flex-shrink: 0;
   }
   .tab-trigger {
-    background: transparent; border: none; color: var(--dim); font-size: 13px; font-weight: 600;
-    padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
-    font-family: var(--sans);
+    background: transparent; border: none; color: var(--dim); font-size: 12.5px; font-weight: 600;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 5px;
+    font-family: var(--sans); white-space: nowrap;
   }
   .tab-trigger:hover { color: var(--ink); }
   .tab-trigger.active {
@@ -132,26 +134,36 @@
   }
 
   /* Nav Utility tools */
-  .nav-tools { display: flex; align-items: center; gap: 12px; }
+  .nav-tools { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: nowrap; }
   .zoom-box {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 6px;
     background: var(--surface-header); border: 1px solid var(--line);
-    padding: 4px 10px; border-radius: 6px; font-size: 12px;
+    padding: 3px 8px; border-radius: 6px; font-size: 11.5px;
   }
   .zoom-slider { width: 80px; cursor: pointer; accent-color: var(--accent); }
-  /* Numeric font-size input: a slider is hard to hit a 0.5px step with, and the
-     operator usually wants a specific value rather than "about that much". */
   .zoom-input {
-    /* 88px, not 68: at 12px mono "11.5" plus the spinner is wider than it looks,
-       and the value was being clipped to "11." on screen while still applying
-       correctly - which is worse than wrong, it is silently wrong. */
-    width: 88px; padding: 2px 4px 2px 8px; font: 12px var(--mono); font-weight: 700;
+    width: 68px; padding: 2px 4px; font: 11.5px var(--mono); font-weight: 700;
     color: var(--accent); background: var(--panel);
     border: 1px solid var(--line); border-radius: 4px; text-align: center;
   }
   .zoom-input:focus { outline: none; border-color: var(--accent); }
   .zoom-input::-webkit-outer-spin-button,
   .zoom-input::-webkit-inner-spin-button { opacity: 0.45; height: 18px; }
+  .lang-selector-wrap { padding: 3px 6px; font-size: 11.5px; }
+  .lang-selector-wrap select { max-width: 140px; font-size: 11.5px; }
+  .nav-tools .btn-sm { padding: 4px 8px; font-size: 11.5px; }
+  .nav-tools .btn-theme { padding: 4px 8px; font-size: 11.5px; gap: 4px; }
+
+  @media(max-width: 1380px){
+    #up, #age { display: none !important; }
+  }
+  @media(max-width: 1180px){
+    #counts { display: none !important; }
+  }
+  @media(max-width: 860px){
+    header.app-nav { flex-wrap: wrap; }
+    .nav-tools { flex-wrap: wrap; }
+  }
   /* A datalist cannot be used here: browsers filter it by what is already
      typed, so a box showing "12" offers only 12 and 12.5 and the other
      thirteen values become unreachable. This is a plain list that always
@@ -760,8 +772,7 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   header{background:var(--panel);border-bottom:1px solid var(--line);
-         padding:12px 24px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;
-         position:sticky;top:0;z-index:10;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+         position:sticky;top:0;z-index:100;box-shadow:0 1px 2px rgba(0,0,0,.03)}
   .brand{display:flex;align-items:center;gap:10px}
   .brand-logo{display:flex;align-items:center;justify-content:center;width:26px;height:26px;
               background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;border-radius:6px;font-size:13px;font-weight:700}
@@ -2584,9 +2595,9 @@ var I18N_BUILTIN = {
     },
     "nav": {
       "tab_dash": "总览看板",
-      "tab_cockpit": "持仓明细与待排队检查",
-      "btn_ssl": "🔒 SSL / HTTPS 设置",
-      "btn_logout": "退出登录"
+      "tab_cockpit": "监控驾驶舱",
+      "btn_ssl": "🔒 SSL / HTTPS",
+      "btn_logout": "退出"
     },
     "kpi": {
       "terminals": "活跃交易端",
