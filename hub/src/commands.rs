@@ -543,7 +543,16 @@ impl CommandStore {
 
         if let Some(c) = inner.commands.get_mut(&id) {
             if c.state == STATE_PENDING {
-                c.next_at = Instant::now();
+                //--- H-01: Only operator-initiated re-issues should pull the retry clock
+                //--- back to `now`. Automated comparison from REG/HBT2 passes an empty actor
+                //--- and MUST NOT shorten the existing backoff ladder, otherwise ladder
+                //--- attempts are exhausted prematurely in 15s instead of 82s.
+                if !actor.is_empty() {
+                    c.next_at = Instant::now();
+                    if !ip.is_empty() {
+                        c.ip = ip.to_string();
+                    }
+                }
                 return c.clone();
             }
             if c.state == STATE_REJECTED {
@@ -661,15 +670,24 @@ impl CommandStore {
     }
 
     /// Newest first, with stable tie-breaking on id.
+    #[allow(dead_code)]
     pub fn commands(&self) -> Vec<Command> {
-        let mut v: Vec<Command> = self
-            .inner
-            .lock_or_recover()
-            .commands
-            .values()
-            .cloned()
-            .collect();
+        self.commands_recent(usize::MAX)
+    }
+
+    /// Newest first up to `limit` entries, with stable tie-breaking on id.
+    /// Fast-path returns empty Vec when limit is 0 without grabbing locks or cloning.
+    pub fn commands_recent(&self, limit: usize) -> Vec<Command> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let inner = self.inner.lock_or_recover();
+        let mut v: Vec<Command> = inner.commands.values().cloned().collect();
+        drop(inner);
         v.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
+        if v.len() > limit {
+            v.truncate(limit);
+        }
         v
     }
 
@@ -1352,6 +1370,43 @@ mod tests {
         let due = s.due(Instant::now());
         assert_eq!(due.len(), 1, "revived command must be due immediately");
         assert_eq!(due[0].id, cmd.id);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn automated_heartbeat_comparison_does_not_reset_pending_retry_ladder() {
+        let p = tmp("ladder_reset");
+        let s = CommandStore::open(&p).unwrap();
+        let t0 = 1_700_000_000u64;
+        let cmd = s.issue_cfg_at("receiver:1", 5, "admin", "", t0);
+        assert_eq!(cmd.state, STATE_PENDING);
+
+        let t_start = Instant::now();
+        // First due pass: consumes initial attempt, sets next_at = t_start + 2s
+        let due1 = s.due(t_start);
+        assert_eq!(due1.len(), 1);
+        assert_eq!(due1[0].attempts, 1);
+
+        // At t_start + 1s (before 2s retry ladder fires), REG/HBT2 automated comparison
+        // calls issue_cfg with an empty actor.
+        let re_called = s.issue_cfg_at("receiver:1", 5, "", "", t0 + 1);
+        assert_eq!(re_called.state, STATE_PENDING);
+
+        // At t_start + 1s, the retry ladder must NOT have been pulled back to `now`.
+        let due_early = s.due(t_start + Duration::from_secs(1));
+        assert_eq!(due_early.len(), 0, "automated re-issue must not reset ladder backoff");
+
+        // At t_start + 2s, the ladder naturally expires and is due.
+        let due_natural = s.due(t_start + Duration::from_secs(2));
+        assert_eq!(due_natural.len(), 1, "natural ladder expiry must fire");
+        assert_eq!(due_natural[0].attempts, 2);
+
+        // However, an explicit operator re-issue with a non-empty actor DOES pull it back to now.
+        let op_re_called = s.issue_cfg_at("receiver:1", 5, "operator_user", "", t0 + 3);
+        assert_eq!(op_re_called.state, STATE_PENDING);
+        let due_op = s.due(t_start + Duration::from_secs(2));
+        assert_eq!(due_op.len(), 1, "operator explicit re-issue should be due immediately");
+
         let _ = std::fs::remove_file(&p);
     }
 

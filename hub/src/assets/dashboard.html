@@ -4636,7 +4636,8 @@ function onGlobalClick(ev){
 // Reflect whether this hub allows writes (--writes on). The flag is a startup
 // setting, so one check at boot is enough; it also drives the footer note.
 function refreshWritesState(){
-  api("/api/v1/commands").then(function(j){
+  //--- H-03: query with ?limit=0 so hub skips cloning/sorting the 30-day command journal
+  api("/api/v1/commands?limit=0").then(function(j){
     s.writes = !!j.writes_enabled;
     var f = $("writes-state");
     if(!f) return;

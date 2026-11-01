@@ -1431,14 +1431,16 @@ async fn users_list(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let s = st.lock_or_recover();
-    let list: Vec<Value> = s
-        .users
-        .users()
+    //--- H-06: Grab users slice clone and session count under lock; construct JSON outside.
+    let (users, session_count) = {
+        let s = st.lock_or_recover();
+        (s.users.users().to_vec(), s.users.session_count())
+    };
+    let list: Vec<Value> = users
         .iter()
         .map(|u| json!({ "id": u.id, "role": u.role.as_str(), "disabled": u.disabled }))
         .collect();
-    Json(json!({ "users": list, "sessions": s.users.session_count() })).into_response()
+    Json(json!({ "users": list, "sessions": session_count })).into_response()
 }
 
 async fn users_upsert(
@@ -2498,6 +2500,10 @@ async fn post_command(
     if op == "reqpos" && !is_force {
         let mut guard = LAST_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
         let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        //--- H-05: Auto-prune stale entries (> 5 mins) when table grows
+        if map.len() > 64 {
+            map.retain(|_, t| t.elapsed() < Duration::from_secs(300));
+        }
         if let Some(last_t) = map.get(&id) {
             if last_t.elapsed() < Duration::from_secs(30) {
                 return (
@@ -2517,6 +2523,9 @@ async fn post_command(
     } else if op == "reqpos" {
         let mut guard = LAST_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
         let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if map.len() > 64 {
+            map.retain(|_, t| t.elapsed() < Duration::from_secs(300));
+        }
         map.insert(id.clone(), Instant::now());
     }
 
@@ -2688,20 +2697,43 @@ async fn commands_global(
 /// The polling fallback the plan's §16 asks for: a write answers `202` and the
 /// result arrives over ZMQ, so a caller that is not watching the WebSocket
 /// needs somewhere to ask.
-async fn commands_list(State(st): State<SharedState>) -> Json<Value> {
-    //--- `commands()` clones every tracked command; grab the handle under the
-    //--- lock and do the cloning outside it, so a large journal does not hold
-    //--- up the router thread.
+async fn commands_list(
+    State(st): State<SharedState>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<Value> {
+    //--- H-03: `commands()` clones every tracked command; grab the handle under the
+    //--- lock and do the cloning outside it.
+    //--- When the caller only wants writes_enabled (e.g. dashboard boots with ?limit=0),
+    //--- return immediately without cloning or sorting the 30-day journal.
     let (cmd_store, writes) = {
         let s = st.lock_or_recover();
         (Arc::clone(&s.cmds), s.writes)
     };
-    let list: Vec<Value> = cmd_store.commands().into_iter().map(command_json).collect();
+    let limit = q
+        .get("limit")
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(200);
+
+    let list: Vec<Value> = if limit == 0 {
+        Vec::new()
+    } else {
+        cmd_store
+            .commands_recent(limit)
+            .into_iter()
+            .map(command_json)
+            .collect()
+    };
     Json(json!({ "commands": Value::Array(list), "writes_enabled": writes }))
 }
 
 async fn command_one(State(st): State<SharedState>, Path(id): Path<String>) -> Json<Value> {
-    let c = { st.lock_or_recover().cmds.command(&id) };
+    //--- H-02: Don't read CommandStore inside the Shared lock. CommandStore::command
+    //--- takes inner mutex which can wait on fsync in append_many. Grab handle, query outside.
+    let cmd_store = {
+        let s = st.lock_or_recover();
+        Arc::clone(&s.cmds)
+    };
+    let c = cmd_store.command(&id);
     match c {
         Some(c) => Json(command_json(c)),
         None => Json(json!({ "error": "no such command", "id": id })),
