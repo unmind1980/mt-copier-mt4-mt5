@@ -1066,7 +1066,7 @@
      bundler), so the login is part of it: a 401 anywhere raises the overlay,
      a successful login dismisses it and the real page boots. */
   #login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;
-         justify-content:center;z-index:10}
+         justify-content:center;z-index:1000}
   #login.hidden{display:none}
   /* Generic hide. It had to exist as a RULE of its own: the users panel was
      toggled with classList 'hidden' while only #login.hidden and #pwdlg.hidden
@@ -1086,7 +1086,7 @@
   /* The change-password dialog reuses the login form's look, but sits over
      the page rather than replacing it (a scrim, not a takeover). */
   #pwdlg{position:fixed;inset:0;background:rgba(20,24,28,.38);display:flex;
-         align-items:center;justify-content:center;z-index:11}
+         align-items:center;justify-content:center;z-index:1001}
   #pwdlg.hidden{display:none}
   #pwdlg form{background:var(--panel);border:1px solid var(--line);border-radius:8px;
               padding:22px;width:300px;display:flex;flex-direction:column;gap:9px}
@@ -1100,7 +1100,7 @@
   #pwderr{color:var(--bad);font-size:12px;min-height:1em}
   #pwdok{color:var(--ok);font-size:12px;min-height:1em}
   #adminpwdlg{position:fixed;inset:0;background:rgba(20,24,28,.38);display:flex;
-              align-items:center;justify-content:center;z-index:12}
+              align-items:center;justify-content:center;z-index:1002}
   #adminpwdlg.hidden{display:none}
   #adminpwdlg form{background:var(--panel);border:1px solid var(--line);border-radius:8px;
                    padding:22px;width:320px;display:flex;flex-direction:column;gap:9px}
@@ -1153,18 +1153,18 @@
      one cell is a LIST, so let it wrap like one. */
   #pos td.sy{white-space:normal}
   /* --- Receiver Config Modal ----------------------------------------- */
-  #cfgmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-            align-items:center;justify-content:center;z-index:15}
+  #cfgmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+            justify-content:center;align-items:flex-start;overflow-y:auto;z-index:10000;padding:24px 12px;box-sizing:border-box}
   #cfgmodal.hidden{display:none}
-  .cfgbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-          width:840px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
-          box-shadow:0 8px 24px rgba(0,0,0,.15);overflow:hidden}
-  .cfghead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
-           justify-content:space-between;align-items:center;background:var(--bg)}
-  .cfghead h2{margin:0;font-size:15px;font-weight:650;color:var(--ink)}
-  .cfgbody{padding:16px 18px;overflow-y:auto;flex:1}
-  .cfgfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
-           justify-content:space-between;align-items:center;background:var(--bg);gap:12px;flex-wrap:wrap}
+  .cfgbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+          width:860px;max-width:96vw;max-height:calc(100vh - 48px);display:flex;flex-direction:column;
+          box-shadow:0 16px 48px rgba(0,0,0,.35);overflow:hidden;margin:auto}
+  .cfghead{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--surface-header);flex-shrink:0}
+  .cfghead h2{margin:0;font-size:15px;font-weight:700;color:var(--ink);line-height:1.3}
+  .cfgbody{padding:16px 20px;overflow-y:auto;flex:1}
+  .cfgfoot{padding:12px 20px;border-top:1px solid var(--line);display:flex;
+           justify-content:space-between;align-items:center;background:var(--surface-header);gap:12px;flex-wrap:wrap;flex-shrink:0}
   .cfgfoot .btns{display:flex;gap:8px}
   .cfgtbl-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
   .cfgtab{padding:6px 14px;border:none;background:none;font:13px system-ui,sans-serif;
@@ -1232,7 +1232,7 @@
   .btn-danger:disabled{opacity:.55;cursor:default}
   /* --- Confirmation Modal (Dangerous Operations) ------------------- */
   #confirmmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
-                align-items:center;justify-content:center;z-index:30}
+                align-items:center;justify-content:center;z-index:1100}
   #confirmmodal.hidden{display:none}
   .confirmbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
               width:460px;max-width:94vw;display:flex;flex-direction:column;
@@ -1251,16 +1251,16 @@
   .cfgnotice.warn{background:#fff7e0;border:1px solid #ecd9a0;color:#7a5a00}
   /* --- Notification Channels ---------------------------------------- */
   #notifmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-              align-items:center;justify-content:center;z-index:16}
+              align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
   #notifmodal.hidden{display:none}
   #hubkeymodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-               align-items:center;justify-content:center;z-index:16}
+               align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
   #hubkeymodal.hidden{display:none}
   #sslmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-            align-items:center;justify-content:center;z-index:16}
+            align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
   #sslmodal.hidden{display:none}
   #peermodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-             align-items:center;justify-content:center;z-index:16}
+             align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
   #peermodal.hidden{display:none}
   .notifbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
             width:580px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
@@ -1537,10 +1537,10 @@
                 <button type="button" id="pos_filter_waiting" class="pos-filter-btn" onclick="setPosDetailFilter('waiting')">Waiting (0)</button>
                 <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
                 <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
-                <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none;background:#f8fafc;color:var(--dim)" onclick="resetPosSort()">↺ Reset Sort</button>
-                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="Close orders immediately on click without confirmation dialog">
+                <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none;background:#f8fafc;color:var(--dim)" onclick="resetPosSort()" data-i18n="cockpit.btn_reset_sort">↺ Reset Sort</button>
+                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="Close orders immediately on click without confirmation dialog" data-i18n-title="cockpit.fast_close_tooltip">
                   <input type="checkbox" id="chk_fast_close" onchange="onToggleFastClose(this.checked)">
-                  <span style="color:var(--ink)">⚡ Fast Close Mode</span>
+                  <span style="color:var(--ink)" data-i18n="cockpit.fast_close_mode">⚡ Fast Close Mode</span>
                 </label>
               </div>
 
@@ -1644,64 +1644,64 @@
   <div class="cfgbox">
     <div class="cfghead">
       <div style="flex:1">
-        <h2 id="cfgtitle">Receiver Configuration (copier.ini)</h2>
+        <h2 id="cfgtitle" data-i18n="cfg.modal_title">Receiver Configuration (copier.ini)</h2>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
-          <label for="cfgtargetselect" style="font-size:12px;color:var(--dim);font-weight:600">Target Receiver:</label>
+          <label for="cfgtargetselect" style="font-size:12px;color:var(--dim);font-weight:600" data-i18n="cfg.target_receiver">Target Receiver:</label>
           <select id="cfgtargetselect" style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);background:var(--panel);color:var(--ink)">
           </select>
           <input id="cfgtargetcustom" class="hidden" placeholder="e.g. 1002 or receiver:1002" style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);width:170px">
-          <button type="button" id="cfgtargetgo" class="opbtn hidden" style="padding:4px 8px">Switch</button>
+          <button type="button" id="cfgtargetgo" class="opbtn hidden" style="padding:4px 8px" data-i18n="common.switch">Switch</button>
         </div>
       </div>
       <button type="button" id="cfgclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <div class="cfgbody">
-      <div id="cfgnotice_writes" class="cfgnotice warn hidden">
+      <div id="cfgnotice_writes" class="cfgnotice warn hidden" data-i18n="cfg.writes_disabled_notice">
         ⚠️ <strong>Writes are disabled on this hub (--writes off).</strong> You can inspect the configuration, but cannot save changes or rollback until the hub is restarted with <code>--writes on</code>.
       </div>
       <div class="cfgstatus-ribbon">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-          <span>Status: <span id="cfgsyncbadge" class="cfgbadge dim">-</span></span>
-          <span>Hub Rev: <strong id="cfghubrev" style="font-family:var(--mono)">-</strong></span>
-          <span>Node Rev: <strong id="cfgnoderev" style="font-family:var(--mono)">-</strong></span>
-          <span>Current Setting: <span id="cfgcurrsettingbadge" class="cfgbadge dim">-</span></span>
+          <span><span data-i18n="common.status">Status</span>: <span id="cfgsyncbadge" class="cfgbadge dim">-</span></span>
+          <span><span data-i18n="cfg.hub_rev">Hub Rev:</span> <strong id="cfghubrev" style="font-family:var(--mono)">-</strong></span>
+          <span><span data-i18n="cfg.node_rev">Node Rev:</span> <strong id="cfgnoderev" style="font-family:var(--mono)">-</strong></span>
+          <span><span data-i18n="cfg.curr_setting">Current Setting:</span> <span id="cfgcurrsettingbadge" class="cfgbadge dim">-</span></span>
         </div>
         <div style="color:var(--dim);font-size:11px" id="cfglastchange"></div>
       </div>
       <div class="cfghistrow">
-        <button type="button" id="cfgloadcurrentbtn" class="opbtn" style="background:#2d6930;color:#fff;border-color:#245427;font-weight:600" title="Load live Current Settings reported by the receiver terminal">📥 Load Current Setting from Node</button>
-        <button type="button" id="cfgpullcurrentbtn" class="opbtn" title="Send reqcfg command to terminal to report latest live config immediately">🔄 Query Live INI</button>
+        <button type="button" id="cfgloadcurrentbtn" class="opbtn" style="background:#2d6930;color:#fff;border-color:#245427;font-weight:600" title="Load live Current Settings reported by the receiver terminal" data-i18n="cfg.btn_load_current">📥 Load Current Setting from Node</button>
+        <button type="button" id="cfgpullcurrentbtn" class="opbtn" title="Send reqcfg command to terminal to report latest live config immediately" data-i18n="cockpit.btn_query_ini">🔄 Query Live INI</button>
         <div style="width:1px;height:18px;background:var(--line);margin:0 2px"></div>
-        <label for="cfghistselect" style="font-weight:600;color:var(--dim)">History:</label>
+        <label for="cfghistselect" style="font-weight:600;color:var(--dim)" data-i18n="cfg.history_label">History:</label>
         <select id="cfghistselect" style="flex:1;min-width:180px;padding:4px 6px;border:1px solid var(--line);border-radius:4px;font:12px var(--mono);background:var(--panel)">
           <option value="">(current configuration)</option>
         </select>
-        <button type="button" id="cfgloadhist" class="opbtn" title="Load selected historical revision into the editor">load revision</button>
-        <button type="button" id="cfgrollbackbtn" class="opbtn danger" title="Immediately rollback node to selected revision">rollback to this rev</button>
+        <button type="button" id="cfgloadhist" class="opbtn" title="Load selected historical revision into the editor" data-i18n="cfg.btn_load_rev">load revision</button>
+        <button type="button" id="cfgrollbackbtn" class="opbtn danger" title="Immediately rollback node to selected revision" data-i18n="cfg.btn_rollback">rollback to this rev</button>
       </div>
       <div class="cfgtbl-tabs">
-        <button type="button" class="cfgtab active" id="cfgtab_vis" data-tab="vis">Visual Editor</button>
-        <button type="button" class="cfgtab" id="cfgtab_raw" data-tab="raw">Raw INI Editor</button>
+        <button type="button" class="cfgtab active" id="cfgtab_vis" data-tab="vis" data-i18n="cfg.tab_vis">Visual Editor</button>
+        <button type="button" class="cfgtab" id="cfgtab_raw" data-tab="raw" data-i18n="cfg.tab_raw">Raw INI Editor</button>
       </div>
       <div id="cfgpanel_vis">
         <div class="cfgsubtabs">
-          <button type="button" class="cfgsubtab active" data-sub="senders" id="cfgsubtab_senders">Senders &amp; Strategies</button>
-          <button type="button" class="cfgsubtab" data-sub="risk" id="cfgsubtab_risk">Account Circuit Breakers [common]</button>
-          <button type="button" class="cfgsubtab" data-sub="system" id="cfgsubtab_system">System &amp; Engine [common]</button>
-          <button type="button" class="cfgsubtab" data-sub="exec" id="cfgsubtab_exec">Global Fallbacks [common]</button>
+          <button type="button" class="cfgsubtab active" data-sub="senders" id="cfgsubtab_senders" data-i18n="cfg.subtab_senders">Senders &amp; Strategies</button>
+          <button type="button" class="cfgsubtab" data-sub="risk" id="cfgsubtab_risk" data-i18n="cfg.subtab_risk">Account Circuit Breakers [common]</button>
+          <button type="button" class="cfgsubtab" data-sub="system" id="cfgsubtab_system" data-i18n="cfg.subtab_system">System &amp; Engine [common]</button>
+          <button type="button" class="cfgsubtab" data-sub="exec" id="cfgsubtab_exec" data-i18n="cfg.subtab_exec">Global Fallbacks [common]</button>
           <button type="button" class="cfgsubtab hidden" data-sub="filter" id="cfgsubtab_filter">Filters</button>
           <button type="button" class="cfgsubtab hidden" data-sub="gates" id="cfgsubtab_gates">Gates</button>
         </div>
 
         <!-- Senders subpanel -->
         <div id="cfgsubpanel_senders">
-          <p style="font-size:12px;color:var(--dim);margin:0 0 10px">
+          <p style="font-size:12px;color:var(--dim);margin:0 0 10px" data-i18n="cfg.desc_senders">
             Configure each upstream signal source independently. Each sender has its own sizing, risk limits, stop management, symbol filters, anti-stacking delays, and trading schedule.
           </p>
           <div id="cfgsenders_list"></div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-            <button type="button" id="cfgaddsender" class="btn-sec">+ Add Sender Section</button>
-            <button type="button" id="cfgloadtemplate" class="btn-sec" style="font-size:12px">Load Default Example</button>
+            <button type="button" id="cfgaddsender" class="btn-sec" data-i18n="cfg.btn_add_sender">+ Add Sender Section</button>
+            <button type="button" id="cfgloadtemplate" class="btn-sec" style="font-size:12px" data-i18n="cfg.btn_load_template">Load Default Example</button>
           </div>
         </div>
 
@@ -1990,8 +1990,8 @@
     <div class="cfgfoot">
       <span id="cfgmsg" class="opmsg" style="flex:1;max-width:440px"></span>
       <div class="btns">
-        <button type="button" id="cfgcancel" class="btn-sec">Close</button>
-        <button type="button" id="cfgsave" class="btn-primary">Save &amp; Push to Receiver</button>
+        <button type="button" id="cfgcancel" class="btn-sec" data-i18n="common.close">Close</button>
+        <button type="button" id="cfgsave" class="btn-primary" data-i18n="cfg.btn_save_push">Save &amp; Push to Receiver</button>
       </div>
     </div>
   </div>
@@ -2000,19 +2000,19 @@
 <div id="notifmodal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="notiftitle">
   <div class="notifbox">
     <div class="notifhead">
-      <h2 id="notiftitle">Add Notification Channel</h2>
+      <h2 id="notiftitle" data-i18n="notif.modal_add_title">Add Notification Channel</h2>
       <button type="button" id="notifclose_x" style="background:none;border:none;font-size:20px;cursor:pointer;padding:0 6px;color:var(--dim);line-height:1" title="close">&times;</button>
     </div>
     <form id="notifform" style="display:contents">
       <div class="notifbody">
         <input type="hidden" id="notif_id" value="">
         <div class="notifrow">
-          <label for="notif_name">Channel Name</label>
-          <input id="notif_name" required placeholder="e.g. Trading Ops Telegram Group">
+          <label for="notif_name" data-i18n="notif.field_name">Channel Name</label>
+          <input id="notif_name" required placeholder="e.g. Trading Ops Telegram Group" data-i18n-placeholder="notif.ph_name">
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div class="notifrow">
-            <label for="notif_type">Platform / Type</label>
+            <label for="notif_type" data-i18n="notif.field_type">Platform / Type</label>
             <select id="notif_type">
               <option value="telegram">Telegram Bot</option>
               <option value="wecom">WeCom Robot</option>
@@ -2021,66 +2021,66 @@
             </select>
           </div>
           <div class="notifrow">
-            <label for="notif_min_sev">Trigger Level</label>
+            <label for="notif_min_sev" data-i18n="notif.field_severity">Trigger Level</label>
             <select id="notif_min_sev">
-              <option value="warning">Warning &amp; Critical (All alerts)</option>
-              <option value="critical">Critical Only (Major issues)</option>
+              <option value="warning" data-i18n="notif.sev_warning">Warning &amp; Critical (All alerts)</option>
+              <option value="critical" data-i18n="notif.sev_critical">Critical Only (Major issues)</option>
             </select>
           </div>
         </div>
         <div class="notifrow inline" style="margin-bottom:14px">
           <input type="checkbox" id="notif_enabled" checked style="width:16px;height:16px;cursor:pointer">
-          <label for="notif_enabled" style="text-transform:none;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:500">Enable this channel for alert dispatch</label>
+          <label for="notif_enabled" style="text-transform:none;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:500" data-i18n="notif.enable_dispatch">Enable this channel for alert dispatch</label>
         </div>
 
         <!-- Telegram panel -->
         <div id="notif_cfg_telegram" class="notif-panel">
           <div class="notifrow">
-            <label for="notif_tg_token">Bot Token</label>
+            <label for="notif_tg_token" data-i18n="notif.tg_token">Bot Token</label>
             <input id="notif_tg_token" placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
-            <span class="hint">Obtain from @BotFather in Telegram. Saved tokens are masked.</span>
+            <span class="hint" data-i18n="notif.tg_token_hint">Obtain from @BotFather in Telegram. Saved tokens are masked.</span>
           </div>
           <div class="notifrow">
-            <label for="notif_tg_chatid">Chat ID</label>
+            <label for="notif_tg_chatid" data-i18n="notif.tg_chatid">Chat ID</label>
             <input id="notif_tg_chatid" placeholder="e.g. -1001234567890 or 987654321">
-            <span class="hint">Target user ID or group chat ID (supergroups typically start with -100).</span>
+            <span class="hint" data-i18n="notif.tg_chatid_hint">Target user ID or group chat ID (supergroups typically start with -100).</span>
           </div>
         </div>
 
         <!-- WeCom panel -->
         <div id="notif_cfg_wecom" class="notif-panel hidden">
           <div class="notifrow">
-            <label for="notif_wecom_key">Webhook Key or URL</label>
+            <label for="notif_wecom_key" data-i18n="notif.wecom_key">Webhook Key or URL</label>
             <input id="notif_wecom_key" placeholder="e.g. 693a91f6-xxxx-xxxx-xxxx-xxxxxxxxxxxx or full webhook URL">
-            <span class="hint">In WeCom group settings -&gt; Group Bot -&gt; Add Bot -&gt; Copy webhook URL or key.</span>
+            <span class="hint" data-i18n="notif.wecom_key_hint">In WeCom group settings -> Group Bot -> Add Bot -> Copy webhook URL or key.</span>
           </div>
         </div>
 
         <!-- DingTalk panel -->
         <div id="notif_cfg_dingtalk" class="notif-panel hidden">
           <div class="notifrow">
-            <label for="notif_dt_token">Access Token or Webhook URL</label>
+            <label for="notif_dt_token" data-i18n="notif.dt_token">Access Token or Webhook URL</label>
             <input id="notif_dt_token" placeholder="e.g. c821xxxx or full webhook URL">
-            <span class="hint">In DingTalk group -&gt; Bot Management -&gt; Custom Bot -&gt; Webhook access_token.</span>
+            <span class="hint" data-i18n="notif.dt_token_hint">In DingTalk group -> Bot Management -> Custom Bot -> Webhook access_token.</span>
           </div>
           <div class="notifrow">
-            <label for="notif_dt_secret">Secret (Signature Key, Optional)</label>
+            <label for="notif_dt_secret" data-i18n="notif.dt_secret">Secret (Signature Key, Optional)</label>
             <input id="notif_dt_secret" placeholder="e.g. SEC... (leave blank if signature check is disabled)">
-            <span class="hint">If signature validation (HMAC-SHA256) is enabled in DingTalk bot settings, paste SECxxx here.</span>
+            <span class="hint" data-i18n="notif.dt_secret_hint">If signature validation (HMAC-SHA256) is enabled in DingTalk bot settings, paste SECxxx here.</span>
           </div>
         </div>
 
         <!-- Webhook panel -->
         <div id="notif_cfg_webhook" class="notif-panel hidden">
           <div class="notifrow">
-            <label for="notif_hook_url">Webhook URL</label>
+            <label for="notif_hook_url" data-i18n="notif.webhook_url">Webhook URL</label>
             <input id="notif_hook_url" placeholder="https://your-service.com/api/alerts">
-            <span class="hint">HTTP POST endpoint receiving JSON payload with alert details.</span>
+            <span class="hint" data-i18n="notif.webhook_url_hint">HTTP POST endpoint receiving JSON payload with alert details.</span>
           </div>
           <div class="notifrow">
-            <label for="notif_hook_headers">Custom Headers (JSON Object, Optional)</label>
+            <label for="notif_hook_headers" data-i18n="notif.webhook_headers">Custom Headers (JSON Object, Optional)</label>
             <textarea id="notif_hook_headers" rows="2" placeholder='{"Authorization": "Bearer secret_token"}'></textarea>
-            <span class="hint">Custom request headers in JSON format (e.g. Bearer auth tokens).</span>
+            <span class="hint" data-i18n="notif.webhook_headers_hint">Custom request headers in JSON format (e.g. Bearer auth tokens).</span>
           </div>
         </div>
 
@@ -2090,10 +2090,10 @@
         </div>
       </div>
       <div class="notiffoot">
-        <button type="button" id="notif_btn_test" class="btn-sec">🚀 Test Send</button>
+        <button type="button" id="notif_btn_test" class="btn-sec" data-i18n="notif.btn_test_send">🚀 Test Send</button>
         <div class="btns">
-          <button type="button" id="notif_btn_cancel" class="btn-sec">Cancel</button>
-          <button type="submit" id="notif_btn_save" class="btn-primary">Save Channel</button>
+          <button type="button" id="notif_btn_cancel" class="btn-sec" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" id="notif_btn_save" class="btn-primary" data-i18n="notif.btn_save_channel">Save Channel</button>
         </div>
       </div>
     </form>
@@ -2400,632 +2400,812 @@ function esc(x){
 // ---------------------------------------------------------------- i18n
 var I18N_BUILTIN = {
   "en": {
-    "common": {
-      "confirm": "Confirm",
-      "cancel": "Cancel",
-      "close": "Close",
-      "save": "Save",
-      "apply": "Apply",
-      "status": "Status",
-      "actions": "Actions",
-      "loading": "Loading...",
-      "error": "Error",
-      "warning": "Warning",
-      "success": "Success",
-      "unknown": "Unknown",
-      "copy": "Copy",
-      "copied": "Copied!",
-      "active": "Active",
-      "disabled": "Disabled",
-      "delete": "Delete",
-      "edit": "Edit",
-      "test": "Test",
-      "enable": "Enable",
-      "disable": "Disable",
-      "password": "Password",
-      "switch": "Switch"
-    },
-    "nav": {
-      "tab_dash": "Main Dashboard",
-      "tab_cockpit": "Split Cockpit",
-      "btn_ssl": "🔒 SSL / HTTPS",
-      "btn_logout": "Log Out",
-      "font_label": "Font:",
-      "night_mode": "Night Mode",
-      "day_mode": "Day Mode",
-      "hub_key_btn": "🔑 Hub Key"
-    },
-    "kpi": {
-      "terminals": "Active Terminals",
-      "open_positions": "Open Positions",
-      "waiting": "Waiting to Open",
-      "hub_engine": "Hub Router Engine",
-      "inspect_arrow": "Click to inspect →"
-    },
-    "gops": {
-      "title": "Global Operations:",
-      "pause_all": "⏸️ Pause ALL",
-      "resume_all": "▶️ Resume ALL",
-      "close_all": "🛑 CLOSE ALL (Every Receiver)",
-      "reload_all": "🔄 Reload All INI",
-      "btn_notif": "🔔 Notifications",
-      "btn_hub_key": "🔑 Hub Key",
-      "btn_cfg_receiver": "+ Configure Receiver",
-      "confirm_global_close_title": "⚠️ Dangerous Action: Global Close All",
-      "confirm_global_close_desc": "Close ALL positions across EVERY receiver?",
-      "confirm_global_close_detail": "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
-      "confirm_global_close_btn": "Yes, Close All Positions",
-      "confirm_global_pause_title": "Pause All Receivers",
-      "confirm_global_pause_desc": "Pause copying on ALL receivers?",
-      "confirm_global_pause_detail": "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
-      "confirm_global_pause_btn": "Pause All Receivers"
-    },
-    "nodes": {
-      "title": "Terminals & Nodes",
-      "batch_pause": "Batch Pause",
-      "batch_reload": "Batch Reload",
-      "th_role": "Role",
-      "th_account_terminal": "Account & Terminal Name",
-      "th_ping": "Latency (Ping)",
-      "th_status": "Status",
-      "th_positions": "Positions",
-      "th_volume": "Volume",
-      "th_equity": "Equity",
-      "th_balance": "Balance",
-      "th_gating": "Gating & Delays",
-      "th_actions": "Actions",
-      "btn_inspect": "🔍 Positions",
-      "btn_config": "Visual Config",
-      "btn_pause": "Pause",
-      "btn_resume": "Resume",
-      "btn_close_all": "Close All",
-      "empty": "no node has registered yet",
-      "confirm_close_all_title": "Confirm Close All Positions",
-      "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
-      "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
-    },
-    "cockpit": {
-      "connected_terminals": "Connected Terminals",
-      "click_to_focus": "Click to focus",
-      "inspection_title": "Positions & Waiting Inspection",
-      "switch_node": "Switch Node:",
-      "back_to_dash": "Back to Dashboard",
-      "nav_prev": "◀ Prev",
-      "nav_next": "Next ▶",
-      "auto_updates_1min": "Auto-updates 1 min",
-      "btn_request_update": "🔄 Request Update",
-      "btn_requesting": "⏳ Requesting…",
-      "btn_query_ini": "🔄 Query Live INI",
-      "btn_pause_node": "Pause Node",
-      "btn_resume_node": "Resume Node",
-      "btn_close_all": "Close All",
-      "account_label": "Account:",
-      "eq_label": "Eq:",
-      "bal_label": "Bal:",
-      "paused_no_mirrors": "PAUSED (No new mirrors)",
-      "table_title": "📋 Line-by-Line Orders & Positions",
-      "filter_all": "All",
-      "filter_opened": "Opened",
-      "filter_waiting": "Waiting",
-      "filter_managed": "Managed",
-      "filter_unmanaged": "Orphan / Manual",
-      "btn_reset_sort": "↺ Reset Sort",
-      "fast_close_mode": "⚡ Fast Close Mode",
-      "fast_close_tooltip": "Close orders immediately on click without confirmation dialog",
-      "th_status": "Status / Stage",
-      "th_ticket": "Ticket / UID",
-      "th_symbol": "Symbol",
-      "th_side": "Side",
-      "th_volume": "Volume",
-      "th_price": "Price",
-      "th_sltp": "SL / TP",
-      "th_profit": "Profit",
-      "th_swap": "Swap",
-      "th_details": "Pipeline Reason / Details",
-      "th_action": "Action",
-      "btn_close": "❌ Close",
-      "btn_closing": "⏳ Closing...",
-      "btn_queued_close": "⏱️ Queued for Close",
-      "btn_queued_tooltip": "Queued on receiver; broker will execute upon Monday market open",
-      "subtotal_label": "Subtotal ({count} orders):",
-      "confirm_close_title": "Confirm Close Single Order",
-      "confirm_close_desc": "Are you sure you want to close order <strong>#{ticket}</strong> ({symbol} {side} {lots} lots, Profit: {profit}) immediately?",
-      "confirm_close_btn": "Close Order",
-      "remember_fast_close": "Remember choice & enable Fast Close mode (no prompt for subsequent closes)",
-      "summary_title": "📦 Position & Mirror Summary Statistics",
-      "summary_managed_mirrors": "Managed Mirrors",
-      "summary_managed_sub": "Active copier mirror positions managed by engine",
-      "summary_orphan_manual": "Orphan / Manual Positions",
-      "summary_orphan_sub_active": "External or manual orders with non-copier magic",
-      "summary_orphan_sub_none": "No untracked or manual positions",
-      "summary_gross_open": "Gross Account Open",
-      "summary_gross_sub": "Total open positions currently active on this terminal",
-      "orders_unit": "orders",
-      "positions_unit": "positions",
-      "pipeline_synced": "Pipeline Execution: All Orders Synchronized",
-      "pipeline_synced_sub": "(0 in broker queue · 0 gate delayed · 0 market closed)",
-      "stage_broker_queue": "⚡ 1. Broker Queue",
-      "stage_gate_delayed": "⏱️ 2. Gate Delayed",
-      "stage_mkt_closed": "🔒 3. Market Closed",
-      "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):",
-      "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh"
-    },
-    "notices": {
-      "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",
-      "mkt_closed_desc": "Foreign exchange markets are closed for the weekend. The close order has been accepted into the receiver priority queue and will be executed by the broker as soon as the market opens on Monday.",
-      "already_queued_title": "Order #{ticket} is already in the execution queue",
-      "already_queued_desc": "This order has already been queued for closing and is waiting for broker matching.",
-      "close_dispatched_title": "✅ Order #{ticket} close instruction received",
-      "close_dispatched_desc": "Receiver confirmed action queueing.",
-      "close_failed_old_ea_title": "⚠️ Close Rejected: Receiver EA running older build",
-      "close_failed_old_ea_desc": "Please switch timeframe on the chart or press F7 in MT4 to reload the latest EA binary!",
-      "close_failed_title": "⚠️ Close instruction could not execute: #{ticket}",
-      "toast_dispatched": "Dispatching close command for order #{ticket}...",
-      "toast_queued_mkt": "Order #{ticket} queued, broker will execute upon market open.",
-      "toast_already_queued": "Order #{ticket} is already queued for close"
-    },
-    "cluster": {
-      "title": "Cluster Status",
-      "peer_settings": "⚙️ Peer Settings",
-      "promote_primary": "⚡ Promote to Primary",
-      "failback_now": "⚡ Failback Now",
-      "lock_master": "Lock as Master",
-      "open_peer_console": "🔗 Open Peer Console",
-      "role_primary": "Primary Node (Active R/W) [Epoch {epoch}]",
-      "role_standby": "Standby Node (Read-Only Mirror) [Epoch {epoch}]",
-      "role_conflict": "Split-Brain Conflict (Locked) [Epoch {epoch}]",
-      "peer_none": "Peer: None",
-      "peer_online": "Peer: Online ({status})",
-      "peer_offline": "Peer: Offline",
-      "failback_locked": "• [Auto-Failback Locked]",
-      "failback_stabilizing": "• [Primary online {curH}h/{totH}h · Auto-failback in ~{remH} hrs]",
-      "failback_ready": "• [Primary stabilized {curH}h/{totH}h · Initiating auto-failback...]",
-      "modal_title": "🔄 Cluster Peer Settings",
-      "current_mode": "Current Mode:",
-      "peer_api": "Peer API:",
-      "peer_zmq": "Peer ZMQ:",
-      "input_ip_label": "Peer VPS Public IP Address",
-      "input_ip_placeholder": "e.g. 168.100.200.50 (leave blank for standalone)",
-      "input_ip_hint": "Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.",
-      "input_api_port_label": "Peer Web API Port",
-      "input_api_port_hint": "Default 6010 (or 6011 for local test)",
-      "input_zmq_port_label": "Peer ZMQ Replication Port",
-      "input_zmq_port_hint": "Default 6000 (or 6001 for local test)",
-      "btn_clear": "⏹️ Clear Peer (Standalone Mode)",
-      "btn_save": "🚀 Save & Apply",
-      "btn_close": "Close"
-    },
-    "ssl": {
-      "title": "🔒 SSL / HTTPS Settings",
-      "status": "Status:",
-      "domain": "Domain:",
-      "issuer": "Issuer:",
-      "port": "Port:",
-      "secure_url": "Secure URL:",
-      "status_enabled": "Enabled (HTTPS Active)",
-      "status_in_progress": "Configuring / Requesting...",
-      "status_disabled": "Disabled (HTTP Mode)",
-      "days_remaining": "{days} days left",
-      "mode_title": "Certificate & Domain Mode",
-      "mode_auto": "Auto Domain (Recommended)",
-      "mode_auto_desc": "Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert",
-      "mode_custom": "Custom Domain",
-      "mode_custom_desc": "Uses a domain name whose DNS A record points to this VPS",
-      "mode_selfsigned": "Self-Signed Certificate",
-      "mode_selfsigned_desc": "For offline or intranet testing (browser will show untrusted warning)",
-      "mode_import": "Import Existing Certificate",
-      "mode_import_desc": "Paste fullchain.pem and private key text directly",
-      "input_domain_label": "Domain Name",
-      "input_domain_placeholder": "e.g. 123-45-67-89.sslip.io or hub.example.com",
-      "input_domain_hint_auto": "Automatically maps public IP to: {domain}",
-      "input_domain_hint_custom": "Please ensure the DNS A record for this domain points to this VPS public IP",
-      "input_domain_hint_self": "e.g. 127-0-0-1.sslip.io or localhost (for local test)",
-      "input_port_label": "HTTPS Listen Port",
-      "port_443": "Standard 443 (Default)",
-      "port_custom": "Custom:",
-      "input_email_label": "Admin Notification Email (Optional)",
-      "input_email_hint": "For Let's Encrypt expiry and security notices, optional.",
-      "chk_ondemand_80": "On-demand port 80 challenge listener (closed during normal operation)",
-      "chk_auto_renew": "Auto-renew 30 days before expiration",
-      "btn_disable": "⛔ Disable SSL (HTTP Mode)",
-      "btn_renew": "🔄 Renew Now",
-      "btn_save": "🚀 Save & Apply",
-      "btn_close": "Close"
-    },
-    "hubkey": {
-      "modal_title": "🔑 Hub Public Key File (copier_hub.key)",
-      "label": "Hub CurveZMQ Public Key",
-      "hint": "40-character Z85 public key. Safe to distribute to all nodes.",
-      "copy_btn": "Copy",
-      "copied_btn": "Copied!",
-      "instr_title": "📁 Deployment Instructions (No manual input needed in EA):",
-      "instr_step1": "Click ⬇️ Download Key File below to save copier_hub.key.",
-      "instr_step2": "In MT4 / MT5, click File → Open Data Folder.",
-      "instr_step3": "Place copier_hub.key into:",
-      "instr_step3_or": "OR",
-      "instr_step3_common": "(shared across ALL MT4/MT5 terminals on this computer!).",
-      "instr_step4": "Attach CopierSender or CopierReceiver with Mode = Central (Hub). The EA automatically detects and loads the key file!",
-      "download_btn": "⬇️ Download Key File",
-      "close_btn": "Close"
-    },
-    "topo": {
-      "title": "Topology",
-      "stats": "{senders} sender(s) · {receivers} receiver(s)"
-    },
-    "msgcenter": {
-      "title": "📢 Message Center & Activity Log (Recent 20)",
-      "dismiss_all": "Dismiss All ({count} unread)",
-      "dismiss_all_read": "Dismiss All (Mark Read)",
-      "empty": "No recent system events logged yet.",
-      "time_now": "just now",
-      "time_m": "{m}m ago",
-      "time_h": "{h}h ago",
-      "time_d": "{d}d ago",
-      "mark_read": "Mark as read"
-    },
-    "notif": {
-      "title": "Notification Channels (Telegram / WeCom / DingTalk / Webhook)",
-      "add_btn": "+ Add Channel",
-      "th_name": "Name",
-      "th_type": "Type",
-      "th_severity": "Min Severity",
-      "th_status": "Status",
-      "th_target": "Target Info",
-      "th_actions": "Actions",
-      "btn_test": "Test",
-      "btn_edit": "Edit",
-      "btn_delete": "Delete",
-      "btn_enable": "Enable",
-      "btn_disable": "Disable",
-      "status_enabled": "Active",
-      "status_disabled": "Disabled"
-    },
-    "users": {
-      "title": "Users",
-      "count_label": "{count} user(s)",
-      "th_user": "user",
-      "th_role": "role",
-      "th_state": "state",
-      "state_active": "active",
-      "state_disabled": "disabled",
-      "btn_password": "password",
-      "btn_disable": "disable",
-      "btn_enable": "enable",
-      "btn_delete": "delete",
-      "footnote": "add / update needs a password; disable, enable and role changes keep the existing one. The last admin cannot be deleted, demoted or disabled.",
-      "ph_userid": "user id",
-      "ph_password": "password (min 8 chars)",
-      "btn_addupdate": "add / update",
-      "role_viewer": "viewer",
-      "role_operator": "operator",
-      "role_admin": "admin"
-    },
-    "footer": {
-      "cmd_off_note": "commands are OFF: this hub started with --writes off. Restart without --writes off (or with --writes on) to issue operational commands.",
-      "cmd_on_note": "operational commands target receivers; the EA acts on them once M5b lands. Each click issues a command via the M5a hub endpoint and shows its command_id.",
-      "change_pwd": "(change password)",
-      "logout": "(log out)"
-    },
-    "auth": {
-      "login_title": "mt-copier hub — sign in",
-      "ph_user": "user id",
-      "ph_pass": "password",
-      "btn_signin": "sign in"
-    }
+      "common": {
+          "confirm": "Confirm",
+          "cancel": "Cancel",
+          "close": "Close",
+          "save": "Save",
+          "apply": "Apply",
+          "status": "Status",
+          "actions": "Actions",
+          "loading": "Loading...",
+          "error": "Error",
+          "warning": "Warning",
+          "success": "Success",
+          "unknown": "Unknown",
+          "copy": "Copy",
+          "copied": "Copied!",
+          "active": "Active",
+          "disabled": "Disabled",
+          "delete": "Delete",
+          "edit": "Edit",
+          "test": "Test",
+          "enable": "Enable",
+          "disable": "Disable",
+          "password": "Password",
+          "switch": "Switch",
+          "sec_ago": "{s}s ago",
+          "min_ago": "{m}m ago",
+          "hr_ago": "{h}h ago",
+          "recently": "recently"
+      },
+      "nav": {
+          "tab_dash": "Main Dashboard",
+          "tab_cockpit": "Split Cockpit",
+          "btn_ssl": "🔒 SSL / HTTPS",
+          "btn_logout": "Log Out",
+          "font_label": "Font:",
+          "night_mode": "Night Mode",
+          "day_mode": "Day Mode",
+          "hub_key_btn": "🔑 Hub Key"
+      },
+      "kpi": {
+          "terminals": "Active Terminals",
+          "open_positions": "Open Positions",
+          "waiting": "Waiting to Open",
+          "hub_engine": "Hub Router Engine",
+          "inspect_arrow": "Click to inspect →",
+          "counts_summary": "{online} online / {stale} stale / {offline} offline",
+          "uptime": "up {time}",
+          "updated": "updated {time}",
+          "online_summary": "{online} / {total} Online",
+          "senders_receivers": "{senders} Senders · {receivers} Receivers",
+          "pos_lots_summary": "{count} ({lots} lots)",
+          "broadcasting_mirrors": "{senders} Senders Broadcasting · {mirrors} Mirrors ({lots} lots)",
+          "waiting_summary": "{count} Waiting ({lots} lots)",
+          "waiting_summary_simple": "{count} Waiting",
+          "waiting_breakdown": "{queued} queued · {delayed} delayed · {mkt_closed} mkt closed",
+          "hub_curve_encrypted": "🔒 CURVE Encrypted",
+          "hub_plain_zmq": "⚠️ Plain ZMQ",
+          "hub_writes_on": "Writes ON",
+          "hub_writes_off": "Writes OFF",
+          "hub_standby_ro": "Standby Read-Only"
+      },
+      "gops": {
+          "title": "Global Operations:",
+          "pause_all": "⏸️ Pause ALL",
+          "resume_all": "▶️ Resume ALL",
+          "close_all": "🛑 CLOSE ALL (Every Receiver)",
+          "reload_all": "🔄 Reload All INI",
+          "btn_notif": "🔔 Notifications",
+          "btn_hub_key": "🔑 Hub Key",
+          "btn_cfg_receiver": "+ Configure Receiver",
+          "confirm_global_close_title": "⚠️ Dangerous Action: Global Close All",
+          "confirm_global_close_desc": "Close ALL positions across EVERY receiver?",
+          "confirm_global_close_detail": "This immediately sends market close orders for every mirrored position held by all receivers. This operation cannot be undone.",
+          "confirm_global_close_btn": "Yes, Close All Positions",
+          "confirm_global_pause_title": "Pause All Receivers",
+          "confirm_global_pause_desc": "Pause copying on ALL receivers?",
+          "confirm_global_pause_detail": "All connected receiver terminals will stop opening new positions from senders until resumed. Existing open positions remain held.",
+          "confirm_global_pause_btn": "Pause All Receivers"
+      },
+      "nodes": {
+          "title": "Terminals & Nodes",
+          "batch_pause": "Batch Pause",
+          "batch_reload": "Batch Reload",
+          "th_role": "Role",
+          "th_account_terminal": "Account & Terminal Name",
+          "th_ping": "Latency (Ping)",
+          "th_status": "Status",
+          "th_positions": "Positions",
+          "th_volume": "Volume",
+          "th_equity": "Equity",
+          "th_balance": "Balance",
+          "th_gating": "Gating & Delays",
+          "th_actions": "Actions",
+          "btn_inspect": "🔍 Positions",
+          "btn_config": "Visual Config",
+          "btn_pause": "Pause",
+          "btn_resume": "Resume",
+          "btn_close_all": "Close All",
+          "empty": "no node has registered yet",
+          "confirm_close_all_title": "Confirm Close All Positions",
+          "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
+          "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
+      },
+      "cockpit": {
+          "connected_terminals": "Connected Terminals",
+          "click_to_focus": "Click to focus",
+          "inspection_title": "Positions & Waiting Inspection",
+          "switch_node": "Switch Node:",
+          "back_to_dash": "Back to Dashboard",
+          "nav_prev": "◀ Prev",
+          "nav_next": "Next ▶",
+          "auto_updates_1min": "Auto-updates 1 min",
+          "btn_request_update": "🔄 Request Update",
+          "btn_requesting": "⏳ Requesting…",
+          "btn_query_ini": "🔄 Query Live INI",
+          "btn_pause_node": "Pause Node",
+          "btn_resume_node": "Resume Node",
+          "btn_close_all": "Close All",
+          "account_label": "Account:",
+          "eq_label": "Eq:",
+          "bal_label": "Bal:",
+          "paused_no_mirrors": "PAUSED (No new mirrors)",
+          "table_title": "📋 Line-by-Line Orders & Positions",
+          "filter_all": "All",
+          "filter_opened": "Opened",
+          "filter_waiting": "Waiting",
+          "filter_managed": "Managed",
+          "filter_unmanaged": "Orphan / Manual",
+          "btn_reset_sort": "↺ Reset Sort",
+          "fast_close_mode": "⚡ Fast Close Mode",
+          "fast_close_tooltip": "Close orders immediately on click without confirmation dialog",
+          "th_status": "Status / Stage",
+          "th_ticket": "Ticket / UID",
+          "th_symbol": "Symbol",
+          "th_side": "Side",
+          "th_volume": "Volume",
+          "th_price": "Price",
+          "th_sltp": "SL / TP",
+          "th_profit": "Profit",
+          "th_swap": "Swap",
+          "th_details": "Pipeline Reason / Details",
+          "th_action": "Action",
+          "btn_close": "❌ Close",
+          "btn_closing": "⏳ Closing...",
+          "btn_queued_close": "⏱️ Queued for Close",
+          "btn_queued_tooltip": "Queued on receiver; broker will execute upon Monday market open",
+          "subtotal_label": "Subtotal ({count} orders):",
+          "confirm_close_title": "Confirm Close Single Order",
+          "confirm_close_desc": "Are you sure you want to close order <strong>#{ticket}</strong> ({symbol} {side} {lots} lots, Profit: {profit}) immediately?",
+          "confirm_close_btn": "Close Order",
+          "remember_fast_close": "Remember choice & enable Fast Close mode (no prompt for subsequent closes)",
+          "summary_title": "📦 Position & Mirror Summary Statistics",
+          "summary_managed_mirrors": "Managed Mirrors",
+          "summary_managed_sub": "Active copier mirror positions managed by engine",
+          "summary_orphan_manual": "Orphan / Manual Positions",
+          "summary_orphan_sub_active": "External or manual orders with non-copier magic",
+          "summary_orphan_sub_none": "No untracked or manual positions",
+          "summary_gross_open": "Gross Account Open",
+          "summary_gross_sub": "Total open positions currently active on this terminal",
+          "orders_unit": "orders",
+          "positions_unit": "positions",
+          "pipeline_synced": "Pipeline Execution: All Orders Synchronized",
+          "pipeline_synced_sub": "(0 in broker queue · 0 gate delayed · 0 market closed)",
+          "stage_broker_queue": "⚡ 1. Broker Queue",
+          "stage_gate_delayed": "⏱️ 2. Gate Delayed",
+          "stage_mkt_closed": "🔒 3. Market Closed",
+          "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):",
+          "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh"
+      },
+      "notices": {
+          "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",
+          "mkt_closed_desc": "Foreign exchange markets are closed for the weekend. The close order has been accepted into the receiver priority queue and will be executed by the broker as soon as the market opens on Monday.",
+          "already_queued_title": "Order #{ticket} is already in the execution queue",
+          "already_queued_desc": "This order has already been queued for closing and is waiting for broker matching.",
+          "close_dispatched_title": "✅ Order #{ticket} close instruction received",
+          "close_dispatched_desc": "Receiver confirmed action queueing.",
+          "close_failed_old_ea_title": "⚠️ Close Rejected: Receiver EA running older build",
+          "close_failed_old_ea_desc": "Please switch timeframe on the chart or press F7 in MT4 to reload the latest EA binary!",
+          "close_failed_title": "⚠️ Close instruction could not execute: #{ticket}",
+          "toast_dispatched": "Dispatching close command for order #{ticket}...",
+          "toast_queued_mkt": "Order #{ticket} queued, broker will execute upon market open.",
+          "toast_already_queued": "Order #{ticket} is already queued for close"
+      },
+      "cluster": {
+          "title": "Cluster Status",
+          "peer_settings": "⚙️ Peer Settings",
+          "promote_primary": "⚡ Promote to Primary",
+          "failback_now": "⚡ Failback Now",
+          "lock_master": "Lock as Master",
+          "open_peer_console": "🔗 Open Peer Console",
+          "role_primary": "Primary Node (Active R/W) [Epoch {epoch}]",
+          "role_standby": "Standby Node (Read-Only Mirror) [Epoch {epoch}]",
+          "role_conflict": "Split-Brain Conflict (Locked) [Epoch {epoch}]",
+          "peer_none": "Peer: None",
+          "peer_online": "Peer: Online ({status})",
+          "peer_offline": "Peer: Offline",
+          "failback_locked": "• [Auto-Failback Locked]",
+          "failback_stabilizing": "• [Primary online {curH}h/{totH}h · Auto-failback in ~{remH} hrs]",
+          "failback_ready": "• [Primary stabilized {curH}h/{totH}h · Initiating auto-failback...]",
+          "modal_title": "🔄 Cluster Peer Settings",
+          "current_mode": "Current Mode:",
+          "peer_api": "Peer API:",
+          "peer_zmq": "Peer ZMQ:",
+          "input_ip_label": "Peer VPS Public IP Address",
+          "input_ip_placeholder": "e.g. 168.100.200.50 (leave blank for standalone)",
+          "input_ip_hint": "Leave blank and click 'Clear Peer (Standalone)' if running as an isolated single hub.",
+          "input_api_port_label": "Peer Web API Port",
+          "input_api_port_hint": "Default 6010 (or 6011 for local test)",
+          "input_zmq_port_label": "Peer ZMQ Replication Port",
+          "input_zmq_port_hint": "Default 6000 (or 6001 for local test)",
+          "btn_clear": "⏹️ Clear Peer (Standalone Mode)",
+          "btn_save": "🚀 Save & Apply",
+          "btn_close": "Close"
+      },
+      "ssl": {
+          "title": "🔒 SSL / HTTPS Settings",
+          "status": "Status:",
+          "domain": "Domain:",
+          "issuer": "Issuer:",
+          "port": "Port:",
+          "secure_url": "Secure URL:",
+          "status_enabled": "Enabled (HTTPS Active)",
+          "status_in_progress": "Configuring / Requesting...",
+          "status_disabled": "Disabled (HTTP Mode)",
+          "days_remaining": "{days} days left",
+          "mode_title": "Certificate & Domain Mode",
+          "mode_auto": "Auto Domain (Recommended)",
+          "mode_auto_desc": "Detects public IP, maps IP.sslip.io and provisions genuine Let's Encrypt cert",
+          "mode_custom": "Custom Domain",
+          "mode_custom_desc": "Uses a domain name whose DNS A record points to this VPS",
+          "mode_selfsigned": "Self-Signed Certificate",
+          "mode_selfsigned_desc": "For offline or intranet testing (browser will show untrusted warning)",
+          "mode_import": "Import Existing Certificate",
+          "mode_import_desc": "Paste fullchain.pem and private key text directly",
+          "input_domain_label": "Domain Name",
+          "input_domain_placeholder": "e.g. 123-45-67-89.sslip.io or hub.example.com",
+          "input_domain_hint_auto": "Automatically maps public IP to: {domain}",
+          "input_domain_hint_custom": "Please ensure the DNS A record for this domain points to this VPS public IP",
+          "input_domain_hint_self": "e.g. 127-0-0-1.sslip.io or localhost (for local test)",
+          "input_port_label": "HTTPS Listen Port",
+          "port_443": "Standard 443 (Default)",
+          "port_custom": "Custom:",
+          "input_email_label": "Admin Notification Email (Optional)",
+          "input_email_hint": "For Let's Encrypt expiry and security notices, optional.",
+          "chk_ondemand_80": "On-demand port 80 challenge listener (closed during normal operation)",
+          "chk_auto_renew": "Auto-renew 30 days before expiration",
+          "btn_disable": "⛔ Disable SSL (HTTP Mode)",
+          "btn_renew": "🔄 Renew Now",
+          "btn_save": "🚀 Save & Apply",
+          "btn_close": "Close"
+      },
+      "hubkey": {
+          "modal_title": "🔑 Hub Public Key File (copier_hub.key)",
+          "label": "Hub CurveZMQ Public Key",
+          "hint": "40-character Z85 public key. Safe to distribute to all nodes.",
+          "copy_btn": "Copy",
+          "copied_btn": "Copied!",
+          "instr_title": "📁 Deployment Instructions (No manual input needed in EA):",
+          "instr_step1": "Click ⬇️ Download Key File below to save copier_hub.key.",
+          "instr_step2": "In MT4 / MT5, click File → Open Data Folder.",
+          "instr_step3": "Place copier_hub.key into:",
+          "instr_step3_or": "OR",
+          "instr_step3_common": "(shared across ALL MT4/MT5 terminals on this computer!).",
+          "instr_step4": "Attach CopierSender or CopierReceiver with Mode = Central (Hub). The EA automatically detects and loads the key file!",
+          "download_btn": "⬇️ Download Key File",
+          "close_btn": "Close"
+      },
+      "topo": {
+          "title": "Topology",
+          "stats": "{senders} sender(s) · {receivers} receiver(s)"
+      },
+      "msgcenter": {
+          "title": "📢 Message Center & Activity Log (Recent 20)",
+          "dismiss_all": "Dismiss All ({count} unread)",
+          "dismiss_all_read": "Dismiss All (Mark Read)",
+          "empty": "No recent system events logged yet.",
+          "time_now": "just now",
+          "time_m": "{m}m ago",
+          "time_h": "{h}h ago",
+          "time_d": "{d}d ago",
+          "mark_read": "Mark as read"
+      },
+      "notif": {
+          "title": "Notification Channels (Telegram / WeCom / DingTalk / Webhook)",
+          "add_btn": "+ Add Channel",
+          "th_name": "Name",
+          "th_type": "Type",
+          "th_severity": "Min Severity",
+          "th_status": "Status",
+          "th_target": "Target Info",
+          "th_actions": "Actions",
+          "btn_test": "Test",
+          "btn_edit": "Edit",
+          "btn_delete": "Delete",
+          "btn_enable": "Enable",
+          "btn_disable": "Disable",
+          "status_enabled": "Active",
+          "status_disabled": "Disabled",
+          "modal_add_title": "Add Notification Channel",
+          "modal_edit_title": "Edit Notification Channel",
+          "field_name": "Channel Name",
+          "ph_name": "e.g. Trading Ops Telegram Group",
+          "field_type": "Platform / Type",
+          "field_severity": "Trigger Level",
+          "sev_warning": "Warning & Critical (All alerts)",
+          "sev_critical": "Critical Only (Major issues)",
+          "enable_dispatch": "Enable this channel for alert dispatch",
+          "tg_token": "Bot Token",
+          "tg_token_hint": "Obtain from @BotFather in Telegram. Saved tokens are masked.",
+          "tg_chatid": "Chat ID",
+          "tg_chatid_hint": "Target user ID or group chat ID (supergroups typically start with -100).",
+          "wecom_key": "Webhook Key or URL",
+          "wecom_key_hint": "In WeCom group settings -> Group Bot -> Add Bot -> Copy webhook URL or key.",
+          "dt_token": "Access Token or Webhook URL",
+          "dt_token_hint": "In DingTalk group -> Bot Management -> Custom Bot -> Webhook access_token.",
+          "dt_secret": "Secret (Signature Key, Optional)",
+          "dt_secret_hint": "If signature validation (HMAC-SHA256) is enabled in DingTalk bot settings, paste SECxxx here.",
+          "webhook_url": "Webhook URL",
+          "webhook_url_hint": "HTTP POST endpoint receiving JSON payload with alert details.",
+          "webhook_headers": "Custom Headers (JSON Object, Optional)",
+          "webhook_headers_hint": "Custom request headers in JSON format (e.g. Bearer auth tokens).",
+          "btn_test_send": "🚀 Test Send",
+          "btn_save_channel": "Save Channel"
+      },
+      "users": {
+          "title": "Users",
+          "count_label": "{count} user(s)",
+          "th_user": "user",
+          "th_role": "role",
+          "th_state": "state",
+          "state_active": "active",
+          "state_disabled": "disabled",
+          "btn_password": "password",
+          "btn_disable": "disable",
+          "btn_enable": "enable",
+          "btn_delete": "delete",
+          "footnote": "add / update needs a password; disable, enable and role changes keep the existing one. The last admin cannot be deleted, demoted or disabled.",
+          "ph_userid": "user id",
+          "ph_password": "password (min 8 chars)",
+          "btn_addupdate": "add / update",
+          "role_viewer": "viewer",
+          "role_operator": "operator",
+          "role_admin": "admin"
+      },
+      "footer": {
+          "cmd_off_note": "commands are OFF: this hub started with --writes off. Restart without --writes off (or with --writes on) to issue operational commands.",
+          "cmd_on_note": "operational commands target receivers; the EA acts on them once M5b lands. Each click issues a command via the M5a hub endpoint and shows its command_id.",
+          "change_pwd": "(change password)",
+          "logout": "(log out)"
+      },
+      "auth": {
+          "login_title": "mt-copier hub — sign in",
+          "ph_user": "user id",
+          "ph_pass": "password",
+          "btn_signin": "sign in"
+      },
+      "cfg": {
+          "modal_title": "Receiver Configuration (copier.ini)",
+          "target_receiver": "Target Receiver:",
+          "writes_disabled_notice": "⚠️ Writes are disabled on this hub (--writes off). You can inspect the configuration, but cannot save changes or rollback until the hub is restarted with --writes on.",
+          "hub_rev": "Hub Rev:",
+          "node_rev": "Node Rev:",
+          "curr_setting": "Current Setting:",
+          "badge_not_managed": "NOT MANAGED",
+          "badge_in_sync": "IN SYNC",
+          "badge_out_of_sync": "OUT OF SYNC",
+          "badge_drift": "DRIFT (node > hub)",
+          "badge_available": "AVAILABLE ({age})",
+          "badge_none_reported": "NONE REPORTED",
+          "last_pushed": "Last pushed: Rev {rev} by {actor} ({when})",
+          "no_rev_history": "No revision history on hub yet",
+          "hist_current": "-- Current (Rev {rev}) --",
+          "msg_autoloaded": "Auto-loaded receiver's active Current Setting into editor.",
+          "btn_load_current": "📥 Load Current Setting from Node",
+          "history_label": "History:",
+          "btn_load_rev": "load revision",
+          "btn_rollback": "rollback to this rev",
+          "tab_vis": "Visual Editor",
+          "tab_raw": "Raw INI Editor",
+          "subtab_senders": "Senders & Strategies",
+          "subtab_risk": "Account Circuit Breakers [common]",
+          "subtab_system": "System & Engine [common]",
+          "subtab_exec": "Global Fallbacks [common]",
+          "desc_senders": "Configure each upstream signal source independently. Each sender has its own sizing, risk limits, stop management, symbol filters, anti-stacking delays, and trading schedule.",
+          "btn_add_sender": "+ Add Sender Section",
+          "btn_load_template": "Load Default Example",
+          "btn_save_push": "Save & Push to Receiver",
+          "remove_section": "remove section",
+          "sender_id_label": "Sender ID / NID *",
+          "magic_label": "Magic Number *",
+          "lot_mode_label": "Lot Mode",
+          "lot_param_label": "Lot Param",
+          "symbol_suffix_label": "Symbol Suffix",
+          "symbol_translations": "Symbol Translations (symbol.<FROM> = <TO>)",
+          "add_mapping": "+ add mapping",
+          "no_symbol_translations": "No custom symbol translations (uses suffix or raw symbol).",
+          "tab_risk": "🛡️ Risk Limits",
+          "tab_exec": "🛑 Execution & Stops",
+          "tab_filters": "🔍 Filters & Direction",
+          "tab_delays": "⏳ Anti-Stack & Delays",
+          "tab_schedule": "📅 Schedule & Timeout"
+      }
   },
   "zh-CN": {
-    "common": {
-      "confirm": "确认",
-      "cancel": "取消",
-      "close": "关闭",
-      "save": "保存",
-      "apply": "应用",
-      "status": "状态",
-      "actions": "操作",
-      "loading": "加载中...",
-      "error": "错误",
-      "warning": "警告",
-      "success": "成功",
-      "unknown": "未知",
-      "copy": "复制",
-      "copied": "已复制！",
-      "active": "启用",
-      "disabled": "停用",
-      "delete": "删除",
-      "edit": "编辑",
-      "test": "测试",
-      "enable": "启用",
-      "disable": "停用",
-      "password": "密码",
-      "switch": "切换"
-    },
-    "nav": {
-      "tab_dash": "总览看板",
-      "tab_cockpit": "监控驾驶舱",
-      "btn_ssl": "🔒 SSL / HTTPS",
-      "btn_logout": "退出",
-      "font_label": "字号:",
-      "night_mode": "夜间模式",
-      "day_mode": "日间模式",
-      "hub_key_btn": "🔑 节点公钥"
-    },
-    "kpi": {
-      "terminals": "活跃交易端",
-      "open_positions": "当前持仓单",
-      "waiting": "排队等待开仓",
-      "hub_engine": "Hub 路由引擎",
-      "inspect_arrow": "点击查看明细 →"
-    },
-    "gops": {
-      "title": "全局接收端统一操作:",
-      "pause_all": "⏸️ 全局暂停跟单",
-      "resume_all": "▶️ 全局恢复跟单",
-      "close_all": "🛑 一键平掉全部持仓 (所有接收端)",
-      "reload_all": "🔄 全局重载 INI 配置",
-      "btn_notif": "🔔 通知设置",
-      "btn_hub_key": "🔑 节点公钥",
-      "btn_cfg_receiver": "+ 配置接收端",
-      "confirm_global_close_title": "⚠️ 高危操作: 全局一键平仓",
-      "confirm_global_close_desc": "确定要平掉所有接收端上的全部持仓吗？",
-      "confirm_global_close_detail": "此操作将立即向所有连接的接收端下发市价平仓指令，无法撤销。",
-      "confirm_global_close_btn": "确认一键平仓",
-      "confirm_global_pause_title": "全局暂停跟单",
-      "confirm_global_pause_desc": "确定要暂停所有接收端的跟单吗？",
-      "confirm_global_pause_detail": "所有接收端将停止接收信号源的新开仓指令，直到恢复跟单。当前已持有的仓位保持不变。",
-      "confirm_global_pause_btn": "确认暂停"
-    },
-    "nodes": {
-      "title": "交易终端与节点",
-      "batch_pause": "批量暂停",
-      "batch_reload": "批量重载",
-      "th_role": "角色",
-      "th_account_terminal": "账号与终端名称",
-      "th_ping": "延迟 (Ping)",
-      "th_status": "状态",
-      "th_positions": "持仓数",
-      "th_volume": "手数",
-      "th_equity": "净值",
-      "th_balance": "余额",
-      "th_gating": "流控与延时",
-      "th_actions": "管理操作",
-      "btn_inspect": "🔍 检查持仓",
-      "btn_config": "可视化配置",
-      "btn_pause": "暂停",
-      "btn_resume": "恢复",
-      "btn_close_all": "全部平仓",
-      "empty": "当前尚无节点接入注册",
-      "confirm_close_all_title": "确认全部平仓",
-      "confirm_close_all_desc": "确定要平掉接收端 <code>{key}</code> 的所有持仓吗？",
-      "confirm_close_all_detail": "此操作将立即市价平掉该接收端持有的所有镜像仓位，无法撤销。"
-    },
-    "cockpit": {
-      "connected_terminals": "已连线终端",
-      "click_to_focus": "点击切换检视",
-      "inspection_title": "持仓明细与排队检验",
-      "switch_node": "切换节点:",
-      "back_to_dash": "返回总览看板",
-      "nav_prev": "◀ 上一个",
-      "nav_next": "下一个 ▶",
-      "auto_updates_1min": "每分钟自动更新",
-      "btn_request_update": "🔄 立即请求更新",
-      "btn_requesting": "⏳ 请求中…",
-      "btn_query_ini": "🔄 查询实时 INI",
-      "btn_pause_node": "暂停节点",
-      "btn_resume_node": "恢复节点",
-      "btn_close_all": "全部平仓",
-      "account_label": "账号:",
-      "eq_label": "净值:",
-      "bal_label": "余额:",
-      "paused_no_mirrors": "已暂停 (停止跟单开仓)",
-      "table_title": "📋 逐笔订单与持仓明细",
-      "filter_all": "全部",
-      "filter_opened": "已开仓",
-      "filter_waiting": "等待中",
-      "filter_managed": "跟单托管单",
-      "filter_unmanaged": "手动/外部单",
-      "btn_reset_sort": "↺ 恢复默认排序",
-      "fast_close_mode": "⚡ 极速平仓模式",
-      "fast_close_tooltip": "开启后点击平仓直接下发指令，跳过二次确认弹窗",
-      "th_status": "状态 / 阶段",
-      "th_ticket": "订单号 / UID",
-      "th_symbol": "品种",
-      "th_side": "方向",
-      "th_volume": "手数",
-      "th_price": "开仓价",
-      "th_sltp": "止损 / 止盈",
-      "th_profit": "浮动盈亏",
-      "th_swap": "隔夜利息",
-      "th_details": "流转原因 / 备注",
-      "th_action": "操作",
-      "btn_close": "❌ 平仓",
-      "btn_closing": "⏳ 平仓中...",
-      "btn_queued_close": "⏱️ 已排队待平",
-      "btn_queued_tooltip": "已在接收端成功排队，待周一开市后券商自动撮合成交",
-      "subtotal_label": "合计 ({count} 笔订单):",
-      "confirm_close_title": "确认单笔订单平仓",
-      "confirm_close_desc": "确定要立即平仓订单 <strong>#{ticket}</strong> ({symbol} {side} {lots} 手, 盈亏: {profit}) 吗？",
-      "confirm_close_btn": "立即平仓",
-      "remember_fast_close": "记住选择并开启极速平仓模式 (本次后续不再弹窗提示)",
-      "summary_title": "📦 仓位与镜像流转统计汇总",
-      "summary_managed_mirrors": "跟单托管仓位",
-      "summary_managed_sub": "由跟单系统引擎自动管理的有效镜像仓位",
-      "summary_orphan_manual": "外部/手动单",
-      "summary_orphan_sub_active": "非跟单 Magic 的手动下单或外部 EA 仓位",
-      "summary_orphan_sub_none": "无外部或手动持仓",
-      "summary_gross_open": "账户总持仓量",
-      "summary_gross_sub": "该终端当前持有的所有开仓单总计",
-      "orders_unit": "笔订单",
-      "positions_unit": "个仓位",
-      "pipeline_synced": "流转执行状态: 所有订单均已同步",
-      "pipeline_synced_sub": "(0 排队中 · 0 延时防抖 · 0 休市等待)",
-      "stage_broker_queue": "⚡ 1. 券商调度队列",
-      "stage_gate_delayed": "⏱️ 2. 安全防抖延迟",
-      "stage_mkt_closed": "🔒 3. 市场休市等待",
-      "orders_waiting_strip": "{total} 笔订单等待开仓 ({lots} 手):",
-      "telemetry_stream_foot": "接收端: {node} · 默认 60 秒同步 · 点击「立即请求更新」强制刷新"
-    },
-    "notices": {
-      "mkt_closed_title": "【周末休市排队中】订单 #{ticket} 已排队待平！",
-      "mkt_closed_desc": "当前外汇市场处于周末闭市状态 (Market Closed)。平仓指令已进入接收端优先执行队列，待周一开盘后经纪商将自动撮合成交。",
-      "already_queued_title": "订单 #{ticket} 已在执行队列中",
-      "already_queued_desc": "该订单已经处于平仓排队列表中，正在等待券商撮合执行。",
-      "close_dispatched_title": "✅ 订单 #{ticket} 平仓指令已送达接收端",
-      "close_dispatched_desc": "接收端已确认处理平仓动作并加入队列。",
-      "close_failed_old_ea_title": "⚠️ 平仓失败：接收端 EA 仍运行旧版本",
-      "close_failed_old_ea_desc": "请在 MT4 图表上按 F7 确定或切换一下周期以重新加载最新 EA！",
-      "close_failed_title": "⚠️ 平仓指令未能执行：#{ticket}",
-      "toast_dispatched": "正在下发订单 #{ticket} 平仓指令...",
-      "toast_queued_mkt": "订单 #{ticket} 已排队，待周一开盘后自动撮合成交。",
-      "toast_already_queued": "订单 #{ticket} 已经在平仓排队中"
-    },
-    "cluster": {
-      "title": "集群状态",
-      "peer_settings": "⚙️ 对端设置",
-      "promote_primary": "⚡ 提升为主节点",
-      "failback_now": "⚡ 立即安全回切",
-      "lock_master": "锁定备机为 Master",
-      "open_peer_console": "🔗 打开对端控制台",
-      "role_primary": "主节点 (Primary · 读写启用) [世代 {epoch}]",
-      "role_standby": "备用节点 (Standby · 只读镜像) [世代 {epoch}]",
-      "role_conflict": "双主冲突 (Split-Brain Conflict · 已锁定) [世代 {epoch}]",
-      "peer_none": "对端: 无",
-      "peer_online": "对端: 在线 ({status})",
-      "peer_offline": "对端: 离线",
-      "failback_locked": "• [自动回切已锁定]",
-      "failback_stabilizing": "• [主机连续在线 {curH}h/{totH}h · 约 {remH} 小时后自动回切为 Master]",
-      "failback_ready": "• [主机已达标 {curH}h/{totH}h · 正在自动回切...]",
-      "modal_title": "🔄 集群对端节点设置 (Cluster Peer Settings)",
-      "current_mode": "当前运行模式:",
-      "peer_api": "对端 API:",
-      "peer_zmq": "对端 ZMQ:",
-      "input_ip_label": "对端 VPS 公网 IP 地址",
-      "input_ip_placeholder": "例如: 168.100.200.50 (单机模式请留空)",
-      "input_ip_hint": "若作为单机运行（无对端备机），请留空并点击下方的“清空对端 (单机模式)”。",
-      "input_api_port_label": "对端 Web 同步端口",
-      "input_api_port_hint": "默认 6010 (单机开发测试为 6011)",
-      "input_zmq_port_label": "对端 ZMQ 跟单端口",
-      "input_zmq_port_hint": "默认 6000 (单机开发测试为 6001)",
-      "btn_clear": "⏹️ 清空对端 (单机模式)",
-      "btn_save": "🚀 保存并应用设置",
-      "btn_close": "关闭"
-    },
-    "ssl": {
-      "title": "🔒 SSL / HTTPS 安全连接设置",
-      "status": "运行状态:",
-      "domain": "绑定域名:",
-      "issuer": "颁发机构:",
-      "port": "监听端口:",
-      "secure_url": "安全入口:",
-      "status_enabled": "已启用 (HTTPS 保护中)",
-      "status_in_progress": "正在设置 / 申请证书中...",
-      "status_disabled": "未启用 (当前为 HTTP 模式)",
-      "days_remaining": "剩余 {days} 天",
-      "mode_title": "证书与域名模式",
-      "mode_auto": "自动分配域名 (推荐)",
-      "mode_auto_desc": "检测公网 IP 并绑定 IP.sslip.io 自动申请权威 Let's Encrypt 证书",
-      "mode_custom": "自有独立域名",
-      "mode_custom_desc": "使用已解析到本机 IP 的独立域名自动申请 Let's Encrypt 证书",
-      "mode_selfsigned": "本地自签名证书",
-      "mode_selfsigned_desc": "离线/内网环境测试使用（浏览器会提示不受信任）",
-      "mode_import": "导入已有证书",
-      "mode_import_desc": "直接粘贴 fullchain.pem 与私钥文本（企业/商业证书）",
-      "input_domain_label": "域名 (Domain)",
-      "input_domain_placeholder": "例如: 123-45-67-89.sslip.io 或 hub.example.com",
-      "input_domain_hint_auto": "根据公网 IP 自动映射为: {domain}",
-      "input_domain_hint_custom": "请确保该域名的 DNS A 记录已解析至本机 VPS 公网 IP",
-      "input_domain_hint_self": "例如: 127-0-0-1.sslip.io 或 localhost (用于内网测试)",
-      "input_port_label": "HTTPS 监听端口",
-      "port_443": "标准 443 (免输端口)",
-      "port_custom": "自定义:",
-      "input_email_label": "管理员通知邮箱 (可选)",
-      "input_email_hint": "用于接收 Let's Encrypt 官方证书到期/安全通知，可留空。",
-      "chk_ondemand_80": "按需临时启用 80 端口 (平时彻底关闭隐形，防扫描)",
-      "chk_auto_renew": "到期前 30 天自动平滑续期",
-      "btn_disable": "⛔ 停用 SSL (切回 HTTP)",
-      "btn_renew": "🔄 立即续期",
-      "btn_save": "🚀 保存并应用设置",
-      "btn_close": "关闭"
-    },
-    "hubkey": {
-      "modal_title": "🔑 节点公钥凭证 (copier_hub.key)",
-      "label": "Hub CurveZMQ 公钥",
-      "hint": "40 位 Z85 格式公钥，可安全分发给所有节点。",
-      "copy_btn": "复制公钥",
-      "copied_btn": "已复制！",
-      "instr_title": "📁 部署指引 (终端 EA 无需手动输入):",
-      "instr_step1": "点击下方 ⬇️ 下载密钥文件 保存 copier_hub.key。",
-      "instr_step2": "在 MT4 / MT5 终端顶部点击 文件 → 打开数据文件夹。",
-      "instr_step3": "将 copier_hub.key 放置于以下路径:",
-      "instr_step3_or": "或",
-      "instr_step3_common": "(此电脑上所有 MT4/MT5 终端共享目录)。",
-      "instr_step4": "将 CopierSender 或 CopierReceiver EA 挂载于图表，并设置 Mode = Central (Hub)，EA 将自动识别并加载密钥！",
-      "download_btn": "⬇️ 下载密钥文件",
-      "close_btn": "关闭"
-    },
-    "topo": {
-      "title": "网络拓扑图",
-      "stats": "{senders} 个发送端 · {receivers} 个接收端"
-    },
-    "msgcenter": {
-      "title": "📢 消息中心与系统日志 (最近 20 条)",
-      "dismiss_all": "全部已读 ({count} 条未读)",
-      "dismiss_all_read": "全部标记为已读",
-      "empty": "当前尚无任何系统事件记录。",
-      "time_now": "刚刚",
-      "time_m": "{m} 分钟前",
-      "time_h": "{h} 小时前",
-      "time_d": "{d} 天前",
-      "mark_read": "标记为已读"
-    },
-    "notif": {
-      "title": "告警通知渠道 (Telegram / 企业微信 / 钉钉 / 自定义 Webhook)",
-      "add_btn": "+ 新增通知渠道",
-      "th_name": "名称",
-      "th_type": "类型",
-      "th_severity": "最低触发等级",
-      "th_status": "状态",
-      "th_target": "目标信息",
-      "th_actions": "管理操作",
-      "btn_test": "测试发送",
-      "btn_edit": "编辑",
-      "btn_delete": "删除",
-      "btn_enable": "启用",
-      "btn_disable": "停用",
-      "status_enabled": "已启用",
-      "status_disabled": "已停用"
-    },
-    "users": {
-      "title": "系统用户管理",
-      "count_label": "{count} 位用户",
-      "th_user": "用户账号",
-      "th_role": "角色权限",
-      "th_state": "账号状态",
-      "state_active": "正常使用",
-      "state_disabled": "已停用",
-      "btn_password": "修改密码",
-      "btn_disable": "停用账号",
-      "btn_enable": "启用账号",
-      "btn_delete": "删除用户",
-      "footnote": "新增/更新用户必须设置密码；停用、启用或修改角色会保留现有密码。最后一位管理员（admin）无法删除、降权或停用。",
-      "ph_userid": "用户账号 ID",
-      "ph_password": "登录密码 (至少 8 位字符)",
-      "btn_addupdate": "新增 / 更新用户",
-      "role_viewer": "访客 (viewer)",
-      "role_operator": "操作员 (operator)",
-      "role_admin": "管理员 (admin)"
-    },
-    "footer": {
-      "cmd_off_note": "操作指令已关闭：此 Hub 以 --writes off 启动。请以 --writes on 重启 Hub 以发布暂停/恢复/平仓指令。",
-      "cmd_on_note": "所有操作指令均直接向接收端终端下发，点击后即刻生成唯一指令编号并由 ZMQ 实时同步执行。",
-      "change_pwd": "(修改密码)",
-      "logout": "(退出登录)"
-    },
-    "auth": {
-      "login_title": "mt-copier hub — 登录系统",
-      "ph_user": "用户账号 ID",
-      "ph_pass": "密码",
-      "btn_signin": "登录系统"
-    }
+      "common": {
+          "confirm": "確認",
+          "cancel": "取消",
+          "close": "關閉",
+          "save": "儲存",
+          "apply": "套用",
+          "status": "狀態",
+          "actions": "操作",
+          "loading": "載入中...",
+          "error": "錯誤",
+          "warning": "警告",
+          "success": "成功",
+          "unknown": "未知",
+          "copy": "複製",
+          "copied": "已複製！",
+          "active": "啟用",
+          "disabled": "停用",
+          "delete": "刪除",
+          "edit": "編輯",
+          "test": "測試",
+          "enable": "啟用",
+          "disable": "停用",
+          "password": "密碼",
+          "switch": "切換",
+          "sec_ago": "{s}秒前",
+          "min_ago": "{m}分钟前",
+          "hr_ago": "{h}小时前",
+          "recently": "刚刚"
+      },
+      "nav": {
+          "tab_dash": "總覽看板",
+          "tab_cockpit": "監控駕駛艙",
+          "btn_ssl": "🔒 SSL / HTTPS",
+          "btn_logout": "登出",
+          "font_label": "字型:",
+          "night_mode": "夜間模式",
+          "day_mode": "日間模式",
+          "hub_key_btn": "🔑 伺服器金鑰"
+      },
+      "kpi": {
+          "terminals": "活躍交易端",
+          "open_positions": "目前持倉單",
+          "waiting": "排隊等待開倉",
+          "hub_engine": "Hub 路由引擎",
+          "inspect_arrow": "點擊查看明細 →",
+          "counts_summary": "{online} 在线 / {stale} 迟滞 / {offline} 离线",
+          "uptime": "运行 {time}",
+          "updated": "更新于 {time}",
+          "online_summary": "{online} / {total} 在线",
+          "senders_receivers": "{senders} 发送端 · {receivers} 接收端",
+          "pos_lots_summary": "{count} ({lots} 手)",
+          "broadcasting_mirrors": "{senders} 发送端广播中 · {mirrors} 接收端镜像 ({lots} 手)",
+          "waiting_summary": "{count} 笔排队等待中 ({lots} 手)",
+          "waiting_summary_simple": "{count} 笔等待中",
+          "waiting_breakdown": "{queued} 队列中 · {delayed} 延时防抖 · {mkt_closed} 闭市等待",
+          "hub_curve_encrypted": "🔒 CURVE 加密保护",
+          "hub_plain_zmq": "⚠️ 明文 ZMQ",
+          "hub_writes_on": "写指令开启",
+          "hub_writes_off": "写指令关闭",
+          "hub_standby_ro": "备机只读镜像"
+      },
+      "gops": {
+          "title": "全域接收端統一操作:",
+          "pause_all": "⏸️ 全域暫停跟單",
+          "resume_all": "▶️ 全域恢復跟單",
+          "close_all": "🛑 一鍵平掉全部持倉 (所有接收端)",
+          "reload_all": "🔄 全域重載 INI 設定",
+          "btn_notif": "🔔 通知設定",
+          "btn_hub_key": "🔑 伺服器金鑰",
+          "btn_cfg_receiver": "+ 配置接收端",
+          "confirm_global_close_title": "⚠️ 高危操作: 全局一鍵平倉",
+          "confirm_global_close_desc": "確定要平掉所有接收端上的全部持倉嗎？",
+          "confirm_global_close_detail": "此操作將立即向所有連接的接收端發布市價平倉指令，無法復原。",
+          "confirm_global_close_btn": "確認一鍵平倉",
+          "confirm_global_pause_title": "全域暫停跟單",
+          "confirm_global_pause_desc": "確定要暫停所有接收端的跟單嗎？",
+          "confirm_global_pause_detail": "所有接收端將停止接收信號源的新開倉指令，直到恢復跟單。目前已持有的倉位保持不變。",
+          "confirm_global_pause_btn": "確認暫停"
+      },
+      "nodes": {
+          "title": "交易終端與節點",
+          "batch_pause": "批次暫停",
+          "batch_reload": "批次重載",
+          "th_role": "角色",
+          "th_account_terminal": "帳號與終端名稱",
+          "th_ping": "延遲 (Ping)",
+          "th_status": "狀態",
+          "th_positions": "持倉數",
+          "th_volume": "手數",
+          "th_equity": "淨值",
+          "th_balance": "餘額",
+          "th_gating": "流控與延時",
+          "th_actions": "管理操作",
+          "btn_inspect": "🔍 檢查持倉",
+          "btn_config": "視覺化設定",
+          "btn_pause": "暫停",
+          "btn_resume": "恢復",
+          "btn_close_all": "全部平倉",
+          "empty": "目前尚無節點連入註冊",
+          "confirm_close_all_title": "確認全部平倉",
+          "confirm_close_all_desc": "確定要平掉接收端 <code>{key}</code> 的所有持倉嗎？",
+          "confirm_close_all_detail": "此操作將立即市價平掉該接收端持有的所有鏡像倉位，無法復原。"
+      },
+      "cockpit": {
+          "connected_terminals": "已連線終端",
+          "click_to_focus": "點擊切換檢視",
+          "inspection_title": "持倉明細與排隊檢驗",
+          "switch_node": "切換節點:",
+          "back_to_dash": "返回總覽看板",
+          "nav_prev": "◀ 上一個",
+          "nav_next": "下一個 ▶",
+          "auto_updates_1min": "每分鐘自動更新",
+          "btn_request_update": "🔄 立即請求更新",
+          "btn_requesting": "⏳ 請求中…",
+          "btn_query_ini": "🔄 查詢即時 INI",
+          "btn_pause_node": "暫停節點",
+          "btn_resume_node": "恢復節點",
+          "btn_close_all": "全部平倉",
+          "account_label": "帳號:",
+          "eq_label": "淨值:",
+          "bal_label": "餘額:",
+          "paused_no_mirrors": "已暫停 (停止跟單開倉)",
+          "table_title": "📋 逐筆訂單與持倉明細",
+          "filter_all": "全部",
+          "filter_opened": "已開倉",
+          "filter_waiting": "等待中",
+          "filter_managed": "跟單託管單",
+          "filter_unmanaged": "手動/外部單",
+          "btn_reset_sort": "↺ 恢復預設排序",
+          "fast_close_mode": "⚡ 極速平倉模式",
+          "fast_close_tooltip": "開啟後點擊平倉直接發布指令，跳過二次確認視窗",
+          "th_status": "狀態 / 階段",
+          "th_ticket": "訂單號 / UID",
+          "th_symbol": "品種",
+          "th_side": "方向",
+          "th_volume": "手數",
+          "th_price": "開倉價",
+          "th_sltp": "止損 / 止盈",
+          "th_profit": "浮動損益",
+          "th_swap": "隔夜利息",
+          "th_details": "流轉原因 / 備註",
+          "th_action": "操作",
+          "btn_close": "❌ 平倉",
+          "btn_closing": "⏳ 平倉中...",
+          "btn_queued_close": "⏱️ 已排隊待平",
+          "btn_queued_tooltip": "已在接收端成功排隊，待週一開市後券商自動撮合成交",
+          "subtotal_label": "合計 ({count} 筆訂單):",
+          "confirm_close_title": "確認單筆訂單平倉",
+          "confirm_close_desc": "確定要立即平倉訂單 <strong>#{ticket}</strong> ({symbol} {side} {lots} 手, 損益: {profit}) 嗎？",
+          "confirm_close_btn": "立即平倉",
+          "remember_fast_close": "記住選擇並開啟極速平倉模式 (本次後續不再彈窗提示)",
+          "summary_title": "📦 倉位與鏡像流轉統計彙總",
+          "summary_managed_mirrors": "跟單託管倉位",
+          "summary_managed_sub": "由跟單系統引擎自動管理的有效鏡像倉位",
+          "summary_orphan_manual": "外部/手動單",
+          "summary_orphan_sub_active": "非跟單 Magic 的手動下單或外部 EA 倉位",
+          "summary_orphan_sub_none": "無外部或手動持倉",
+          "summary_gross_open": "帳戶總持倉量",
+          "summary_gross_sub": "該終端目前持有的所有開倉單總計",
+          "orders_unit": "筆訂單",
+          "positions_unit": "個倉位",
+          "pipeline_synced": "流轉執行狀態: 所有訂單均已同步",
+          "pipeline_synced_sub": "(0 排隊中 · 0 延時防抖 · 0 休市等待)",
+          "stage_broker_queue": "⚡ 1. 券商調度隊列",
+          "stage_gate_delayed": "⏱️ 2. 安全防抖延遲",
+          "stage_mkt_closed": "🔒 3. 市場休市等待",
+          "orders_waiting_strip": "{total} 筆訂單等待開倉 ({lots} 手):",
+          "telemetry_stream_foot": "接收端: {node} · 預設 60 秒同步 · 點擊「立即請求更新」強制刷新"
+      },
+      "notices": {
+          "mkt_closed_title": "【週末休市排隊中】訂單 #{ticket} 已排隊待平！",
+          "mkt_closed_desc": "目前外匯市場處於週末休市狀態 (Market Closed)。平倉指令已進入接收端優先執行隊列，待週一開盤後經紀商將自動撮合成交。",
+          "already_queued_title": "訂單 #{ticket} 已在執行隊列中",
+          "already_queued_desc": "該訂單已經處於平倉排隊列表中，正在等待券商撮合執行。",
+          "close_dispatched_title": "✅ 訂單 #{ticket} 平倉指令已送達接收端",
+          "close_dispatched_desc": "接收端已確認處理平倉動作並加入隊列。",
+          "close_failed_old_ea_title": "⚠️ 平倉失敗：接收端 EA 仍運行舊版本",
+          "close_failed_old_ea_desc": "請在 MT4 圖表上按 F7 確定或切換一下週期以重新載入最新 EA！",
+          "close_failed_title": "⚠️ 平倉指令未能執行：#{ticket}",
+          "toast_dispatched": "正在下發訂單 #{ticket} 平倉指令...",
+          "toast_queued_mkt": "訂單 #{ticket} 已排隊，待週一開盤後自動撮合成交。",
+          "toast_already_queued": "訂單 #{ticket} 已經在平倉排隊中"
+      },
+      "cluster": {
+          "title": "叢集狀態",
+          "peer_settings": "⚙️ 對端設定",
+          "promote_primary": "⚡ 提升為主節點",
+          "failback_now": "⚡ 立即安全回切",
+          "lock_master": "鎖定備機為 Master",
+          "open_peer_console": "🔗 打開對端控制台",
+          "role_primary": "主節點 (Primary · 讀寫啟用) [世代 {epoch}]",
+          "role_standby": "備用節點 (Standby · 唯讀鏡像) [世代 {epoch}]",
+          "role_conflict": "雙主衝突 (Split-Brain Conflict · 已鎖定) [世代 {epoch}]",
+          "peer_none": "對端: 無",
+          "peer_online": "對端: 在線 ({status})",
+          "peer_offline": "對端: 離線",
+          "failback_locked": "• [自動回切已鎖定]",
+          "failback_stabilizing": "• [主機連續在線 {curH}h/{totH}h · 約 {remH} 小時後自動回切為 Master]",
+          "failback_ready": "• [主機已達標 {curH}h/{totH}h · 正在自動回切...]",
+          "modal_title": "🔄 叢集對端節點設定 (Cluster Peer Settings)",
+          "current_mode": "目前運行模式:",
+          "peer_api": "對端 API:",
+          "peer_zmq": "對端 ZMQ:",
+          "input_ip_label": "對端 VPS 公網 IP 位址",
+          "input_ip_placeholder": "例如: 168.100.200.50 (單機模式請留空)",
+          "input_ip_hint": "若作為單機運行（無對端備機），請留空並點擊下方的「清空對端 (單機模式)」。",
+          "input_api_port_label": "對端 Web 同步連接埠",
+          "input_api_port_hint": "預設 6010 (單機開發測試為 6011)",
+          "input_zmq_port_label": "對端 ZMQ 跟單連接埠",
+          "input_zmq_port_hint": "預設 6000 (單机開發測試為 6001)",
+          "btn_clear": "⏹️ 清空對端 (單機模式)",
+          "btn_save": "🚀 儲存並套用設定",
+          "btn_close": "關閉"
+      },
+      "ssl": {
+          "title": "🔒 SSL / HTTPS 安全連線設定",
+          "status": "運行狀態:",
+          "domain": "綁定網域:",
+          "issuer": "簽發機構:",
+          "port": "監聽連接埠:",
+          "secure_url": "安全入口:",
+          "status_enabled": "已啟用 (HTTPS 保護中)",
+          "status_in_progress": "正在設定 / 申請憑證中...",
+          "status_disabled": "未啟用 (目前為 HTTP 模式)",
+          "days_remaining": "剩餘 {days} 天",
+          "mode_title": "憑證與網域模式",
+          "mode_auto": "自動分配網域 (推薦)",
+          "mode_auto_desc": "偵測公網 IP 並綁定 IP.sslip.io 自動申請權威 Let's Encrypt 憑證",
+          "mode_custom": "自有獨立網域",
+          "mode_custom_desc": "使用已解析到本機 IP 的獨立網域自動申請 Let's Encrypt 憑證",
+          "mode_selfsigned": "本機自我簽署憑證",
+          "mode_selfsigned_desc": "離線/內部網路環境測試使用（瀏覽器會提示不受信任）",
+          "mode_import": "匯入現有憑證",
+          "mode_import_desc": "直接貼上 fullchain.pem 與私密金鑰文字（企業/商業憑證）",
+          "input_domain_label": "網域名稱 (Domain)",
+          "input_domain_placeholder": "例如: 123-45-67-89.sslip.io 或 hub.example.com",
+          "input_domain_hint_auto": "根據公網 IP 自動映射為: {domain}",
+          "input_domain_hint_custom": "請確保該網域的 DNS A 記錄已解析至本機 VPS 公網 IP",
+          "input_domain_hint_self": "例如: 127-0-0-1.sslip.io 或 localhost (用於內部網路測試)",
+          "input_port_label": "HTTPS 監聽連接埠",
+          "port_443": "標準 443 (免輸連接埠)",
+          "port_custom": "自訂:",
+          "input_email_label": "管理員通知信箱 (選填)",
+          "input_email_hint": "用於接收 Let's Encrypt 官方憑證到期/安全性通知，可留空。",
+          "chk_ondemand_80": "按需臨時啟用 80 連接埠 (平時徹底關閉隱形，防掃描)",
+          "chk_auto_renew": "到期前 30 天自動平滑續期",
+          "btn_disable": "⛔ 停用 SSL (切回 HTTP)",
+          "btn_renew": "🔄 立即續期",
+          "btn_save": "🚀 儲存並套用設定",
+          "btn_close": "關閉"
+      },
+      "hubkey": {
+          "modal_title": "🔑 伺服器公鑰憑證 (copier_hub.key)",
+          "label": "Hub CurveZMQ 公鑰",
+          "hint": "40 位元 Z85 格式公鑰，可安全分發給所有節點。",
+          "copy_btn": "複製公鑰",
+          "copied_btn": "已複製！",
+          "instr_title": "📁 部署指引 (終端 EA 無需手動輸入):",
+          "instr_step1": "點擊下方 ⬇️ 下載金鑰檔案 保存 copier_hub.key。",
+          "instr_step2": "在 MT4 / MT5 終端頂部點擊 檔案 → 開啟數據資料夾。",
+          "instr_step3": "將 copier_hub.key 放置於以下路徑:",
+          "instr_step3_or": "或",
+          "instr_step3_common": "(此電腦上所有 MT4/MT5 終端共用目錄)。",
+          "instr_step4": "將 CopierSender 或 CopierReceiver EA 掛載於圖表，並設定 Mode = Central (Hub)，EA 將自動辨識並載入金鑰！",
+          "download_btn": "⬇️ 下載金鑰檔案",
+          "close_btn": "關閉"
+      },
+      "topo": {
+          "title": "網路拓撲圖",
+          "stats": "{senders} 個發送端 · {receivers} 個接收端"
+      },
+      "msgcenter": {
+          "title": "📢 訊息中心與系統日誌 (最近 20 筆)",
+          "dismiss_all": "全部已讀 ({count} 則未讀)",
+          "dismiss_all_read": "全部標記為已讀",
+          "empty": "目前尚無任何系統事件記錄。",
+          "time_now": "剛剛",
+          "time_m": "{m} 分鐘前",
+          "time_h": "{h} 小時前",
+          "time_d": "{d} 天前",
+          "mark_read": "標記為已讀"
+      },
+      "notif": {
+          "title": "警報通知管道 (Telegram / 企業微信 / 釘釘 / 自訂 Webhook)",
+          "add_btn": "+ 新增通知管道",
+          "th_name": "名稱",
+          "th_type": "類型",
+          "th_severity": "最低觸發等級",
+          "th_status": "狀態",
+          "th_target": "目標資訊",
+          "th_actions": "管理操作",
+          "btn_test": "測試發送",
+          "btn_edit": "編輯",
+          "btn_delete": "刪除",
+          "btn_enable": "啟用",
+          "btn_disable": "停用",
+          "status_enabled": "已啟用",
+          "status_disabled": "已停用",
+          "modal_add_title": "新增告警通知渠道",
+          "modal_edit_title": "编辑告警通知渠道",
+          "field_name": "渠道名称",
+          "ph_name": "例如：交易运维企业微信群",
+          "field_type": "平台 / 类型",
+          "field_severity": "触发警报等级",
+          "sev_warning": "警告与严重错误 (所有告警)",
+          "sev_critical": "仅严重错误 (仅重大故障)",
+          "enable_dispatch": "启用此渠道接收系统推送",
+          "tg_token": "机器人 Token (Bot Token)",
+          "tg_token_hint": "在 Telegram 向 @BotFather 申请获取。保存后自动脱敏隐藏。",
+          "tg_chatid": "会话 ID (Chat ID)",
+          "tg_chatid_hint": "目标用户 ID 或群组 ID (超级群组通常以 -100 开头)。",
+          "wecom_key": "Webhook Key 或完整 URL",
+          "wecom_key_hint": "在企业微信群设置 -> 群机器人 -> 添加机器人 -> 复制 webhook 地址或 key。",
+          "dt_token": "Access Token 或完整 Webhook URL",
+          "dt_token_hint": "钉钉群设置 -> 机器人管理 -> 自定义机器人 -> 复制 access_token 或完整链接。",
+          "dt_secret": "加签密钥 Secret (可选)",
+          "dt_secret_hint": "若钉钉机器人开启了加签安全设置，请粘贴 SEC 开头的密钥。",
+          "webhook_url": "Webhook URL 地址",
+          "webhook_url_hint": "接收告警 JSON 载荷的 HTTP POST 接口地址。",
+          "webhook_headers": "自定义 HTTP 请求头 (JSON 格式，可选)",
+          "webhook_headers_hint": "以 JSON 键值对传递的请求头 (例如 Bearer 鉴权 token)。",
+          "btn_test_send": "🚀 发送测试",
+          "btn_save_channel": "保存渠道"
+      },
+      "users": {
+          "title": "系統使用者管理",
+          "count_label": "{count} 位使用者",
+          "th_user": "使用者帳號",
+          "th_role": "角色權限",
+          "th_state": "帳號狀態",
+          "state_active": "正常使用",
+          "state_disabled": "已停用",
+          "btn_password": "修改密碼",
+          "btn_disable": "停用帳號",
+          "btn_enable": "啟用帳號",
+          "btn_delete": "刪除使用者",
+          "footnote": "新增/更新使用者必須設定密碼；停用、啟用或修改角色會保留現有密碼。最後一位管理員（admin）無法刪除、降權或停用。",
+          "ph_userid": "使用者帳號 ID",
+          "ph_password": "登入密碼 (至少 8 位字元)",
+          "btn_addupdate": "新增 / 更新使用者",
+          "role_viewer": "訪客 (viewer)",
+          "role_operator": "操作員 (operator)",
+          "role_admin": "管理員 (admin)"
+      },
+      "footer": {
+          "cmd_off_note": "操作指令已關閉：此 Hub 以 --writes off 啟動。請以 --writes on 重啟 Hub 以發布暫停/恢復/平倉指令。",
+          "cmd_on_note": "所有操作指令均直接向接收端終端下發，點擊後即刻生成唯一指令編號並由 ZMQ 即時同步執行。",
+          "change_pwd": "(修改密碼)",
+          "logout": "(登出)"
+      },
+      "auth": {
+          "login_title": "mt-copier hub — 登入系統",
+          "ph_user": "使用者帳號 ID",
+          "ph_pass": "密碼",
+          "btn_signin": "登入系統"
+      },
+      "cfg": {
+          "modal_title": "接收端参数可视化配置 (copier.ini)",
+          "target_receiver": "目标接收端:",
+          "writes_disabled_notice": "⚠️ 当前 Hub 已启动为只读模式 (--writes off)。您可以检视配置，但无法保存或回滚，直到以 --writes on 重启 Hub。",
+          "hub_rev": "Hub 版本:",
+          "node_rev": "终端版本:",
+          "curr_setting": "运行中参数:",
+          "badge_not_managed": "未接管托管",
+          "badge_in_sync": "已同步对齐",
+          "badge_out_of_sync": "待同步更新",
+          "badge_drift": "版本漂移 (终端高于Hub)",
+          "badge_available": "已获取 ({age})",
+          "badge_none_reported": "未上报运行参数",
+          "last_pushed": "最近推送：版本 {rev} 操作人：{actor} ({when})",
+          "no_rev_history": "Hub 暂无此终端历史推送快照",
+          "hist_current": "-- 当前运行态 (版本 {rev}) --",
+          "msg_autoloaded": "已自动将接收端当前运行中的真实参数载入编辑器。",
+          "btn_load_current": "📥 加载接收端运行中的真实参数",
+          "history_label": "历史快照:",
+          "btn_load_rev": "载入该版本",
+          "btn_rollback": "立即回滚至此版本",
+          "tab_vis": "可视化编辑器",
+          "tab_raw": "INI 源码编辑器",
+          "subtab_senders": "信号源与策略管理",
+          "subtab_risk": "账户全局风控熔断 [common]",
+          "subtab_system": "底层引擎与通信 [common]",
+          "subtab_exec": "全局订单执行兜底 [common]",
+          "desc_senders": "独立配置每个上游信号源。各个发送端支持专属的手数算法、风控上限、止损/止盈镜像、品种映射、防堆叠延迟以及交易时间表。",
+          "btn_add_sender": "+ 新增信号源配置 [sender]",
+          "btn_load_template": "载入预设示例模板",
+          "btn_save_push": "保存并即时推送到接收端",
+          "remove_section": "删除该信号源",
+          "sender_id_label": "信号源账号或别名 (NID) *",
+          "magic_label": "专属订单识别码 (Magic) *",
+          "lot_mode_label": "手数计算模式",
+          "lot_param_label": "手数参数值",
+          "symbol_suffix_label": "品种后缀 (Suffix)",
+          "symbol_translations": "特殊品种映射对照 (symbol.<来源> = <目标>)",
+          "add_mapping": "+ 新增映射",
+          "no_symbol_translations": "当前无特殊品种映射 (按后缀或原始名称跟单)。",
+          "tab_risk": "🛡️ 专属风控上限",
+          "tab_exec": "🛑 订单执行与止损",
+          "tab_filters": "🔍 过滤条件与方向",
+          "tab_delays": "⏳ 防堆叠与延时",
+          "tab_schedule": "📅 交易时间与超时"
+      }
   }
 };
 
@@ -3279,9 +3459,9 @@ window.resetPosSort = resetPosSort;
 
 function fmtAge(sec){
   sec = Math.max(0, Math.round(sec));
-  if(sec < 60) return sec + "s ago";
-  if(sec < 3600) return Math.floor(sec/60) + "m ago";
-  return Math.floor(sec/3600) + "h ago";
+  if(sec < 60) return t("common.sec_ago", { s: sec });
+  if(sec < 3600) return t("common.min_ago", { m: Math.floor(sec/60) });
+  return t("common.hr_ago", { h: Math.floor(sec/3600) });
 }
 
 function confirmDialog(opts){
@@ -3577,21 +3757,23 @@ function updateKpiCards(nodes, pos, d){
   var elKpiNodes = $("kpi_nodes_val");
   if(elKpiNodes){
     var online = nodes.filter(function(n){ return n.liveness === "online"; }).length;
-    elKpiNodes.textContent = online + " / " + nodes.length + " Online";
-    $("kpi_nodes_sub").textContent = totalSenders + " Senders · " + totalReceivers + " Receivers";
+    elKpiNodes.textContent = t("kpi.online_summary", { online: online, total: nodes.length });
+    $("kpi_nodes_sub").textContent = t("kpi.senders_receivers", { senders: totalSenders, receivers: totalReceivers });
   }
 
   var elKpiPos = $("kpi_pos_val");
   if(elKpiPos){
-    elKpiPos.textContent = senderOpenPos + " (" + senderOpenLots.toFixed(2) + " lots)";
-    $("kpi_pos_sub").textContent = pos.length + " Senders Broadcasting · " + receiverMirrors + " Mirrors (" + receiverLots.toFixed(2) + " lots)";
+    elKpiPos.textContent = t("kpi.pos_lots_summary", { count: senderOpenPos, lots: senderOpenLots.toFixed(2) });
+    $("kpi_pos_sub").textContent = t("kpi.broadcasting_mirrors", { senders: pos.length, mirrors: receiverMirrors, lots: receiverLots.toFixed(2) });
   }
 
   var elKpiWait = $("kpi_wait_val");
   var cardWait = $("kpi_card_wait");
   if(elKpiWait){
-    elKpiWait.textContent = totalWaitOrders + " Waiting" + (totalWaitLots > 0 ? " (" + totalWaitLots.toFixed(2) + " lots)" : "");
-    $("kpi_wait_sub").textContent = waitBreakdown.queued + " queued · " + waitBreakdown.delayed + " delayed · " + waitBreakdown.mkt_closed + " mkt closed";
+    elKpiWait.textContent = totalWaitLots > 0 
+      ? t("kpi.waiting_summary", { count: totalWaitOrders, lots: totalWaitLots.toFixed(2) })
+      : t("kpi.waiting_summary_simple", { count: totalWaitOrders });
+    $("kpi_wait_sub").textContent = t("kpi.waiting_breakdown", { queued: waitBreakdown.queued, delayed: waitBreakdown.delayed, mkt_closed: waitBreakdown.mkt_closed });
     if(cardWait){
       cardWait.className = "kpi-card" + (totalWaitOrders > 0 ? " warn-active" : "");
     }
@@ -3599,10 +3781,10 @@ function updateKpiCards(nodes, pos, d){
 
   var elKpiHub = $("kpi_hub_val");
   if(elKpiHub){
-    elKpiHub.textContent = "up " + fmtAge(d.hub_uptime_secs);
+    elKpiHub.textContent = t("kpi.uptime", { time: fmtAge(d.hub_uptime_secs) });
     var cvOn = d.curve && d.curve.on;
-    var wrDesc = s.writes ? "Writes ON" : ((d.cluster && d.cluster.role === "standby") ? "Standby Read-Only" : "Writes OFF");
-    $("kpi_hub_sub").textContent = (cvOn ? "🔒 CURVE Encrypted" : "⚠️ Plain ZMQ") + " · " + wrDesc;
+    var wrDesc = s.writes ? t("kpi.hub_writes_on") : ((d.cluster && d.cluster.role === "standby") ? t("kpi.hub_standby_ro") : t("kpi.hub_writes_off"));
+    $("kpi_hub_sub").textContent = (cvOn ? t("kpi.hub_curve_encrypted") : t("kpi.hub_plain_zmq")) + " · " + wrDesc;
   }
 }
 
@@ -4524,10 +4706,13 @@ function render(){
   var pos = sortPos(d.positions || []);
   var counts = {online:0,stale:0,offline:0};
   nodes.forEach(function(n){ if(counts[n.liveness] !== undefined) counts[n.liveness]++; });
-  $("counts").textContent =
-    counts.online + " online / " + counts.stale + " stale / " + counts.offline + " offline";
-  $("up").textContent = "up " + fmtAge(d.hub_uptime_secs);
-  $("age").textContent = "updated " + (s.lastAt ? fmtAge((Date.now()-s.lastAt)/1000) : "-");
+  $("counts").textContent = t("kpi.counts_summary", {
+    online: counts.online,
+    stale: counts.stale,
+    offline: counts.offline
+  });
+  $("up").textContent = t("kpi.uptime", { time: fmtAge(d.hub_uptime_secs) });
+  $("age").textContent = t("kpi.updated", { time: s.lastAt ? fmtAge((Date.now()-s.lastAt)/1000) : "-" });
   $("ncount").textContent = nodes.length + " node(s)";
   $("pcount").textContent = pos.length + " sender(s)";
 
@@ -5275,7 +5460,7 @@ function renderNodes(nodes){
     if(r.btnPz && n.role === "receiver"){
       var pzOpCur = n.paused ? "resume" : "pause";
       r.btnPz.setAttribute("data-op", pzOpCur);
-      r.btnPz.textContent = n.paused ? "Resume" : "Pause";
+      r.btnPz.textContent = n.paused ? t("nodes.btn_resume") : t("nodes.btn_pause");
     }
   });
 }
@@ -6310,7 +6495,7 @@ function renderNotifications(channels){
 
 function openNotificationModal(channel){
   var isEdit = !!channel;
-  $("notiftitle").textContent = isEdit ? "Edit Notification Channel" : "Add Notification Channel";
+  $("notiftitle").textContent = isEdit ? t("notif.modal_edit_title") : t("notif.modal_add_title");
   $("notif_id").value = isEdit ? channel.id : "";
   $("notif_name").value = isEdit ? channel.name : "";
   $("notif_type").value = isEdit ? channel.channel_type : "telegram";
@@ -6905,21 +7090,21 @@ function renderSenderCards(senders){
     return '<div class="sendercard" data-idx="' + idx + '" data-orig-id="' + esc(s.id || "") + '">' +
            '<div class="sendercard-head">' +
            '<h3>[sender' + idx + ']' + (s.id ? ' &mdash; ' + esc(s.id) : '') + '</h3>' +
-           '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">remove section</button>' +
+           '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">' + t("cfg.remove_section") + '</button>' +
            '</div>' +
            '<div class="cfggrid">' +
            '<div class="cfgfield">' +
-           '<label>Sender ID / NID *</label>' +
+           '<label>' + t("cfg.sender_id_label") + '</label>' +
            '<input type="text" class="inp-id" placeholder="e.g. 1001" value="' + esc(s.id) + '">' +
            '<span class="hint">Sender account or NID</span>' +
            '</div>' +
            '<div class="cfgfield">' +
-           '<label>Magic Number *</label>' +
+           '<label>' + t("cfg.magic_label") + '</label>' +
            '<input type="text" class="inp-magic" placeholder="e.g. ' + (770000 + idx + 1) + '" value="' + esc(s.magic) + '">' +
            '<span class="hint">Unique order magic</span>' +
            '</div>' +
            '<div class="cfgfield">' +
-           '<label>Lot Mode</label>' +
+           '<label>' + t("cfg.lot_mode_label") + '</label>' +
            '<select class="inp-lotmode">' +
            '<option value="multiplier"' + (lotmode === "multiplier" ? ' selected' : '') + '>multiplier</option>' +
            '<option value="fixed"' + (lotmode === "fixed" ? ' selected' : '') + '>fixed</option>' +
@@ -6928,36 +7113,36 @@ function renderSenderCards(senders){
            '<span class="hint">Position sizing mode</span>' +
            '</div>' +
            '<div class="cfgfield">' +
-           '<label>Lot Param</label>' +
+           '<label>' + t("cfg.lot_param_label") + '</label>' +
            '<input type="number" step="0.01" class="inp-lotparam" placeholder="1.0" value="' + esc(s.lotparam !== undefined && s.lotparam !== "" ? s.lotparam : "1.0") + '">' +
            '<span class="hint">Multiplier or fixed lots</span>' +
            '</div>' +
            '<div class="cfgfield">' +
-           '<label>Symbol Suffix</label>' +
+           '<label>' + t("cfg.symbol_suffix_label") + '</label>' +
            '<input type="text" class="inp-suffix" placeholder="e.g. m, .pro" value="' + esc(s.suffix || "") + '">' +
            '<span class="hint">Broker suffix (optional)</span>' +
            '</div>' +
            '</div>' +
            '<div class="symmaps">' +
            '<div class="symmaps-head">' +
-           '<span>Symbol Translations (symbol.&lt;FROM&gt; = &lt;TO&gt;)</span>' +
-           '<button type="button" class="opbtn add-symmap" data-idx="' + idx + '">+ add mapping</button>' +
+           '<span>' + t("cfg.symbol_translations") + '</span>' +
+           '<button type="button" class="opbtn add-symmap" data-idx="' + idx + '">' + t("cfg.add_mapping") + '</button>' +
            '</div>' +
-           '<div class="symmaps-list">' + (symRows || '<div style="color:var(--dim);font-size:11px;padding:2px 0">No custom symbol translations (uses suffix or raw symbol).</div>') + '</div>' +
+           '<div class="symmaps-list">' + (symRows || ('<div style="color:var(--dim);font-size:11px;padding:2px 0">' + t("cfg.no_symbol_translations") + '</div>')) + '</div>' +
            '</div>' +
 
            // Subtabs for Strategy & Risk settings inside this sender
            '<div class="sc-tabs">' +
-           '<button type="button" class="sc-tab active" data-sctab="risk">🛡️ Risk Limits</button>' +
-           '<button type="button" class="sc-tab" data-sctab="exec">🛑 Execution &amp; Stops</button>' +
-           '<button type="button" class="sc-tab" data-sctab="filter">🔍 Filters &amp; Direction</button>' +
-           '<button type="button" class="sc-tab" data-sctab="gates">⏳ Anti-Stack &amp; Delays</button>' +
-           '<button type="button" class="sc-tab" data-sctab="sched">📅 Schedule &amp; Timeout</button>' +
+           '<button type="button" class="sc-tab active" data-sctab="risk">' + t("cfg.tab_risk") + '</button>' +
+           '<button type="button" class="sc-tab" data-sctab="exec">' + t("cfg.tab_exec") + '</button>' +
+           '<button type="button" class="sc-tab" data-sctab="filter">' + t("cfg.tab_filters") + '</button>' +
+           '<button type="button" class="sc-tab" data-sctab="gates">' + t("cfg.tab_delays") + '</button>' +
+           '<button type="button" class="sc-tab" data-sctab="sched">' + t("cfg.tab_schedule") + '</button>' +
            '</div>' +
 
            // Panel: Risk
            '<div class="sc-panel" data-scpanel="risk">' +
-           '<div class="sc-panel-title">🛡️ Risk Limits for [sender' + idx + ']</div>' +
+           '<div class="sc-panel-title">' + t("cfg.tab_risk") + ' [sender' + idx + ']</div>' +
            '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
            '<div class="cfgfield"><label>Max Lots / Trade</label><input type="number" step="0.01" class="inp-s-maxlotsperposition" placeholder="0.0 (off/inherit)" value="' + esc(s.maxlotsperposition || '') + '"><span class="hint">Single trade lot limit</span></div>' +
            '<div class="cfgfield"><label>Max Total Lots</label><input type="number" step="0.01" class="inp-s-maxtotallots" placeholder="0.0 (off/inherit)" value="' + esc(s.maxtotallots || '') + '"><span class="hint">Total lots from this sender</span></div>' +
@@ -7164,45 +7349,49 @@ function loadNodeConfig(nodeKey){
     var badge = $("cfgsyncbadge");
     if(!d.managed || !d.hub_rev){
       badge.className = "cfgbadge dim";
-      badge.textContent = "NOT MANAGED";
+      badge.textContent = t("cfg.badge_not_managed");
       badge.title = "No configuration pushed by the hub yet";
     } else if(d.in_sync){
       badge.className = "cfgbadge ok";
-      badge.textContent = "IN SYNC";
+      badge.textContent = t("cfg.badge_in_sync");
       badge.title = "Node running Hub revision " + d.hub_rev;
     } else if(d.drift){
       badge.className = "cfgbadge bad";
-      badge.textContent = "DRIFT (node > hub)";
+      badge.textContent = t("cfg.badge_drift");
       badge.title = "Node revision " + d.node_rev + " is ahead of Hub revision " + d.hub_rev;
     } else {
       badge.className = "cfgbadge warn";
-      badge.textContent = "OUT OF SYNC";
+      badge.textContent = t("cfg.badge_out_of_sync");
       badge.title = "Node at Rev " + d.node_rev + ", waiting to match Hub Rev " + d.hub_rev;
     }
 
     var curBadge = $("cfgcurrsettingbadge");
     if(d.current_setting){
-      var ageStr = d.current_setting_ts ? fmtAge((Date.now()/1000) - d.current_setting_ts) : "recently";
+      var ageStr = d.current_setting_ts ? fmtAge((Date.now()/1000) - d.current_setting_ts) : t("common.recently");
       curBadge.className = "cfgbadge ok";
-      curBadge.textContent = "AVAILABLE (" + ageStr + ")";
+      curBadge.textContent = t("cfg.badge_available", { age: ageStr });
       curBadge.title = "Receiver node reported its running settings " + ageStr;
       $("cfgloadcurrentbtn").disabled = false;
     } else {
       curBadge.className = "cfgbadge dim";
-      curBadge.textContent = "NONE REPORTED";
+      curBadge.textContent = t("cfg.badge_none_reported");
       curBadge.title = "No current setting reported by receiver node yet";
       $("cfgloadcurrentbtn").disabled = true;
     }
 
     if(d.rev){
       var when = d.rev.ts ? new Date(d.rev.ts * 1000).toLocaleString() : "-";
-      $("cfglastchange").textContent = "Last pushed: Rev " + d.rev.rev + " by " + (d.rev.actor || "operator") + " (" + when + ")";
+      $("cfglastchange").textContent = t("cfg.last_pushed", {
+        rev: d.rev.rev,
+        actor: d.rev.actor || "operator",
+        when: when
+      });
     } else {
-      $("cfglastchange").textContent = "No revision history on hub yet";
+      $("cfglastchange").textContent = t("cfg.no_rev_history");
     }
 
     // Populate history selector
-    var hOpts = ['<option value="">-- Current (Rev ' + (d.hub_rev || 0) + ') --</option>'];
+    var hOpts = ['<option value="">' + t("cfg.hist_current", { rev: d.hub_rev || 0 }) + '</option>'];
     (d.history || []).forEach(function(h){
       var dt = h.ts ? new Date(h.ts * 1000).toLocaleDateString() + " " + new Date(h.ts * 1000).toLocaleTimeString() : "";
       var from = h.from_rev ? " -> from rev " + h.from_rev : "";
@@ -7218,7 +7407,7 @@ function loadNodeConfig(nodeKey){
     renderSenderCards(parsed.senders);
     if(!d.managed && d.current_setting){
       $("cfgmsg").className = "opmsg ok";
-      $("cfgmsg").textContent = "Auto-loaded receiver's active Current Setting into editor.";
+      $("cfgmsg").textContent = t("cfg.msg_autoloaded");
     }
   }).catch(function(e){
     $("cfgmsg").className = "opmsg bad";
