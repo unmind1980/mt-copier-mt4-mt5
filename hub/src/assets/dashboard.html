@@ -1884,6 +1884,12 @@
               <!-- Summary Cards placed at the bottom as final summary statistics -->
               <div class="pos-section-title" style="margin-top:24px" data-i18n="cockpit.summary_title">📦 Position &amp; Mirror Summary Statistics</div>
               <div id="pos_rec_held_cards" class="pos-card-grid"></div>
+
+              <!-- Positions Breakdown by Symbol for Receiver -->
+              <div id="pos_rec_sym_section" style="display:none;margin-top:24px">
+                <div class="pos-section-title">📈 <span data-i18n="cockpit.sender_sym_breakdown_title">Positions Breakdown by Symbol</span></div>
+                <div id="pos_rec_sym_content"></div>
+              </div>
             </div>
 
             <div id="pos_snd_view" style="display:none">
@@ -4343,6 +4349,7 @@ function renderPosNodeDetail(){
     s.lastWaitingHtml = null;
     s.lastBannerHtml = null;
     s.lastSndHtml = null;
+    s.lastRecSymHtml = null;
   }
 
   // 1. Node Banner
@@ -4751,6 +4758,68 @@ function renderPosNodeDetail(){
       s.lastPosRowsHtml = "";
     }
 
+    // C2. Positions Breakdown by Symbol for Receiver
+    var symSec = $("pos_rec_sym_section");
+    var symHost = $("pos_rec_sym_content");
+    if(symSec && symHost){
+      var symMap = {};
+      for(var oi = 0; oi < opened.length; oi++){
+        var opItem = opened[oi];
+        var sKey = opItem.symbol || "UNKNOWN";
+        if(!symMap[sKey]){
+          symMap[sKey] = { symbol: sKey, count: 0, lots: 0.0 };
+        }
+        symMap[sKey].count++;
+        symMap[sKey].lots += (Number(opItem.lots) || 0.0);
+      }
+      var recSymbols = [];
+      for(var sk in symMap){
+        recSymbols.push(symMap[sk]);
+      }
+      recSymbols.sort(function(a, b){ return b.lots - a.lots; });
+
+      if(recSymbols.length > 0){
+        var maxSymLots = 0;
+        recSymbols.forEach(function(s){ if(s.lots > maxSymLots) maxSymLots = s.lots; });
+        if(maxSymLots <= 0) maxSymLots = 1;
+
+        var symRows = recSymbols.map(function(s){
+          var pct = Math.min(100, Math.round((s.lots / maxSymLots) * 100));
+          return '<tr>' +
+                 '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
+                 '  <td class="num">' + esc(s.count) + '</td>' +
+                 '  <td class="num">' + s.lots.toFixed(2) + '</td>' +
+                 '  <td style="width:40%">' +
+                 '    <div class="pos-bar-container">' +
+                 '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
+                 '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
+                 '    </div>' +
+                 '  </td>' +
+                 '</tr>';
+        }).join("");
+
+        var recSymTableHtml = '<div class="pos-table-wrap">' +
+                              '  <table>' +
+                              '    <thead><tr>' +
+                              '      <th>' + t("cockpit.th_symbol") + '</th>' +
+                              '      <th class="num">' + t("cockpit.sender_card_open_pos") + '</th>' +
+                              '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
+                              '      <th>' + t("cockpit.sender_th_rel_exposure") + '</th>' +
+                              '    </tr></thead>' +
+                              '    <tbody>' + symRows + '</tbody>' +
+                              '  </table>' +
+                              '</div>';
+        if(s.lastRecSymHtml !== recSymTableHtml){
+          symHost.innerHTML = recSymTableHtml;
+          s.lastRecSymHtml = recSymTableHtml;
+        }
+        symSec.style.display = "";
+      } else {
+        symSec.style.display = "none";
+        s.lastRecSymHtml = null;
+      }
+    }
+
     if($("pos_foot_msg")){
       $("pos_foot_msg").textContent = t("cockpit.telemetry_stream_foot", { node: n.key });
     }
@@ -4769,70 +4838,9 @@ function renderPosNodeDetail(){
       var symbols = (p && p.symbols) ? p.symbols : [];
       var snaps = (p && p.snaps) ? p.snaps : "-";
 
-      var sndHtml = '<div class="pos-section-title">📊 ' + t("cockpit.sender_summary_title") + '</div>';
-      sndHtml += '<div class="pos-card-grid">';
-      sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_open_pos") + '</div>';
-      sndHtml += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>';
-      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_open_pos_sub") + '</div>';
-      sndHtml += '  </div>';
-      sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_total_vol") + '</div>';
-      sndHtml += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.th_volume").toLowerCase() + '</span></div>';
-      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_total_vol_sub") + '</div>';
-      sndHtml += '  </div>';
-      sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_snap_state") + '</div>';
-      sndHtml += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
-      var snapSub = (snaps !== "-" ? t("cockpit.sender_card_snaps_received", { count: snaps }) : t("cockpit.sender_card_snap_live"));
-      sndHtml += '    <div class="pos-card-sub">' + snapSub + '</div>';
-      sndHtml += '  </div>';
-      sndHtml += '</div>';
-
-      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📈 ' + t("cockpit.sender_sym_breakdown_title") + '</div>';
-      if(symbols.length > 0){
-        var maxSymLots = 0;
-        symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
-        if(maxSymLots <= 0) maxSymLots = 1;
-
-        var symRows = symbols.map(function(s){
-          var pct = Math.min(100, Math.round((Number(s.lots) / maxSymLots) * 100));
-          return '<tr>' +
-                 '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
-                 '  <td class="num">' + esc(s.count) + '</td>' +
-                 '  <td class="num">' + esc(s.lots) + '</td>' +
-                 '  <td style="width:40%">' +
-                 '    <div class="pos-bar-container">' +
-                 '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
-                 '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
-                 '    </div>' +
-                 '  </td>' +
-                 '</tr>';
-        }).join("");
-
-        sndHtml += '<div class="pos-table-wrap">';
-        sndHtml += '  <table>';
-        sndHtml += '    <thead><tr>' +
-                   '      <th>' + t("cockpit.th_symbol") + '</th>' +
-                   '      <th class="num">' + t("cockpit.sender_card_open_pos") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
-                   '      <th>' + t("cockpit.sender_th_rel_exposure") + '</th>' +
-                   '    </tr></thead>';
-        sndHtml += '    <tbody>' + symRows + '</tbody>';
-        sndHtml += '  </table>';
-        sndHtml += '</div>';
-      } else {
-        sndHtml += '<div class="waiting-banner clear">';
-        sndHtml += '  <div class="waiting-banner-icon">✅</div>';
-        sndHtml += '  <div class="waiting-banner-text">';
-        sndHtml += '    <div class="waiting-banner-title">' + t("cockpit.sender_flat_title") + '</div>';
-        sndHtml += '    <div class="waiting-banner-desc">' + t("cockpit.sender_flat_desc") + '</div>';
-        sndHtml += '  </div>';
-        sndHtml += '</div>';
-      }
-
+      // 1. First: Line-by-Line Itemized Positions Table (Elevated to top per user request)
       var sItems = (n.positions_detail && n.positions_detail.length > 0) ? n.positions_detail : ((p && p.items) ? p.items : []);
-      sndHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
+      var sndHtml = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
       sndHtml += '  <div class="pos-section-title" style="margin-bottom:0">📋 ' + t("cockpit.table_title") + ' (' + sItems.length + ')</div>';
       sndHtml += '  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
       sndHtml += '    <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span><span>' + t("cockpit.auto_updates_1min") + '</span></span>';
@@ -4932,6 +4940,70 @@ function renderPosNodeDetail(){
         sndHtml += '</div>';
       }
 
+      // 2. Second: Open Positions Summary Cards
+      sndHtml += '<div class="pos-section-title" style="margin-top:24px">📊 ' + t("cockpit.sender_summary_title") + '</div>';
+      sndHtml += '<div class="pos-card-grid">';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_open_pos") + '</div>';
+      sndHtml += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>';
+      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_open_pos_sub") + '</div>';
+      sndHtml += '  </div>';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_total_vol") + '</div>';
+      sndHtml += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.th_volume").toLowerCase() + '</span></div>';
+      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_total_vol_sub") + '</div>';
+      sndHtml += '  </div>';
+      sndHtml += '  <div class="pos-card">';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_snap_state") + '</div>';
+      sndHtml += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
+      var snapSub = (snaps !== "-" ? t("cockpit.sender_card_snaps_received", { count: snaps }) : t("cockpit.sender_card_snap_live"));
+      sndHtml += '    <div class="pos-card-sub">' + snapSub + '</div>';
+      sndHtml += '  </div>';
+      sndHtml += '</div>';
+
+      // 3. Third: Positions Breakdown by Symbol
+      sndHtml += '<div class="pos-section-title" style="margin-top:24px">📈 ' + t("cockpit.sender_sym_breakdown_title") + '</div>';
+      if(symbols.length > 0){
+        var maxSymLots = 0;
+        symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
+        if(maxSymLots <= 0) maxSymLots = 1;
+
+        var symRows = symbols.map(function(s){
+          var pct = Math.min(100, Math.round((Number(s.lots) / maxSymLots) * 100));
+          return '<tr>' +
+                 '  <td><strong>' + esc(s.symbol) + '</strong></td>' +
+                 '  <td class="num">' + esc(s.count) + '</td>' +
+                 '  <td class="num">' + esc(s.lots) + '</td>' +
+                 '  <td style="width:40%">' +
+                 '    <div class="pos-bar-container">' +
+                 '      <div class="pos-bar-bg"><div class="pos-bar-fill" style="width:' + pct + '%"></div></div>' +
+                 '      <span style="font-size:11px;font-family:var(--mono);color:var(--dim)">' + pct + '%</span>' +
+                 '    </div>' +
+                 '  </td>' +
+                 '</tr>';
+        }).join("");
+
+        sndHtml += '<div class="pos-table-wrap">';
+        sndHtml += '  <table>';
+        sndHtml += '    <thead><tr>' +
+                   '      <th>' + t("cockpit.th_symbol") + '</th>' +
+                   '      <th class="num">' + t("cockpit.sender_card_open_pos") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
+                   '      <th>' + t("cockpit.sender_th_rel_exposure") + '</th>' +
+                   '    </tr></thead>';
+        sndHtml += '    <tbody>' + symRows + '</tbody>';
+        sndHtml += '  </table>';
+        sndHtml += '</div>';
+      } else {
+        sndHtml += '<div class="waiting-banner clear">';
+        sndHtml += '  <div class="waiting-banner-icon">✅</div>';
+        sndHtml += '  <div class="waiting-banner-text">';
+        sndHtml += '    <div class="waiting-banner-title">' + t("cockpit.sender_flat_title") + '</div>';
+        sndHtml += '    <div class="waiting-banner-desc">' + t("cockpit.sender_flat_desc") + '</div>';
+        sndHtml += '  </div>';
+        sndHtml += '</div>';
+      }
+
       if(s.lastSndHtml !== sndHtml){
         $("pos_snd_content").innerHTML = sndHtml;
         s.lastSndHtml = sndHtml;
@@ -4955,6 +5027,7 @@ function openPositionsView(focusKey){
   s.lastWaitingHtml = null;
   s.lastBannerHtml = null;
   s.lastSndHtml = null;
+  s.lastRecSymHtml = null;
   s.lastPosNodeSelectHtml = null;
   updatePosNodeSelector();
   if(focusKey){
@@ -5020,6 +5093,7 @@ function closePositionsModal(){
   s.lastWaitingHtml = null;
   s.lastBannerHtml = null;
   s.lastSndHtml = null;
+  s.lastRecSymHtml = null;
   s.lastPosNodeSelectHtml = null;
 }
 
