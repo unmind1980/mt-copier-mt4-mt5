@@ -1393,6 +1393,107 @@
   .cfghistrow{display:flex;gap:8px;align-items:center;margin-bottom:12px;padding:8px 12px;
               background:var(--bg);border:1px solid var(--line);border-radius:6px;font-size:12px;
               flex-wrap:wrap}
+
+  /* Senders Master-Detail Split Layout (Like Split Cockpit) */
+  .cfg-senders-split {
+    display: flex;
+    gap: 14px;
+    align-items: stretch;
+    min-height: 420px;
+  }
+  .cfg-senders-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .cfg-senders-side-head {
+    padding: 10px 12px;
+    background: var(--surface-header);
+    border-bottom: 1px solid var(--line);
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--dim);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .cfg-senders-nav-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 480px;
+  }
+  .cfg-sender-nav-item {
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: var(--panel);
+    transition: all 0.15s ease;
+    user-select: none;
+  }
+  .cfg-sender-nav-item:hover {
+    border-color: var(--accent);
+    background: var(--surface-header);
+  }
+  .cfg-sender-nav-item.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .cfg-sender-nav-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ink);
+    font-family: var(--mono);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cfg-sender-nav-sub {
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cfg-senders-side-foot {
+    padding: 10px 12px;
+    background: var(--surface-header);
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .cfg-senders-detail-pane {
+    flex: 1;
+    min-width: 0;
+  }
+  .cfg-senders-detail-pane .sendercard {
+    margin-bottom: 0;
+  }
+  @media(max-width: 768px) {
+    .cfg-senders-split {
+      flex-direction: column;
+    }
+    .cfg-senders-sidebar {
+      width: 100%;
+    }
+    .cfg-senders-nav-list {
+      max-height: 160px;
+    }
+  }
+
   .sendercard{border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:12px;
               background:var(--panel)}
   .sendercard-head{display:flex;justify-content:space-between;align-items:center;
@@ -1901,10 +2002,20 @@
           <p style="font-size:12px;color:var(--dim);margin:0 0 10px" data-i18n="cfg.desc_senders">
             Configure each upstream signal source independently. Each sender has its own sizing, risk limits, stop management, symbol filters, anti-stacking delays, and trading schedule.
           </p>
-          <div id="cfgsenders_list"></div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-            <button type="button" id="cfgaddsender" class="btn-sec" data-i18n="cfg.btn_add_sender">+ Add Sender Section</button>
-            <button type="button" id="cfgloadtemplate" class="btn-sec" style="font-size:12px" data-i18n="cfg.btn_load_template">Load Default Example</button>
+          <div class="cfg-senders-split">
+            <div class="cfg-senders-sidebar">
+              <div class="cfg-senders-side-head">
+                <span id="cfg_senders_count_label">Senders (0)</span>
+              </div>
+              <div id="cfg_senders_nav_list" class="cfg-senders-nav-list"></div>
+              <div class="cfg-senders-side-foot">
+                <button type="button" id="cfgaddsender" class="btn-sec btn-sm" style="width:100%" data-i18n="cfg.btn_add_sender">+ Add Sender Section</button>
+                <button type="button" id="cfgloadtemplate" class="btn-sec btn-sm" style="width:100%;font-size:11.5px" data-i18n="cfg.btn_load_template">Load Default Example</button>
+              </div>
+            </div>
+            <div class="cfg-senders-detail-pane">
+              <div id="cfgsenders_list"></div>
+            </div>
           </div>
         </div>
 
@@ -6960,6 +7071,8 @@ var cfgState = {
   target: "",
   data: null,
   activeTab: "vis",
+  activeSenderIdx: 0,
+  senders: [],
   pollTimer: null
 };
 
@@ -7032,6 +7145,9 @@ function openConfigModal(nodeKey){
   $("cfgmsg").className = "opmsg";
   $("cfgsave").disabled = false;
   $("cfgrollbackbtn").disabled = false;
+  cfgState.activeSenderIdx = 0;
+  cfgState.senders = [];
+  if($("cfg_senders_nav_list")) $("cfg_senders_nav_list").innerHTML = '<div style="color:var(--dim);font-size:11.5px;padding:12px;text-align:center">loading…</div>';
   $("cfgsenders_list").innerHTML = '<div class="empty">loading configuration…</div>';
   switchCfgTab("vis");
   switchCfgSubTab("senders");
@@ -7274,262 +7390,309 @@ function serializeIni(common, senders){
 }
 
 function renderSenderCards(senders){
+  if(senders !== undefined && senders !== null){
+    cfgState.senders = senders;
+  }
+  var list = cfgState.senders || [];
+  var countEl = $("cfg_senders_count_label");
+  if(countEl) countEl.textContent = "Senders (" + list.length + ")";
+
+  var navHost = $("cfg_senders_nav_list");
   var host = $("cfgsenders_list");
   if(!host) return;
-  if(!senders || !senders.length){
+
+  if(!list.length){
+    if(navHost) navHost.innerHTML = '<div style="color:var(--dim);font-size:11.5px;padding:12px;text-align:center">No senders</div>';
     host.innerHTML = '<div class="empty">No sender sections defined yet. Click "+ Add Sender Section" or "Load Default Example" to start.</div>';
+    cfgState.activeSenderIdx = 0;
     return;
   }
-  // BUG-01: Ensure 'c' (common section) is declared and available in strict mode
-  var c = (cfgState.parsed && cfgState.parsed.common) ? cfgState.parsed.common : collectCommonFromForm();
-  var html = senders.map(function(s, idx){
-    var lotmode = (s.lotmode || "multiplier").toLowerCase();
-    var symRows = (s.symbols || []).map(function(sym, sidx){
-      return '<div class="symrow" data-sidx="' + sidx + '">' +
-             '<input type="text" placeholder="From symbol (e.g. GOLD)" value="' + esc(sym.from) + '" class="sym-from">' +
-             '<span style="color:var(--dim)">\u2192</span>' +
-             '<input type="text" placeholder="To symbol (e.g. XAUUSD)" value="' + esc(sym.to) + '" class="sym-to">' +
-             '<button type="button" class="opbtn danger remove-symmap" title="remove mapping">&times;</button>' +
+
+  if(typeof cfgState.activeSenderIdx !== "number" || cfgState.activeSenderIdx < 0 || cfgState.activeSenderIdx >= list.length){
+    cfgState.activeSenderIdx = 0;
+  }
+
+  // 1. Render Left Nav List
+  if(navHost){
+    var navHtml = list.map(function(item, i){
+      var isAct = (i === cfgState.activeSenderIdx);
+      var title = "[sender" + i + "]" + (item.id ? " · " + esc(item.id) : "");
+      var lotInfo = (item.lotmode || "multiplier") + " " + (item.lotparam || "1.0");
+      var magicInfo = item.magic ? ("Magic: " + esc(item.magic)) : "";
+      var sub = magicInfo ? (magicInfo + " · " + lotInfo) : lotInfo;
+      return '<div class="cfg-sender-nav-item' + (isAct ? ' active' : '') + '" data-sidx="' + i + '">' +
+             '  <div class="cfg-sender-nav-title"><span>' + title + '</span>' + (isAct ? '<span style="color:var(--accent);font-size:11px">▶</span>' : '') + '</div>' +
+             '  <div class="cfg-sender-nav-sub">' + sub + '</div>' +
              '</div>';
     }).join("");
+    navHost.innerHTML = navHtml;
+  }
 
-    function isChk(v, defChk){
-      if(v === undefined || v === null || v === "") return !!defChk;
-      return (v === "1" || v === "true" || v === true);
-    }
-
-    return '<div class="sendercard" data-idx="' + idx + '" data-orig-id="' + esc(s.id || "") + '">' +
-           '<div class="sendercard-head">' +
-           '<h3>[sender' + idx + ']' + (s.id ? ' &mdash; ' + esc(s.id) : '') + '</h3>' +
-           '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">' + t("cfg.remove_section") + '</button>' +
-           '</div>' +
-           '<div class="cfggrid">' +
-           '<div class="cfgfield">' +
-           '<label>' + t("cfg.sender_id_label") + '</label>' +
-           '<input type="text" class="inp-id" placeholder="e.g. 1001" value="' + esc(s.id) + '">' +
-           '<span class="hint">Sender account or NID</span>' +
-           '</div>' +
-           '<div class="cfgfield">' +
-           '<label>' + t("cfg.magic_label") + '</label>' +
-           '<input type="text" class="inp-magic" placeholder="e.g. ' + (770000 + idx + 1) + '" value="' + esc(s.magic) + '">' +
-           '<span class="hint">Unique order magic</span>' +
-           '</div>' +
-           '<div class="cfgfield">' +
-           '<label>' + t("cfg.lot_mode_label") + '</label>' +
-           '<select class="inp-lotmode">' +
-           '<option value="multiplier"' + (lotmode === "multiplier" ? ' selected' : '') + '>multiplier</option>' +
-           '<option value="fixed"' + (lotmode === "fixed" ? ' selected' : '') + '>fixed</option>' +
-           '<option value="off"' + (lotmode === "off" ? ' selected' : '') + '>off</option>' +
-           '</select>' +
-           '<span class="hint">Position sizing mode</span>' +
-           '</div>' +
-           '<div class="cfgfield">' +
-           '<label>' + t("cfg.lot_param_label") + '</label>' +
-           '<input type="number" step="0.01" class="inp-lotparam" placeholder="1.0" value="' + esc(s.lotparam !== undefined && s.lotparam !== "" ? s.lotparam : "1.0") + '">' +
-           '<span class="hint">Multiplier or fixed lots</span>' +
-           '</div>' +
-           '<div class="cfgfield">' +
-           '<label>' + t("cfg.symbol_suffix_label") + '</label>' +
-           '<input type="text" class="inp-suffix" placeholder="e.g. m, .pro" value="' + esc(s.suffix || "") + '">' +
-           '<span class="hint">Broker suffix (optional)</span>' +
-           '</div>' +
-           '</div>' +
-           '<div class="symmaps">' +
-           '<div class="symmaps-head">' +
-           '<span>' + t("cfg.symbol_translations") + '</span>' +
-           '<button type="button" class="opbtn add-symmap" data-idx="' + idx + '">' + t("cfg.add_mapping") + '</button>' +
-           '</div>' +
-           '<div class="symmaps-list">' + (symRows || ('<div style="color:var(--dim);font-size:11px;padding:2px 0">' + t("cfg.no_symbol_translations") + '</div>')) + '</div>' +
-           '</div>' +
-
-           // Subtabs for Strategy & Risk settings inside this sender
-           '<div class="sc-tabs">' +
-           '<button type="button" class="sc-tab active" data-sctab="risk">' + t("cfg.tab_risk") + '</button>' +
-           '<button type="button" class="sc-tab" data-sctab="exec">' + t("cfg.tab_exec") + '</button>' +
-           '<button type="button" class="sc-tab" data-sctab="filter">' + t("cfg.tab_filters") + '</button>' +
-           '<button type="button" class="sc-tab" data-sctab="gates">' + t("cfg.tab_delays") + '</button>' +
-           '<button type="button" class="sc-tab" data-sctab="sched">' + t("cfg.tab_schedule") + '</button>' +
-           '</div>' +
-
-           // Panel: Risk
-           '<div class="sc-panel" data-scpanel="risk">' +
-           '<div class="sc-panel-title">' + t("cfg.tab_risk") + ' [sender' + idx + ']</div>' +
-           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
-           '<div class="cfgfield"><label>Max Lots / Trade</label><input type="number" step="0.01" class="inp-s-maxlotsperposition" placeholder="0.0 (off/inherit)" value="' + esc(s.maxlotsperposition || '') + '"><span class="hint">Single trade lot limit</span></div>' +
-           '<div class="cfgfield"><label>Max Total Lots</label><input type="number" step="0.01" class="inp-s-maxtotallots" placeholder="0.0 (off/inherit)" value="' + esc(s.maxtotallots || '') + '"><span class="hint">Total lots from this sender</span></div>' +
-           '<div class="cfgfield"><label>Max Open Positions</label><input type="number" step="1" class="inp-s-maxopenpositions" placeholder="0 (off/inherit)" value="' + esc(s.maxopenpositions || '') + '"><span class="hint">Max open trades cap</span></div>' +
-           '</div></div>' +
-
-           // Panel: Exec & Stops
-           '<div class="sc-panel hidden" data-scpanel="exec">' +
-           '<div class="sc-panel-title">🛑 Execution &amp; Stops for [sender' + idx + ']</div>' +
-           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
-           '<div class="cfgfield"><label>Deviation Points</label><input type="number" step="1" class="inp-s-deviationpoints" placeholder="30" value="' + esc(s.deviationpoints !== undefined ? s.deviationpoints : '') + '"><span class="hint">Max slippage points</span></div>' +
-           '<div class="cfgfield"><label>Emergency SL (Pips)</label><input type="number" step="0.1" class="inp-s-emergencyslpips" placeholder="0.0 (off)" value="' + esc(s.emergencyslpips !== undefined ? s.emergencyslpips : '') + '"><span class="hint">Safety SL backstop</span></div>' +
-           '<div class="cfgfield"><label>Emergency TP (Pips)</label><input type="number" step="0.1" class="inp-s-emergencytppips" placeholder="0.0 (off)" value="' + esc(s.emergencytppips !== undefined ? s.emergencytppips : '') + '"><span class="hint">Safety TP backstop</span></div>' +
-           '<div class="cfgfield"><label>Stops Throttle (Sec)</label><input type="number" step="1" class="inp-s-stopsthrottleseconds" placeholder="2" value="' + esc(s.stopsthrottleseconds !== undefined ? s.stopsthrottleseconds : '') + '"><span class="hint">Min sec between modifications</span></div>' +
-           '</div>' +
-           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, isChk(c.mirrorstops, true)) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="' + (isChk(c.mirrorstops, true) ? '1' : '0') + '"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="0"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, isChk(c.reopenclosedmirrors, true)) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="' + (isChk(c.reopenclosedmirrors, true) ? '1' : '0') + '"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, isChk(c.dedupduplicates, true)) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="' + (isChk(c.dedupduplicates, true) ? '1' : '0') + '"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
-           '</div></div>' +
-
-           // Panel: Filters
-           '<div class="sc-panel hidden" data-scpanel="filter">' +
-           '<div class="sc-panel-title">🔍 Filters &amp; Direction for [sender' + idx + ']</div>' +
-           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
-           '<div class="cfgfield"><label>Permitted Symbols</label><input type="text" class="inp-s-permittedsymbols" placeholder="e.g. EURUSD,XAUUSD" value="' + esc(s.permittedsymbols || '') + '"><span class="hint">Allowed symbol whitelist</span></div>' +
-           '<div class="cfgfield"><label>Permitted Magic</label><input type="text" class="inp-s-permittedmagic" placeholder="e.g. 10001,10002" value="' + esc(s.permittedmagic || '') + '"><span class="hint">Allowed sender magic list</span></div>' +
-           '<div class="cfgfield"><label>Min Sender Lots</label><input type="number" step="0.01" class="inp-s-minsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.minsenderlotsize || '') + '"><span class="hint">Skip sender orders &lt; lots</span></div>' +
-           '<div class="cfgfield"><label>Max Sender Lots</label><input type="number" step="0.01" class="inp-s-maxsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.maxsenderlotsize || '') + '"><span class="hint">Skip sender orders &gt; lots</span></div>' +
-           '<div class="cfgfield" style="grid-column:1/-1"><label>Ignore Specific UIDs</label><input type="text" class="inp-s-ignoreuids" placeholder="e.g. a1b2c3d4,e5f6g7h8" value="' + esc(s.ignoreuids || '') + '"><span class="hint">Exempt these UIDs from convergence</span></div>' +
-           '</div>' +
-           '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:6px">' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + ' data-init="' + esc(s.nobuy !== undefined ? s.nobuy : '') + '" data-def="0"><label>Block Buy (NoBuy)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + ' data-init="' + esc(s.nosell !== undefined ? s.nosell : '') + '" data-def="0"><label>Block Sell (NoSell)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignorenewentrysignals !== undefined ? s.ignorenewentrysignals : '') + '" data-def="0"><label>Ignore New Entry Signals (Close only)</label></div>' +
-           '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignoreallexitsignals !== undefined ? s.ignoreallexitsignals : '') + '" data-def="0"><label>Ignore All Exit Signals (Open only)</label></div>' +
-           '</div></div>' +
-
-           // Panel: Gates
-           '<div class="sc-panel hidden" data-scpanel="gates">' +
-           '<div class="sc-panel-title">⏳ Anti-Stacking &amp; Delays for [sender' + idx + ']</div>' +
-           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
-           '<div class="cfgfield" style="grid-column:1/-1"><label>Check For Existing Position</label>' +
-           '<select class="inp-s-checkforexistingposition">' +
-           '<option value="0"' + ((s.checkforexistingposition === "0" || !s.checkforexistingposition) ? ' selected' : '') + '>0 - Off (Allow multiple positions on same symbol)</option>' +
-           '<option value="1"' + (s.checkforexistingposition === "1" ? ' selected' : '') + '>1 - Any Direction (Skip if ANY position open on symbol)</option>' +
-           '<option value="2"' + (s.checkforexistingposition === "2" ? ' selected' : '') + '>2 - Same Direction (Skip if same direction open on symbol)</option>' +
-           '</select></div>' +
-           '<div class="cfgfield"><label>Wait Hours</label><input type="number" step="1" class="inp-s-waitforhours" placeholder="0" value="' + esc(s.waitforhours || '') + '"><span class="hint">Delay open (hrs)</span></div>' +
-           '<div class="cfgfield"><label>Wait Minutes</label><input type="number" step="1" class="inp-s-waitforminutes" placeholder="0" value="' + esc(s.waitforminutes || '') + '"><span class="hint">Delay open (min)</span></div>' +
-           '<div class="cfgfield"><label>Wait Seconds</label><input type="number" step="1" class="inp-s-waitforseconds" placeholder="0" value="' + esc(s.waitforseconds || '') + '"><span class="hint">Delay open (sec)</span></div>' +
-           '<div class="cfgfield"><label>Wait For Profit Pips</label><input type="number" step="0.1" class="inp-s-waitforprofitpips" placeholder="0.0" value="' + esc(s.waitforprofitpips || '') + '"><span class="hint">Delay until profit &gt;= pips</span></div>' +
-           '<div class="cfgfield"><label>Wait M1 Bars</label><input type="number" step="1" class="inp-s-waitforminutesbar" placeholder="0" value="' + esc(s.waitforminutesbar || '') + '"><span class="hint">Delay N M1 bars</span></div>' +
-           '<div class="cfgfield"><label>Fill Limit Hours</label><input type="number" step="1" class="inp-s-requirepositionfillwithinhours" placeholder="0" value="' + esc(s.requirepositionfillwithinhours || '') + '"><span class="hint">Expire open (hrs)</span></div>' +
-           '<div class="cfgfield"><label>Fill Limit Minutes</label><input type="number" step="1" class="inp-s-requirepositionfillwithinminutes" placeholder="0" value="' + esc(s.requirepositionfillwithinminutes || '') + '"><span class="hint">Expire open (min)</span></div>' +
-           '<div class="cfgfield"><label>Fill Limit Seconds</label><input type="number" step="1" class="inp-s-requirepositionfillwithinseconds" placeholder="0" value="' + esc(s.requirepositionfillwithinseconds || '') + '"><span class="hint">Expire open (sec)</span></div>' +
-           '<div class="cfgfield"><label>Fill Limit M1 Bars</label><input type="number" step="1" class="inp-s-fillwithinminutesbar" placeholder="0" value="' + esc(s.fillwithinminutesbar || '') + '"><span class="hint">Expire after N bars</span></div>' +
-           '<div class="cfgfield"><label>Pending Fill Grace (s)</label><input type="number" step="0.1" class="inp-s-pendingfillgraceseconds" placeholder="1.5" value="' + esc(s.pendingfillgraceseconds !== undefined ? s.pendingfillgraceseconds : '') + '"><span class="hint">Fill buffer (sec)</span></div>' +
-           '</div></div>' +
-
-           // Panel: Schedule
-           '<div class="sc-panel hidden" data-scpanel="sched">' +
-           '<div class="sc-panel-title">📅 Schedule &amp; Timeout for [sender' + idx + ']</div>' +
-           '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">' +
-           '<div class="cfgfield"><label>Include Trading Times</label><input type="text" class="inp-s-includetradingtimes" placeholder="e.g. 08:00-12:00,13:00-17:00" value="' + esc(s.includetradingtimes || '') + '"><span class="hint">Allowed hours</span></div>' +
-           '<div class="cfgfield"><label>Day Trading Times</label><input type="text" class="inp-s-daytradingtimes" placeholder="e.g. Mon:08:00-12:00;Tue:08:00-17:00" value="' + esc(s.daytradingtimes || '') + '"><span class="hint">Hours per day</span></div>' +
-           '<div class="cfgfield"><label>Stale Seconds</label><input type="number" step="1" class="inp-s-staleseconds" placeholder="15" value="' + esc(s.staleseconds !== undefined ? s.staleseconds : '') + '"><span class="hint">Signal stale timeout (sec)</span></div>' +
-           '</div></div>' +
-
+  // 2. Render Right Detail Pane (only the active sender)
+  var s = list[cfgState.activeSenderIdx];
+  var idx = cfgState.activeSenderIdx;
+  var c = (cfgState.parsed && cfgState.parsed.common) ? cfgState.parsed.common : collectCommonFromForm();
+  var lotmode = (s.lotmode || "multiplier").toLowerCase();
+  var symRows = (s.symbols || []).map(function(sym, sidx){
+    return '<div class="symrow" data-sidx="' + sidx + '">' +
+           '<input type="text" placeholder="From symbol (e.g. GOLD)" value="' + esc(sym.from) + '" class="sym-from">' +
+           '<span style="color:var(--dim)">→</span>' +
+           '<input type="text" placeholder="To symbol (e.g. XAUUSD)" value="' + esc(sym.to) + '" class="sym-to">' +
+           '<button type="button" class="opbtn danger remove-symmap" title="remove mapping">&times;</button>' +
            '</div>';
   }).join("");
+
+  function isChk(v, defChk){
+    if(v === undefined || v === null || v === "") return !!defChk;
+    return (v === "1" || v === "true" || v === true);
+  }
+
+  var html = '<div class="sendercard" data-idx="' + idx + '" data-orig-id="' + esc(s.id || "") + '">' +
+             '<div class="sendercard-head">' +
+             '<h3>[sender' + idx + ']' + (s.id ? ' &mdash; ' + esc(s.id) : '') + '</h3>' +
+             '<button type="button" class="opbtn danger remove-sender" data-idx="' + idx + '" title="Remove this sender section">' + t("cfg.remove_section") + '</button>' +
+             '</div>' +
+             '<div class="cfggrid">' +
+             '<div class="cfgfield">' +
+             '<label>' + t("cfg.sender_id_label") + '</label>' +
+             '<input type="text" class="inp-id" placeholder="e.g. 1001" value="' + esc(s.id) + '">' +
+             '<span class="hint">Sender account or NID</span>' +
+             '</div>' +
+             '<div class="cfgfield">' +
+             '<label>' + t("cfg.magic_label") + '</label>' +
+             '<input type="text" class="inp-magic" placeholder="e.g. ' + (770000 + idx + 1) + '" value="' + esc(s.magic) + '">' +
+             '<span class="hint">Unique order magic</span>' +
+             '</div>' +
+             '<div class="cfgfield">' +
+             '<label>' + t("cfg.lot_mode_label") + '</label>' +
+             '<select class="inp-lotmode">' +
+             '<option value="multiplier"' + (lotmode === "multiplier" ? ' selected' : '') + '>multiplier</option>' +
+             '<option value="fixed"' + (lotmode === "fixed" ? ' selected' : '') + '>fixed</option>' +
+             '<option value="off"' + (lotmode === "off" ? ' selected' : '') + '>off</option>' +
+             '</select>' +
+             '<span class="hint">Position sizing mode</span>' +
+             '</div>' +
+             '<div class="cfgfield">' +
+             '<label>' + t("cfg.lot_param_label") + '</label>' +
+             '<input type="number" step="0.01" class="inp-lotparam" placeholder="1.0" value="' + esc(s.lotparam !== undefined && s.lotparam !== "" ? s.lotparam : "1.0") + '">' +
+             '<span class="hint">Multiplier or fixed lots</span>' +
+             '</div>' +
+             '<div class="cfgfield">' +
+             '<label>' + t("cfg.symbol_suffix_label") + '</label>' +
+             '<input type="text" class="inp-suffix" placeholder="e.g. m, .pro" value="' + esc(s.suffix || "") + '">' +
+             '<span class="hint">Broker suffix (optional)</span>' +
+             '</div>' +
+             '</div>' +
+             '<div class="symmaps">' +
+             '<div class="symmaps-head">' +
+             '<span>' + t("cfg.symbol_translations") + '</span>' +
+             '<button type="button" class="opbtn add-symmap" data-idx="' + idx + '">' + t("cfg.add_mapping") + '</button>' +
+             '</div>' +
+             '<div class="symmaps-list">' + (symRows || ('<div style="color:var(--dim);font-size:11px;padding:2px 0">' + t("cfg.no_symbol_translations") + '</div>')) + '</div>' +
+             '</div>' +
+
+             // Subtabs for Strategy & Risk settings inside this sender
+             '<div class="sc-tabs">' +
+             '<button type="button" class="sc-tab active" data-sctab="risk">' + t("cfg.tab_risk") + '</button>' +
+             '<button type="button" class="sc-tab" data-sctab="exec">' + t("cfg.tab_exec") + '</button>' +
+             '<button type="button" class="sc-tab" data-sctab="filter">' + t("cfg.tab_filters") + '</button>' +
+             '<button type="button" class="sc-tab" data-sctab="gates">' + t("cfg.tab_delays") + '</button>' +
+             '<button type="button" class="sc-tab" data-sctab="sched">' + t("cfg.tab_schedule") + '</button>' +
+             '</div>' +
+
+             // Panel: Risk
+             '<div class="sc-panel" data-scpanel="risk">' +
+             '<div class="sc-panel-title">' + t("cfg.tab_risk") + ' [sender' + idx + ']</div>' +
+             '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+             '<div class="cfgfield"><label>Max Lots / Trade</label><input type="number" step="0.01" class="inp-s-maxlotsperposition" placeholder="0.0 (off/inherit)" value="' + esc(s.maxlotsperposition || '') + '"><span class="hint">Single trade lot limit</span></div>' +
+             '<div class="cfgfield"><label>Max Total Lots</label><input type="number" step="0.01" class="inp-s-maxtotallots" placeholder="0.0 (off/inherit)" value="' + esc(s.maxtotallots || '') + '"><span class="hint">Total lots from this sender</span></div>' +
+             '<div class="cfgfield"><label>Max Open Positions</label><input type="number" step="1" class="inp-s-maxopenpositions" placeholder="0 (off/inherit)" value="' + esc(s.maxopenpositions || '') + '"><span class="hint">Max open trades cap</span></div>' +
+             '</div></div>' +
+
+             // Panel: Exec & Stops
+             '<div class="sc-panel hidden" data-scpanel="exec">' +
+             '<div class="sc-panel-title">' + t("cfg.tab_exec") + ' [sender' + idx + ']</div>' +
+             '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+             '<div class="cfgfield"><label>Deviation Points</label><input type="number" step="1" class="inp-s-deviationpoints" placeholder="30" value="' + esc(s.deviationpoints !== undefined ? s.deviationpoints : '') + '"><span class="hint">Max slippage points</span></div>' +
+             '<div class="cfgfield"><label>Emergency SL (Pips)</label><input type="number" step="0.1" class="inp-s-emergencyslpips" placeholder="0.0 (off)" value="' + esc(s.emergencyslpips !== undefined ? s.emergencyslpips : '') + '"><span class="hint">Safety SL backstop</span></div>' +
+             '<div class="cfgfield"><label>Emergency TP (Pips)</label><input type="number" step="0.1" class="inp-s-emergencytppips" placeholder="0.0 (off)" value="' + esc(s.emergencytppips !== undefined ? s.emergencytppips : '') + '"><span class="hint">Safety TP backstop</span></div>' +
+             '<div class="cfgfield"><label>Stops Throttle (Sec)</label><input type="number" step="1" class="inp-s-stopsthrottleseconds" placeholder="2" value="' + esc(s.stopsthrottleseconds !== undefined ? s.stopsthrottleseconds : '') + '"><span class="hint">Min sec between modifications</span></div>' +
+             '</div>' +
+             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, isChk(c.mirrorstops, true)) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="' + (isChk(c.mirrorstops, true) ? '1' : '0') + '"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="0"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, isChk(c.reopenclosedmirrors, true)) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="' + (isChk(c.reopenclosedmirrors, true) ? '1' : '0') + '"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, isChk(c.dedupduplicates, true)) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="' + (isChk(c.dedupduplicates, true) ? '1' : '0') + '"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
+             '</div></div>' +
+
+             // Panel: Filters
+             '<div class="sc-panel hidden" data-scpanel="filter">' +
+             '<div class="sc-panel-title">' + t("cfg.tab_filters") + ' [sender' + idx + ']</div>' +
+             '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+             '<div class="cfgfield"><label>Permitted Symbols</label><input type="text" class="inp-s-permittedsymbols" placeholder="e.g. EURUSD,XAUUSD" value="' + esc(s.permittedsymbols || '') + '"><span class="hint">Allowed symbol whitelist</span></div>' +
+             '<div class="cfgfield"><label>Permitted Magic</label><input type="text" class="inp-s-permittedmagic" placeholder="e.g. 10001,10002" value="' + esc(s.permittedmagic || '') + '"><span class="hint">Allowed sender magic list</span></div>' +
+             '<div class="cfgfield"><label>Min Sender Lots</label><input type="number" step="0.01" class="inp-s-minsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.minsenderlotsize || '') + '"><span class="hint">Skip sender orders &lt; lots</span></div>' +
+             '<div class="cfgfield"><label>Max Sender Lots</label><input type="number" step="0.01" class="inp-s-maxsenderlotsize" placeholder="0.0 (off)" value="' + esc(s.maxsenderlotsize || '') + '"><span class="hint">Skip sender orders &gt; lots</span></div>' +
+             '<div class="cfgfield" style="grid-column:1/-1"><label>Ignore Specific UIDs</label><input type="text" class="inp-s-ignoreuids" placeholder="e.g. a1b2c3d4,e5f6g7h8" value="' + esc(s.ignoreuids || '') + '"><span class="hint">Exempt these UIDs from convergence</span></div>' +
+             '</div>' +
+             '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:6px">' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + ' data-init="' + esc(s.nobuy !== undefined ? s.nobuy : '') + '" data-def="0"><label>Block Buy (NoBuy)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + ' data-init="' + esc(s.nosell !== undefined ? s.nosell : '') + '" data-def="0"><label>Block Sell (NoSell)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignorenewentrysignals !== undefined ? s.ignorenewentrysignals : '') + '" data-def="0"><label>Ignore New Entry Signals (Close only)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignoreallexitsignals !== undefined ? s.ignoreallexitsignals : '') + '" data-def="0"><label>Ignore All Exit Signals (Open only)</label></div>' +
+             '</div></div>' +
+
+             // Panel: Gates
+             '<div class="sc-panel hidden" data-scpanel="gates">' +
+             '<div class="sc-panel-title">' + t("cfg.tab_delays") + ' [sender' + idx + ']</div>' +
+             '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">' +
+             '<div class="cfgfield" style="grid-column:1/-1"><label>Check For Existing Position</label>' +
+             '<select class="inp-s-checkforexistingposition">' +
+             '<option value="0"' + ((s.checkforexistingposition === "0" || !s.checkforexistingposition) ? ' selected' : '') + '>0 - Off (Allow multiple positions on same symbol)</option>' +
+             '<option value="1"' + (s.checkforexistingposition === "1" ? ' selected' : '') + '>1 - Any Direction (Skip if ANY position open on symbol)</option>' +
+             '<option value="2"' + (s.checkforexistingposition === "2" ? ' selected' : '') + '>2 - Same Direction (Skip if same direction open on symbol)</option>' +
+             '</select></div>' +
+             '<div class="cfgfield"><label>Wait Hours</label><input type="number" step="1" class="inp-s-waitforhours" placeholder="0" value="' + esc(s.waitforhours || '') + '"><span class="hint">Delay open (hrs)</span></div>' +
+             '<div class="cfgfield"><label>Wait Minutes</label><input type="number" step="1" class="inp-s-waitforminutes" placeholder="0" value="' + esc(s.waitforminutes || '') + '"><span class="hint">Delay open (min)</span></div>' +
+             '<div class="cfgfield"><label>Wait Seconds</label><input type="number" step="1" class="inp-s-waitforseconds" placeholder="0" value="' + esc(s.waitforseconds || '') + '"><span class="hint">Delay open (sec)</span></div>' +
+             '<div class="cfgfield"><label>Wait For Profit Pips</label><input type="number" step="0.1" class="inp-s-waitforprofitpips" placeholder="0.0" value="' + esc(s.waitforprofitpips || '') + '"><span class="hint">Delay until profit &gt;= pips</span></div>' +
+             '<div class="cfgfield"><label>Wait M1 Bars</label><input type="number" step="1" class="inp-s-waitforminutesbar" placeholder="0" value="' + esc(s.waitforminutesbar || '') + '"><span class="hint">Delay N M1 bars</span></div>' +
+             '<div class="cfgfield"><label>Fill Limit Hours</label><input type="number" step="1" class="inp-s-requirepositionfillwithinhours" placeholder="0" value="' + esc(s.requirepositionfillwithinhours || '') + '"><span class="hint">Expire open (hrs)</span></div>' +
+             '<div class="cfgfield"><label>Fill Limit Minutes</label><input type="number" step="1" class="inp-s-requirepositionfillwithinminutes" placeholder="0" value="' + esc(s.requirepositionfillwithinminutes || '') + '"><span class="hint">Expire open (min)</span></div>' +
+             '<div class="cfgfield"><label>Fill Limit Seconds</label><input type="number" step="1" class="inp-s-requirepositionfillwithinseconds" placeholder="0" value="' + esc(s.requirepositionfillwithinseconds || '') + '"><span class="hint">Expire open (sec)</span></div>' +
+             '<div class="cfgfield"><label>Fill Limit M1 Bars</label><input type="number" step="1" class="inp-s-fillwithinminutesbar" placeholder="0" value="' + esc(s.fillwithinminutesbar || '') + '"><span class="hint">Expire after N bars</span></div>' +
+             '<div class="cfgfield"><label>Pending Fill Grace (s)</label><input type="number" step="0.1" class="inp-s-pendingfillgraceseconds" placeholder="1.5" value="' + esc(s.pendingfillgraceseconds !== undefined ? s.pendingfillgraceseconds : '') + '"><span class="hint">Fill buffer (sec)</span></div>' +
+             '</div></div>' +
+
+             // Panel: Schedule
+             '<div class="sc-panel hidden" data-scpanel="sched">' +
+             '<div class="sc-panel-title">' + t("cfg.tab_schedule") + ' [sender' + idx + ']</div>' +
+             '<div class="cfggrid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">' +
+             '<div class="cfgfield"><label>Include Trading Times</label><input type="text" class="inp-s-includetradingtimes" placeholder="e.g. 08:00-12:00,13:00-17:00" value="' + esc(s.includetradingtimes || '') + '"><span class="hint">Allowed hours</span></div>' +
+             '<div class="cfgfield"><label>Day Trading Times</label><input type="text" class="inp-s-daytradingtimes" placeholder="e.g. Mon:08:00-12:00;Tue:08:00-17:00" value="' + esc(s.daytradingtimes || '') + '"><span class="hint">Hours per day</span></div>' +
+             '<div class="cfgfield"><label>Stale Seconds</label><input type="number" step="1" class="inp-s-staleseconds" placeholder="15" value="' + esc(s.staleseconds !== undefined ? s.staleseconds : '') + '"><span class="hint">Signal stale timeout (sec)</span></div>' +
+             '</div></div>' +
+
+             '</div>';
 
   host.innerHTML = html;
 }
 
-function collectSendersFromCards(){
-  var cards = $("cfgsenders_list").querySelectorAll(".sendercard");
-  var senders = [];
-  cards.forEach(function(c, idx){
-    var id = (c.querySelector(".inp-id") ? c.querySelector(".inp-id").value : "").trim();
-    var magic = (c.querySelector(".inp-magic") ? c.querySelector(".inp-magic").value : "").trim();
-    var lotmode = c.querySelector(".inp-lotmode") ? c.querySelector(".inp-lotmode").value : "multiplier";
-    var lotparam = (c.querySelector(".inp-lotparam") ? c.querySelector(".inp-lotparam").value : "1.0").trim();
-    var suffix = (c.querySelector(".inp-suffix") ? c.querySelector(".inp-suffix").value : "").trim();
+function extractSenderFromCard(c, idx){
+  var id = (c.querySelector(".inp-id") ? c.querySelector(".inp-id").value : "").trim();
+  var magic = (c.querySelector(".inp-magic") ? c.querySelector(".inp-magic").value : "").trim();
+  var lotmode = c.querySelector(".inp-lotmode") ? c.querySelector(".inp-lotmode").value : "multiplier";
+  var lotparam = (c.querySelector(".inp-lotparam") ? c.querySelector(".inp-lotparam").value : "1.0").trim();
+  var suffix = (c.querySelector(".inp-suffix") ? c.querySelector(".inp-suffix").value : "").trim();
 
-    var symRows = c.querySelectorAll(".symrow");
-    var symbols = [];
-    symRows.forEach(function(sr){
-      var sf = (sr.querySelector(".sym-from") ? sr.querySelector(".sym-from").value : "").trim();
-      var st = (sr.querySelector(".sym-to") ? sr.querySelector(".sym-to").value : "").trim();
-      if(sf && st) symbols.push({ from: sf, to: st });
-    });
-
-    var sObj = {
-      secName: "sender" + idx,
-      id: id,
-      magic: magic,
-      lotmode: lotmode,
-      lotparam: lotparam || "1.0",
-      suffix: suffix,
-      symbols: symbols
-    };
-
-    function val(cls, defVal){
-      var el = c.querySelector(cls);
-      if(!el) return defVal !== undefined ? defVal : "";
-      if(el.type === "checkbox"){
-        var initVal = el.getAttribute("data-init");
-        var defValAttr = el.getAttribute("data-def") || "0";
-        var isChecked = el.checked ? "1" : "0";
-        if(initVal === "" || initVal === null || initVal === undefined){
-          if(isChecked === defValAttr) return ""; // untouched default -> inherit from [common]
-        }
-        return isChecked;
-      }
-      var v = el.value !== undefined ? el.value.trim() : "";
-      return v !== "" ? v : (defVal !== undefined ? defVal : "");
-    }
-
-    sObj.maxlotsperposition = val(".inp-s-maxlotsperposition");
-    sObj.maxtotallots = val(".inp-s-maxtotallots");
-    sObj.maxopenpositions = val(".inp-s-maxopenpositions");
-
-    sObj.deviationpoints = val(".inp-s-deviationpoints");
-    sObj.emergencyslpips = val(".inp-s-emergencyslpips");
-    sObj.emergencytppips = val(".inp-s-emergencytppips");
-    sObj.stopsthrottleseconds = val(".inp-s-stopsthrottleseconds");
-    sObj.mirrorstops = val(".inp-s-mirrorstops");
-    sObj.inverttrades = val(".inp-s-inverttrades");
-    sObj.reopenclosedmirrors = val(".inp-s-reopenclosedmirrors");
-    sObj.dedupduplicates = val(".inp-s-dedupduplicates");
-
-    sObj.permittedsymbols = val(".inp-s-permittedsymbols");
-    sObj.permittedmagic = val(".inp-s-permittedmagic");
-    sObj.minsenderlotsize = val(".inp-s-minsenderlotsize");
-    sObj.maxsenderlotsize = val(".inp-s-maxsenderlotsize");
-    sObj.ignoreuids = val(".inp-s-ignoreuids");
-    sObj.nobuy = val(".inp-s-nobuy");
-    sObj.nosell = val(".inp-s-nosell");
-    sObj.ignorenewentrysignals = val(".inp-s-ignorenewentrysignals");
-    sObj.ignoreallexitsignals = val(".inp-s-ignoreallexitsignals");
-
-    sObj.checkforexistingposition = val(".inp-s-checkforexistingposition");
-    sObj.waitforhours = val(".inp-s-waitforhours");
-    sObj.waitforminutes = val(".inp-s-waitforminutes");
-    sObj.waitforseconds = val(".inp-s-waitforseconds");
-    sObj.waitforprofitpips = val(".inp-s-waitforprofitpips");
-    sObj.waitforminutesbar = val(".inp-s-waitforminutesbar");
-    sObj.requirepositionfillwithinhours = val(".inp-s-requirepositionfillwithinhours");
-    sObj.requirepositionfillwithinminutes = val(".inp-s-requirepositionfillwithinminutes");
-    sObj.requirepositionfillwithinseconds = val(".inp-s-requirepositionfillwithinseconds");
-    sObj.fillwithinminutesbar = val(".inp-s-fillwithinminutesbar");
-    sObj.pendingfillgraceseconds = val(".inp-s-pendingfillgraceseconds");
-
-    sObj.includetradingtimes = val(".inp-s-includetradingtimes");
-    sObj.daytradingtimes = val(".inp-s-daytradingtimes");
-    sObj.staleseconds = val(".inp-s-staleseconds");
-
-    var origId = c.getAttribute("data-orig-id");
-    if(cfgState.parsed && cfgState.parsed.senders){
-      var match = null;
-      if(origId){
-        match = cfgState.parsed.senders.find(function(it){ return it.id && it.id === origId; });
-      }
-      if(!match && cfgState.parsed.senders[idx]){
-        match = cfgState.parsed.senders[idx];
-      }
-      if(match){
-        sObj = Object.assign({}, match, sObj);
-      }
-    }
-
-    senders.push(sObj);
+  var symRows = c.querySelectorAll(".symrow");
+  var symbols = [];
+  symRows.forEach(function(sr){
+    var sf = (sr.querySelector(".sym-from") ? sr.querySelector(".sym-from").value : "").trim();
+    var st = (sr.querySelector(".sym-to") ? sr.querySelector(".sym-to").value : "").trim();
+    if(sf && st) symbols.push({ from: sf, to: st });
   });
-  return senders;
+
+  var sObj = {
+    secName: "sender" + idx,
+    id: id,
+    magic: magic,
+    lotmode: lotmode,
+    lotparam: lotparam || "1.0",
+    suffix: suffix,
+    symbols: symbols
+  };
+
+  function val(cls, defVal){
+    var el = c.querySelector(cls);
+    if(!el) return defVal !== undefined ? defVal : "";
+    if(el.type === "checkbox"){
+      var initVal = el.getAttribute("data-init");
+      var defValAttr = el.getAttribute("data-def") || "0";
+      var isChecked = el.checked ? "1" : "0";
+      if(initVal === "" || initVal === null || initVal === undefined){
+        if(isChecked === defValAttr) return ""; // untouched default -> inherit from [common]
+      }
+      return isChecked;
+    }
+    var v = el.value !== undefined ? el.value.trim() : "";
+    return v !== "" ? v : (defVal !== undefined ? defVal : "");
+  }
+
+  sObj.maxlotsperposition = val(".inp-s-maxlotsperposition");
+  sObj.maxtotallots = val(".inp-s-maxtotallots");
+  sObj.maxopenpositions = val(".inp-s-maxopenpositions");
+
+  sObj.deviationpoints = val(".inp-s-deviationpoints");
+  sObj.emergencyslpips = val(".inp-s-emergencyslpips");
+  sObj.emergencytppips = val(".inp-s-emergencytppips");
+  sObj.stopsthrottleseconds = val(".inp-s-stopsthrottleseconds");
+  sObj.mirrorstops = val(".inp-s-mirrorstops");
+  sObj.inverttrades = val(".inp-s-inverttrades");
+  sObj.reopenclosedmirrors = val(".inp-s-reopenclosedmirrors");
+  sObj.dedupduplicates = val(".inp-s-dedupduplicates");
+
+  sObj.permittedsymbols = val(".inp-s-permittedsymbols");
+  sObj.permittedmagic = val(".inp-s-permittedmagic");
+  sObj.minsenderlotsize = val(".inp-s-minsenderlotsize");
+  sObj.maxsenderlotsize = val(".inp-s-maxsenderlotsize");
+  sObj.ignoreuids = val(".inp-s-ignoreuids");
+  sObj.nobuy = val(".inp-s-nobuy");
+  sObj.nosell = val(".inp-s-nosell");
+  sObj.ignorenewentrysignals = val(".inp-s-ignorenewentrysignals");
+  sObj.ignoreallexitsignals = val(".inp-s-ignoreallexitsignals");
+
+  sObj.checkforexistingposition = val(".inp-s-checkforexistingposition");
+  sObj.waitforhours = val(".inp-s-waitforhours");
+  sObj.waitforminutes = val(".inp-s-waitforminutes");
+  sObj.waitforseconds = val(".inp-s-waitforseconds");
+  sObj.waitforprofitpips = val(".inp-s-waitforprofitpips");
+  sObj.waitforminutesbar = val(".inp-s-waitforminutesbar");
+  sObj.requirepositionfillwithinhours = val(".inp-s-requirepositionfillwithinhours");
+  sObj.requirepositionfillwithinminutes = val(".inp-s-requirepositionfillwithinminutes");
+  sObj.requirepositionfillwithinseconds = val(".inp-s-requirepositionfillwithinseconds");
+  sObj.fillwithinminutesbar = val(".inp-s-fillwithinminutesbar");
+  sObj.pendingfillgraceseconds = val(".inp-s-pendingfillgraceseconds");
+
+  sObj.includetradingtimes = val(".inp-s-includetradingtimes");
+  sObj.daytradingtimes = val(".inp-s-daytradingtimes");
+  sObj.staleseconds = val(".inp-s-staleseconds");
+
+  var origId = c.getAttribute("data-orig-id");
+  if(cfgState.senders && cfgState.senders[idx]){
+    sObj = Object.assign({}, cfgState.senders[idx], sObj);
+  } else if(cfgState.parsed && cfgState.parsed.senders){
+    var match = null;
+    if(origId){
+      match = cfgState.parsed.senders.find(function(it){ return it.id && it.id === origId; });
+    }
+    if(!match && cfgState.parsed.senders[idx]){
+      match = cfgState.parsed.senders[idx];
+    }
+    if(match){
+      sObj = Object.assign({}, match, sObj);
+    }
+  }
+
+  return sObj;
+}
+
+function saveActiveSenderFromForm(){
+  var host = $("cfgsenders_list");
+  if(!host) return;
+  var c = host.querySelector(".sendercard");
+  if(!c) return;
+  var idx = parseInt(c.getAttribute("data-idx"), 10);
+  if(isNaN(idx) || idx < 0) return;
+  if(!cfgState.senders) cfgState.senders = [];
+  if(idx < cfgState.senders.length){
+    cfgState.senders[idx] = extractSenderFromCard(c, idx);
+  }
+}
+
+function collectSendersFromCards(){
+  saveActiveSenderFromForm();
+  return cfgState.senders || [];
 }
 
 function getDefaultIni(nodeKey){
@@ -7697,6 +7860,7 @@ $("cfgaddsender").addEventListener("click", function(){
     suffix: "",
     symbols: []
   });
+  cfgState.activeSenderIdx = nextIdx;
   renderSenderCards(senders);
   $("cfgraw").value = serializeIni(collectCommonFromForm(), senders);
 });
@@ -7714,6 +7878,7 @@ $("cfgloadtemplate").addEventListener("click", function(){
     $("cfgraw").value = ini;
     var parsed = parseIni(ini);
     cfgState.parsed = parsed;
+    cfgState.activeSenderIdx = 0;
     populateCommonToForm(parsed.common);
     renderSenderCards(parsed.senders);
     $("cfgmsg").className = "opmsg";
@@ -7761,6 +7926,7 @@ $("cfgloadcurrentbtn").addEventListener("click", function(){
   }
   var parsed = parseIni(curIni);
   cfgState.parsed = parsed;
+  cfgState.activeSenderIdx = 0;
   populateCommonToForm(parsed.common);
   renderSenderCards(parsed.senders);
   $("cfgraw").value = curIni;
@@ -7768,6 +7934,20 @@ $("cfgloadcurrentbtn").addEventListener("click", function(){
   $("cfgmsg").className = "opmsg ok";
   $("cfgmsg").textContent = "Loaded live Current Setting from receiver (reported " + ageStr + "). You can now edit and push.";
 });
+
+var navListEl = $("cfg_senders_nav_list");
+if(navListEl){
+  navListEl.addEventListener("click", function(ev){
+    var item = ev.target.closest(".cfg-sender-nav-item");
+    if(!item) return;
+    var sidx = parseInt(item.getAttribute("data-sidx"), 10);
+    if(isNaN(sidx) || sidx === cfgState.activeSenderIdx) return;
+    saveActiveSenderFromForm();
+    cfgState.activeSenderIdx = sidx;
+    renderSenderCards();
+    $("cfgraw").value = serializeIni(collectCommonFromForm(), cfgState.senders || []);
+  });
+}
 
 $("cfgsenders_list").addEventListener("click", function(ev){
   var t = ev.target;
@@ -7788,6 +7968,9 @@ $("cfgsenders_list").addEventListener("click", function(ev){
     var idx = parseInt(card.getAttribute("data-idx"), 10);
     var senders = collectSendersFromCards();
     senders.splice(idx, 1);
+    if(cfgState.activeSenderIdx >= senders.length){
+      cfgState.activeSenderIdx = Math.max(0, senders.length - 1);
+    }
     renderSenderCards(senders);
     $("cfgraw").value = serializeIni(collectCommonFromForm(), senders);
   } else if(t.classList.contains("add-symmap")){
