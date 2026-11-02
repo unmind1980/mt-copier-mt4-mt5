@@ -1590,6 +1590,167 @@
   .notiftbl .chan-dt{background:#fff3cd;color:#856404;border:1px solid #ffeeba}
   .notiftbl .chan-wx{background:#e7f8ea;color:#07c160;border:1px solid #a3e7b5}
   .notiftbl .chan-wh{background:#f0efe4;color:#495057;border:1px solid #ced4da}
+
+  /* =========================================================================
+     COMPREHENSIVE UNIVERSAL DYNAMIC TYPOGRAPHY BASED ON --font-base
+     Ensures every modal, table, form field, button, label and panel smoothly
+     scales whenever the operator changes the font slider or input.
+     ========================================================================= */
+
+  /* 1. Global Forms & Controls */
+  input, select, textarea {
+    font-size: var(--font-base) !important;
+  }
+  .btn-sm, .opbtn, .btn-primary, .btn-sec, .btn-danger, button.opbtn {
+    font-size: calc(var(--font-base) * 0.92) !important;
+    padding: calc(var(--font-base) * 0.38) calc(var(--font-base) * 0.88) !important;
+  }
+
+  /* 2. All Data Tables (Nodes, Positions, Notifications, Users) */
+  table.hub-table, table.hub-table th, table.hub-table td,
+  table.notiftbl, .notiftbl, .notiftbl th, .notiftbl td,
+  #users-sec table, #users-sec th, #users-sec td,
+  .pos-table-wrap table, .pos-table-wrap table th, .pos-table-wrap table td,
+  #pos_rec_table, #pos_rec_table th, #pos_rec_table td,
+  .pos-subtotal-row td {
+    font-size: var(--font-base) !important;
+  }
+  .hub-table th, .notiftbl th, #users-sec th, .pos-table-wrap table th, #pos_rec_table th {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  .notiftbl .chan-badge, .pos-badge, .side-badge, .role-pill, .ver-tag, .ping-tag, .pzchip {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+  .notiftbl td .ops, .notiftbl .opbtn {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+
+  /* 3. Notification Modal (#notifmodal - Screenshot 1) */
+  #notifmodal .notifhead h2, #notiftitle {
+    font-size: calc(var(--font-base) * 1.15) !important;
+  }
+  #notifmodal .notifrow label {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  #notifmodal .notifrow input,
+  #notifmodal .notifrow select,
+  #notifmodal .notifrow textarea {
+    font-size: var(--font-base) !important;
+    padding: calc(var(--font-base) * 0.45) calc(var(--font-base) * 0.65) !important;
+  }
+  #notifmodal .notifrow .hint {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+  #notifmodal .notifrow.inline label {
+    font-size: calc(var(--font-base) * 0.92) !important;
+  }
+  #notifmodal .notiffoot button {
+    font-size: calc(var(--font-base) * 0.95) !important;
+  }
+  #notifstatus .opmsg, .opmsg {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+
+  /* 4. Notifications Section & Header (#notif-sec - Screenshot 2) */
+  #notif-sec h2, #notifcount {
+    font-size: calc(var(--font-base) * 1.05) !important;
+  }
+
+  /* 5. Users Section (#users-sec - Screenshot 3) */
+  #users-sec h2 {
+    font-size: calc(var(--font-base) * 1.05) !important;
+  }
+  #users-sec p, #userform, #userform label, #userform span {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  #userform input, #userform select, #userform button {
+    font-size: var(--font-base) !important;
+  }
+  #users-sec td button {
+    font-size: calc(var(--font-base) * 0.88) !important;
+    padding: calc(var(--font-base) * 0.25) calc(var(--font-base) * 0.6) !important;
+  }
+
+  /* 6. Receiver Configuration Modal (#cfgmodal - Screenshot 4) */
+  #cfgmodal .cfghead h2, #cfgtitle {
+    font-size: calc(var(--font-base) * 1.15) !important;
+  }
+  #cfgmodal label, #cfgmodal .cfgstatus, #cfglastchange, #cfgdesc, #cfgmodal p, .cfgnotice {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  #cfgmodal select, #cfgmodal input, #cfgmodal textarea, .cfgrawbox {
+    font-size: var(--font-base) !important;
+  }
+  #cfgmodaltabs button, .sc-tab, .cfggroup-tabs button {
+    font-size: calc(var(--font-base) * 0.9) !important;
+  }
+  .sendercard-head h3, .cfggroup-title, .sc-panel-title {
+    font-size: calc(var(--font-base) * 0.95) !important;
+  }
+  .cfgfield label, .cfgfield-check label {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  .cfgfield .hint {
+    font-size: calc(var(--font-base) * 0.8) !important;
+  }
+  .symmaps-head, .symmaps-list {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .cfg-sender-nav-item, .cfg-sender-nav-title, #cfg_senders_nav_list {
+    font-size: calc(var(--font-base) * 0.9) !important;
+  }
+  #cfgfootmsg {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+
+  /* 7. Topology & Activity Log (#toposec, #msgsec - Screenshot 5) */
+  #toposec h2, #msgsec h2, #btn-dismiss-alerts {
+    font-size: calc(var(--font-base) * 0.95) !important;
+  }
+  #toposec text, svg#toposvg text, .lbl {
+    font-size: calc(var(--font-base) * 0.85) !important;
+  }
+  .msg-item {
+    font-size: calc(var(--font-base) * 0.92) !important;
+  }
+  .msg-badge {
+    font-size: calc(var(--font-base) * 0.8) !important;
+  }
+  .msg-time {
+    font-size: calc(var(--font-base) * 0.82) !important;
+  }
+
+  /* 8. Additional Modals & Controls (SSL, Peer, Hub Key, Passwords, Confirm Dialog) */
+  #sslmodal h2, #peermodal h2, #hubkeymodal h2, #pwdlg h2, #adminpwdlg h2, .confirmhead h2 {
+    font-size: calc(var(--font-base) * 1.15) !important;
+  }
+  #sslmodal label, #sslmodal span, #peermodal label, #peermodal span,
+  .confirm-desc, .confirm-detail, .modal-card p, .modal-card label {
+    font-size: calc(var(--font-base) * 0.9) !important;
+  }
+  #hubkey_val, #ssl_import_cert, #ssl_import_key, #peer_target_ip {
+    font-size: var(--font-base) !important;
+  }
+  .toast-item {
+    font-size: calc(var(--font-base) * 0.92) !important;
+  }
+
+  /* 9. Header Tools, Cockpit Sidebar & Footer */
+  footer, #foot, #foot a, #foot span {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .lang-selector-wrap, .lang-selector-wrap select, .nav-tools .btn-sm, .nav-tools .btn-theme {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .cockpit-sidebar-head, .cockpit-sidebar-head span {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  .node-entry-top {
+    font-size: calc(var(--font-base) * 1.02) !important;
+  }
+  .node-entry-sub {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
 </style>
 </head>
 <body>
@@ -1726,7 +1887,6 @@
       <button type="button" class="btn-sm opbtn" id="btn-view-pos" data-i18n="nodes.btn_inspect">📊 Positions</button>
       <button type="button" class="btn-sm opbtn" id="btn-gop-cfg" data-i18n="nodes.btn_config">⚙️ Receiver Config</button>
       <button type="button" class="btn-sm opbtn" id="btn-gop-notif" data-i18n="gops.btn_notif">🔔 Notifications</button>
-      <button type="button" class="btn-sm opbtn" id="btn-download-hub-key" data-i18n="gops.btn_hub_key">🔑 Hub Key</button>
       <button type="button" class="btn-sm btn-primary opbtn" id="btn-open-cfg" data-i18n="gops.btn_cfg_receiver">+ Configure Receiver</button>
     </div>
     <span class="opmsg" id="gmsg"></span>
@@ -6882,7 +7042,7 @@ function renderUsers(users){
              "</button> <button data-act='del'>" + t("users.btn_delete") + "</button></td></tr>";
     }).join("") +
     "</tbody></table>" +
-    "<p style='color:var(--dim);font-size:12px;margin:6px 0 0'>" + t("users.footnote") + "</p>";
+    "<p style='color:var(--dim);margin:6px 0 0'>" + t("users.footnote") + "</p>";
 }
 function openAdminPasswordReset(user){
   adminPasswordTarget = user.id;
@@ -7039,10 +7199,6 @@ function closeHubKeyModal(){
   $("hubkeymodal").classList.add("hidden");
 }
 
-$("btn-download-hub-key").addEventListener("click", function(ev){
-  ev.preventDefault();
-  openHubKeyModal(true);
-});
 $("hubkeyclose_x").addEventListener("click", closeHubKeyModal);
 $("hubkey_close_btn").addEventListener("click", closeHubKeyModal);
 $("hubkey_copybtn").addEventListener("click", function(){
@@ -7252,7 +7408,7 @@ function renderNotifications(channels){
                var st = c.enabled ? ('<span class="dot online"></span>' + t("notif.status_enabled")) : ('<span class="dot offline"></span>' + t("notif.status_disabled"));
                var langNames = { "zh-CN": "简中", "zh-TW": "繁中", "en": "EN", "ja": "JA", "ru": "RU", "es": "ES" };
                var chLang = c.lang || (c.config && c.config.lang) || "zh-CN";
-               var langBadge = '<span style="display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-family:var(--mono);font-weight:600;background:var(--bg);border:1px solid var(--line);color:var(--dim);margin-right:6px" title="Notification Language">' + (langNames[chLang] || esc(chLang)) + '</span>';
+               var langBadge = '<span class="chan-badge notif-lang-badge" style="display:inline-block;padding:1px 5px;border-radius:3px;font-family:var(--mono);font-weight:600;background:var(--bg);border:1px solid var(--line);color:var(--dim);margin-right:6px" title="Notification Language">' + (langNames[chLang] || esc(chLang)) + '</span>';
                var ops = isViewer ? '' :
                  '<td class="ops" style="text-align:right">' +
                  '<button class="opbtn" data-nact="test" title="Send a test alert now">' + t("notif.btn_test") + '</button> ' +
@@ -7265,7 +7421,7 @@ function renderNotifications(channels){
                       '<td>' + getChannelTypeBadge(c.channel_type) + '</td>' +
                       '<td>' + sev + '</td>' +
                       '<td>' + st + '</td>' +
-                      '<td style="font-size:11.5px;color:var(--dim)">' + langBadge + getChannelSummary(c) + '</td>' +
+                      '<td style="color:var(--dim)">' + langBadge + getChannelSummary(c) + '</td>' +
                       ops + '</tr>';
              }).join('') +
              '</tbody></table>';

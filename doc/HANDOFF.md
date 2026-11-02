@@ -1604,6 +1604,23 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 新增 `format_alert_multilingual_test` 单元测试，Rust 单元测试基线提升至 **157 / 157 PASS**；
      - `tools/hub_notifications_test.py` 增补渠道语言配置与持久化断言，26 / 26 PASS。
 
+### 九十四次演进：全模块动态字号缩放系统与多余操作按钮划除 (2026-11-03 10:30；全部闭环)
+
+- **技术落地项**：
+  1. **多余 Hub Key 按钮划除**：
+     - 在 `hub/src/assets/dashboard.html` 中移除 GLOBAL OPERATIONS 栏目内与顶部 Header 重复的 `[ 🔑 Hub Key ]` 按钮（`#btn-download-hub-key`）及事件监听，消除冗余入口；
+  2. **全局全模块动态字体缩放系统（基于 `--font-base`）**：
+     - 在样式表尾部建立具有最高优先级的集中式动态排版覆盖规则，深度覆盖用户截图圈出的全部 5 个重点界面：
+       - **通知弹窗 (#notifmodal)**：标题、标签、输入框、下拉框、提示及底部按钮全面自适应缩放；
+       - **通知列表 (.notiftbl)**：表头、单元格、语言徽章与操作按钮等比缩放；
+       - **用户管理 (#users-sec)**：表头、单元格数据、操作按钮、底端添加表单及说明文字同步联动；
+       - **接收端配置弹窗 (#cfgmodal)**：配置标题、状态标签、Tabs、左侧 Senders 栏、各字段标签及输入框动态响应；
+       - **拓扑与活动日志 (#toposec, #msgsec)**：拓扑节点与连线标签、消息条目、时间戳与 Badge 实时缩放；
+       - **页脚与全局控件**：`#foot`、全局 `input/select/textarea/button` 基于 `--font-base` 联动，确保在顶部微调 Font 大小（如从 11px 调至 17.5px）时全站丝滑等比放大缩小；
+  3. **测试基准更新**：
+     - `dash_check.py` 更新为 252 个元素 ID 与 138 个函数匹配；
+     - 157/157 Rust 测试与 26/26 通知回归测试全部通过。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1623,9 +1640,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
     - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
-    - `dash_check.py`：253 个前端元素与 138 个函数完全校验匹配。
+    - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知与全渠道独立通知语言选择）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择与全界面响应式字号缩放）与业务代码实现 100% 吻合。
 
 ---
 
