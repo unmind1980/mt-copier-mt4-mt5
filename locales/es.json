@@ -371,7 +371,14 @@
     "type_wechat": "WeChat (Xtuis)",
     "wx_token": "Token de Xtuis",
     "wx_token_ph": "ej. ABCdef123456 (o URL completa)",
-    "wx_token_hint": "Siga la cuenta oficial de WeChat '虾推啥' para obtener su token de inserción personal."
+    "wx_token_hint": "Siga la cuenta oficial de WeChat '虾推啥' para obtener su token de inserción personal.",
+    "field_lang": "Idioma de notificación",
+    "lang_zh_cn": "Chino simplificado (zh-CN)",
+    "lang_zh_tw": "Chino tradicional (zh-TW)",
+    "lang_en": "Inglés (en)",
+    "lang_ja": "Japonés (ja)",
+    "lang_ru": "Ruso (ru)",
+    "lang_es": "Español (es)"
   },
   "users": {
     "title": "Gestión de Usuarios",

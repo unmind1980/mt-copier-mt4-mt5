@@ -371,7 +371,14 @@
     "type_wechat": "WeChat (Xtuis)",
     "wx_token": "Xtuis Token",
     "wx_token_ph": "e.g. ABCdef123456 (or full push URL)",
-    "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token."
+    "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token.",
+    "field_lang": "Notification Language",
+    "lang_zh_cn": "Simplified Chinese (zh-CN)",
+    "lang_zh_tw": "Traditional Chinese (zh-TW)",
+    "lang_en": "English (en)",
+    "lang_ja": "Japanese (ja)",
+    "lang_ru": "Russian (ru)",
+    "lang_es": "Spanish (es)"
   },
   "users": {
     "title": "Users",

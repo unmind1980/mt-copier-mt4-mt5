@@ -2802,7 +2802,13 @@ struct NotificationUpsertBody {
     enabled: bool,
     #[serde(default = "default_notif_severity")]
     min_severity: String,
+    #[serde(default = "default_notif_lang")]
+    lang: String,
     config: Value,
+}
+
+fn default_notif_lang() -> String {
+    "zh-CN".to_string()
 }
 
 fn default_notif_enabled() -> bool {
@@ -2881,12 +2887,19 @@ async fn notifications_upsert(
         }
     }
 
+    let lang = if !b.lang.trim().is_empty() {
+        b.lang.trim().to_string()
+    } else {
+        b.config.get("lang").and_then(|v| v.as_str()).unwrap_or("zh-CN").to_string()
+    };
+
     let ch = NotificationChannel {
         id: id.clone(),
         name: b.name,
         channel_type: b.channel_type,
         enabled: b.enabled,
         min_severity: b.min_severity,
+        lang,
         config: b.config,
         created_at: 0,
     };

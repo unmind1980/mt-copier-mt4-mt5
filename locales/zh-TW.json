@@ -371,7 +371,14 @@
     "type_wechat": "微信 (蝦推啥)",
     "wx_token": "蝦推啥 Token (權杖)",
     "wx_token_ph": "例如 ABCdef123456 (或完整推送 URL)",
-    "wx_token_hint": "關注微信公眾號【蝦推啥】即可免費獲取專屬個人推送 Token。"
+    "wx_token_hint": "關注微信公眾號【蝦推啥】即可免費獲取專屬個人推送 Token。",
+    "field_lang": "訊息通知語言",
+    "lang_zh_cn": "簡體中文 (zh-CN)",
+    "lang_zh_tw": "繁體中文 (zh-TW)",
+    "lang_en": "英語 (en)",
+    "lang_ja": "日語 (ja)",
+    "lang_ru": "俄語 (ru)",
+    "lang_es": "西班牙語 (es)"
   },
   "users": {
     "title": "系統使用者管理",

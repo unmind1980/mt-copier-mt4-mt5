@@ -2351,9 +2351,22 @@
             </select>
           </div>
         </div>
-        <div class="notifrow inline" style="margin-bottom:14px">
-          <input type="checkbox" id="notif_enabled" checked style="width:16px;height:16px;cursor:pointer">
-          <label for="notif_enabled" style="text-transform:none;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:500" data-i18n="notif.enable_dispatch">Enable this channel for alert dispatch</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;margin-bottom:14px;align-items:center">
+          <div class="notifrow">
+            <label for="notif_lang" data-i18n="notif.field_lang">Notification Language</label>
+            <select id="notif_lang">
+              <option value="zh-CN" data-i18n="notif.lang_zh_cn">简体中文 (Simplified Chinese)</option>
+              <option value="zh-TW" data-i18n="notif.lang_zh_tw">繁體中文 (Traditional Chinese)</option>
+              <option value="en" data-i18n="notif.lang_en">English</option>
+              <option value="ja" data-i18n="notif.lang_ja">日本語 (Japanese)</option>
+              <option value="ru" data-i18n="notif.lang_ru">Русский (Russian)</option>
+              <option value="es" data-i18n="notif.lang_es">Español (Spanish)</option>
+            </select>
+          </div>
+          <div class="notifrow inline" style="margin-top:20px">
+            <input type="checkbox" id="notif_enabled" checked style="width:16px;height:16px;cursor:pointer">
+            <label for="notif_enabled" style="text-transform:none;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:500" data-i18n="notif.enable_dispatch">Enable this channel for alert dispatch</label>
+          </div>
         </div>
 
         <!-- Telegram panel -->
@@ -3098,7 +3111,14 @@ var I18N_BUILTIN = {
           "type_wechat": "WeChat (Xtuis)",
           "wx_token": "Xtuis Token",
           "wx_token_ph": "e.g. ABCdef123456 (or full push URL)",
-          "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token."
+          "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token.",
+          "field_lang": "Notification Language",
+          "lang_zh_cn": "Simplified Chinese (zh-CN)",
+          "lang_zh_tw": "Traditional Chinese (zh-TW)",
+          "lang_en": "English (en)",
+          "lang_ja": "Japanese (ja)",
+          "lang_ru": "Russian (ru)",
+          "lang_es": "Spanish (es)"
       },
       "users": {
           "title": "Users",
@@ -3558,7 +3578,14 @@ var I18N_BUILTIN = {
           "type_wechat": "微信 (虾推啥)",
           "wx_token": "虾推啥 Token (令牌)",
           "wx_token_ph": "例如 ABCdef123456 (或完整推送 URL)",
-          "wx_token_hint": "关注微信公众号【虾推啥】即可免费获取专属个人推送 Token。"
+          "wx_token_hint": "关注微信公众号【虾推啥】即可免费获取专属个人推送 Token。",
+          "field_lang": "消息通知语言",
+          "lang_zh_cn": "简体中文 (zh-CN)",
+          "lang_zh_tw": "繁体中文 (zh-TW)",
+          "lang_en": "英语 (en)",
+          "lang_ja": "日语 (ja)",
+          "lang_ru": "俄语 (ru)",
+          "lang_es": "西班牙语 (es)"
       },
       "users": {
           "title": "系統使用者管理",
@@ -7223,6 +7250,9 @@ function renderNotifications(channels){
              channels.map(function(c){
                var sev = (c.min_severity === "critical") ? '<span style="color:var(--bad);font-weight:600">Critical Only</span>' : 'Warning &amp; Critical';
                var st = c.enabled ? ('<span class="dot online"></span>' + t("notif.status_enabled")) : ('<span class="dot offline"></span>' + t("notif.status_disabled"));
+               var langNames = { "zh-CN": "简中", "zh-TW": "繁中", "en": "EN", "ja": "JA", "ru": "RU", "es": "ES" };
+               var chLang = c.lang || (c.config && c.config.lang) || "zh-CN";
+               var langBadge = '<span style="display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-family:var(--mono);font-weight:600;background:var(--bg);border:1px solid var(--line);color:var(--dim);margin-right:6px" title="Notification Language">' + (langNames[chLang] || esc(chLang)) + '</span>';
                var ops = isViewer ? '' :
                  '<td class="ops" style="text-align:right">' +
                  '<button class="opbtn" data-nact="test" title="Send a test alert now">' + t("notif.btn_test") + '</button> ' +
@@ -7235,7 +7265,7 @@ function renderNotifications(channels){
                       '<td>' + getChannelTypeBadge(c.channel_type) + '</td>' +
                       '<td>' + sev + '</td>' +
                       '<td>' + st + '</td>' +
-                      '<td style="font-size:11.5px;color:var(--dim)">' + getChannelSummary(c) + '</td>' +
+                      '<td style="font-size:11.5px;color:var(--dim)">' + langBadge + getChannelSummary(c) + '</td>' +
                       ops + '</tr>';
              }).join('') +
              '</tbody></table>';
@@ -7250,6 +7280,7 @@ function openNotificationModal(channel){
   $("notif_type").value = isEdit ? channel.channel_type : "telegram";
   $("notif_type").disabled = isEdit;
   $("notif_min_sev").value = isEdit ? (channel.min_severity || "warning") : "warning";
+  $("notif_lang").value = isEdit ? (channel.lang || (channel.config && channel.config.lang) || "zh-CN") : (s.lang || "zh-CN");
   $("notif_enabled").checked = isEdit ? !!channel.enabled : true;
 
   $("notiferr").textContent = "";
@@ -7345,6 +7376,7 @@ $("notifform").addEventListener("submit", function(ev){
   var name = $("notif_name").value.trim();
   var type = $("notif_type").value;
   var min_severity = $("notif_min_sev").value;
+  var lang = $("notif_lang").value;
   var enabled = $("notif_enabled").checked;
 
   if(!name){ err.textContent = "Channel Name is required"; return; }
@@ -7356,6 +7388,7 @@ $("notifform").addEventListener("submit", function(ev){
     err.textContent = e.message;
     return;
   }
+  config.lang = lang;
 
   $("notif_btn_save").disabled = true;
   err.textContent = "Saving channel…";
@@ -7369,6 +7402,7 @@ $("notifform").addEventListener("submit", function(ev){
       channel_type: type,
       enabled: enabled,
       min_severity: min_severity,
+      lang: lang,
       config: config
     })
   }).then(function(r){
@@ -7395,6 +7429,7 @@ $("notif_btn_test").addEventListener("click", function(){
   var name = $("notif_name").value.trim() || "Test Channel";
   var type = $("notif_type").value;
   var min_severity = $("notif_min_sev").value;
+  var lang = $("notif_lang").value;
   var enabled = $("notif_enabled").checked;
 
   var config;
@@ -7404,12 +7439,13 @@ $("notif_btn_test").addEventListener("click", function(){
     err.textContent = e.message;
     return;
   }
+  config.lang = lang;
 
   $("notif_btn_test").disabled = true;
   ok.textContent = "Sending test alert…";
 
-  var payload = id ? { id: id, channel: { id: id, name: name, channel_type: type, enabled: enabled, min_severity: min_severity, config: config, created_at: 0 } }
-                   : { channel: { id: "", name: name, channel_type: type, enabled: enabled, min_severity: min_severity, config: config, created_at: 0 } };
+  var payload = id ? { id: id, channel: { id: id, name: name, channel_type: type, enabled: enabled, min_severity: min_severity, lang: lang, config: config, created_at: 0 } }
+                   : { channel: { id: "", name: name, channel_type: type, enabled: enabled, min_severity: min_severity, lang: lang, config: config, created_at: 0 } };
 
   fetch("/api/v1/notifications/test", {
     method: "POST",

@@ -28,9 +28,16 @@ pub struct NotificationChannel {
     pub enabled: bool,
     /// Minimum severity to trigger: "warning" (all) or "critical" (only critical)
     pub min_severity: String,
+    /// Notification language preference: "zh-CN", "zh-TW", "en", "ja", "ru", "es"
+    #[serde(default = "default_notif_lang")]
+    pub lang: String,
     /// Type-specific configuration
     pub config: Value,
     pub created_at: u64,
+}
+
+pub fn default_notif_lang() -> String {
+    "zh-CN".to_string()
 }
 
 impl NotificationChannel {
@@ -108,6 +115,7 @@ impl NotificationChannel {
             "channel_type": self.channel_type,
             "enabled": self.enabled,
             "min_severity": self.min_severity,
+            "lang": self.lang,
             "config": cfg,
             "created_at": self.created_at,
         })
@@ -632,30 +640,153 @@ pub struct AlertFormatted {
     pub time_str: String,
     pub node: String,
     pub detail_summary: String,
+    pub lbl_severity: String,
+    pub lbl_target: String,
+    pub lbl_time: String,
+    pub lbl_detail: String,
 }
 
+pub fn normalize_lang(lang: &str) -> &'static str {
+    let l = lang.trim().to_ascii_lowercase();
+    if l == "zh-tw" || l == "zh_tw" || l == "zh-hk" || l == "tw" || l == "hk" {
+        "zh-TW"
+    } else if l.starts_with("zh") || l == "cn" {
+        "zh-CN"
+    } else if l.starts_with("ja") || l == "jp" {
+        "ja"
+    } else if l.starts_with("ru") {
+        "ru"
+    } else if l.starts_with("es") {
+        "es"
+    } else {
+        "en"
+    }
+}
+
+pub fn get_channel_lang(channel: &NotificationChannel) -> &str {
+    if !channel.lang.trim().is_empty() {
+        channel.lang.as_str()
+    } else if let Some(l) = channel.config.get("lang").and_then(|v| v.as_str()) {
+        l
+    } else {
+        "zh-CN"
+    }
+}
+
+#[allow(dead_code)]
 pub fn format_alert(alert: &Alert) -> AlertFormatted {
+    format_alert_with_lang(alert, "en")
+}
+
+pub fn format_alert_with_lang(alert: &Alert, lang: &str) -> AlertFormatted {
+    let nlang = normalize_lang(lang);
     let time_str = format_utc_timestamp(alert.ts);
+
+    let (lbl_severity, lbl_target, lbl_time, lbl_detail) = match nlang {
+        "zh-CN" => ("告警级别", "监控对象", "发生时间", "详细说明"),
+        "zh-TW" => ("告警級別", "監控對象", "發生時間", "詳細說明"),
+        "ja" => ("重要度", "対象", "発生日時", "詳細"),
+        "ru" => ("Уровень", "Объект", "Время", "Подробности"),
+        "es" => ("Severidad", "Destino", "Hora", "Detalle"),
+        _ => ("Severity", "Target", "Time", "Detail"),
+    };
+
     let (sev_str, badge) = match (alert.kind, alert.severity) {
-        ("node.recovered", _) => ("[RECOVERED]", "🟢 RECOVERED"),
-        (_, Severity::Critical) => ("[CRITICAL ALERT]", "🔴 CRITICAL"),
-        (_, Severity::Warning) => ("[WARNING]", "🟡 WARNING"),
+        ("node.recovered", _) => match nlang {
+            "zh-CN" => ("[已恢复]", "🟢 已恢复"),
+            "zh-TW" => ("[已恢復]", "🟢 已恢復"),
+            "ja" => ("[復旧]", "🟢 復旧"),
+            "ru" => ("[ВОССТАНОВЛЕНО]", "🟢 ВОССТАНОВЛЕНО"),
+            "es" => ("[RECUPERADO]", "🟢 RECUPERADO"),
+            _ => ("[RECOVERED]", "🟢 RECOVERED"),
+        },
+        (_, Severity::Critical) => match nlang {
+            "zh-CN" => ("[严重告警]", "🔴 严重告警"),
+            "zh-TW" => ("[嚴重告警]", "🔴 嚴重告警"),
+            "ja" => ("[緊急]", "🔴 緊急"),
+            "ru" => ("[КРИТИЧЕСКИЙ]", "🔴 КРИТИЧЕСКИЙ"),
+            "es" => ("[CRÍTICO]", "🔴 CRÍTICO"),
+            _ => ("[CRITICAL ALERT]", "🔴 CRITICAL"),
+        },
+        (_, Severity::Warning) => match nlang {
+            "zh-CN" => ("[一般警告]", "🟡 一般警告"),
+            "zh-TW" => ("[一般警告]", "🟡 一般警告"),
+            "ja" => ("[警告]", "🟡 警告"),
+            "ru" => ("[ПРЕДУПРЕЖДЕНИЕ]", "🟡 ПРЕДУПРЕЖДЕНИЕ"),
+            "es" => ("[ADVERTENCIA]", "🟡 ADVERTENCIA"),
+            _ => ("[WARNING]", "🟡 WARNING"),
+        },
     };
 
     let title_prefix = match alert.kind {
-        "node.offline" => "Node Offline",
-        "node.recovered" => "Node Recovered",
-        "node.clock.drift" => "Clock Drift Exceeded",
-        "risk.blocked" => "Risk Gate Blocked",
-        "risk.tripped" => "Risk Gate Tripped",
-        "command.unknown" => "Command Retries Exhausted",
-        "test" => "Channel Connectivity Test",
+        "node.offline" => match nlang {
+            "zh-CN" => "节点掉线离线",
+            "zh-TW" => "節點斷線離線",
+            "ja" => "ノードオフライン",
+            "ru" => "Узел офлайн",
+            "es" => "Nodo desconectado",
+            _ => "Node Offline",
+        },
+        "node.recovered" => match nlang {
+            "zh-CN" => "节点连接恢复",
+            "zh-TW" => "節點連線恢復",
+            "ja" => "ノード復旧",
+            "ru" => "Узел восстановлен",
+            "es" => "Nodo recuperado",
+            _ => "Node Recovered",
+        },
+        "node.clock.drift" => match nlang {
+            "zh-CN" => "时钟漂移超限",
+            "zh-TW" => "時鐘漂移超限",
+            "ja" => "クロックドリフト超過",
+            "ru" => "Превышен дрейф часов",
+            "es" => "Desviación de reloj superada",
+            _ => "Clock Drift Exceeded",
+        },
+        "risk.blocked" => match nlang {
+            "zh-CN" => "风控拦截挂单",
+            "zh-TW" => "風控攔截掛單",
+            "ja" => "リスクゲート遮断",
+            "ru" => "Заблокировано шлюзом риска",
+            "es" => "Puerta de riesgo bloqueada",
+            _ => "Risk Gate Blocked",
+        },
+        "risk.tripped" => match nlang {
+            "zh-CN" => "风控规则触发",
+            "zh-TW" => "風控規則觸發",
+            "ja" => "リスクゲート作動",
+            "ru" => "Сработал шлюз риска",
+            "es" => "Puerta de riesgo activada",
+            _ => "Risk Gate Tripped",
+        },
+        "command.unknown" => match nlang {
+            "zh-CN" => "指令重试耗尽",
+            "zh-TW" => "指令重試耗盡",
+            "ja" => "コマンド再試行枯渇",
+            "ru" => "Исчерпаны попытки команды",
+            "es" => "Reintentos de comando agotados",
+            _ => "Command Retries Exhausted",
+        },
+        "test" => match nlang {
+            "zh-CN" => "渠道连通性测试",
+            "zh-TW" => "渠道連通性測試",
+            "ja" => "接続テスト",
+            "ru" => "Тест подключения канала",
+            "es" => "Prueba de conectividad",
+            _ => "Channel Connectivity Test",
+        },
         _ => alert.kind,
     };
 
     let title = format!("{} {}", sev_str, title_prefix);
     let node_display = if alert.node.is_empty() {
-        "hub (global)".to_string()
+        match nlang {
+            "zh-CN" | "zh-TW" => "Hub中枢 (全局)".to_string(),
+            "ja" => "Hub (グローバル)".to_string(),
+            "ru" => "Hub (глобальный)".to_string(),
+            "es" => "Hub (global)".to_string(),
+            _ => "hub (global)".to_string(),
+        }
     } else {
         alert.node.clone()
     };
@@ -666,9 +797,23 @@ pub fn format_alert(alert: &Alert) -> AlertFormatted {
             let acc = alert.detail.get("account").and_then(|v| v.as_str()).unwrap_or("-");
             let quiet = alert.detail.get("quiet_secs").and_then(|v| v.as_u64());
             if let Some(q) = quiet {
-                format!("Role: {}, Account: {}, heartbeat timeout exceeded (silent for {}s)", role, acc, q)
+                match nlang {
+                    "zh-CN" => format!("角色: {}, 账号: {}, 心跳超时失联 (已静默 {}s)", role, acc, q),
+                    "zh-TW" => format!("角色: {}, 帳號: {}, 心跳超時失聯 (已靜默 {}s)", role, acc, q),
+                    "ja" => format!("ロール: {}, 口座: {}, ハートビートタイムアウト (応答停止: {}秒)", role, acc, q),
+                    "ru" => format!("Роль: {}, Счет: {}, тайм-аут пакетов (тишина {}с)", role, acc, q),
+                    "es" => format!("Rol: {}, Cuenta: {}, tiempo de espera agotado (inactivo por {}s)", role, acc, q),
+                    _ => format!("Role: {}, Account: {}, heartbeat timeout exceeded (silent for {}s)", role, acc, q),
+                }
             } else {
-                format!("Role: {}, Account: {}, heartbeat timeout exceeded", role, acc)
+                match nlang {
+                    "zh-CN" => format!("角色: {}, 账号: {}, 心跳超时失联", role, acc),
+                    "zh-TW" => format!("角色: {}, 帳號: {}, 心跳超時失聯", role, acc),
+                    "ja" => format!("ロール: {}, 口座: {}, ハートビートタイムアウト", role, acc),
+                    "ru" => format!("Роль: {}, Счет: {}, тайм-аут пакетов", role, acc),
+                    "es" => format!("Rol: {}, Cuenta: {}, tiempo de espera agotado", role, acc),
+                    _ => format!("Role: {}, Account: {}, heartbeat timeout exceeded", role, acc),
+                }
             }
         }
         "node.recovered" => {
@@ -681,29 +826,78 @@ pub fn format_alert(alert: &Alert) -> AlertFormatted {
                 } else {
                     format!("{}s", dur)
                 };
-                format!("Role: {}, Account: {}, connection & heartbeat restored (outage: {})", role, acc, dur_str)
+                match nlang {
+                    "zh-CN" => format!("角色: {}, 账号: {}, 连接与心跳已恢复正常 (中断时长: {})", role, acc, dur_str),
+                    "zh-TW" => format!("角色: {}, 帳號: {}, 連線與心跳已恢復正常 (中斷時長: {})", role, acc, dur_str),
+                    "ja" => format!("ロール: {}, 口座: {}, 接続とハートビートが復旧しました (停止時間: {})", role, acc, dur_str),
+                    "ru" => format!("Роль: {}, Счет: {}, связь и сердцебиение восстановлены (перерыв: {})", role, acc, dur_str),
+                    "es" => format!("Rol: {}, Cuenta: {}, conexión y latidos restaurados (interrupción: {})", role, acc, dur_str),
+                    _ => format!("Role: {}, Account: {}, connection & heartbeat restored (outage: {})", role, acc, dur_str),
+                }
             } else {
-                format!("Role: {}, Account: {}, connection & heartbeat restored", role, acc)
+                match nlang {
+                    "zh-CN" => format!("角色: {}, 账号: {}, 连接与心跳已恢复正常", role, acc),
+                    "zh-TW" => format!("角色: {}, 帳號: {}, 連線與心跳已恢復正常", role, acc),
+                    "ja" => format!("ロール: {}, 口座: {}, 接続とハートビートが復旧しました", role, acc),
+                    "ru" => format!("Роль: {}, Счет: {}, связь и сердцебиение восстановлены", role, acc),
+                    "es" => format!("Rol: {}, Cuenta: {}, conexión y latidos restaurados", role, acc),
+                    _ => format!("Role: {}, Account: {}, connection & heartbeat restored", role, acc),
+                }
             }
         }
         "node.clock.drift" => {
             let drift = alert.detail.get("drift_secs").or_else(|| alert.detail.get("drift")).and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("Node clock offset vs Hub reached {}s (threshold: 300s)", drift)
+            match nlang {
+                "zh-CN" => format!("节点本地时钟与 Hub 偏差达到 {} 秒 (阈值: 300秒)", drift),
+                "zh-TW" => format!("節點本地時鐘與 Hub 偏差達到 {} 秒 (閾值: 300秒)", drift),
+                "ja" => format!("ノードのクロックオフセットが {}秒 に達しました (閾値: 300秒)", drift),
+                "ru" => format!("Смещение часов узла относительно Hub достигло {}с (порог: 300с)", drift),
+                "es" => format!("La desviación del reloj del nodo con el Hub alcanzó {}s (umbral: 300s)", drift),
+                _ => format!("Node clock offset vs Hub reached {}s (threshold: 300s)", drift),
+            }
         }
         "risk.blocked" => {
             let cnt = alert.detail.get("blocked_entries").or_else(|| alert.detail.get("blocked")).and_then(|v| v.as_i64()).unwrap_or(0);
-            format!("Receiver risk gate active, blocked orders: {}", cnt)
+            match nlang {
+                "zh-CN" => format!("接收端风控门禁生效，当前拦截订单笔数: {}", cnt),
+                "zh-TW" => format!("接收端風控閘門生效，目前攔截訂單筆數: {}", cnt),
+                "ja" => format!("受信側のリスクゲートが作動中、保留中の注文数: {}", cnt),
+                "ru" => format!("Шлюз риска приемника активен, заблокировано ордеров: {}", cnt),
+                "es" => format!("Puerta de riesgo del receptor activa, órdenes bloqueadas: {}", cnt),
+                _ => format!("Receiver risk gate active, blocked orders: {}", cnt),
+            }
         }
         "risk.tripped" => {
             let r = alert.detail.get("trip").or_else(|| alert.detail.get("risk")).and_then(|v| v.as_str()).unwrap_or("tripped");
-            format!("Receiver reported risk trip: {}", r)
+            match nlang {
+                "zh-CN" => format!("接收端汇报风控触发: {}", r),
+                "zh-TW" => format!("接收端回報風控觸發: {}", r),
+                "ja" => format!("受信側がリスク違反を報告しました: {}", r),
+                "ru" => format!("Приемник сообщил о срабатывании риска: {}", r),
+                "es" => format!("El receptor reportó activación de riesgo: {}", r),
+                _ => format!("Receiver reported risk trip: {}", r),
+            }
         }
         "command.unknown" => {
             let op = alert.detail.get("op").and_then(|v| v.as_str()).unwrap_or("command");
-            format!("Command [{}] retry backoff exhausted, no ACK confirmation received", op)
+            match nlang {
+                "zh-CN" => format!("指令 [{}] 重试阶梯耗尽，未收到终端确认回执 (ACK)", op),
+                "zh-TW" => format!("指令 [{}] 重試階梯耗盡，未收到終端確認回執 (ACK)", op),
+                "ja" => format!("コマンド [{}] の再試行が上限に達しましたが、ACK確認応答を受信できませんでした", op),
+                "ru" => format!("Исчерпаны повторы команды [{op}], подтверждение ACK не получено"),
+                "es" => format!("Reintentos de la orden [{}] agotados, no se recibió confirmación ACK", op),
+                _ => format!("Command [{}] retry backoff exhausted, no ACK confirmation received", op),
+            }
         }
         "test" => {
-            "This is a test notification from MT-Copier Hub. The channel is configured and working properly.".to_string()
+            match nlang {
+                "zh-CN" => "这是一条来自 MT-Copier Hub 的测试通知。该通知渠道配置正确，收发测试完全正常。".to_string(),
+                "zh-TW" => "這是一條來自 MT-Copier Hub 的測試通知。該通知渠道配置正確，收發測試完全正常。".to_string(),
+                "ja" => "MT-Copier Hub からのテスト通知です。通知チャンネルは正しく設定され、正常に動作しています。".to_string(),
+                "ru" => "Это тестовое уведомление от MT-Copier Hub. Канал настроен и работает нормально.".to_string(),
+                "es" => "Esta es una notificación de prueba de MT-Copier Hub. El canal está configurado y funcionando correctamente.".to_string(),
+                _ => "This is a test notification from MT-Copier Hub. The channel is configured and working properly.".to_string(),
+            }
         }
         _ => alert.detail.to_string(),
     };
@@ -714,6 +908,10 @@ pub fn format_alert(alert: &Alert) -> AlertFormatted {
         time_str,
         node: node_display,
         detail_summary,
+        lbl_severity: lbl_severity.to_string(),
+        lbl_target: lbl_target.to_string(),
+        lbl_time: lbl_time.to_string(),
+        lbl_detail: lbl_detail.to_string(),
     }
 }
 
@@ -767,21 +965,26 @@ async fn send_telegram(
         );
     }
 
-    let fmt = format_alert(alert);
+    let lang = get_channel_lang(channel);
+    let fmt = format_alert_with_lang(alert, lang);
     //--- Everything interpolated is HTML-escaped. node names come from REG
     //--- (operator-supplied) and risk names from the node itself; a "&" or
     //--- "<" in either makes Telegram reject the whole request with 400, so
     //--- the alert is lost. See html_escape.
     let text = format!(
         "<b>{}</b>\n\n\
-        <b>Severity</b>: {}\n\
-        <b>Target</b>: <code>{}</code>\n\
-        <b>Time</b>: {}\n\
-        <b>Detail</b>: {}",
+        <b>{}</b>: {}\n\
+        <b>{}</b>: <code>{}</code>\n\
+        <b>{}</b>: {}\n\
+        <b>{}</b>: {}",
         html_escape(&fmt.title),
+        html_escape(&fmt.lbl_severity),
         html_escape(&fmt.severity_badge),
+        html_escape(&fmt.lbl_target),
         html_escape(&fmt.node),
+        html_escape(&fmt.lbl_time),
         html_escape(&fmt.time_str),
+        html_escape(&fmt.lbl_detail),
         html_escape(&fmt.detail_summary)
     );
 
@@ -1014,7 +1217,8 @@ async fn send_wecom(
     };
     let client = resolve_pinned_client(client, &url).await?;
 
-    let fmt = format_alert(alert);
+    let lang = get_channel_lang(channel);
+    let fmt = format_alert_with_lang(alert, lang);
     let color_tag = match alert.kind {
         "node.recovered" => "info",
         _ => match alert.severity {
@@ -1025,15 +1229,19 @@ async fn send_wecom(
 
     let content = format!(
         "### <font color=\"{}\">{}</font>\n\
-        > **Severity**: {}\n\
-        > **Target**: <font color=\"comment\">{}</font>\n\
-        > **Time**: {}\n\
-        > **Detail**: {}",
+        > **{}**: {}\n\
+        > **{}**: <font color=\"comment\">{}</font>\n\
+        > **{}**: {}\n\
+        > **{}**: {}",
         color_tag,
         html_escape(&fmt.title),
+        html_escape(&fmt.lbl_severity),
         html_escape(&fmt.severity_badge),
+        html_escape(&fmt.lbl_target),
         html_escape(&fmt.node),
+        html_escape(&fmt.lbl_time),
         html_escape(&fmt.time_str),
+        html_escape(&fmt.lbl_detail),
         html_escape(&fmt.detail_summary)
     );
 
@@ -1110,17 +1318,22 @@ async fn send_dingtalk(
         raw_url
     };
 
-    let fmt = format_alert(alert);
+    let lang = get_channel_lang(channel);
+    let fmt = format_alert_with_lang(alert, lang);
     let md_text = format!(
         "### {}\n\n\
-        - **Severity**: {}\n\
-        - **Target**: `{}`\n\
-        - **Time**: {}\n\
-        - **Detail**: {}",
+        - **{}**: {}\n\
+        - **{}**: `{}`\n\
+        - **{}**: {}\n\
+        - **{}**: {}",
         markdown_escape(&fmt.title),
+        markdown_escape(&fmt.lbl_severity),
         markdown_escape(&fmt.severity_badge),
+        markdown_escape(&fmt.lbl_target),
         markdown_escape(&fmt.node),
+        markdown_escape(&fmt.lbl_time),
         markdown_escape(&fmt.time_str),
+        markdown_escape(&fmt.lbl_detail),
         markdown_escape(&fmt.detail_summary)
     );
 
@@ -1215,14 +1428,20 @@ async fn send_webhook(
         }
     }
 
+    let lang = get_channel_lang(channel);
+    let fmt = format_alert_with_lang(alert, lang);
     let payload = json!({
         "event": "alert",
+        "lang": lang,
+        "title": fmt.title,
         "ts": alert.ts,
         "utc_time": format_utc_timestamp(alert.ts),
         "kind": alert.kind,
         "severity": alert.severity.as_str(),
+        "severity_badge": fmt.severity_badge,
         "node": alert.node,
         "detail": alert.detail,
+        "detail_summary": fmt.detail_summary,
     });
 
     let resp = req
@@ -1275,7 +1494,8 @@ async fn send_wechat(
 
     let client = resolve_pinned_client(client, &url).await?;
 
-    let fmt = format_alert(alert);
+    let lang = get_channel_lang(channel);
+    let fmt = format_alert_with_lang(alert, lang);
 
     let text = if alert.node.is_empty() {
         fmt.title.clone()
@@ -1285,14 +1505,18 @@ async fn send_wechat(
 
     let desp = format!(
         "### {}\n\n\
-        - **告警级别**: {}\n\
-        - **监控对象**: `{}`\n\
-        - **发生时间**: {}\n\
-        - **详细说明**: {}",
+        - **{}**: {}\n\
+        - **{}**: `{}`\n\
+        - **{}**: {}\n\
+        - **{}**: {}",
         fmt.title,
+        fmt.lbl_severity,
         fmt.severity_badge,
+        fmt.lbl_target,
         fmt.node,
+        fmt.lbl_time,
         fmt.time_str,
+        fmt.lbl_detail,
         fmt.detail_summary
     );
 
@@ -1405,6 +1629,7 @@ mod tests {
             channel_type: "dingtalk".into(),
             enabled: true,
             min_severity: "warning".into(),
+            lang: "en".into(),
             config: json!({
                 "access_token": "SECRETDTOKEN123456",
                 "secret": "SEC4567890abcdef",
@@ -1430,6 +1655,7 @@ mod tests {
             channel_type: "webhook".into(),
             enabled: true,
             min_severity: "warning".into(),
+            lang: "en".into(),
             config: json!({
                 "url": "https://example.invalid/hook?token=URLSECRET12345&x=1",
                 "headers": {
@@ -1518,6 +1744,7 @@ mod tests {
             channel_type: "webhook".into(),
             enabled: true,
             min_severity: "warning".into(),
+            lang: "en".into(),
             config: json!({
                 "url": "https://example.invalid/hook",
                 "webhook_auth_value": "Bearer sk-live-abcdef123456",
@@ -1565,6 +1792,7 @@ mod tests {
             channel_type: "telegram".to_string(),
             enabled: true,
             min_severity: "warning".to_string(),
+            lang: "en".to_string(),
             config: json!({
                 "bot_token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
                 "chat_id": "-100123456789"
@@ -1623,6 +1851,7 @@ mod tests {
             channel_type: "telegram".to_string(),
             enabled: true,
             min_severity: "critical".to_string(),
+            lang: "en".to_string(),
             config: json!({}),
             created_at: 1000,
         };
@@ -1712,6 +1941,7 @@ mod tests {
             channel_type: "wechat".to_string(),
             enabled: true,
             min_severity: "warning".to_string(),
+            lang: "zh-CN".to_string(),
             config: json!({
                 "token": "ABC123456789XYZ",
             }),
@@ -1726,5 +1956,47 @@ mod tests {
         });
         merge_unmasked_config(&mut updated_config, &ch.config, "wechat");
         assert_eq!(updated_config["token"], json!("ABC123456789XYZ"));
+    }
+
+    #[test]
+    fn format_alert_multilingual_test() {
+        let alert = Alert {
+            ts: 1792139807,
+            kind: "test",
+            severity: Severity::Warning,
+            node: "hub:selftest".to_string(),
+            detail: json!({}),
+        };
+
+        let fmt_zh = format_alert_with_lang(&alert, "zh-CN");
+        assert_eq!(fmt_zh.severity_badge, "🟡 一般警告");
+        assert!(fmt_zh.title.contains("渠道连通性测试"));
+        assert!(fmt_zh.detail_summary.contains("测试通知"));
+        assert_eq!(fmt_zh.lbl_severity, "告警级别");
+
+        let fmt_tw = format_alert_with_lang(&alert, "zh-TW");
+        assert_eq!(fmt_tw.severity_badge, "🟡 一般警告");
+        assert!(fmt_tw.title.contains("渠道連通性測試"));
+        assert_eq!(fmt_tw.lbl_severity, "告警級別");
+
+        let fmt_en = format_alert_with_lang(&alert, "en");
+        assert_eq!(fmt_en.severity_badge, "🟡 WARNING");
+        assert!(fmt_en.title.contains("Channel Connectivity Test"));
+        assert_eq!(fmt_en.lbl_severity, "Severity");
+
+        let fmt_ja = format_alert_with_lang(&alert, "ja");
+        assert_eq!(fmt_ja.severity_badge, "🟡 警告");
+        assert!(fmt_ja.title.contains("接続テスト"));
+        assert_eq!(fmt_ja.lbl_severity, "重要度");
+
+        let fmt_ru = format_alert_with_lang(&alert, "ru");
+        assert_eq!(fmt_ru.severity_badge, "🟡 ПРЕДУПРЕЖДЕНИЕ");
+        assert!(fmt_ru.title.contains("Тест подключения канала"));
+        assert_eq!(fmt_ru.lbl_severity, "Уровень");
+
+        let fmt_es = format_alert_with_lang(&alert, "es");
+        assert_eq!(fmt_es.severity_badge, "🟡 ADVERTENCIA");
+        assert!(fmt_es.title.contains("Prueba de conectividad"));
+        assert_eq!(fmt_es.lbl_severity, "Severidad");
     }
 }

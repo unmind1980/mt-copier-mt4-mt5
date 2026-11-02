@@ -169,6 +169,7 @@ def main():
                 "channel_type": "telegram",
                 "enabled": True,
                 "min_severity": "warning",
+                "lang": "en",
                 "config": {
                     "bot_token": raw_tg_token,
                     "chat_id": "-1001234567890",
@@ -246,6 +247,7 @@ def main():
                 "channel_type": "wechat",
                 "enabled": True,
                 "min_severity": "warning",
+                "lang": "zh-CN",
                 "config": {"token": raw_wx_token},
             },
             c=token,
@@ -257,6 +259,10 @@ def main():
         st, body = js("GET", "/api/v1/notifications", c=token)
         channels = {c["id"]: c for c in body.get("channels", [])}
         check("9. All 5 channels listed", len(channels) == 5)
+        check(
+            "9b. Channel language preferences preserved",
+            channels.get(tg_id, {}).get("lang") == "en" and channels.get(wx_id, {}).get("lang") == "zh-CN",
+        )
 
         tg_c = channels.get(tg_id, {}).get("config", {})
         check(

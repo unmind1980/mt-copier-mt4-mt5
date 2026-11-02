@@ -1587,6 +1587,23 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 新增 `wechat_xtuis_channel_masking_and_merge` 单元测试，Rust 单元测试基线提升至 **156 / 156 PASS**；
      - `tools/hub_notifications_test.py` 增补微信渠道端到端 CRUD、脱敏和重启加载测试，25 / 25 PASS。
 
+### 九十三次演进：全渠道通知语言首选项配置与多语言消息格式化同步 (2026-11-03 00:30；全部闭环)
+
+- **技术落地项**：
+  1. **NotificationChannel 数据模型扩展**：
+     - 在 `hub/src/notifications.rs` 与 `api.rs` 中为渠道模型新增 `pub lang: String` 语言首选项（默认 `zh-CN`，完美向后兼容），并在 `safe_json` 中完整对外输出；
+  2. **多语言告警消息格式化引擎**：
+     - 实现 `format_alert_with_lang(alert, lang)`，支持 6 种主流语言（简中、繁中、英语、日语、俄语、西班牙语）的告警标题、级别标签、监控对象与详细说明本地化生成；
+     - 包含 Telegram、WeCom、DingTalk、WeChat (Xtuis) 与 Webhook 在内的全部渠道分发逻辑接入 `get_channel_lang(channel)`，消息与测试推送完全与所选语言同步；
+  3. **驾驶舱 Web UI 交互升级**：
+     - 在“添加通知渠道”与“编辑通知渠道”模态框中新增 `Notification Language` 选择器（6 种语言），新建时默认跟随用户界面语言；
+     - 在渠道列表的 Target 栏目前置显示优雅的语言徽章（如 `简中`、`繁中`、`EN` 等），一眼辨识；
+     - 在点击 `🚀 Test Send` 测试发送按钮时，前端立即将所选语言传入后端，测试推送消息实时使用所选语言发出；
+  4. **全套自动化测试扩展与 435 键多语言词库**：
+     - 在 6 种语言环境中扩充 `notif.field_lang` 等 7 个本地化词条，多语言矩阵扩充至 **435 键（100% PASS）**；
+     - 新增 `format_alert_multilingual_test` 单元测试，Rust 单元测试基线提升至 **157 / 157 PASS**；
+     - `tools/hub_notifications_test.py` 增补渠道语言配置与持久化断言，26 / 26 PASS。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1596,19 +1613,19 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**156 / 156 单元测试全量 PASS**；
+  - Rust Hub Release 构建成功，**157 / 157 单元测试全量 PASS**；
   - 核心 Python 测试套件全部绿灯：
     - `hub_tls_test.py`：13 / 13 PASS
-    - `hub_notifications_test.py`：25 / 25 PASS
+    - `hub_notifications_test.py`：26 / 26 PASS
     - `hub_config_test.py`：71 / 71 PASS
     - `hub_commands_test.py`：47 / 47 PASS
     - `hub_cluster_test.py`：35 / 35 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
-    - `i18n_check.py`：428 / 428 键在 6 种语言环境中全量 PASS (ALL GREEN)
-    - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
+    - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
+    - `dash_check.py`：253 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序与 WeChat 虾推啥微信通知）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知与全渠道独立通知语言选择）与业务代码实现 100% 吻合。
 
 ---
 

@@ -371,7 +371,14 @@
     "type_wechat": "WeChat (Xtuis)",
     "wx_token": "Xtuis トークン",
     "wx_token_ph": "例: ABCdef123456 (またはプッシュURL)",
-    "wx_token_hint": "WeChat公式アカウント「虾推啥」をフォローしてプッシュトークンを取得します。"
+    "wx_token_hint": "WeChat公式アカウント「虾推啥」をフォローしてプッシュトークンを取得します。",
+    "field_lang": "通知メッセージの言語",
+    "lang_zh_cn": "簡体字中国語 (zh-CN)",
+    "lang_zh_tw": "繁体字中国語 (zh-TW)",
+    "lang_en": "英語 (en)",
+    "lang_ja": "日本語 (ja)",
+    "lang_ru": "ロシア語 (ru)",
+    "lang_es": "スペイン語 (es)"
   },
   "users": {
     "title": "ユーザー管理",
