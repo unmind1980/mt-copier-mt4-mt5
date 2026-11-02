@@ -106,7 +106,12 @@
     "empty": "no node has registered yet",
     "confirm_close_all_title": "Confirm Close All Positions",
     "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
-    "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
+    "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+    "cmd_issuing": "Issuing {op} command...",
+    "cmd_issued": "Command Issued: {cid}",
+    "cmd_acked": "Command {cid} executed successfully by {node}",
+    "cmd_rejected": "Command {cid} rejected by {node}: {reason}",
+    "cmd_failed": "Command failed: {error}"
   },
   "cockpit": {
     "connected_terminals": "Connected Terminals",

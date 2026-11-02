@@ -106,7 +106,12 @@
     "empty": "登録されたノードはまだありません",
     "confirm_close_all_title": "全ポジション一括決済の確認",
     "confirm_close_all_desc": "受信端末 <code>{key}</code> の全ポジションを決済しますか？",
-    "confirm_close_all_detail": "この端末が保有するすべてのポジションに成行決済注文を発注します。この操作は取り消せません。"
+    "confirm_close_all_detail": "この端末が保有するすべてのポジションに成行決済注文を発注します。この操作は取り消せません。",
+    "cmd_issuing": "{op} コマンドを送信中...",
+    "cmd_issued": "コマンド発行済: {cid}",
+    "cmd_acked": "コマンド {cid} は端末 {node} により実行確認されました",
+    "cmd_rejected": "コマンド {cid} は端末 {node} に拒否されました: {reason}",
+    "cmd_failed": "コマンド送信失敗: {error}"
   },
   "cockpit": {
     "connected_terminals": "接続中のターミナル",

@@ -106,7 +106,12 @@
     "empty": "目前尚無節點連入註冊",
     "confirm_close_all_title": "確認全部平倉",
     "confirm_close_all_desc": "確定要平掉接收端 <code>{key}</code> 的所有持倉嗎？",
-    "confirm_close_all_detail": "此操作將立即市價平掉該接收端持有的所有鏡像倉位，無法復原。"
+    "confirm_close_all_detail": "此操作將立即市價平掉該接收端持有的所有鏡像倉位，無法復原。",
+    "cmd_issuing": "正在發布 {op} 指令...",
+    "cmd_issued": "指令已發布: {cid}",
+    "cmd_acked": "指令 {cid} 已由終端 {node} 確認執行",
+    "cmd_rejected": "指令 {cid} 被終端 {node} 拒絕: {reason}",
+    "cmd_failed": "指令執行失敗: {error}"
   },
   "cockpit": {
     "connected_terminals": "已連線終端",

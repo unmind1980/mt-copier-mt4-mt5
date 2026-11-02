@@ -106,7 +106,12 @@
     "empty": "Aún no hay nodos registrados",
     "confirm_close_all_title": "Confirmar Cierre de Todas las Posiciones",
     "confirm_close_all_desc": "¿Cerrar TODAS las posiciones en el receptor <code>{key}</code>?",
-    "confirm_close_all_detail": "Envía órdenes de mercado inmediatas para cerrar todas las posiciones de este receptor. Esta operación no se puede deshacer."
+    "confirm_close_all_detail": "Envía órdenes de mercado inmediatas para cerrar todas las posiciones de este receptor. Esta operación no se puede deshacer.",
+    "cmd_issuing": "Enviando comando {op}...",
+    "cmd_issued": "Comando Emitido: {cid}",
+    "cmd_acked": "Comando {cid} confirmado por el nodo {node}",
+    "cmd_rejected": "Comando {cid} rechazado por el nodo {node}: {reason}",
+    "cmd_failed": "Fallo al enviar comando: {error}"
   },
   "cockpit": {
     "connected_terminals": "Terminales Conectados",

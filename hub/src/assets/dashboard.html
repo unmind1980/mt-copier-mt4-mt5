@@ -2704,7 +2704,12 @@ var I18N_BUILTIN = {
           "empty": "no node has registered yet",
           "confirm_close_all_title": "Confirm Close All Positions",
           "confirm_close_all_desc": "Close ALL positions on receiver <code>{key}</code>?",
-          "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone."
+          "confirm_close_all_detail": "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+          "cmd_issuing": "Issuing {op} command...",
+          "cmd_issued": "Command Issued: {cid}",
+          "cmd_acked": "Command {cid} executed successfully by {node}",
+          "cmd_rejected": "Command {cid} rejected by {node}: {reason}",
+          "cmd_failed": "Command failed: {error}"
       },
       "cockpit": {
           "connected_terminals": "Connected Terminals",
@@ -3108,7 +3113,12 @@ var I18N_BUILTIN = {
           "empty": "目前尚無節點連入註冊",
           "confirm_close_all_title": "確認全部平倉",
           "confirm_close_all_desc": "確定要平掉接收端 <code>{key}</code> 的所有持倉嗎？",
-          "confirm_close_all_detail": "此操作將立即市價平掉該接收端持有的所有鏡像倉位，無法復原。"
+          "confirm_close_all_detail": "此操作將立即市價平掉該接收端持有的所有鏡像倉位，無法復原。",
+          "cmd_issuing": "正在下发 {op} 指令...",
+          "cmd_issued": "指令已下发: {cid}",
+          "cmd_acked": "指令 {cid} 已由终端 {node} 确认执行",
+          "cmd_rejected": "指令 {cid} 被终端 {node} 拒绝: {reason}",
+          "cmd_failed": "指令执行失败: {error}"
       },
       "cockpit": {
           "connected_terminals": "已連線終端",
@@ -5491,10 +5501,8 @@ function renderNodes(nodes){
       var pzOp = n.paused ? "resume" : "pause";
       var ops = (n.role === "receiver")
         ? "<button class='btn-sm opbtn' data-op='config'>" + t("nodes.btn_config") + "</button> " +
-          "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>" +
-          "<span class='opmsg'></span>"
-        : "<button class='btn-sm opbtn' data-op='inspect'>" + t("nodes.btn_inspect") + "</button>" +
-          "<span class='opmsg'></span>";
+          "<button class='btn-sm opbtn' data-op='" + pzOp + "'>" + pzText + "</button>"
+        : "<button class='btn-sm opbtn' data-op='inspect'>" + t("nodes.btn_inspect") + "</button>";
       return "<tr data-k='" + esc(n.key) + "'>" +
              "<td class='role-cell'><span class='role-pill'></span></td>" +
              "<td class='nm-cell'><span class='dot'></span><span class='k-acc'></span> <span class='ver-tag'></span><span class='pzchip' style='display:none'>PAUSED</span></td>" +
@@ -5540,8 +5548,7 @@ function renderNodes(nodes){
         eq:      trs[i].querySelector(".eq-val"),
         bal:     trs[i].querySelector(".bal-val"),
         gate:    trs[i].querySelector(".gate-val"),
-        btnPz:   trs[i].querySelector("button[data-op='pause'], button[data-op='resume']"),
-        opmsg:   trs[i].querySelector(".opmsg")
+        btnPz:   trs[i].querySelector("button[data-op='pause'], button[data-op='resume']")
       };
     }
   }
@@ -5896,11 +5903,9 @@ function startWS(){
 // command_id; the EA only acts on it once M5b lands. A click therefore proves
 // the hub half works even before the EA executes anything.
 //
-// Feedback is written into the .opmsg span of the same row. renderNodes never
-// overwrites that span (it only updates dot/k/nm/ps/st), so a status survives
-// the once-per-second re-render until the row SET itself changes.
+// Modern UX: Transient feedback is dispatched via global Toast notifications and
+// button loading states, ensuring table rows remain impeccably aligned with zero truncation.
 function sendCommand(k, op, msgEl, extraPayload, cb){
-  if(msgEl){ msgEl.className = "opmsg"; msgEl.textContent = "issuing " + op + "…"; }
   var url = "/api/v1/nodes/" + encodeURIComponent(k) + "/commands";
   var payloadObj = { op: op };
   if(extraPayload && typeof extraPayload === "object"){
@@ -5917,44 +5922,32 @@ function sendCommand(k, op, msgEl, extraPayload, cb){
   }).then(function(r){
     return r.json().then(function(j){ return { status: r.status, j: j }; });
   }).then(function(res){
-    if(!msgEl){
-      console.warn("[sendCommand] " + op + " -> HTTP " + res.status + " " + JSON.stringify(res.j || {}));
-      if(typeof cb === "function") cb(res.status < 300, res.j);
-      return;
-    }
     if(res.j && res.j.error){
-      msgEl.className = "opmsg bad";
       var extra = res.j.detail
         ? " — " + res.j.detail
         : (res.j.known ? " (known: " + res.j.known.join(", ") + ")" : "");
-      msgEl.textContent = res.j.error + extra;
-      if(typeof cb === "function") cb(false, res.j.error);
+      var errMsg = res.j.error + extra;
+      showToast(t("nodes.cmd_failed", { error: errMsg }), k, "bad");
+      if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = errMsg; }
+      if(typeof cb === "function") cb(false, errMsg);
     } else if(res.j && (res.j.command_id || res.j.id)){
       var cid = res.j.command_id || res.j.id;
-      msgEl.className = "opmsg ok";
-      msgEl.textContent = "issued " + cid + " · " + (res.j.state || "?");
-      pollCommand(res.j.poll, cid, msgEl, 0, cb);
+      if(msgEl){ msgEl.className = "opmsg ok"; msgEl.textContent = "issued " + cid + " · " + (res.j.state || "?"); }
+      pollCommand(res.j.poll, cid, k, op, msgEl, 0, cb);
     } else {
-      msgEl.className = "opmsg warn";
-      msgEl.textContent = "HTTP " + res.status;
-      if(typeof cb === "function") cb(false, "HTTP " + res.status);
+      var warnMsg = "HTTP " + res.status;
+      showToast(t("nodes.cmd_failed", { error: warnMsg }), k, "warn");
+      if(msgEl){ msgEl.className = "opmsg warn"; msgEl.textContent = warnMsg; }
+      if(typeof cb === "function") cb(false, warnMsg);
     }
   }).catch(function(e){
+    showToast(t("nodes.cmd_failed", { error: e.message }), k, "bad");
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
-    else console.error("[sendCommand] request failed:", e);
     if(typeof cb === "function") cb(false, e.message);
   });
 }
 
-//--- The 202 only means the hub TOOK the command. Whether the receiver
-//--- answered is visible only in the command's state, so follow the poll
-//--- URL: once at 2.5 s (a live receiver ACKs in milliseconds - the ladder's
-//--- first retry is at 2 s, so 2.5 s separates "answered" from "retrying"
-//--- cleanly), and once more at 10 s before settling on whatever it says.
-//--- A receiver running the OLD build, or with AcceptCommands=false, shows
-//--- up here as rejected (it answers OK=0) or as pending climbing to
-//--- unknown - which is the honest picture of "the node did not obey".
-function pollCommand(poll, cid, msgEl, attempt, cb){
+function pollCommand(poll, cid, nodeKey, op, msgEl, attempt, cb){
   if(!poll) return;
   setTimeout(function(){
     api(poll).then(function(j){
@@ -5963,36 +5956,31 @@ function pollCommand(poll, cid, msgEl, attempt, cb){
         return;
       }
       if(j.state === "pending" && attempt < 1){
-        pollCommand(poll, cid, msgEl, attempt + 1, cb);
+        pollCommand(poll, cid, nodeKey, op, msgEl, attempt + 1, cb);
         return;
       }
       if(j.state === "acked"){
-        if(msgEl){
-          msgEl.className = "opmsg ok";
-          if(j.err && j.err.indexOf("market_closed") >= 0){
-            msgEl.textContent = cid + " · Queued on receiver (Market Closed for weekend)";
-          } else if(j.err && j.err.indexOf("already_queued") >= 0){
-            msgEl.textContent = cid + " · Already in execution queue";
-          } else {
-            msgEl.textContent = cid + " · acked by the node";
-          }
+        if(j.err && j.err.indexOf("market_closed") >= 0){
+          showToast(t("notices.mkt_closed_title", { ticket: cid }), t("notices.mkt_closed_desc"), "warn");
+        } else if(j.err && j.err.indexOf("already_queued") >= 0){
+          showToast(t("notices.already_queued_title", { ticket: cid }), t("notices.already_queued_desc"), "info");
+        } else {
+          showToast("✅ " + t("common.success"), t("nodes.cmd_acked", { cid: cid, node: nodeKey }), "ok");
         }
+        if(msgEl){ msgEl.className = "opmsg ok"; msgEl.textContent = cid + " · acked"; }
         if(typeof cb === "function") cb(true, j);
       } else if(j.state === "rejected"){
-        if(msgEl){
-          msgEl.className = "opmsg bad";
-          if(j.err && j.err.indexOf("unknown op close") >= 0){
-            msgEl.textContent = cid + " · Receiver running old EA build, please switch timeframe or press F7 in MT4 to reload!";
-          } else {
-            msgEl.textContent = cid + " · rejected: " + (j.err || "no reason given");
-          }
+        var reason = j.err || "rejected";
+        if(reason.indexOf("unknown op close") >= 0){
+          showToast(t("notices.close_failed_old_ea_title"), t("notices.close_failed_old_ea_desc"), "bad");
+        } else {
+          showToast("⚠️ " + t("common.warning"), t("nodes.cmd_rejected", { cid: cid, node: nodeKey, reason: reason }), "bad");
         }
-        if(typeof cb === "function") cb(false, j.err || "rejected");
+        if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = cid + " · rejected: " + reason; }
+        if(typeof cb === "function") cb(false, reason);
       } else {
-        if(msgEl){
-          msgEl.className = "opmsg warn";
-          msgEl.textContent = cid + " · " + j.state + (j.err ? " (" + j.err + ")" : "");
-        }
+        showToast("ℹ️ " + t("common.status"), cid + " · " + j.state + (j.err ? " (" + j.err + ")" : ""), "warn");
+        if(msgEl){ msgEl.className = "opmsg warn"; msgEl.textContent = cid + " · " + j.state; }
         if(typeof cb === "function") cb(false, j.state);
       }
     }).catch(function(e){
@@ -6028,20 +6016,40 @@ function onOpClick(ev){
     openConfigModal(k);
     return;
   }
-  var msg = tr ? tr.querySelector(".opmsg") : null;
+  
+  // Set button loading state
+  var origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "⏳ " + (op === "pause" ? t("nodes.btn_pause") : (op === "resume" ? t("nodes.btn_resume") : op)) + "…";
+  showToast(t("nodes.cmd_issuing", { op: op.toUpperCase() }), k, "info");
+
+  var restoreBtn = function(){
+    btn.disabled = false;
+    btn.textContent = origText;
+  };
+
   if(op === "closeall"){
     confirmDialog({
-      title: "Confirm Close All Positions",
-      desc: "Close ALL positions on receiver <code>" + esc(k) + "</code>?",
-      detail: "This immediately sends market close commands for all positions held by this receiver. This operation cannot be undone.",
+      title: t("nodes.confirm_close_all_title"),
+      desc: t("nodes.confirm_close_all_desc", { key: k }),
+      detail: t("nodes.confirm_close_all_detail"),
       danger: true,
-      confirmText: "Close All Positions"
+      confirmText: t("nodes.btn_close_all")
     }).then(function(ok){
-      if(ok) sendCommand(k, op, msg);
+      if(!ok){
+        restoreBtn();
+        return;
+      }
+      sendCommand(k, op, null, null, function(success){
+        restoreBtn();
+      });
     });
     return;
   }
-  sendCommand(k, op, msg);
+
+  sendCommand(k, op, null, null, function(success){
+    restoreBtn();
+  });
 }
 
 // G10: one call, every receiver. The hub mints ONE COMMAND PER RECEIVER (a
