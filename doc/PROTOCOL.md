@@ -273,7 +273,19 @@ apart by CONTENT, not by type** — all are `T=STAT`:
 receipt only           LOGIN=..;SID=..;H=..                                                                        every 1s (SyncHeartbeatSeconds)
 receipt + summary      LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;ORPHAN=..;WAIT=..;EQ=..;BL=..;PING=..                  every 5s
 full report + detail   LOGIN=..;SID=..;H=..;HELD=..;LOTS=..;..;POS=..;WAITLIST=..;NSEND=..;BLOCKED=..;RISK=..     once a minute / on-demand
+sender telemetry       LOGIN=..;ROLE=sender;SID=..;HELD=..;LOTS=..;EQ=..;BL=..;PING=..;POS=..                      on-demand only (WebUI reqpos)
 ```
+
+#### Detailed Position Stream Encoding (`POS=`)
+The `POS=` string carries serialized, compressed records for all active positions on a node:
+```
+ticket,sym,side,lots,openPx,sl,tp,magic,isManaged,comment/uid,profit,swap,openTime~...
+```
+- **Fields 0–9**: `ticket`, `symbol`, `side` (1=BUY,-1=SELL), `lots`, `openPx`, `sl`, `tp`, `magic`, `isManaged` (1=ours,0=manual), `comment` (or `uid` for sender).
+- **Field 10 (`profit`)**: Real-time floating profit / loss in account currency (e.g. `12.50` or `-3.40`).
+- **Field 11 (`swap`)**: Cumulative overnight financing charges / rollover swap in account currency.
+- **Field 12 (`openTime`)**: Server open timestamp in unix seconds.
+- **On-Demand Cadence**: Senders only transmit `POS=` when explicitly requested by an operator inspecting the node via the WebUI (`reqpos` / `refreshpos`), generating zero routine background telemetry while the dashboard is closed. Transmitted telemetry is decoupled from the `H=` trade snapshot hashing algorithm to prevent hash drift storms.
 
 The receiver appends the position-summary block together or not at all, and
 appends the monitoring block together or not at all. The presence of **`EQ`**

@@ -1469,9 +1469,73 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 按需轮询：仅在处于 Cockpit 视图且页面可见时才激活 60s 轮询，页面最小化或切走时立刻销毁定时器。
 - **全栈验证结果**：
   - 13/13 `hub_tls_test.py` 全绿通过；
-  - 153/153 Rust 单元测试全量 PASS；
+  - 154/154 Rust 单元测试全量 PASS；
   - 4 终端 16 个 MQL 二进制编译全部 0 errors, 0 warnings (ALL GREEN)；
-  - 自动化回归套件（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 236 元素）全量 PASS。
+  - 自动化回归套件（commands 47/47, config 71/71, users 57/57, cluster 35/35, notifications 23/23, receipt 49/49, dash 248 元素）全量 PASS。
+
+### 八十五次演进：轻量模块化 i18n 国际化引擎与全球多语言矩阵（2026-11-01 17:00；全部闭环）
+
+- **技术落地项**：
+  1. **零外部依赖的前端 i18n 驱动**：
+     - 在 `dashboard.html` 中实现基于纯原生 JS 的轻量级 `t(key, params)` 国际化引擎，支持递归取词与 `{var}` 参数插值；
+     - 内置核心基础语言（English `en`、简体中文 `zh-CN`），二进制单文件自包含、零文件亦可独立运行；
+  2. **热插拔外挂多语言包（Hot-pluggable Drop-in Plugins）**：
+     - Hub 端新增 `/api/v1/locales` 与 `/api/v1/locales/{lang}` REST API，动态枚举并加载 `locales/*.json`；
+     - 首发推出 **繁体中文 (`zh-TW`)**、**日本語 (`ja`)**、**Русский (`ru`)**、**Español (`es`)** 四国外挂插件包及 `template.json` 模板；
+  3. **词条矩阵与一致性检查工具**：
+     - 建立 `tools/i18n_check.py` 自动化检查工具，强校验所有语言包必须拥有与模板 100% 相同且合法的键名与占位符；
+     - 词典矩阵实现全局覆盖，涵盖导航、看板、风控参数、系统配置、二次确认框与操作通知。
+
+### 八十六次演进：Night Mode 深色模式全面重构与响应式排版加固（2026-11-01 22:30；全部闭环）
+
+- **技术落地项**：
+  1. **深色主题高对比配色与消除眩光**：
+     - 修复 `th` 与 `section h2` 亮白底色违和感，抽取并引入专用变量 `--surface-header` 与 `--surface-row-hover`；
+     - 全局所有表单组件（`input`, `select`, `textarea`）在 dark 模式下采用沉浸深色背景，杜绝反白刺眼；
+     - 拓扑图 `#topo svg` 深度定制深蓝黑、幽紫色光晕与柔和连线，消除纯白背景方块；
+  2. **导航栏自适应与视口溢出修复**：
+     - 修复长语种（如西班牙语、俄语）在小屏幕或特定分辨率下顶栏折行错位问题；
+     - 修复 `cfgmodal` 弹窗顶部在小屏幕上被 Header 遮挡且无法向下滚动的视口溢出缺陷。
+
+### 八十七次演进：表格操作列 Loading 交互重构与 Toast 全局通知体系（2026-11-02 01:50；全部闭环）
+
+- **技术落地项**：
+  1. **彻底清理表格行内文字长尾巴**：
+     - 彻底从节点列表每行 DOM 中移除 `<span class="opmsg"></span>`，解决长命令回执（如 `receiver-xxx · acked by receiver`）撑爆表格导致的截断与排版错位；
+  2. **按钮原地 Loading 态（防误触与双击防重）**：
+     - 点击 `Pause` 或 `Resume` 按钮后，按钮立即进入 `disabled` 状态，文案变为 `⏳ 暂停中…`，指令完成后平滑恢复；
+  3. **Toast 全局通知接管全生命周期反馈**：
+     - 指令发起时弹出蓝色通知；终端确认（ACK）后弹出绿色卡片显示完整指令 ID 与执行终端；失败/拒绝时弹出黄色/红色卡片，4.5 秒后自动平滑淡出。
+
+### 八十八次演进：Senders 策略配置 Master-Detail 双栏重构与弹窗扩宽（2026-11-02 03:20；全部闭环）
+
+- **技术落地项**：
+  1. **左右双栏架构（类似 Split Cockpit）**：
+     - 彻底终结多个 Sender 策略纵向一路向下无限拖拽的繁冗体验，重构成 `.cfg-senders-split` Master-Detail 双栏结构；
+     - 左栏 `.cfg-senders-sidebar`（宽 220px）：展示可独立滚动的 Sender 列表，包含编号、账号、Magic 与手数摘要，当前项蓝边高亮并带 `▶` 箭头；底部固定 `+ Add Sender Section` 和 `Load Default Example` 快捷按钮；
+     - 右栏 `.cfg-senders-detail-pane`：专心编辑当前选中 Sender 的专属风控、执行、过滤、延时与时间表；
+  2. **双向状态机暂存（Zero Data Loss）**：
+     - 引入 `cfgState.activeSenderIdx` 与 `senders` 缓存，在左栏切换、保存或回滚前自动调用 `saveActiveSenderFromForm()` 抽取当前右侧编辑，保证 INI 序列化包含全部信号源；
+  3. **弹窗宽度拓宽与选项卡防折行**：
+     - 将 `.cfgbox` 宽度由 `860px` 大幅拓展至 `1180px`（`max-width: 96vw`）；
+     - 将内嵌的 5 个二级选项卡设置为 `flex-wrap: nowrap; overflow-x: auto;` 与 `white-space: nowrap;`，消除换行。
+
+### 八十九次演进：Sender 视图按需真实浮盈/利息穿透、合计行呈现与确认弹窗层级穿透（2026-11-02 06:15；全部闭环）
+
+- **技术落地项**：
+  1. **移除驾驶舱横幅冗余按钮**：
+     - 移除横幅上多余的 `[ 🔄 查詢即時 INI ]` 按钮，保留核心的可视化配置、暂停与平仓；
+  2. **Sender 端按需真实 Profit / Swap 遥测与全链路闭环**：
+     - `CopierSender.mq4` 拦截 Hub 下发的 `CP_T_CMD`（`reqpos`/`refreshpos`），回传 `ACK` 并标记 `g_forcePosReport`；
+     - 零日常开销：平时正常运行时不发送浮盈数据（防快照指纹哈希漂移风暴）；仅在 WebUI 请求时采集实时 `profit`、`swap`、`equity`、`balance`，编码为 `POS=` 并以 `STAT` 消息单播发往 `@hub`；
+     - `hub/src/main.rs` & `api.rs` 对 `Role::Sender` 开放解析与输出 `positions_detail`；
+  3. **驾驶舱 Sender 表格对齐与底部合计行**：
+     - Sender 订单表格追加 `Profit` 与 `Swap` 列，根据红绿标准高亮涨跌；
+     - 底部新增 `<tfoot>` 汇总行（`pos-subtotal-row`），计算并对齐显示订单数、总手数、总损益与总利息；
+     - 将 `maybeAutoRequestPositions` 与 `startPosAutoPoll`（60s 仅前台激活）无缝覆盖至 Sender 节点；
+  4. **确认弹窗层级穿透与 411 键全量国际化**：
+     - 将 `#confirmmodal` 的 `z-index` 调整至 `20000`（高于配置弹窗的 `10000`），解决弹窗遮挡问题；
+     - 全工程 16 处 `confirmDialog` 调用点全面接入 `t(...)`，多语言词典扩充并达到 411 键 100% 全覆盖。
 
 ---
 
@@ -1482,15 +1546,18 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**153 / 153 单元测试全量 PASS**；
+  - Rust Hub Release 构建成功，**154 / 154 单元测试全量 PASS**；
   - 核心 Python 测试套件全部绿灯：
     - `hub_tls_test.py`：13 / 13 PASS
+    - `hub_config_test.py`：71 / 71 PASS
+    - `hub_commands_test.py`：47 / 47 PASS
     - `hub_cluster_test.py`：35 / 35 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
-    - `dash_check.py`：222 个前端元素与 111 个函数完全校验匹配。
+    - `i18n_check.py`：411 / 411 键在 6 种语言环境中全量 PASS (ALL GREEN)
+    - `dash_check.py`：248 个前端元素与 133 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测与极速平仓）与业务代码实现 100% 吻合。
 
 ---
 

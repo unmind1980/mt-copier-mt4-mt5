@@ -45,16 +45,18 @@ You do not need to worry about breaking the interface if your translation is sti
 
 ## 3. Directory Layout
 
-| File | Language | Type |
-|---|---|---|
-| *(Built-in)* | **English (en)** | Core baseline compiled inside binary |
-| *(Built-in)* | **简体中文 (zh-CN)** | Core Chinese compiled inside binary |
-| `zh-TW.json` | **繁體中文 (zh-TW)** | External Drop-in Plugin |
-| `ja.json` | **日本語 (ja)** | External Drop-in Plugin |
-| `ru.json` | **Русский (ru)** | External Drop-in Plugin |
-| `es.json` | **Español (es)** | External Drop-in Plugin |
-| `template.json` | **Starter Template** | Clean reference template for new translators |
-| `README.md` | **Documentation** | This guide |
+The localization matrix provides **100% complete coverage across 411 translation keys**:
+
+| File | Language | Type | Coverage |
+|---|---|---|---|
+| *(Built-in)* | **English (en)** | Core baseline compiled inside binary | 411 / 411 keys (100%) |
+| *(Built-in)* | **简体中文 (zh-CN)** | Core Chinese compiled inside binary | 411 / 411 keys (100%) |
+| `zh-TW.json` | **繁體中文 (zh-TW)** | External Drop-in Plugin | 411 / 411 keys (100%) |
+| `ja.json` | **日本語 (ja)** | External Drop-in Plugin | 411 / 411 keys (100%) |
+| `ru.json` | **Русский (ru)** | External Drop-in Plugin | 411 / 411 keys (100%) |
+| `es.json` | **Español (es)** | External Drop-in Plugin | 411 / 411 keys (100%) |
+| `template.json` | **Starter Template** | Clean reference template for new translators | 411 / 411 keys (100%) |
+| `README.md` | **Documentation** | This guide | - |
 
 ---
 

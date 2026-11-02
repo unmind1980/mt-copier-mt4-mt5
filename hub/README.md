@@ -539,15 +539,19 @@ surface as it stands.
 | GET | `/api/v1/commands` | the command journal (in-flight and terminal) |
 | GET | `/api/v1/commands/{id}` | one command's state |
 | POST | `/api/v1/commands` | G10 global: one command per known receiver; operator + `--writes on` |
-| POST | `/api/v1/nodes/{id}/commands` | `pause`/`resume`/`closeall`/`reload` → **202** + `command_id` (operator + `--writes on`); `reqpos`/`reqcfg` (read-only telemetry/config queries, any authenticated role, works with `--writes off`) |
+| POST | `/api/v1/nodes/{id}/commands` | `pause`/`resume`/`closeall`/`reload`/`close` → **202** + `command_id` (operator + `--writes on`); `reqpos`/`reqcfg` (read-only telemetry/config queries, any authenticated role, works with `--writes off`) |
 | GET · POST | `/api/v1/users` | M9 user management; **admin only** |
 | DELETE | `/api/v1/users/{id}` | remove a user; **admin only** |
 | GET · POST | `/api/v1/notifications` | external alert channels, secrets masked on read; upsert needs operator |
 | DELETE | `/api/v1/notifications/{id}` | remove a channel; operator |
 | POST | `/api/v1/notifications/test` | fire a test message through a channel; operator |
+| GET | `/api/v1/locales` · `/locales/{lang}` | hot-pluggable i18n language pack discovery and JSON retrieval |
+| GET · POST | `/api/v1/tls/status` · `/tls/save` · `/tls/disable` · `/tls/renew` | native SSL/TLS status, ACME Let's Encrypt certificates, custom PFX import, and renewal |
 | GET | `/api/v1/cluster/status` | HA cluster state, role, epoch, memory stats, file hashes; cluster-token auth |
 | POST | `/api/v1/cluster/sync` | incremental replication of users, notifications, curve clients, revisions & commands |
 | POST | `/api/v1/cluster/promote` | manually promote this hub to Primary (admin only); bumps epoch and opens write gate |
+| POST | `/api/v1/cluster/failback-now` | trigger safe two-phase handover to reclaim Primary master role (admin only) |
+| POST | `/api/v1/cluster/peer` | dynamically update or clear peer hub connection settings (admin only) |
 | POST | `/api/v1/cluster/handover` | two-phase failback handover request from Primary to Standby; cluster-token auth |
 | POST | `/api/v1/cluster/failback_lock` | toggle manual failback lock (`{"locked": bool}`); admin only |
 | GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — no 40-char key to transcribe (404 with `--curve off`) |

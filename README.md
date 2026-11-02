@@ -607,8 +607,11 @@ which the hub learns as a by-product of relaying snapshot receipts.
 | GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only**; answers from the active file plus `.gz` archives when `limit` reaches past a rotation |
 | GET · POST · DELETE | `/api/v1/users` | M9 user management; **admin only** |
 | GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **403 with `--writes off`** |
-| POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
+| POST | `/api/v1/nodes/{id}/config/rollback/{rev}` | rollback configuration to a historical revision |
+| POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`/`close`/`reqpos`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
 | POST | `/api/v1/commands` | G10 global: one command per known receiver → **202** + counts + per-command ids; **403 with `--writes off`**, same **400** door |
+| GET · POST | `/api/v1/tls/status` · `/tls/save` · `/tls/disable` · `/tls/renew` | native SSL/TLS configuration, Let's Encrypt automation, and certificate renewal |
+| POST | `/api/v1/cluster/promote` · `/cluster/failback-now` · `/cluster/peer` | HA cluster role promotion, zero dual-write safe failback, and peer configuration |
 | GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — the 40-char key with nothing to transcribe by hand (session required; 404 when `--curve off`) |
 | GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
 | WS | `/api/v1/stream` | a full snapshot on connect, and one per change (session cookie required) |
