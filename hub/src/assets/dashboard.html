@@ -1588,6 +1588,7 @@
   .notiftbl .chan-tg{background:#e8f2fb;color:#0b5cad;border:1px solid #b2d7ff}
   .notiftbl .chan-wc{background:#d8eedf;color:#1e5e34;border:1px solid #b7ddc2}
   .notiftbl .chan-dt{background:#fff3cd;color:#856404;border:1px solid #ffeeba}
+  .notiftbl .chan-wx{background:#e7f8ea;color:#07c160;border:1px solid #a3e7b5}
   .notiftbl .chan-wh{background:#f0efe4;color:#495057;border:1px solid #ced4da}
 </style>
 </head>
@@ -2338,6 +2339,7 @@
               <option value="telegram">Telegram Bot</option>
               <option value="wecom">WeCom Robot</option>
               <option value="dingtalk">DingTalk Robot</option>
+              <option value="wechat" data-i18n="notif.type_wechat">WeChat (Xtuis)</option>
               <option value="webhook">Custom Webhook</option>
             </select>
           </div>
@@ -2388,6 +2390,15 @@
             <label for="notif_dt_secret" data-i18n="notif.dt_secret">Secret (Signature Key, Optional)</label>
             <input id="notif_dt_secret" placeholder="e.g. SEC... (leave blank if signature check is disabled)">
             <span class="hint" data-i18n="notif.dt_secret_hint">If signature validation (HMAC-SHA256) is enabled in DingTalk bot settings, paste SECxxx here.</span>
+          </div>
+        </div>
+
+        <!-- WeChat (Xtuis) panel -->
+        <div id="notif_cfg_wechat" class="notif-panel hidden">
+          <div class="notifrow">
+            <label for="notif_wx_token" data-i18n="notif.wx_token">Xtuis Token</label>
+            <input id="notif_wx_token" placeholder="e.g. ABCdef123456 (or full push URL)" data-i18n-placeholder="notif.wx_token_ph">
+            <span class="hint" data-i18n="notif.wx_token_hint">Follow official WeChat account '虾推啥' to obtain your personal push token.</span>
           </div>
         </div>
 
@@ -3083,7 +3094,11 @@ var I18N_BUILTIN = {
           "confirm_delete_title": "Delete Notification Channel",
           "confirm_delete_desc": "Delete notification channel <strong>{name}</strong>?",
           "confirm_delete_detail": "Alerts will no longer be dispatched to this channel ({type}).",
-          "confirm_delete_btn": "Delete Channel"
+          "confirm_delete_btn": "Delete Channel",
+          "type_wechat": "WeChat (Xtuis)",
+          "wx_token": "Xtuis Token",
+          "wx_token_ph": "e.g. ABCdef123456 (or full push URL)",
+          "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token."
       },
       "users": {
           "title": "Users",
@@ -3539,7 +3554,11 @@ var I18N_BUILTIN = {
           "confirm_delete_title": "删除告警通知渠道",
           "confirm_delete_desc": "确定删除通知渠道 <strong>{name}</strong> 吗？",
           "confirm_delete_detail": "系统告警将不再向此渠道 ({type}) 推送任何消息。",
-          "confirm_delete_btn": "删除渠道"
+          "confirm_delete_btn": "删除渠道",
+          "type_wechat": "微信 (虾推啥)",
+          "wx_token": "虾推啥 Token (令牌)",
+          "wx_token_ph": "例如 ABCdef123456 (或完整推送 URL)",
+          "wx_token_hint": "关注微信公众号【虾推啥】即可免费获取专属个人推送 Token。"
       },
       "users": {
           "title": "系統使用者管理",
@@ -7169,6 +7188,7 @@ function getChannelTypeBadge(type){
   if(type === "telegram") return '<span class="chan-badge chan-tg">Telegram</span>';
   if(type === "wecom" || type === "wechat_work") return '<span class="chan-badge chan-wc">WeCom</span>';
   if(type === "dingtalk") return '<span class="chan-badge chan-dt">DingTalk</span>';
+  if(type === "wechat" || type === "xtuis") return '<span class="chan-badge chan-wx">WeChat</span>';
   if(type === "webhook") return '<span class="chan-badge chan-wh">Webhook</span>';
   return '<span class="chan-badge">' + esc(type) + '</span>';
 }
@@ -7181,6 +7201,8 @@ function getChannelSummary(ch){
     return "key: " + esc(cfg.key || cfg.webhook_url || "-");
   } else if(ch.channel_type === "dingtalk"){
     return "token: " + esc(cfg.access_token || cfg.webhook_url || "-") + (cfg.secret ? " (signed)" : "");
+  } else if(ch.channel_type === "wechat" || ch.channel_type === "xtuis"){
+    return "token: " + esc(cfg.token || cfg.webhook_url || "-");
   } else if(ch.channel_type === "webhook"){
     return esc(cfg.url || "-");
   }
@@ -7190,7 +7212,7 @@ function getChannelSummary(ch){
 function renderNotifications(channels){
   $("notifcount").textContent = channels.length + " channel(s)";
   if(!channels.length){
-    $("notifbody").innerHTML = '<div class="empty">No notification channels configured yet. Click "+ Add Channel" to set up Telegram, WeCom, DingTalk or Webhook alerts.</div>';
+    $("notifbody").innerHTML = '<div class="empty">No notification channels configured yet. Click "+ Add Channel" to set up Telegram, WeCom, DingTalk, WeChat or Webhook alerts.</div>';
     return;
   }
   var isViewer = (s.userRole === "viewer");
@@ -7239,6 +7261,7 @@ function openNotificationModal(channel){
   $("notif_wecom_key").value = cfg.key || cfg.webhook_url || "";
   $("notif_dt_token").value = cfg.access_token || cfg.webhook_url || "";
   $("notif_dt_secret").value = cfg.secret || "";
+  $("notif_wx_token").value = cfg.token || cfg.webhook_url || "";
   $("notif_hook_url").value = cfg.url || "";
   $("notif_hook_headers").value = (cfg.headers && typeof cfg.headers === "object") ? JSON.stringify(cfg.headers, null, 2) : "";
 
@@ -7255,7 +7278,7 @@ function closeNotificationModal(){
 
 function updateNotifTypePanels(){
   var t = $("notif_type").value;
-  ["telegram", "wecom", "dingtalk", "webhook"].forEach(function(k){
+  ["telegram", "wecom", "dingtalk", "wechat", "webhook"].forEach(function(k){
     var el = $("notif_cfg_" + k);
     if(el) el.classList.toggle("hidden", k !== t);
   });
@@ -7282,6 +7305,10 @@ function collectNotifFormConfig(type){
     }
     var sec = $("notif_dt_secret").value.trim();
     if(sec) cfg.secret = sec;
+  } else if(type === "wechat"){
+    var tok = $("notif_wx_token").value.trim();
+    if(!tok) throw new Error("Xtuis Token is required");
+    cfg.token = tok;
   } else if(type === "webhook"){
     cfg.url = $("notif_hook_url").value.trim();
     var hRaw = $("notif_hook_headers").value.trim();

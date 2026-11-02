@@ -236,10 +236,27 @@ def main():
         hook_id = body.get("channel", {}).get("id")
         check("8. Create Webhook channel", st == 200 and hook_id)
 
+        # 7b. Create WeChat (Xtuis) channel
+        raw_wx_token = "xtuis_secret_token_123456"
+        st, body = js(
+            "POST",
+            "/api/v1/notifications",
+            {
+                "name": "WeChat Xtuis Alerts",
+                "channel_type": "wechat",
+                "enabled": True,
+                "min_severity": "warning",
+                "config": {"token": raw_wx_token},
+            },
+            c=token,
+        )
+        wx_id = body.get("channel", {}).get("id")
+        check("8b. Create WeChat (Xtuis) channel", st == 200 and wx_id)
+
         # 8. List channels and verify masking
         st, body = js("GET", "/api/v1/notifications", c=token)
         channels = {c["id"]: c for c in body.get("channels", [])}
-        check("9. All 4 channels listed", len(channels) == 4)
+        check("9. All 5 channels listed", len(channels) == 5)
 
         tg_c = channels.get(tg_id, {}).get("config", {})
         check(
@@ -257,6 +274,12 @@ def main():
         check(
             "12. DingTalk token and secret are masked",
             "***" in ding_c.get("secret", "") and ding_c.get("secret") != raw_ding_secret,
+        )
+
+        wx_c = channels.get(wx_id, {}).get("config", {})
+        check(
+            "12b. WeChat Xtuis token is masked",
+            "***" in wx_c.get("token", "") and wx_c.get("token") != raw_wx_token,
         )
 
         # 9. Test Webhook dispatch via /api/v1/notifications/test
@@ -339,8 +362,8 @@ def main():
 
         st, body = js("GET", "/api/v1/notifications", c=token)
         check(
-            "20. Channel removed from active list (3 left)",
-            len(body.get("channels", [])) == 3
+            "20. Channel removed from active list (4 left)",
+            len(body.get("channels", [])) == 4
             and not any(c["id"] == wecom_id for c in body["channels"]),
         )
 
@@ -386,13 +409,13 @@ def main():
         st, body = js("GET", "/api/v1/notifications", c=new_token)
         rem_channels = body.get("channels", [])
         check(
-            "21. Persisted channels survive hub restart (3 channels loaded)",
-            st == 200 and len(rem_channels) == 3,
+            "21. Persisted channels survive hub restart (4 channels loaded)",
+            st == 200 and len(rem_channels) == 4,
         )
         rem_ids = {c["id"] for c in rem_channels}
         check(
             "22. Surviving channel IDs match disk store",
-            tg_id in rem_ids and ding_id in rem_ids and hook_id in rem_ids,
+            tg_id in rem_ids and ding_id in rem_ids and hook_id in rem_ids and wx_id in rem_ids,
         )
     finally:
         p2.terminate()

@@ -367,7 +367,11 @@
     "confirm_delete_title": "Delete Notification Channel",
     "confirm_delete_desc": "Delete notification channel <strong>{name}</strong>?",
     "confirm_delete_detail": "Alerts will no longer be dispatched to this channel ({type}).",
-    "confirm_delete_btn": "Delete Channel"
+    "confirm_delete_btn": "Delete Channel",
+    "type_wechat": "WeChat (Xtuis)",
+    "wx_token": "Xtuis Token",
+    "wx_token_ph": "e.g. ABCdef123456 (or full push URL)",
+    "wx_token_hint": "Follow official WeChat account '虾推啥' to obtain your personal push token."
   },
   "users": {
     "title": "Users",

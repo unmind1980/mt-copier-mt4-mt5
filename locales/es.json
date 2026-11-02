@@ -367,7 +367,11 @@
     "confirm_delete_title": "Eliminar Canal de Notificación",
     "confirm_delete_desc": "¿Eliminar el canal de notificación <strong>{name}</strong>?",
     "confirm_delete_detail": "Las alertas ya no se enviarán a este canal ({type}).",
-    "confirm_delete_btn": "Eliminar Canal"
+    "confirm_delete_btn": "Eliminar Canal",
+    "type_wechat": "WeChat (Xtuis)",
+    "wx_token": "Token de Xtuis",
+    "wx_token_ph": "ej. ABCdef123456 (o URL completa)",
+    "wx_token_hint": "Siga la cuenta oficial de WeChat '虾推啥' para obtener su token de inserción personal."
   },
   "users": {
     "title": "Gestión de Usuarios",

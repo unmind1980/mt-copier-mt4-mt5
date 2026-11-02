@@ -367,7 +367,11 @@
     "confirm_delete_title": "刪除警報通知管道",
     "confirm_delete_desc": "確定刪除通知管道 <strong>{name}</strong> 嗎？",
     "confirm_delete_detail": "系統警報將不再向此管道 ({type}) 發布任何訊息。",
-    "confirm_delete_btn": "刪除管道"
+    "confirm_delete_btn": "刪除管道",
+    "type_wechat": "微信 (蝦推啥)",
+    "wx_token": "蝦推啥 Token (權杖)",
+    "wx_token_ph": "例如 ABCdef123456 (或完整推送 URL)",
+    "wx_token_hint": "關注微信公眾號【蝦推啥】即可免費獲取專屬個人推送 Token。"
   },
   "users": {
     "title": "系統使用者管理",

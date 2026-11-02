@@ -367,7 +367,11 @@
     "confirm_delete_title": "通知チャンネルの削除",
     "confirm_delete_desc": "通知チャンネル <strong>{name}</strong> を削除しますか？",
     "confirm_delete_detail": "このチャンネル ({type}) にはアラートが送信されなくなります。",
-    "confirm_delete_btn": "チャンネルを削除"
+    "confirm_delete_btn": "チャンネルを削除",
+    "type_wechat": "WeChat (Xtuis)",
+    "wx_token": "Xtuis トークン",
+    "wx_token_ph": "例: ABCdef123456 (またはプッシュURL)",
+    "wx_token_hint": "WeChat公式アカウント「虾推啥」をフォローしてプッシュトークンを取得します。"
   },
   "users": {
     "title": "ユーザー管理",

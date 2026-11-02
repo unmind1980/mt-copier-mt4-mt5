@@ -367,7 +367,11 @@
     "confirm_delete_title": "Удалить канал уведомлений",
     "confirm_delete_desc": "Удалить канал уведомлений <strong>{name}</strong>?",
     "confirm_delete_detail": "Оповещения больше не будут отправляться по этому каналу ({type}).",
-    "confirm_delete_btn": "Удалить канал"
+    "confirm_delete_btn": "Удалить канал",
+    "type_wechat": "WeChat (Xtuis)",
+    "wx_token": "Токен Xtuis",
+    "wx_token_ph": "например ABCdef123456 (или полный URL)",
+    "wx_token_hint": "Подпишитесь на официальный аккаунт WeChat '虾推啥' для получения токена."
   },
   "users": {
     "title": "Пользователи системы",

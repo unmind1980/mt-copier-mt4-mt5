@@ -23,7 +23,7 @@ const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 pub struct NotificationChannel {
     pub id: String,
     pub name: String,
-    /// Channel kind: "telegram", "wecom", "dingtalk", "webhook"
+    /// Channel kind: "telegram", "wecom", "dingtalk", "webhook", "wechat" (xtuis)
     pub channel_type: String,
     pub enabled: bool,
     /// Minimum severity to trigger: "warning" (all) or "critical" (only critical)
@@ -90,7 +90,8 @@ impl NotificationChannel {
                             //--- A webhook URL is the credential and its
                             //--- secret usually sits in the PATH; every other
                             //--- channel type only has secrets in its query.
-                            *v = Value::String(if self.channel_type == "webhook" {
+                            //--- For WeChat/Xtuis, token also sits in the URL path.
+                            *v = Value::String(if self.channel_type == "webhook" || self.channel_type == "wechat" || self.channel_type == "xtuis" {
                                 mask_webhook_url(s)
                             } else {
                                 mask_url_secrets(s)
@@ -730,6 +731,7 @@ pub async fn send_to_channel(
         "wecom" | "wechat_work" => send_wecom(client, channel, alert).await,
         "dingtalk" => send_dingtalk(client, channel, alert).await,
         "webhook" => send_webhook(client, channel, alert).await,
+        "wechat" | "xtuis" => send_wechat(client, channel, alert).await,
         other => Err(format!("Unknown channel type '{}'", other)),
     }
 }
@@ -1244,6 +1246,91 @@ async fn send_webhook(
     }
 }
 
+async fn send_wechat(
+    client: &reqwest::Client,
+    channel: &NotificationChannel,
+    alert: &Alert,
+) -> Result<String, String> {
+    let raw_token = if let Some(tok) = channel.config.get("token").and_then(|v| v.as_str()) {
+        tok.trim()
+    } else if let Some(tok) = channel.config.get("key").and_then(|v| v.as_str()) {
+        tok.trim()
+    } else if let Some(u) = channel.config.get("webhook_url").and_then(|v| v.as_str()) {
+        u.trim()
+    } else {
+        return Err("WeChat (Xtuis) token missing".to_string());
+    };
+
+    if raw_token.is_empty() {
+        return Err("WeChat (Xtuis) token cannot be empty".to_string());
+    }
+
+    // Determine target URL: user can enter raw token or full https://wx.xtuis.cn/...
+    let url = if raw_token.starts_with("http://") || raw_token.starts_with("https://") {
+        raw_token.to_string()
+    } else {
+        let clean_token = raw_token.trim_end_matches(".send");
+        format!("https://wx.xtuis.cn/{}.send", clean_token)
+    };
+
+    let client = resolve_pinned_client(client, &url).await?;
+
+    let fmt = format_alert(alert);
+
+    let text = if alert.node.is_empty() {
+        fmt.title.clone()
+    } else {
+        format!("{} - {}", fmt.title, fmt.node)
+    };
+
+    let desp = format!(
+        "### {}\n\n\
+        - **告警级别**: {}\n\
+        - **监控对象**: `{}`\n\
+        - **发生时间**: {}\n\
+        - **详细说明**: {}",
+        fmt.title,
+        fmt.severity_badge,
+        fmt.node,
+        fmt.time_str,
+        fmt.detail_summary
+    );
+
+    let params = [
+        ("text", text.as_str()),
+        ("desp", desp.as_str()),
+    ];
+
+    let resp = client
+        .post(&url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| {
+            if let Some(status) = e.status() {
+                format!("WeChat (Xtuis) request failed: HTTP {}", status)
+            } else {
+                "WeChat (Xtuis) request failed: connection error".to_string()
+            }
+        })?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(format!(
+            "WeChat (Xtuis) rate limit exceeded (HTTP 429): {}",
+            body
+        ));
+    }
+
+    if status.is_success() {
+        Ok(format!("WeChat (Xtuis) sent: HTTP {}", status))
+    } else {
+        Err(format!("WeChat (Xtuis) failed: HTTP {} - {}", status, body))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1615,5 +1702,29 @@ mod tests {
                 "Header {} must be marked prohibited", h
             );
         }
+    }
+
+    #[test]
+    fn wechat_xtuis_channel_masking_and_merge() {
+        let ch = NotificationChannel {
+            id: "chan_wx1".to_string(),
+            name: "My WeChat".to_string(),
+            channel_type: "wechat".to_string(),
+            enabled: true,
+            min_severity: "warning".to_string(),
+            config: json!({
+                "token": "ABC123456789XYZ",
+            }),
+            created_at: 1000,
+        };
+        let s = ch.safe_json();
+        assert_eq!(s["config"]["token"], json!("ABC1***9XYZ"));
+
+        // Test merge on unmasked update
+        let mut updated_config = json!({
+            "token": "ABC1***9XYZ"
+        });
+        merge_unmasked_config(&mut updated_config, &ch.config, "wechat");
+        assert_eq!(updated_config["token"], json!("ABC123456789XYZ"));
     }
 }
