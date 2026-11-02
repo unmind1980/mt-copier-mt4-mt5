@@ -1859,7 +1859,7 @@
                       <th class="pos-th-sort" onclick="togglePosSort('side')" title="Click to sort"><span data-i18n="cockpit.th_side">Side</span> <span id="pos_sort_side" class="sort-indicator">⇅</span></th>
                       <th class="pos-th-sort num" onclick="togglePosSort('volume')" title="Click to sort by volume"><span data-i18n="cockpit.th_volume">Volume</span> <span id="pos_sort_volume" class="sort-indicator">⇅</span></th>
                       <th class="pos-th-sort num" onclick="togglePosSort('price')" title="Click to sort by price"><span data-i18n="cockpit.th_price">Price</span> <span id="pos_sort_price" class="sort-indicator">⇅</span></th>
-                      <th class="num" data-i18n="cockpit.th_sltp">SL / TP</th>
+                      <th class="pos-th-sort num" onclick="togglePosSort('sltp')" title="Click to sort by SL/TP"><span data-i18n="cockpit.th_sltp">SL / TP</span> <span id="pos_sort_sltp" class="sort-indicator">⇅</span></th>
                       <th class="pos-th-sort num" onclick="togglePosSort('profit')" title="Click to sort by profit"><span data-i18n="cockpit.th_profit">Profit</span> <span id="pos_sort_profit" class="sort-indicator">⇅</span></th>
                       <th class="pos-th-sort num" onclick="togglePosSort('swap')" title="Click to sort by swap"><span data-i18n="cockpit.th_swap">Swap</span> <span id="pos_sort_swap" class="sort-indicator">⇅</span></th>
                       <th class="pos-th-sort" onclick="togglePosSort('details')" title="Click to sort"><span data-i18n="cockpit.th_details">Pipeline Reason / Details</span> <span id="pos_sort_details" class="sort-indicator">⇅</span></th>
@@ -3869,23 +3869,35 @@ function nodeSortTh(col, i18nKey, isNum){
          "<span class='sort-indicator'>" + arrow + "</span></th>";
 }
 
+function isDescFirstCol(col){
+  return col === "profit" || col === "volume" || col === "swap" || col === "ticket" ||
+         col === "price" || col === "sltp" || col === "positions" || col === "equity" ||
+         col === "balance" || col === "gating";
+}
+
 function togglePosSort(col){
   if(s.posSortCol === col){
-    if(s.posSortDir === "asc"){
-      s.posSortDir = "desc";
-    } else if(s.posSortDir === "desc"){
-      s.posSortCol = null;
-      s.posSortDir = "none";
+    var descFirst = isDescFirstCol(col);
+    if(descFirst){
+      // 循环顺序: desc (▼) -> asc (▲) -> none (⇅)
+      if(s.posSortDir === "desc"){
+        s.posSortDir = "asc";
+      } else {
+        s.posSortCol = null;
+        s.posSortDir = "none";
+      }
     } else {
-      s.posSortDir = "asc";
+      // 循环顺序: asc (▲) -> desc (▼) -> none (⇅)
+      if(s.posSortDir === "asc"){
+        s.posSortDir = "desc";
+      } else {
+        s.posSortCol = null;
+        s.posSortDir = "none";
+      }
     }
   } else {
     s.posSortCol = col;
-    if(col === "profit" || col === "volume" || col === "swap" || col === "ticket" || col === "price" || col === "sltp"){
-      s.posSortDir = "desc";
-    } else {
-      s.posSortDir = "asc";
-    }
+    s.posSortDir = isDescFirstCol(col) ? "desc" : "asc";
   }
   s.lastPosRowsHtml = null;
   s.lastSndHtml = null;
@@ -3904,21 +3916,27 @@ window.resetPosSort = resetPosSort;
 
 function toggleNodeSort(col){
   if(s.nodeSortCol === col){
-    if(s.nodeSortDir === "asc"){
-      s.nodeSortDir = "desc";
-    } else if(s.nodeSortDir === "desc"){
-      s.nodeSortCol = null;
-      s.nodeSortDir = "none";
+    var descFirst = isDescFirstCol(col);
+    if(descFirst){
+      // 循环顺序: desc (▼) -> asc (▲) -> none (⇅)
+      if(s.nodeSortDir === "desc"){
+        s.nodeSortDir = "asc";
+      } else {
+        s.nodeSortCol = null;
+        s.nodeSortDir = "none";
+      }
     } else {
-      s.nodeSortDir = "asc";
+      // 循环顺序: asc (▲) -> desc (▼) -> none (⇅)
+      if(s.nodeSortDir === "asc"){
+        s.nodeSortDir = "desc";
+      } else {
+        s.nodeSortCol = null;
+        s.nodeSortDir = "none";
+      }
     }
   } else {
     s.nodeSortCol = col;
-    if(col === "positions" || col === "volume" || col === "equity" || col === "balance" || col === "gating"){
-      s.nodeSortDir = "desc";
-    } else {
-      s.nodeSortDir = "asc";
-    }
+    s.nodeSortDir = isDescFirstCol(col) ? "desc" : "asc";
   }
   s.nodeKeys = null;
   render();
@@ -4637,7 +4655,7 @@ function renderPosNodeDetail(){
 
     renderPosActionNotice();
 
-    var sortCols = ["status", "ticket", "symbol", "side", "volume", "price", "profit", "swap", "details"];
+    var sortCols = ["status", "ticket", "symbol", "side", "volume", "price", "sltp", "profit", "swap", "details"];
     for(var sci = 0; sci < sortCols.length; sci++){
       var scName = sortCols[sci];
       var sIconEl = $("pos_sort_" + scName);
@@ -4694,6 +4712,9 @@ function renderPosNodeDetail(){
         } else if(sortC === "price"){
           valA = Number(itemA.open_px) || 0.0;
           valB = Number(itemB.open_px) || 0.0;
+        } else if(sortC === "sltp"){
+          valA = Number(itemA.sl) || (Number(itemA.tp) || 0.0);
+          valB = Number(itemB.sl) || (Number(itemB.tp) || 0.0);
         } else if(sortC === "profit"){
           valA = (itemA.profit !== undefined && itemA.profit !== null) ? Number(itemA.profit) : 0.0;
           valB = (itemB.profit !== undefined && itemB.profit !== null) ? Number(itemB.profit) : 0.0;
