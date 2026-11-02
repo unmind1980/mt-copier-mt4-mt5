@@ -111,7 +111,11 @@
     "cmd_issued": "Comando Emitido: {cid}",
     "cmd_acked": "Comando {cid} confirmado por el nodo {node}",
     "cmd_rejected": "Comando {cid} rechazado por el nodo {node}: {reason}",
-    "cmd_failed": "Fallo al enviar comando: {error}"
+    "cmd_failed": "Fallo al enviar comando: {error}",
+    "confirm_batch_reload_title": "Recargar Todos los Nodos",
+    "confirm_batch_reload_desc": "¿Recargar la configuración en TODOS los nodos conectados?",
+    "confirm_batch_reload_detail": "Todos los nodos conectados volverán a leer sus archivos de configuración locales sin interrumpir las posiciones abiertas.",
+    "confirm_batch_reload_btn": "Recargar Todos los Nodos"
   },
   "cockpit": {
     "connected_terminals": "Terminales Conectados",
@@ -222,7 +226,17 @@
     "input_zmq_port_hint": "Predeterminado 6000 (o 6001 en pruebas locales)",
     "btn_clear": "⏹️ Limpiar Par (Modo Independiente)",
     "btn_save": "🚀 Guardar y Aplicar",
-    "btn_close": "Cerrar"
+    "btn_close": "Cerrar",
+    "confirm_promote_title": "⚡ Promover a Primario",
+    "confirm_promote_desc": "¿Promover este nodo Standby a Primario?<br><br><b>⚠️ Precondición Importante</b>: ¡Asegúrese de que el Primario original esté aislado para evitar conflictos split-brain!",
+    "confirm_promote_btn": "Confirmar Promoción",
+    "confirm_failback_title": "⚡ Iniciar Failback Seguro Ahora",
+    "confirm_failback_desc": "¿Iniciar traspaso seguro con el nodo Primario actual para reclamar el rol Master?<br><br><b>Seguridad</b>: El Primario actual desactivará la escritura primero, garantizando cero riesgo de doble escritura.",
+    "confirm_failback_btn": "Ejecutar Failback",
+    "confirm_standalone_title": "Cambiar a Modo Autónomo",
+    "confirm_standalone_desc": "¿Borrar la configuración del par y cambiar al modo autónomo?",
+    "confirm_standalone_detail": "Este nodo se ejecutará como un Hub individual aislado, deteniendo la sincronización.",
+    "confirm_standalone_btn": "Cambiar a Autónomo"
   },
   "ssl": {
     "title": "🔒 Ajustes SSL / HTTPS",
@@ -259,7 +273,11 @@
     "btn_disable": "⛔ Desactivar SSL (Modo HTTP)",
     "btn_renew": "🔄 Renovar Ahora",
     "btn_save": "🚀 Guardar y Aplicar",
-    "btn_close": "Cerrar"
+    "btn_close": "Cerrar",
+    "confirm_disable_title": "Desactivar SSL / Volver a HTTP",
+    "confirm_disable_desc": "¿Desactivar el cifrado SSL y volver a HTTP?",
+    "confirm_disable_detail": "Las conexiones posteriores no estarán cifradas con TLS. Recomendado solo para redes internas.",
+    "confirm_disable_btn": "Desactivar SSL"
   },
   "hubkey": {
     "modal_title": "🔑 Archivo de Clave Pública del Hub (copier_hub.key)",
@@ -332,7 +350,11 @@
     "webhook_headers": "Encabezados Personalizados (Objeto JSON, Opcional)",
     "webhook_headers_hint": "Encabezados en formato JSON (ej. tokens de autenticación Bearer).",
     "btn_test_send": "🚀 Probar Envío",
-    "btn_save_channel": "Guardar Canal"
+    "btn_save_channel": "Guardar Canal",
+    "confirm_delete_title": "Eliminar Canal de Notificación",
+    "confirm_delete_desc": "¿Eliminar el canal de notificación <strong>{name}</strong>?",
+    "confirm_delete_detail": "Las alertas ya no se enviarán a este canal ({type}).",
+    "confirm_delete_btn": "Eliminar Canal"
   },
   "users": {
     "title": "Gestión de Usuarios",
@@ -352,7 +374,11 @@
     "btn_addupdate": "añadir / actualizar",
     "role_viewer": "visor (viewer)",
     "role_operator": "operador (operator)",
-    "role_admin": "administrador (admin)"
+    "role_admin": "administrador (admin)",
+    "confirm_delete_title": "Eliminar Cuenta de Usuario",
+    "confirm_delete_desc": "¿Eliminar el usuario <code>{id}</code>?",
+    "confirm_delete_detail": "El usuario perderá el acceso al panel web del Hub inmediatamente y todas sus sesiones activas quedarán invalidadas.",
+    "confirm_delete_btn": "Eliminar Usuario"
   },
   "footer": {
     "cmd_off_note": "comandos DESACTIVADOS: este hub inició con --writes off. Reinicie con --writes on para emitir comandos operativos.",
@@ -410,6 +436,14 @@
     "tab_exec": "🛑 Ejecución y Stops",
     "tab_filters": "🔍 Filtros y Dirección",
     "tab_delays": "⏳ Retardos y Anti-Acúmulo",
-    "tab_schedule": "📅 Horarios y Tiempos"
+    "tab_schedule": "📅 Horarios y Tiempos",
+    "confirm_reset_template_title": "Restablecer plantilla inicial",
+    "confirm_reset_template_desc": "¿Restablecer el editor con la plantilla inicial por defecto?",
+    "confirm_reset_template_detail": "Todos los cambios no guardados en el Editor Visual y el INI sin procesar se reemplazarán con los valores predeterminados.",
+    "confirm_reset_template_btn": "Restablecer Plantilla",
+    "confirm_rollback_title": "Revertir Configuración",
+    "confirm_rollback_desc": "¿Revertir inmediatamente <code>{target}</code> a la Revisión {rev}?",
+    "confirm_rollback_detail": "La configuración activa se revertirá a la Revisión {rev} y se enviará de inmediato al nodo receptor.",
+    "confirm_rollback_btn": "Revertir a la Rev {rev}"
   }
 }

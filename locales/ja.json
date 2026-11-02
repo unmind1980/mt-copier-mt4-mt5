@@ -111,7 +111,11 @@
     "cmd_issued": "コマンド発行済: {cid}",
     "cmd_acked": "コマンド {cid} は端末 {node} により実行確認されました",
     "cmd_rejected": "コマンド {cid} は端末 {node} に拒否されました: {reason}",
-    "cmd_failed": "コマンド送信失敗: {error}"
+    "cmd_failed": "コマンド送信失敗: {error}",
+    "confirm_batch_reload_title": "全端末の一括再読み込み",
+    "confirm_batch_reload_desc": "接続されているすべての端末に設定の再読み込みを指示しますか？",
+    "confirm_batch_reload_detail": "接続中の全端末が未決済ポジションを維持したまま、ローカル設定ファイルを再読み込みします。",
+    "confirm_batch_reload_btn": "全端末を再読み込み"
   },
   "cockpit": {
     "connected_terminals": "接続中のターミナル",
@@ -222,7 +226,17 @@
     "input_zmq_port_hint": "標準 6000 (ローカルテスト時は 6001)",
     "btn_clear": "⏹️ 対向設定をクリア (単独運用モード)",
     "btn_save": "🚀 設定を保存して適用",
-    "btn_close": "閉じる"
+    "btn_close": "閉じる",
+    "confirm_promote_title": "⚡ プライマリへ昇格",
+    "confirm_promote_desc": "このスタンバイノードを緊急でプライマリに昇格しますか？<br><br><b>⚠️ 重要な前提条件</b>: スプリットブレインを防ぐため、元のプライマリノードがオフラインまたは隔離されていることを確認してください！",
+    "confirm_promote_btn": "昇格を実行",
+    "confirm_failback_title": "⚡ 安全フェイルバックを即時実行",
+    "confirm_failback_desc": "現在のプライマリノードと安全なハンドシェイクを実行し、マスター権限を復帰しますか？<br><br><b>引継ぎの安全性</b>: 現在のプライマリが先に書込を停止して降格し、その後このノードが昇格するため二重書き込みは発生しません。",
+    "confirm_failback_btn": "今すぐフェイルバック",
+    "confirm_standalone_title": "スタンドアロンモードへ切替",
+    "confirm_standalone_desc": "ピア設定をクリアしてスタンドアロンモードに切り替えますか？",
+    "confirm_standalone_detail": "このノードは単一Hubとして動作し、クラスタ同期およびピア拓扑ブロードキャストを停止します。",
+    "confirm_standalone_btn": "スタンドアロンに切替"
   },
   "ssl": {
     "title": "🔒 SSL / HTTPS 安全接続設定",
@@ -259,7 +273,11 @@
     "btn_disable": "⛔ SSL無効化 (HTTPモードへ切替)",
     "btn_renew": "🔄 今すぐ証明書を更新",
     "btn_save": "🚀 設定を保存して適用",
-    "btn_close": "閉じる"
+    "btn_close": "閉じる",
+    "confirm_disable_title": "SSL無効化 / HTTPへ復帰",
+    "confirm_disable_desc": "SSL暗号化を無効化し、通常のHTTPモードに戻しますか？",
+    "confirm_disable_detail": "以降の接続はTLS保護されなくなります。トラブルシューティングや閉域網でのみ推奨されます。",
+    "confirm_disable_btn": "SSLを無効化"
   },
   "hubkey": {
     "modal_title": "🔑 サーバー公開鍵ファイル (copier_hub.key)",
@@ -332,7 +350,11 @@
     "webhook_headers": "カスタムヘッダー (JSON形式、任意)",
     "webhook_headers_hint": "JSON形式のリクエストヘッダー（例: Bearer認証トークン）。",
     "btn_test_send": "🚀 テスト送信",
-    "btn_save_channel": "チャンネルを保存"
+    "btn_save_channel": "チャンネルを保存",
+    "confirm_delete_title": "通知チャンネルの削除",
+    "confirm_delete_desc": "通知チャンネル <strong>{name}</strong> を削除しますか？",
+    "confirm_delete_detail": "このチャンネル ({type}) にはアラートが送信されなくなります。",
+    "confirm_delete_btn": "チャンネルを削除"
   },
   "users": {
     "title": "ユーザー管理",
@@ -352,7 +374,11 @@
     "btn_addupdate": "追加 / 更新",
     "role_viewer": "閲覧者 (viewer)",
     "role_operator": "運用者 (operator)",
-    "role_admin": "管理者 (admin)"
+    "role_admin": "管理者 (admin)",
+    "confirm_delete_title": "ユーザーアカウントの削除",
+    "confirm_delete_desc": "ユーザー <code>{id}</code> を削除しますか？",
+    "confirm_delete_detail": "このユーザーは直ちにHub Webダッシュボードへのアクセス権を失い、アクティブなセッションはすべて無効化されます。",
+    "confirm_delete_btn": "ユーザーを削除"
   },
   "footer": {
     "cmd_off_note": "操作コマンド無効: このHubは --writes off で起動されています。操作コマンドを送信するには --writes on で再起動してください。",
@@ -410,6 +436,14 @@
     "tab_exec": "🛑 約定とSL/TP",
     "tab_filters": "🔍 フィルターと方向",
     "tab_delays": "⏳ 連打防止と遅延",
-    "tab_schedule": "📅 取引時間とタイムアウト"
+    "tab_schedule": "📅 取引時間とタイムアウト",
+    "confirm_reset_template_title": "スターターテンプレートにリセット",
+    "confirm_reset_template_desc": "エディタをデフォルトのスターターテンプレートでリセットしますか？",
+    "confirm_reset_template_detail": "ビジュアルエディタとRaw INIの未保存の変更はすべてクリーンなデフォルトで上書きされます。",
+    "confirm_reset_template_btn": "テンプレートをリセット",
+    "confirm_rollback_title": "設定ロールバックの確認",
+    "confirm_rollback_desc": "端末 <code>{target}</code> を直ちに第 {rev} 版へロールバックしますか？",
+    "confirm_rollback_detail": "現在の設定は第 {rev} 版の内容に戻され、直ちに受信端末へ配信されます。",
+    "confirm_rollback_btn": "第 {rev} 版へロールバック"
   }
 }

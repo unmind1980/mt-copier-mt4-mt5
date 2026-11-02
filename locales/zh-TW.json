@@ -111,7 +111,11 @@
     "cmd_issued": "指令已發布: {cid}",
     "cmd_acked": "指令 {cid} 已由終端 {node} 確認執行",
     "cmd_rejected": "指令 {cid} 被終端 {node} 拒絕: {reason}",
-    "cmd_failed": "指令執行失敗: {error}"
+    "cmd_failed": "指令執行失敗: {error}",
+    "confirm_batch_reload_title": "批次重載全部節點",
+    "confirm_batch_reload_desc": "確定向所有已連線的節點發布設定重載指令嗎？",
+    "confirm_batch_reload_detail": "所有連線的終端將重新讀取本機設定檔，期間不會干擾正在持倉的單子。",
+    "confirm_batch_reload_btn": "重載全部節點"
   },
   "cockpit": {
     "connected_terminals": "已連線終端",
@@ -222,7 +226,17 @@
     "input_zmq_port_hint": "預設 6000 (單机開發測試為 6001)",
     "btn_clear": "⏹️ 清空對端 (單機模式)",
     "btn_save": "🚀 儲存並套用設定",
-    "btn_close": "關閉"
+    "btn_close": "關閉",
+    "confirm_promote_title": "⚡ 升為主節點",
+    "confirm_promote_desc": "確定要將此備機節點緊急提升為主節點嗎？<br><br><b>⚠️ 重要先決條件</b>：請確保原主節點已離線或隔離，以防腦裂雙寫衝突！",
+    "confirm_promote_btn": "確認提升",
+    "confirm_failback_title": "⚡ 立即觸發安全回切",
+    "confirm_failback_desc": "確定向目前主節點發起安全握手交接，重新收回 Master 主機角色嗎？<br><br><b>交接安全性保證</b>：目前主節點將先關閉寫權限並降級，隨後本節點接管主機，實現零雙寫風險。",
+    "confirm_failback_btn": "立即回切",
+    "confirm_standalone_title": "切換為單機模式",
+    "confirm_standalone_desc": "確定要清除對端設定並切換為單機獨立模式嗎？",
+    "confirm_standalone_detail": "本節點將作為獨立的單一 Hub 運行，停止叢集同步與對端拓撲廣播。",
+    "confirm_standalone_btn": "切換為單機模式"
   },
   "ssl": {
     "title": "🔒 SSL / HTTPS 安全連線設定",
@@ -259,7 +273,11 @@
     "btn_disable": "⛔ 停用 SSL (切回 HTTP)",
     "btn_renew": "🔄 立即續期",
     "btn_save": "🚀 儲存並套用設定",
-    "btn_close": "關閉"
+    "btn_close": "關閉",
+    "confirm_disable_title": "停用 SSL 並切回 HTTP",
+    "confirm_disable_desc": "確定要停用 SSL 加密並切回一般的 HTTP 明文模式嗎？",
+    "confirm_disable_detail": "後續連線將不再啟用 TLS 加密保護。僅建議在內部隔離網路或排查連線故障時使用。",
+    "confirm_disable_btn": "停用 SSL"
   },
   "hubkey": {
     "modal_title": "🔑 伺服器公鑰憑證 (copier_hub.key)",
@@ -332,7 +350,11 @@
     "webhook_headers": "自訂 HTTP 請求標頭 (JSON 格式，選填)",
     "webhook_headers_hint": "以 JSON 鍵值對傳遞的請求標頭 (例如 Bearer 鑑權 token)。",
     "btn_test_send": "🚀 發送測試",
-    "btn_save_channel": "儲存管道"
+    "btn_save_channel": "儲存管道",
+    "confirm_delete_title": "刪除警報通知管道",
+    "confirm_delete_desc": "確定刪除通知管道 <strong>{name}</strong> 嗎？",
+    "confirm_delete_detail": "系統警報將不再向此管道 ({type}) 發布任何訊息。",
+    "confirm_delete_btn": "刪除管道"
   },
   "users": {
     "title": "系統使用者管理",
@@ -352,7 +374,11 @@
     "btn_addupdate": "新增 / 更新使用者",
     "role_viewer": "訪客 (viewer)",
     "role_operator": "操作員 (operator)",
-    "role_admin": "管理員 (admin)"
+    "role_admin": "管理員 (admin)",
+    "confirm_delete_title": "刪除系統使用者帳號",
+    "confirm_delete_desc": "確定要刪除使用者 <code>{id}</code> 嗎？",
+    "confirm_delete_detail": "該使用者將立即失去對 Hub Web 主控台的存取權限，且目前帳號的所有活躍登入工作階段都將失效。",
+    "confirm_delete_btn": "刪除使用者"
   },
   "footer": {
     "cmd_off_note": "操作指令已關閉：此 Hub 以 --writes off 啟動。請以 --writes on 重啟 Hub 以發布暫停/恢復/平倉指令。",
@@ -410,6 +436,14 @@
     "tab_exec": "🛑 訂單執行與止損",
     "tab_filters": "🔍 過濾條件與方向",
     "tab_delays": "⏳ 防堆疊與延遲",
-    "tab_schedule": "📅 交易時間與超時"
+    "tab_schedule": "📅 交易時間與超時",
+    "confirm_reset_template_title": "重置預設範例範本",
+    "confirm_reset_template_desc": "確認使用預設範例範本重置編輯器嗎？",
+    "confirm_reset_template_detail": "目前視覺化編輯器和 INI 源碼中所有未儲存的修改將被預設範本覆蓋。",
+    "confirm_reset_template_btn": "重置範本",
+    "confirm_rollback_title": "確認設定復原",
+    "confirm_rollback_desc": "確定要立即將終端 <code>{target}</code> 復原至版本 {rev} 嗎？",
+    "confirm_rollback_detail": "運行中的設定將立即恢復為版本 {rev} 的內容並推送給接收端終端執行。",
+    "confirm_rollback_btn": "復原至版本 {rev}"
   }
 }

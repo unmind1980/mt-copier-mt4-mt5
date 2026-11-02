@@ -1360,7 +1360,7 @@
             justify-content:center;align-items:flex-start;overflow-y:auto;z-index:10000;padding:24px 12px;box-sizing:border-box}
   #cfgmodal.hidden{display:none}
   .cfgbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-          width:860px;max-width:96vw;max-height:calc(100vh - 48px);display:flex;flex-direction:column;
+          width:1180px;max-width:96vw;max-height:calc(100vh - 48px);display:flex;flex-direction:column;
           box-shadow:0 16px 48px rgba(0,0,0,.35);overflow:hidden;margin:auto}
   .cfghead{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
            justify-content:space-between;align-items:center;background:var(--surface-header);flex-shrink:0}
@@ -1512,8 +1512,8 @@
   .symrow{display:flex;gap:6px;align-items:center;margin-bottom:4px}
   .symrow input{flex:1;padding:4px 6px;border:1px solid var(--line);border-radius:4px;
                 font:12px var(--mono);background:var(--panel);color:var(--ink)}
-  .sc-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:12px 0 8px;padding-bottom:0;flex-wrap:wrap}
-  .sc-tab{background:none;border:none;border-bottom:2px solid transparent;padding:5px 9px;font-size:11px;font-weight:600;color:var(--dim);cursor:pointer;border-radius:3px 3px 0 0}
+  .sc-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:12px 0 8px;padding-bottom:0;flex-wrap:nowrap;overflow-x:auto}
+  .sc-tab{background:none;border:none;border-bottom:2px solid transparent;padding:6px 12px;font-size:11.5px;font-weight:600;color:var(--dim);cursor:pointer;border-radius:3px 3px 0 0;white-space:nowrap}
   .sc-tab:hover{color:var(--ink)}
   .sc-tab.active{color:#0969da;border-bottom-color:#0969da;font-weight:700}
   .sc-panel{background:var(--bg);padding:10px 12px;border-radius:6px;border:1px solid var(--line);margin-bottom:8px}
@@ -1534,37 +1534,37 @@
               padding:7px 14px;border-radius:6px;cursor:pointer;font:13px system-ui,sans-serif;font-weight:600}
   .btn-danger:hover{background:#a32014}
   .btn-danger:disabled{opacity:.55;cursor:default}
-  /* --- Confirmation Modal (Dangerous Operations) ------------------- */
-  #confirmmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
-                align-items:center;justify-content:center;z-index:1100}
+  /* --- Confirmation Modal (Dangerous Operations & Prompts) --------- */
+  #confirmmodal{position:fixed;inset:0;background:rgba(20,24,28,.65);display:flex;
+                align-items:center;justify-content:center;z-index:20000}
   #confirmmodal.hidden{display:none}
-  .confirmbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
-              width:460px;max-width:94vw;display:flex;flex-direction:column;
-              box-shadow:0 12px 36px rgba(0,0,0,.25);overflow:hidden}
-  .confirmhead{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;
-               justify-content:space-between;align-items:center;background:var(--bg)}
+  .confirmbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+              width:480px;max-width:94vw;display:flex;flex-direction:column;
+              box-shadow:0 16px 48px rgba(0,0,0,.35);overflow:hidden}
+  .confirmhead{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;
+               justify-content:space-between;align-items:center;background:var(--surface-header)}
   .confirmhead h2{margin:0;font-size:14.5px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:6px}
-  .confirmbody{padding:18px 20px;display:flex;gap:14px;align-items:flex-start}
+  .confirmbody{padding:20px 22px;display:flex;gap:14px;align-items:flex-start}
   .confirm-icon{font-size:26px;line-height:1;flex-shrink:0}
   .confirm-content{flex:1}
   .confirm-desc{font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.45;margin-bottom:6px}
   .confirm-detail{font-size:12px;color:var(--dim);line-height:1.5}
-  .confirmfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;
-               justify-content:flex-end;align-items:center;background:var(--bg);gap:10px}
+  .confirmfoot{padding:14px 20px;border-top:1px solid var(--line);display:flex;
+               justify-content:flex-end;align-items:center;background:var(--surface-header);gap:10px}
   .cfgnotice{padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;line-height:1.4}
   .cfgnotice.warn{background:#fff7e0;border:1px solid #ecd9a0;color:#7a5a00}
   /* --- Notification Channels ---------------------------------------- */
-  #notifmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-              align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
+  #notifmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+              align-items:center;justify-content:center;z-index:10000;padding:20px 12px;box-sizing:border-box}
   #notifmodal.hidden{display:none}
-  #hubkeymodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-               align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
+  #hubkeymodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+               align-items:center;justify-content:center;z-index:10000;padding:20px 12px;box-sizing:border-box}
   #hubkeymodal.hidden{display:none}
-  #sslmodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-            align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
+  #sslmodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+            align-items:center;justify-content:center;z-index:10000;padding:20px 12px;box-sizing:border-box}
   #sslmodal.hidden{display:none}
-  #peermodal{position:fixed;inset:0;background:rgba(20,24,28,.45);display:flex;
-             align-items:center;justify-content:center;z-index:1050;padding:20px 12px;box-sizing:border-box}
+  #peermodal{position:fixed;inset:0;background:rgba(20,24,28,.55);display:flex;
+             align-items:center;justify-content:center;z-index:10000;padding:20px 12px;box-sizing:border-box}
   #peermodal.hidden{display:none}
   .notifbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;
             width:580px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;
@@ -2820,7 +2820,11 @@ var I18N_BUILTIN = {
           "cmd_issued": "Command Issued: {cid}",
           "cmd_acked": "Command {cid} executed successfully by {node}",
           "cmd_rejected": "Command {cid} rejected by {node}: {reason}",
-          "cmd_failed": "Command failed: {error}"
+          "cmd_failed": "Command failed: {error}",
+          "confirm_batch_reload_title": "Reload All Nodes",
+          "confirm_batch_reload_desc": "Reload configuration on ALL connected nodes?",
+          "confirm_batch_reload_detail": "All connected nodes will re-read their local configuration files without interrupting open positions.",
+          "confirm_batch_reload_btn": "Reload All Nodes"
       },
       "cockpit": {
           "connected_terminals": "Connected Terminals",
@@ -2931,7 +2935,17 @@ var I18N_BUILTIN = {
           "input_zmq_port_hint": "Default 6000 (or 6001 for local test)",
           "btn_clear": "⏹️ Clear Peer (Standalone Mode)",
           "btn_save": "🚀 Save & Apply",
-          "btn_close": "Close"
+          "btn_close": "Close",
+          "confirm_promote_title": "⚡ Promote to Primary",
+          "confirm_promote_desc": "Are you sure you want to promote this Standby node to Primary?<br><br><b>⚠️ Important Precondition</b>: Please ensure the original Primary node is offline or isolated to prevent split-brain conflicts!",
+          "confirm_promote_btn": "Confirm Promotion",
+          "confirm_failback_title": "⚡ Trigger Safe Failback Now",
+          "confirm_failback_desc": "Initiate safe handover handshake with the current Primary node to reclaim Master role?<br><br><b>Handover Safety</b>: The current Primary will disable writes and demote first, then this node assumes Master with zero dual-write window.",
+          "confirm_failback_btn": "Failback Now",
+          "confirm_standalone_title": "Switch to Standalone Mode",
+          "confirm_standalone_desc": "Are you sure you want to clear peer configuration and switch to Standalone mode?",
+          "confirm_standalone_detail": "This node will run as an isolated single hub, stopping synchronization and peer topology broadcast.",
+          "confirm_standalone_btn": "Switch to Standalone"
       },
       "ssl": {
           "title": "🔒 SSL / HTTPS Settings",
@@ -2968,7 +2982,11 @@ var I18N_BUILTIN = {
           "btn_disable": "⛔ Disable SSL (HTTP Mode)",
           "btn_renew": "🔄 Renew Now",
           "btn_save": "🚀 Save & Apply",
-          "btn_close": "Close"
+          "btn_close": "Close",
+          "confirm_disable_title": "Disable SSL / Revert to HTTP",
+          "confirm_disable_desc": "Are you sure you want to disable SSL encryption and revert to HTTP?",
+          "confirm_disable_detail": "Subsequent connections will not use TLS encryption. Recommended only for troubleshooting or private networks.",
+          "confirm_disable_btn": "Disable SSL"
       },
       "hubkey": {
           "modal_title": "🔑 Hub Public Key File (copier_hub.key)",
@@ -3041,7 +3059,11 @@ var I18N_BUILTIN = {
           "webhook_headers": "Custom Headers (JSON Object, Optional)",
           "webhook_headers_hint": "Custom request headers in JSON format (e.g. Bearer auth tokens).",
           "btn_test_send": "🚀 Test Send",
-          "btn_save_channel": "Save Channel"
+          "btn_save_channel": "Save Channel",
+          "confirm_delete_title": "Delete Notification Channel",
+          "confirm_delete_desc": "Delete notification channel <strong>{name}</strong>?",
+          "confirm_delete_detail": "Alerts will no longer be dispatched to this channel ({type}).",
+          "confirm_delete_btn": "Delete Channel"
       },
       "users": {
           "title": "Users",
@@ -3061,7 +3083,11 @@ var I18N_BUILTIN = {
           "btn_addupdate": "add / update",
           "role_viewer": "viewer",
           "role_operator": "operator",
-          "role_admin": "admin"
+          "role_admin": "admin",
+          "confirm_delete_title": "Delete User Account",
+          "confirm_delete_desc": "Delete user <code>{id}</code>?",
+          "confirm_delete_detail": "The user will immediately lose access to the Hub Web Dashboard and all active sessions for this account will be invalidated.",
+          "confirm_delete_btn": "Delete User"
       },
       "footer": {
           "cmd_off_note": "commands are OFF: this hub started with --writes off. Restart without --writes off (or with --writes on) to issue operational commands.",
@@ -3119,7 +3145,15 @@ var I18N_BUILTIN = {
           "tab_exec": "🛑 Execution & Stops",
           "tab_filters": "🔍 Filters & Direction",
           "tab_delays": "⏳ Anti-Stack & Delays",
-          "tab_schedule": "📅 Schedule & Timeout"
+          "tab_schedule": "📅 Schedule & Timeout",
+          "confirm_reset_template_title": "Reset Starter Template",
+          "confirm_reset_template_desc": "Reset editor with default starter template?",
+          "confirm_reset_template_detail": "All unsaved changes in the Visual Editor and Raw INI will be replaced with clean defaults.",
+          "confirm_reset_template_btn": "Reset Template",
+          "confirm_rollback_title": "Rollback Configuration",
+          "confirm_rollback_desc": "Immediately rollback <code>{target}</code> to Revision {rev}?",
+          "confirm_rollback_detail": "The live configuration will be reverted to Revision {rev} and pushed to the receiver node immediately.",
+          "confirm_rollback_btn": "Rollback to Rev {rev}"
       }
   },
   "zh-CN": {
@@ -3229,7 +3263,11 @@ var I18N_BUILTIN = {
           "cmd_issued": "指令已下发: {cid}",
           "cmd_acked": "指令 {cid} 已由终端 {node} 确认执行",
           "cmd_rejected": "指令 {cid} 被终端 {node} 拒绝: {reason}",
-          "cmd_failed": "指令执行失败: {error}"
+          "cmd_failed": "指令执行失败: {error}",
+          "confirm_batch_reload_title": "批量重载全部节点",
+          "confirm_batch_reload_desc": "确定向所有已连接的节点下发配置重载指令吗？",
+          "confirm_batch_reload_detail": "所有连接的终端将重新读取本地配置文件，期间不会干扰正在持仓的单子。",
+          "confirm_batch_reload_btn": "重载全部节点"
       },
       "cockpit": {
           "connected_terminals": "已連線終端",
@@ -3340,7 +3378,17 @@ var I18N_BUILTIN = {
           "input_zmq_port_hint": "預設 6000 (單机開發測試為 6001)",
           "btn_clear": "⏹️ 清空對端 (單機模式)",
           "btn_save": "🚀 儲存並套用設定",
-          "btn_close": "關閉"
+          "btn_close": "關閉",
+          "confirm_promote_title": "⚡ 升为主节点",
+          "confirm_promote_desc": "确定要将此备机节点紧急提升为主节点吗？<br><br><b>⚠️ 重要先决条件</b>：请确保原主节点已离线或隔离，以防脑裂双写冲突！",
+          "confirm_promote_btn": "确认提升",
+          "confirm_failback_title": "⚡ 立即触发安全回切",
+          "confirm_failback_desc": "确定向当前主节点发起安全握手交接，重新收回 Master 主机角色吗？<br><br><b>交接安全性保证</b>：当前主节点将先关闭写权限并降级，随后本节点接管主机，实现零双写风险。",
+          "confirm_failback_btn": "立即回切",
+          "confirm_standalone_title": "切换为单机模式",
+          "confirm_standalone_desc": "确定要清除对端配置并切换为单机独立模式吗？",
+          "confirm_standalone_detail": "本节点将作为独立的单一 Hub 运行，停止集群同步与对端拓扑广播。",
+          "confirm_standalone_btn": "切换为单机模式"
       },
       "ssl": {
           "title": "🔒 SSL / HTTPS 安全連線設定",
@@ -3377,7 +3425,11 @@ var I18N_BUILTIN = {
           "btn_disable": "⛔ 停用 SSL (切回 HTTP)",
           "btn_renew": "🔄 立即續期",
           "btn_save": "🚀 儲存並套用設定",
-          "btn_close": "關閉"
+          "btn_close": "關閉",
+          "confirm_disable_title": "停用 SSL 并切回 HTTP",
+          "confirm_disable_desc": "确定要停用 SSL 加密并切回普通的 HTTP 明文模式吗？",
+          "confirm_disable_detail": "后续连接将不再启用 TLS 加密保护。仅建议在内部隔离网络或排查连接故障时使用。",
+          "confirm_disable_btn": "停用 SSL"
       },
       "hubkey": {
           "modal_title": "🔑 伺服器公鑰憑證 (copier_hub.key)",
@@ -3450,7 +3502,11 @@ var I18N_BUILTIN = {
           "webhook_headers": "自定义 HTTP 请求头 (JSON 格式，可选)",
           "webhook_headers_hint": "以 JSON 键值对传递的请求头 (例如 Bearer 鉴权 token)。",
           "btn_test_send": "🚀 发送测试",
-          "btn_save_channel": "保存渠道"
+          "btn_save_channel": "保存渠道",
+          "confirm_delete_title": "删除告警通知渠道",
+          "confirm_delete_desc": "确定删除通知渠道 <strong>{name}</strong> 吗？",
+          "confirm_delete_detail": "系统告警将不再向此渠道 ({type}) 推送任何消息。",
+          "confirm_delete_btn": "删除渠道"
       },
       "users": {
           "title": "系統使用者管理",
@@ -3470,7 +3526,11 @@ var I18N_BUILTIN = {
           "btn_addupdate": "新增 / 更新使用者",
           "role_viewer": "訪客 (viewer)",
           "role_operator": "操作員 (operator)",
-          "role_admin": "管理員 (admin)"
+          "role_admin": "管理員 (admin)",
+          "confirm_delete_title": "删除系统用户账号",
+          "confirm_delete_desc": "确定要删除用户 <code>{id}</code> 吗？",
+          "confirm_delete_detail": "该用户将立即失去对 Hub Web 控制台的访问权限，且当前账户的所有活跃登录会话都将失效。",
+          "confirm_delete_btn": "删除用户"
       },
       "footer": {
           "cmd_off_note": "操作指令已關閉：此 Hub 以 --writes off 啟動。請以 --writes on 重啟 Hub 以發布暫停/恢復/平倉指令。",
@@ -3528,7 +3588,15 @@ var I18N_BUILTIN = {
           "tab_exec": "🛑 订单执行与止损",
           "tab_filters": "🔍 过滤条件与方向",
           "tab_delays": "⏳ 防堆叠与延时",
-          "tab_schedule": "📅 交易时间与超时"
+          "tab_schedule": "📅 交易时间与超时",
+          "confirm_reset_template_title": "重置预设示例模板",
+          "confirm_reset_template_desc": "确认使用预设示例模板重置编辑器吗？",
+          "confirm_reset_template_detail": "当前可视化编辑器和 INI 源码中所有未保存的修改将被默认模板覆盖。",
+          "confirm_reset_template_btn": "重置模板",
+          "confirm_rollback_title": "确认配置回滚",
+          "confirm_rollback_desc": "确定要立即将终端 <code>{target}</code> 回滚至版本 {rev} 吗？",
+          "confirm_rollback_detail": "运行中的配置将立即恢复为版本 {rev} 的内容并推送给接收端终端执行。",
+          "confirm_rollback_btn": "回滚至版本 {rev}"
       }
   }
 };
@@ -3790,8 +3858,8 @@ function fmtAge(sec){
 
 function confirmDialog(opts){
   return new Promise(function(resolve){
-    $("confirmtitle").textContent = opts.title || "Confirm Action";
-    $("confirmdesc").innerHTML = opts.desc || "Are you sure you want to proceed?";
+    $("confirmtitle").textContent = opts.title || t("common.confirm");
+    $("confirmdesc").innerHTML = opts.desc || t("common.confirm");
     var detailEl = $("confirmdetail");
     if(opts.detail){
       detailEl.innerHTML = opts.detail;
@@ -3808,9 +3876,9 @@ function confirmDialog(opts){
     }
     $("confirmicon").textContent = opts.icon || (opts.danger ? "⚠️" : "ℹ️");
     var okBtn = $("confirmokbtn");
-    okBtn.textContent = opts.confirmText || "Confirm";
+    okBtn.textContent = opts.confirmText || t("common.confirm");
     okBtn.className = opts.danger ? "btn-danger" : "btn-primary";
-    $("confirmcancelbtn").textContent = opts.cancelText || "Cancel";
+    $("confirmcancelbtn").textContent = opts.cancelText || t("common.cancel");
     $("confirmmodal").classList.remove("hidden");
     okBtn.focus();
 
@@ -5177,40 +5245,38 @@ function renderCluster(cl){
 
 function onClusterPromote(){
   confirmDialog({
-    title: "⚡ Promote to Primary",
-    desc: "Are you sure you want to promote this Standby node to Primary?<br><br><b>⚠️ Important Precondition</b>: Please ensure the original Primary node is offline or isolated to prevent split-brain conflicts!",
+    title: t("cluster.confirm_promote_title"),
+    desc: t("cluster.confirm_promote_desc"),
     danger: true,
-    confirmText: "Confirm Promotion",
-    cancelText: "Cancel"
+    confirmText: t("cluster.confirm_promote_btn")
   }).then(function(ok){
     if(!ok) return;
     api("/api/v1/cluster/promote", { method: "POST" })
       .then(function(res){
-        alert("Promotion successful! This node is now Primary (Epoch " + res.epoch + "), writes enabled.");
+        showToast("⚡ " + t("common.success"), "Promotion successful! This node is now Primary (Epoch " + res.epoch + ").", "ok");
         refresh();
       })
       .catch(function(e){
-        alert("Promotion failed: " + e.message);
+        showToast("⚠️ " + t("common.error"), "Promotion failed: " + e.message, "bad");
       });
   });
 }
 
 function onClusterFailbackNow(){
   confirmDialog({
-    title: "⚡ Trigger Safe Failback Now",
-    desc: "Initiate safe handover handshake with the current Primary node to reclaim Master role?<br><br><b>Handover Safety</b>: The current Primary will disable writes and demote first, then this node assumes Master with zero dual-write window.",
+    title: t("cluster.confirm_failback_title"),
+    desc: t("cluster.confirm_failback_desc"),
     danger: false,
-    confirmText: "Failback Now",
-    cancelText: "Cancel"
+    confirmText: t("cluster.confirm_failback_btn")
   }).then(function(ok){
     if(!ok) return;
     api("/api/v1/cluster/failback-now", { method: "POST" })
       .then(function(res){
-        alert("Failback successful! Reclaimed Master role (Epoch " + res.epoch + "), writes enabled.");
+        showToast("⚡ " + t("common.success"), "Failback successful! Reclaimed Master role (Epoch " + res.epoch + ").", "ok");
         refresh();
       })
       .catch(function(e){
-        alert("Failback failed: " + e.message);
+        showToast("⚠️ " + t("common.error"), "Failback failed: " + e.message, "bad");
       });
   });
 }
@@ -6277,11 +6343,11 @@ function startDashboard(){
   if(btnBatchR){
     btnBatchR.addEventListener("click", function(){
       confirmDialog({
-        title: "Reload All Nodes",
-        desc: "Reload configuration on ALL connected nodes?",
-        detail: "All connected nodes will re-read their local configuration files without interrupting open positions.",
+        title: t("nodes.confirm_batch_reload_title"),
+        desc: t("nodes.confirm_batch_reload_desc"),
+        detail: t("nodes.confirm_batch_reload_detail"),
         danger: false,
-        confirmText: "Reload All Nodes"
+        confirmText: t("nodes.confirm_batch_reload_btn")
       }).then(function(ok){
         if(ok) sendGlobal("reload");
       });
@@ -6459,11 +6525,11 @@ function userAction(act, id, ev){
   var u = s.users.rows.filter(function(x){ return x.id === id; })[0];
   if(act === "del"){
     confirmDialog({
-      title: "Delete User Account",
-      desc: "Delete user <code>" + esc(id) + "</code>?",
-      detail: "The user will immediately lose access to the Hub Web Dashboard and all active sessions for this account will be invalidated.",
+      title: t("users.confirm_delete_title"),
+      desc: t("users.confirm_delete_desc", { id: id }),
+      detail: t("users.confirm_delete_detail"),
       danger: true,
-      confirmText: "Delete User"
+      confirmText: t("users.confirm_delete_btn")
     }).then(function(ok){
       if(!ok) return;
       api("/api/v1/users/" + encodeURIComponent(id), { method: "DELETE" })
@@ -7011,11 +7077,11 @@ $("notifbody").addEventListener("click", function(ev){
 
   if(act === "del"){
     confirmDialog({
-      title: "Delete Notification Channel",
-      desc: "Delete notification channel <strong>" + esc(ch.name) + "</strong>?",
-      detail: "Alerts will no longer be dispatched to this channel (" + esc(ch.channel_type) + ").",
+      title: t("notif.confirm_delete_title"),
+      desc: t("notif.confirm_delete_desc", { name: ch.name }),
+      detail: t("notif.confirm_delete_detail", { type: ch.channel_type }),
       danger: true,
-      confirmText: "Delete Channel"
+      confirmText: t("notif.confirm_delete_btn")
     }).then(function(ok){
       if(!ok) return;
       api("/api/v1/notifications/" + encodeURIComponent(nid), { method: "DELETE" })
@@ -7867,11 +7933,11 @@ $("cfgaddsender").addEventListener("click", function(){
 
 $("cfgloadtemplate").addEventListener("click", function(){
   confirmDialog({
-    title: "Reset Starter Template",
-    desc: "Reset editor with default starter template?",
-    detail: "All unsaved changes in the Visual Editor and Raw INI will be replaced with clean defaults.",
+    title: t("cfg.confirm_reset_template_title"),
+    desc: t("cfg.confirm_reset_template_desc"),
+    detail: t("cfg.confirm_reset_template_detail"),
     danger: false,
-    confirmText: "Reset Template"
+    confirmText: t("cfg.confirm_reset_template_btn")
   }).then(function(ok){
     if(!ok) return;
     var ini = getDefaultIni(cfgState.target);
@@ -8140,11 +8206,11 @@ $("cfgrollbackbtn").addEventListener("click", function(){
     return;
   }
   confirmDialog({
-    title: "Rollback Configuration",
-    desc: "Immediately rollback <code>" + esc(cfgState.target) + "</code> to Revision " + esc(rev) + "?",
-    detail: "The live configuration will be reverted to Revision " + esc(rev) + " and pushed to the receiver node immediately.",
+    title: t("cfg.confirm_rollback_title"),
+    desc: t("cfg.confirm_rollback_desc", { target: cfgState.target, rev: rev }),
+    detail: t("cfg.confirm_rollback_detail", { rev: rev }),
     danger: true,
-    confirmText: "Rollback to Rev " + rev
+    confirmText: t("cfg.confirm_rollback_btn", { rev: rev })
   }).then(function(ok){
     if(!ok) return;
 
@@ -8474,11 +8540,11 @@ function saveSslConfig(){
 
 function disableSsl(){
   confirmDialog({
-    title: "Disable SSL / Revert to HTTP",
-    desc: "Are you sure you want to disable SSL encryption and revert to HTTP?",
-    detail: "Subsequent connections will not use TLS encryption. Recommended only for troubleshooting or private networks.",
+    title: t("ssl.confirm_disable_title"),
+    desc: t("ssl.confirm_disable_desc"),
+    detail: t("ssl.confirm_disable_detail"),
     danger: true,
-    confirmText: "Disable SSL"
+    confirmText: t("ssl.confirm_disable_btn")
   }).then(function(ok){
     if(!ok) return;
     var msg = $("ssl_opmsg");
@@ -8602,11 +8668,11 @@ function savePeerConfig(){
 
 function clearPeerConfig(){
   confirmDialog({
-    title: "Switch to Standalone Mode",
-    desc: "Are you sure you want to clear peer configuration and switch to Standalone mode?",
-    detail: "This node will run as an isolated single hub, stopping synchronization and peer topology broadcast.",
+    title: t("cluster.confirm_standalone_title"),
+    desc: t("cluster.confirm_standalone_desc"),
+    detail: t("cluster.confirm_standalone_detail"),
     danger: false,
-    confirmText: "Switch to Standalone"
+    confirmText: t("cluster.confirm_standalone_btn")
   }).then(function(ok){
     if(!ok) return;
     var msg = $("peer_opmsg");

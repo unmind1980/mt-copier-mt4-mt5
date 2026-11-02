@@ -111,7 +111,11 @@
     "cmd_issued": "Command Issued: {cid}",
     "cmd_acked": "Command {cid} executed successfully by {node}",
     "cmd_rejected": "Command {cid} rejected by {node}: {reason}",
-    "cmd_failed": "Command failed: {error}"
+    "cmd_failed": "Command failed: {error}",
+    "confirm_batch_reload_title": "Reload All Nodes",
+    "confirm_batch_reload_desc": "Reload configuration on ALL connected nodes?",
+    "confirm_batch_reload_detail": "All connected nodes will re-read their local configuration files without interrupting open positions.",
+    "confirm_batch_reload_btn": "Reload All Nodes"
   },
   "cockpit": {
     "connected_terminals": "Connected Terminals",
@@ -222,7 +226,17 @@
     "input_zmq_port_hint": "Default 6000 (or 6001 for local test)",
     "btn_clear": "⏹️ Clear Peer (Standalone Mode)",
     "btn_save": "🚀 Save & Apply",
-    "btn_close": "Close"
+    "btn_close": "Close",
+    "confirm_promote_title": "⚡ Promote to Primary",
+    "confirm_promote_desc": "Are you sure you want to promote this Standby node to Primary?<br><br><b>⚠️ Important Precondition</b>: Please ensure the original Primary node is offline or isolated to prevent split-brain conflicts!",
+    "confirm_promote_btn": "Confirm Promotion",
+    "confirm_failback_title": "⚡ Trigger Safe Failback Now",
+    "confirm_failback_desc": "Initiate safe handover handshake with the current Primary node to reclaim Master role?<br><br><b>Handover Safety</b>: The current Primary will disable writes and demote first, then this node assumes Master with zero dual-write window.",
+    "confirm_failback_btn": "Failback Now",
+    "confirm_standalone_title": "Switch to Standalone Mode",
+    "confirm_standalone_desc": "Are you sure you want to clear peer configuration and switch to Standalone mode?",
+    "confirm_standalone_detail": "This node will run as an isolated single hub, stopping synchronization and peer topology broadcast.",
+    "confirm_standalone_btn": "Switch to Standalone"
   },
   "ssl": {
     "title": "🔒 SSL / HTTPS Settings",
@@ -259,7 +273,11 @@
     "btn_disable": "⛔ Disable SSL (HTTP Mode)",
     "btn_renew": "🔄 Renew Now",
     "btn_save": "🚀 Save & Apply",
-    "btn_close": "Close"
+    "btn_close": "Close",
+    "confirm_disable_title": "Disable SSL / Revert to HTTP",
+    "confirm_disable_desc": "Are you sure you want to disable SSL encryption and revert to HTTP?",
+    "confirm_disable_detail": "Subsequent connections will not use TLS encryption. Recommended only for troubleshooting or private networks.",
+    "confirm_disable_btn": "Disable SSL"
   },
   "hubkey": {
     "modal_title": "🔑 Hub Public Key File (copier_hub.key)",
@@ -332,7 +350,11 @@
     "webhook_headers": "Custom Headers (JSON Object, Optional)",
     "webhook_headers_hint": "Custom request headers in JSON format (e.g. Bearer auth tokens).",
     "btn_test_send": "🚀 Test Send",
-    "btn_save_channel": "Save Channel"
+    "btn_save_channel": "Save Channel",
+    "confirm_delete_title": "Delete Notification Channel",
+    "confirm_delete_desc": "Delete notification channel <strong>{name}</strong>?",
+    "confirm_delete_detail": "Alerts will no longer be dispatched to this channel ({type}).",
+    "confirm_delete_btn": "Delete Channel"
   },
   "users": {
     "title": "Users",
@@ -352,7 +374,11 @@
     "btn_addupdate": "add / update",
     "role_viewer": "viewer",
     "role_operator": "operator",
-    "role_admin": "admin"
+    "role_admin": "admin",
+    "confirm_delete_title": "Delete User Account",
+    "confirm_delete_desc": "Delete user <code>{id}</code>?",
+    "confirm_delete_detail": "The user will immediately lose access to the Hub Web Dashboard and all active sessions for this account will be invalidated.",
+    "confirm_delete_btn": "Delete User"
   },
   "footer": {
     "cmd_off_note": "commands are OFF: this hub started with --writes off. Restart without --writes off (or with --writes on) to issue operational commands.",
@@ -410,6 +436,14 @@
     "tab_exec": "🛑 Execution & Stops",
     "tab_filters": "🔍 Filters & Direction",
     "tab_delays": "⏳ Anti-Stack & Delays",
-    "tab_schedule": "📅 Schedule & Timeout"
+    "tab_schedule": "📅 Schedule & Timeout",
+    "confirm_reset_template_title": "Reset Starter Template",
+    "confirm_reset_template_desc": "Reset editor with default starter template?",
+    "confirm_reset_template_detail": "All unsaved changes in the Visual Editor and Raw INI will be replaced with clean defaults.",
+    "confirm_reset_template_btn": "Reset Template",
+    "confirm_rollback_title": "Rollback Configuration",
+    "confirm_rollback_desc": "Immediately rollback <code>{target}</code> to Revision {rev}?",
+    "confirm_rollback_detail": "The live configuration will be reverted to Revision {rev} and pushed to the receiver node immediately.",
+    "confirm_rollback_btn": "Rollback to Rev {rev}"
   }
 }

@@ -111,7 +111,11 @@
     "cmd_issued": "Команда отправлена: {cid}",
     "cmd_acked": "Команда {cid} подтверждена узлом {node}",
     "cmd_rejected": "Команда {cid} отклонена узлом {node}: {reason}",
-    "cmd_failed": "Ошибка отправки команды: {error}"
+    "cmd_failed": "Ошибка отправки команды: {error}",
+    "confirm_batch_reload_title": "Перезагрузить все узлы",
+    "confirm_batch_reload_desc": "Перезагрузить конфигурацию на ВСЕХ подключенных узлах?",
+    "confirm_batch_reload_detail": "Все подключенные узлы перечитают свои локальные файлы конфигурации без закрытия открытых позиций.",
+    "confirm_batch_reload_btn": "Перезагрузить все"
   },
   "cockpit": {
     "connected_terminals": "Подключенные терминалы",
@@ -222,7 +226,17 @@
     "input_zmq_port_hint": "По умолчанию 6000 (или 6001 для локального теста)",
     "btn_clear": "⏹️ Очистить (Автономный режим)",
     "btn_save": "🚀 Сохранить и применить",
-    "btn_close": "Закрыть"
+    "btn_close": "Закрыть",
+    "confirm_promote_title": "⚡ Повысить до Primary",
+    "confirm_promote_desc": "Повысить этот узел Standby до Primary?<br><br><b>⚠️ Важно</b>: убедитесь, что основной узел отключен во избежание конфликтов split-brain!",
+    "confirm_promote_btn": "Подтвердить повышение",
+    "confirm_failback_title": "⚡ Запустить безопасный возврат",
+    "confirm_failback_desc": "Инициировать безопасную передачу полномочий от текущего Primary?<br><br><b>Безопасность</b>: текущий Primary сначала отключит запись и понизится, затем этот узел примет роль без риска одновременной записи.",
+    "confirm_failback_btn": "Выполнить возврат",
+    "confirm_standalone_title": "Переключить в одиночный режим",
+    "confirm_standalone_desc": "Очистить настройки пира и переключиться в одиночный режим?",
+    "confirm_standalone_detail": "Этот узел будет работать автономно, синхронизация и вещание топологии будут остановлены.",
+    "confirm_standalone_btn": "Переключить в одиночный"
   },
   "ssl": {
     "title": "🔒 Настройки SSL / HTTPS",
@@ -259,7 +273,11 @@
     "btn_disable": "⛔ Отключить SSL (Режим HTTP)",
     "btn_renew": "🔄 Обновить сейчас",
     "btn_save": "🚀 Сохранить и применить",
-    "btn_close": "Закрыть"
+    "btn_close": "Закрыть",
+    "confirm_disable_title": "Отключить SSL / Вернуться к HTTP",
+    "confirm_disable_desc": "Отключить SSL шифрование и вернуться к обычному HTTP?",
+    "confirm_disable_detail": "Последующие подключения не будут защищены TLS. Рекомендуется только для диагностики или локальных сетей.",
+    "confirm_disable_btn": "Отключить SSL"
   },
   "hubkey": {
     "modal_title": "🔑 Файл публичного ключа Hub (copier_hub.key)",
@@ -332,7 +350,11 @@
     "webhook_headers": "Пользовательские заголовки (JSON, Опционально)",
     "webhook_headers_hint": "Заголовки запроса в формате JSON (напр. токены Bearer).",
     "btn_test_send": "🚀 Тестовая отправка",
-    "btn_save_channel": "Сохранить канал"
+    "btn_save_channel": "Сохранить канал",
+    "confirm_delete_title": "Удалить канал уведомлений",
+    "confirm_delete_desc": "Удалить канал уведомлений <strong>{name}</strong>?",
+    "confirm_delete_detail": "Оповещения больше не будут отправляться по этому каналу ({type}).",
+    "confirm_delete_btn": "Удалить канал"
   },
   "users": {
     "title": "Пользователи системы",
@@ -352,7 +374,11 @@
     "btn_addupdate": "добавить / обновить",
     "role_viewer": "наблюдатель (viewer)",
     "role_operator": "оператор (operator)",
-    "role_admin": "администратор (admin)"
+    "role_admin": "администратор (admin)",
+    "confirm_delete_title": "Удалить учетную запись",
+    "confirm_delete_desc": "Удалить пользователя <code>{id}</code>?",
+    "confirm_delete_detail": "Пользователь немедленно потеряет доступ к панели управления Hub, а все его активные сессии будут аннулированы.",
+    "confirm_delete_btn": "Удалить пользователя"
   },
   "footer": {
     "cmd_off_note": "команды ОТКЛЮЧЕНЫ: Hub запущен с параметром --writes off. Перезапустите с --writes on для отправки команд.",
@@ -410,6 +436,14 @@
     "tab_exec": "🛑 Исполнение и SL/TP",
     "tab_filters": "🔍 Фильтры и направление",
     "tab_delays": "⏳ Задержки и интервалы",
-    "tab_schedule": "📅 Расписание и таймауты"
+    "tab_schedule": "📅 Расписание и таймауты",
+    "confirm_reset_template_title": "Сброс к начальному шаблону",
+    "confirm_reset_template_desc": "Сбросить редактор к стандартному начальному шаблону?",
+    "confirm_reset_template_detail": "Все несохраненные изменения в визуальном и текстовом редакторе будут заменены стандартными значениями.",
+    "confirm_reset_template_btn": "Сбросить шаблон",
+    "confirm_rollback_title": "Откат конфигурации",
+    "confirm_rollback_desc": "Немедленно откатить узел <code>{target}</code> на ревизию {rev}?",
+    "confirm_rollback_detail": "Активная конфигурация будет заменена на ревизию {rev} и немедленно отправлена на узел-получатель.",
+    "confirm_rollback_btn": "Откатить на ревизию {rev}"
   }
 }
