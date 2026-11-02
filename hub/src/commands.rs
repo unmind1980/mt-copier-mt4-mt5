@@ -395,8 +395,9 @@ impl CommandStore {
                     err: v["err"].as_str().unwrap_or("").to_string(),
                     next_at: Instant::now() + Duration::from_secs(step),
                 };
-                // N76-04: Evaluate time order. Replicated lines with strictly newer ts (including revivals)
-                // take precedence. For identical ts, higher state_rank breaks ties.
+                // N76-04 & N82-05: Evaluate time order. Replicated lines with strictly newer ts (including revivals)
+                // take precedence. For identical ts, strict '>' breaks ties so duplicate identical retransmissions
+                // are ignored, preventing Standby journal line count inflation (N74-04).
                 let should_insert = match inner.commands.get(&id) {
                     Some(existing) => {
                         if cmd.ts > existing.ts {
@@ -792,6 +793,7 @@ impl CommandStore {
                     // The ladder is exhausted. `unknown`, not `failed` - we do
                     // not know that it did not arrive, only that nobody said.
                     c.state = STATE_UNKNOWN.to_string();
+                    c.ts = unix_secs(); // N82-01 & N82-02: Stamp transition time so recent_unknown does not drop it and revive cooldown starts afresh
                     let total_secs: u64 = RETRY_LADDER_SECS.iter().sum();
                     c.err = format!(
                         "no ACK after {} attempts ({}s ladder exhausted)",
@@ -1073,9 +1075,9 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
             err: v["err"].as_str().unwrap_or("").to_string(),
             next_at: Instant::now(),
         };
-        // P0-03, R60-04 & N76-04: Journal is sequentially ordered. Later written lines take
-        // precedence over older lines. If a command was revived (unknown/acked -> pending),
-        // its ts is strictly newer so it wins. For identical ts, state_rank breaks ties.
+        // P0-03, R60-04, N76-04 & N82-05: Journal on disk is sequentially ordered. Later written lines take
+        // precedence over older lines. If a command was revived (unknown/acked -> pending), its ts is
+        // strictly newer so it wins. For identical ts on disk, '>=' allows subsequent chronological lines to win.
         let should_insert = match commands.get(id) {
             Some(existing) => {
                 if cmd.ts > existing.ts {
@@ -1352,18 +1354,20 @@ mod tests {
             let _ = s.due(now);
             now += Duration::from_secs(120);
         }
-        assert_eq!(s.command(&cmd.id).unwrap().state, STATE_UNKNOWN);
+        let finished_cmd = s.command(&cmd.id).unwrap();
+        assert_eq!(finished_cmd.state, STATE_UNKNOWN);
+        let t_done = finished_cmd.ts;
 
         // Inside the cooldown the command stays finished: the comparison that
         // calls this runs every 5 s, and reviving on every heartbeat would turn
         // a node that keeps REJECTING a config into a permanent flood.
-        let early = s.issue_cfg_at("receiver:1", 5, "op", "", t0 + 5);
+        let early = s.issue_cfg_at("receiver:1", 5, "op", "", t_done + 5);
         assert_eq!(early.state, STATE_UNKNOWN, "revived inside the cooldown");
 
         // After it, the re-push must revive the command to pending with 0
         // attempts and due immediately.
         let revived =
-            s.issue_cfg_at("receiver:1", 5, "op", "", t0 + REVIVE_COOLDOWN_SECS + 1);
+            s.issue_cfg_at("receiver:1", 5, "op", "", t_done + REVIVE_COOLDOWN_SECS + 1);
         assert_eq!(revived.state, STATE_PENDING);
         assert_eq!(revived.attempts, 0);
 
@@ -1489,6 +1493,37 @@ mod tests {
         let (total, pending, _) = s.stats();
         assert_eq!(total, 6);
         assert_eq!(pending, 1);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// N82-01: Exhausting the retry ladder stamps c.ts with the transition time
+    /// so recent_unknown does not drop it as stale even if the command was pending for long.
+    #[test]
+    fn test_ladder_exhaustion_stamps_transition_time_for_recent_unknown() {
+        let p = tmp("ladder_ts");
+        let s = CommandStore::open(&p).unwrap();
+        let c = s.issue_op("receiver:1", "closeall", "", "op", "");
+        // Artificially age the original creation timestamp to 5000 seconds ago
+        {
+            let mut inner = s.inner.lock().unwrap();
+            if let Some(cmd) = inner.commands.get_mut(&c.id) {
+                cmd.ts = unix_secs().saturating_sub(5000);
+            }
+        }
+        let mut now = Instant::now();
+        for _ in 0..10 {
+            s.due(now);
+            now += Duration::from_secs(120);
+        }
+        let updated = s.command(&c.id).unwrap();
+        assert_eq!(updated.state, STATE_UNKNOWN);
+        // The transition timestamp must have been refreshed to current time (within 10s)
+        let now_s = unix_secs();
+        assert!(now_s.saturating_sub(updated.ts) <= 10, "transition time must be refreshed upon ladder exhaustion");
+        // recent_unknown(3600) must pick it up!
+        let unknowns = s.recent_unknown(3600, now_s);
+        assert_eq!(unknowns.len(), 1);
+        assert_eq!(unknowns[0].id, c.id);
         let _ = std::fs::remove_file(&p);
     }
 }

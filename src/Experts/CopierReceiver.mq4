@@ -4550,7 +4550,7 @@ string EncodeReceiverPositions()
       string rec=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
                  +g_acctAllPos[i].sym+CP_SEP_ITEM
                  +(string)g_acctAllPos[i].side+CP_SEP_ITEM
-                 +CopierFmtDouble(g_acctAllPos[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_acctAllPos[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].sl,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].tp,5)+CP_SEP_ITEM

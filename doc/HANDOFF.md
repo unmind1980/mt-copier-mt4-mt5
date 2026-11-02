@@ -1551,6 +1551,22 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   3. **多语言词库扩充至 424 键**：
      - 新增 `nodes.btn_reset_sort` 词条，6 种语言环境 100% 覆盖。
 
+### 九十一次演进：命令阶梯耗尽时间戳刷新闭环、遥测微手数精度提升与第 82 轮全栈审计核销 (2026-11-02 23:00；全部闭环)
+
+- **技术落地项**：
+  1. **N82-01 & N82-02 状态转移时戳刷新与防风暴闭环**：
+     - 在 `hub/src/commands.rs:794` 处的重试阶梯耗尽分支补齐 `c.ts = unix_secs();`；
+     - 解决 `recent_unknown(3600)` 将长期未响应节点离线后走完阶梯的命令误作为陈旧历史过滤的问题，确保 `command.unknown` 失败告警 100% 触发；
+     - 消除原先走完 82s 阶梯导致 60s 复活冷却失效、从而触发心跳死循环重复推送配置的风暴；
+     - 新增 `test_ladder_exhaustion_stamps_transition_time_for_recent_unknown` 单元测试，Rust 单元测试基线提升至 **155 / 155 PASS**；
+  2. **N82-03 持仓遥测手数精度提升**：
+     - 在 `CopierSender.mq4` 与 `CopierReceiver.mq4` 中的 `POS=` 字符串编码中，将 `lots` 格式化精度从固定 2 位统一提升为标准 `CP_DIGITS_LOTS`（8位自适应去尾零），避免加密货币或微型账户中的微手数（<0.005）被误编码为 0；
+  3. **N82-05 判据语义注释对齐**：
+     - 详尽阐述了 `load()`（本地 journal 顺序回放 `>=`）与 `apply_delta_lines`（备机同步防行膨胀 `>`）的设计原理；
+  4. **N82-04 / N82-06 审查核销**：
+     - 核实 N82-04 为维护性代码重复，保持两端逻辑稳定并向用户透明呈报；
+     - 确认 N82-06 为误报，代码在 N80-02 已由 `CopierLotEncodable` 完备守卫。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1560,7 +1576,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**154 / 154 单元测试全量 PASS**；
+  - Rust Hub Release 构建成功，**155 / 155 单元测试全量 PASS**；
   - 核心 Python 测试套件全部绿灯：
     - `hub_tls_test.py`：13 / 13 PASS
     - `hub_config_test.py`：71 / 71 PASS
@@ -1569,7 +1585,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
     - `i18n_check.py`：424 / 424 键在 6 种语言环境中全量 PASS (ALL GREEN)
-    - `dash_check.py`：251 个前端元素与 137 个函数完全校验匹配。
+    - `dash_check.py`：251 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
   - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓与双向全功能列头排序）与业务代码实现 100% 吻合。
 

@@ -1884,7 +1884,7 @@ string EncodeSenderPositions(const int count)
       string rec=(string)g_curScratch[i].ticket+CP_SEP_ITEM
                  +g_curScratch[i].sym+CP_SEP_ITEM
                  +(string)g_curScratch[i].side+CP_SEP_ITEM
-                 +CopierFmtDouble(g_curScratch[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].openPx,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].sl,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].tp,5)+CP_SEP_ITEM
