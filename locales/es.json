@@ -115,7 +115,8 @@
     "confirm_batch_reload_title": "Recargar Todos los Nodos",
     "confirm_batch_reload_desc": "¿Recargar la configuración en TODOS los nodos conectados?",
     "confirm_batch_reload_detail": "Todos los nodos conectados volverán a leer sus archivos de configuración locales sin interrumpir las posiciones abiertas.",
-    "confirm_batch_reload_btn": "Recargar Todos los Nodos"
+    "confirm_batch_reload_btn": "Recargar Todos los Nodos",
+    "btn_reset_sort": "↺ Restablecer Orden"
   },
   "cockpit": {
     "connected_terminals": "Terminales Conectados",

@@ -115,7 +115,8 @@
     "confirm_batch_reload_title": "Перезагрузить все узлы",
     "confirm_batch_reload_desc": "Перезагрузить конфигурацию на ВСЕХ подключенных узлах?",
     "confirm_batch_reload_detail": "Все подключенные узлы перечитают свои локальные файлы конфигурации без закрытия открытых позиций.",
-    "confirm_batch_reload_btn": "Перезагрузить все"
+    "confirm_batch_reload_btn": "Перезагрузить все",
+    "btn_reset_sort": "↺ Сброс сортировки"
   },
   "cockpit": {
     "connected_terminals": "Подключенные терминалы",

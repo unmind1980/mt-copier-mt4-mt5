@@ -115,7 +115,8 @@
     "confirm_batch_reload_title": "全端末の一括再読み込み",
     "confirm_batch_reload_desc": "接続されているすべての端末に設定の再読み込みを指示しますか？",
     "confirm_batch_reload_detail": "接続中の全端末が未決済ポジションを維持したまま、ローカル設定ファイルを再読み込みします。",
-    "confirm_batch_reload_btn": "全端末を再読み込み"
+    "confirm_batch_reload_btn": "全端末を再読み込み",
+    "btn_reset_sort": "↺ ソート解除"
   },
   "cockpit": {
     "connected_terminals": "接続中のターミナル",

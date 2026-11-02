@@ -1735,6 +1735,7 @@
     <h2>
       <span><span data-i18n="nodes.title">Terminals &amp; Nodes</span> <span id="ncount"></span></span>
       <div style="display:flex;gap:8px;align-items:center">
+        <button type="button" class="btn-sm" id="btn-node-sort-reset" style="display:none;cursor:pointer" onclick="resetNodeSort()" data-i18n="nodes.btn_reset_sort">↺ Reset Sort</button>
         <button type="button" class="btn-sm" id="btn-batch-pause" data-i18n="nodes.batch_pause">Batch Pause</button>
         <button type="button" class="btn-sm" id="btn-batch-reload" data-i18n="nodes.batch_reload">Batch Reload</button>
       </div>
@@ -2830,7 +2831,8 @@ var I18N_BUILTIN = {
           "confirm_batch_reload_title": "Reload All Nodes",
           "confirm_batch_reload_desc": "Reload configuration on ALL connected nodes?",
           "confirm_batch_reload_detail": "All connected nodes will re-read their local configuration files without interrupting open positions.",
-          "confirm_batch_reload_btn": "Reload All Nodes"
+          "confirm_batch_reload_btn": "Reload All Nodes",
+          "btn_reset_sort": "↺ Reset Sort"
       },
       "cockpit": {
           "connected_terminals": "Connected Terminals",
@@ -3285,7 +3287,8 @@ var I18N_BUILTIN = {
           "confirm_batch_reload_title": "批量重载全部节点",
           "confirm_batch_reload_desc": "确定向所有已连接的节点下发配置重载指令吗？",
           "confirm_batch_reload_detail": "所有连接的终端将重新读取本地配置文件，期间不会干扰正在持仓的单子。",
-          "confirm_batch_reload_btn": "重载全部节点"
+          "confirm_batch_reload_btn": "重载全部节点",
+          "btn_reset_sort": "↺ 恢复默认排序"
       },
       "cockpit": {
           "connected_terminals": "已連線終端",
@@ -3848,6 +3851,24 @@ function renderPosActionNotice(){
     '<button type="button" class="ban-close" onclick="closePosActionBanner()" title="Dismiss notice">✕</button>';
 }
 
+function posSortTh(col, i18nKey, isNum){
+  var active = (s.posSortCol === col && s.posSortDir !== "none");
+  var arrow = active ? (s.posSortDir === "asc" ? "▲" : "▼") : "⇅";
+  var cls = "pos-th-sort" + (isNum ? " num" : "") + (active ? " active" : "");
+  return '<th class="' + cls + '" onclick="togglePosSort(\'' + col + '\')" title="Click to sort">' +
+         '<span data-i18n="' + i18nKey + '">' + t(i18nKey) + '</span> ' +
+         '<span class="sort-indicator">' + arrow + '</span></th>';
+}
+
+function nodeSortTh(col, i18nKey, isNum){
+  var active = (s.nodeSortCol === col && s.nodeSortDir !== "none");
+  var arrow = active ? (s.nodeSortDir === "asc" ? "▲" : "▼") : "⇅";
+  var cls = "pos-th-sort" + (isNum ? " num" : "") + (active ? " active" : "");
+  return "<th class='" + cls + "' onclick=\"toggleNodeSort('" + col + "')\" title='Click to sort'>" +
+         "<span data-i18n='" + i18nKey + "'>" + t(i18nKey) + "</span> " +
+         "<span class='sort-indicator'>" + arrow + "</span></th>";
+}
+
 function togglePosSort(col){
   if(s.posSortCol === col){
     if(s.posSortDir === "asc"){
@@ -3860,13 +3881,14 @@ function togglePosSort(col){
     }
   } else {
     s.posSortCol = col;
-    if(col === "profit" || col === "volume" || col === "swap" || col === "ticket"){
+    if(col === "profit" || col === "volume" || col === "swap" || col === "ticket" || col === "price" || col === "sltp"){
       s.posSortDir = "desc";
     } else {
       s.posSortDir = "asc";
     }
   }
   s.lastPosRowsHtml = null;
+  s.lastSndHtml = null;
   renderPosNodeDetail();
 }
 window.togglePosSort = togglePosSort;
@@ -3875,9 +3897,41 @@ function resetPosSort(){
   s.posSortCol = null;
   s.posSortDir = "none";
   s.lastPosRowsHtml = null;
+  s.lastSndHtml = null;
   renderPosNodeDetail();
 }
 window.resetPosSort = resetPosSort;
+
+function toggleNodeSort(col){
+  if(s.nodeSortCol === col){
+    if(s.nodeSortDir === "asc"){
+      s.nodeSortDir = "desc";
+    } else if(s.nodeSortDir === "desc"){
+      s.nodeSortCol = null;
+      s.nodeSortDir = "none";
+    } else {
+      s.nodeSortDir = "asc";
+    }
+  } else {
+    s.nodeSortCol = col;
+    if(col === "positions" || col === "volume" || col === "equity" || col === "balance" || col === "gating"){
+      s.nodeSortDir = "desc";
+    } else {
+      s.nodeSortDir = "asc";
+    }
+  }
+  s.nodeKeys = null;
+  render();
+}
+window.toggleNodeSort = toggleNodeSort;
+
+function resetNodeSort(){
+  s.nodeSortCol = null;
+  s.nodeSortDir = "none";
+  s.nodeKeys = null;
+  render();
+}
+window.resetNodeSort = resetNodeSort;
 
 function fmtAge(sec){
   sec = Math.max(0, Math.round(sec));
@@ -4072,7 +4126,48 @@ function cmp(a, b){
   b = (b === undefined || b === null) ? "" : String(b);
   return a < b ? -1 : (a > b ? 1 : 0);
 }
-function sortNodes(n){ return n.slice().sort(function(x, y){ return cmp(x.key, y.key); }); }
+function sortNodes(n){
+  if(!s.nodeSortCol || s.nodeSortDir === "none"){
+    return n.slice().sort(function(x, y){ return cmp(x.key, y.key); });
+  }
+  var col = s.nodeSortCol;
+  var isAsc = (s.nodeSortDir === "asc");
+  return n.slice().sort(function(a, b){
+    var valA, valB;
+    if(col === "role"){
+      valA = String(a.role || "").toUpperCase();
+      valB = String(b.role || "").toUpperCase();
+    } else if(col === "account"){
+      valA = Number(a.acc) || String(a.key || "");
+      valB = Number(b.acc) || String(b.key || "");
+    } else if(col === "ping"){
+      valA = (typeof a.ping_ms === "number" && a.ping_ms >= 0 && a.liveness === "online") ? a.ping_ms : (isAsc ? 999999 : -1);
+      valB = (typeof b.ping_ms === "number" && b.ping_ms >= 0 && b.liveness === "online") ? b.ping_ms : (isAsc ? 999999 : -1);
+    } else if(col === "status"){
+      var rank = function(l){ return l === "online" ? 0 : (l === "stale" ? 1 : 2); };
+      valA = rank(a.liveness);
+      valB = rank(b.liveness);
+    } else if(col === "positions"){
+      valA = (a.positions && a.positions.count !== undefined) ? Number(a.positions.count) : (a.held !== undefined && a.held !== null ? Number(a.held) : 0);
+      valB = (b.positions && b.positions.count !== undefined) ? Number(b.positions.count) : (b.held !== undefined && b.held !== null ? Number(b.held) : 0);
+    } else if(col === "volume"){
+      valA = (a.positions && a.positions.lots !== undefined) ? Number(a.positions.lots) : (a.held_lots !== undefined && a.held_lots !== null ? Number(a.held_lots) : 0.0);
+      valB = (b.positions && b.positions.lots !== undefined) ? Number(b.positions.lots) : (b.held_lots !== undefined && b.held_lots !== null ? Number(b.held_lots) : 0.0);
+    } else if(col === "equity"){
+      valA = typeof a.equity === "number" ? a.equity : (isAsc ? 999999999 : -999999999);
+      valB = typeof b.equity === "number" ? b.equity : (isAsc ? 999999999 : -999999999);
+    } else if(col === "balance"){
+      valA = typeof a.balance === "number" ? a.balance : (isAsc ? 999999999 : -999999999);
+      valB = typeof b.balance === "number" ? b.balance : (isAsc ? 999999999 : -999999999);
+    } else if(col === "gating"){
+      valA = (a.waiting && a.waiting.total !== undefined) ? Number(a.waiting.total) : (a.wait_total !== undefined && a.wait_total !== null ? Number(a.wait_total) : 0);
+      valB = (b.waiting && b.waiting.total !== undefined) ? Number(b.waiting.total) : (b.wait_total !== undefined && b.wait_total !== null ? Number(b.wait_total) : 0);
+    }
+    if(valA < valB) return isAsc ? -1 : 1;
+    if(valA > valB) return isAsc ? 1 : -1;
+    return cmp(a.key, b.key);
+  });
+}
 function sortPos(n){ return n.slice().sort(function(x, y){ return cmp(x.sid, y.sid); }); }
 
 // ---------------------------------------------------------------- text
@@ -4839,11 +4934,59 @@ function renderPosNodeDetail(){
       var snaps = (p && p.snaps) ? p.snaps : "-";
 
       // 1. First: Line-by-Line Itemized Positions Table (Elevated to top per user request)
-      var sItems = (n.positions_detail && n.positions_detail.length > 0) ? n.positions_detail : ((p && p.items) ? p.items : []);
+      var sItems = ((n.positions_detail && n.positions_detail.length > 0) ? n.positions_detail : ((p && p.items) ? p.items : [])).slice();
+
+      // Apply active column sorting
+      if(s.posSortCol && s.posSortDir !== "none"){
+        var sortC = s.posSortCol;
+        var isAsc = (s.posSortDir === "asc");
+        sItems.sort(function(itemA, itemB){
+          var valA, valB;
+          if(sortC === "ticket"){
+            valA = Number(itemA.ticket) || 0;
+            valB = Number(itemB.ticket) || 0;
+          } else if(sortC === "symbol"){
+            valA = String(itemA.symbol || "").toUpperCase();
+            valB = String(itemB.symbol || "").toUpperCase();
+          } else if(sortC === "side"){
+            valA = String(itemA.side || "").toUpperCase();
+            valB = String(itemB.side || "").toUpperCase();
+          } else if(sortC === "volume"){
+            valA = Number(itemA.lots) || 0.0;
+            valB = Number(itemB.lots) || 0.0;
+          } else if(sortC === "price"){
+            valA = Number(itemA.open_px) || 0.0;
+            valB = Number(itemB.open_px) || 0.0;
+          } else if(sortC === "sltp"){
+            valA = Number(itemA.sl) || (Number(itemA.tp) || 0.0);
+            valB = Number(itemB.sl) || (Number(itemB.tp) || 0.0);
+          } else if(sortC === "profit"){
+            valA = (itemA.profit !== undefined && itemA.profit !== null) ? Number(itemA.profit) : 0.0;
+            valB = (itemB.profit !== undefined && itemB.profit !== null) ? Number(itemB.profit) : 0.0;
+          } else if(sortC === "swap"){
+            valA = (itemA.swap !== undefined && itemA.swap !== null) ? Number(itemA.swap) : 0.0;
+            valB = (itemB.swap !== undefined && itemB.swap !== null) ? Number(itemB.swap) : 0.0;
+          } else if(sortC === "status"){
+            valA = itemA.kind || 0;
+            valB = itemB.kind || 0;
+          } else if(sortC === "details"){
+            valA = Number(itemA.open_time) || (Number(itemA.magic) || 0);
+            valB = Number(itemB.open_time) || (Number(itemB.magic) || 0);
+          }
+          if(valA < valB) return isAsc ? -1 : 1;
+          if(valA > valB) return isAsc ? 1 : -1;
+          return 0;
+        });
+      }
+
+      var resetBtnHtml = (s.posSortCol && s.posSortDir !== "none")
+        ? '<button type="button" class="btn-sm" onclick="resetPosSort()" style="cursor:pointer" title="' + t("cockpit.btn_reset_sort") + '">' + t("cockpit.btn_reset_sort") + '</button>'
+        : '';
       var sndHtml = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
       sndHtml += '  <div class="pos-section-title" style="margin-bottom:0">📋 ' + t("cockpit.table_title") + ' (' + sItems.length + ')</div>';
       sndHtml += '  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
       sndHtml += '    <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span><span>' + t("cockpit.auto_updates_1min") + '</span></span>';
+      sndHtml += resetBtnHtml;
       sndHtml += '    <button type="button" class="btn-sm btn-refresh-update" onclick="requestPosUpdate()" style="cursor:pointer">' + t("cockpit.btn_request_update") + '</button>';
       sndHtml += '  </div>';
       sndHtml += '</div>';
@@ -4908,16 +5051,16 @@ function renderPosNodeDetail(){
         sndHtml += '<div class="pos-table-wrap">';
         sndHtml += '  <table>';
         sndHtml += '    <thead><tr>' +
-                   '      <th>' + t("cockpit.th_status") + '</th>' +
-                   '      <th>' + t("cockpit.th_ticket") + '</th>' +
-                   '      <th>' + t("cockpit.th_symbol") + '</th>' +
-                   '      <th>' + t("cockpit.th_side") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_price") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_sltp") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_profit") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_swap") + '</th>' +
-                   '      <th>' + t("cockpit.th_details") + '</th>' +
+                   posSortTh("status", "cockpit.th_status", false) +
+                   posSortTh("ticket", "cockpit.th_ticket", false) +
+                   posSortTh("symbol", "cockpit.th_symbol", false) +
+                   posSortTh("side", "cockpit.th_side", false) +
+                   posSortTh("volume", "cockpit.th_volume", true) +
+                   posSortTh("price", "cockpit.th_price", true) +
+                   posSortTh("sltp", "cockpit.th_sltp", true) +
+                   posSortTh("profit", "cockpit.th_profit", true) +
+                   posSortTh("swap", "cockpit.th_swap", true) +
+                   posSortTh("details", "cockpit.th_details", false) +
                    '    </tr></thead>';
         sndHtml += '    <tbody>' + sRows + '</tbody>';
         sndHtml += '    <tfoot><tr class="pos-subtotal-row">' +
@@ -5866,19 +6009,23 @@ function renderNodes(nodes){
     }).join("");
     host.innerHTML =
       "<div class='table-scroll'><table class='hub-table'><thead><tr>" +
-      "<th>" + t("nodes.th_role") + "</th>" +
-      "<th>" + t("nodes.th_account_terminal") + "</th>" +
-      "<th>" + t("nodes.th_ping") + "</th>" +
-      "<th>" + t("nodes.th_status") + "</th>" +
-      "<th class='num'>" + t("nodes.th_positions") + "</th>" +
-      "<th class='num'>" + t("nodes.th_volume") + "</th>" +
-      "<th class='num'>" + t("nodes.th_equity") + "</th>" +
-      "<th class='num'>" + t("nodes.th_balance") + "</th>" +
-      "<th>" + t("nodes.th_gating") + "</th>" +
+      nodeSortTh("role", "nodes.th_role", false) +
+      nodeSortTh("account", "nodes.th_account_terminal", false) +
+      nodeSortTh("ping", "nodes.th_ping", false) +
+      nodeSortTh("status", "nodes.th_status", false) +
+      nodeSortTh("positions", "nodes.th_positions", true) +
+      nodeSortTh("volume", "nodes.th_volume", true) +
+      nodeSortTh("equity", "nodes.th_equity", true) +
+      nodeSortTh("balance", "nodes.th_balance", true) +
+      nodeSortTh("gating", "nodes.th_gating", false) +
       "<th style='text-align:center'>" + t("nodes.th_actions") + "</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table></div>";
     s.nodeKeys = keys;
     s.nodeRows = {};
+    var bNodeReset = $("btn-node-sort-reset");
+    if(bNodeReset){
+      bNodeReset.style.display = (s.nodeSortCol && s.nodeSortDir !== "none") ? "inline-block" : "none";
+    }
     var trs = host.getElementsByTagName("tr");
     for(var i = 0; i < trs.length; i++){
       var k = trs[i].getAttribute("data-k");

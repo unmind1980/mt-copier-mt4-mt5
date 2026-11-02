@@ -115,7 +115,8 @@
     "confirm_batch_reload_title": "批次重載全部節點",
     "confirm_batch_reload_desc": "確定向所有已連線的節點發布設定重載指令嗎？",
     "confirm_batch_reload_detail": "所有連線的終端將重新讀取本機設定檔，期間不會干擾正在持倉的單子。",
-    "confirm_batch_reload_btn": "重載全部節點"
+    "confirm_batch_reload_btn": "重載全部節點",
+    "btn_reset_sort": "↺ 恢復預設排序"
   },
   "cockpit": {
     "connected_terminals": "已連線終端",

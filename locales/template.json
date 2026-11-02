@@ -115,7 +115,8 @@
     "confirm_batch_reload_title": "Reload All Nodes",
     "confirm_batch_reload_desc": "Reload configuration on ALL connected nodes?",
     "confirm_batch_reload_detail": "All connected nodes will re-read their local configuration files without interrupting open positions.",
-    "confirm_batch_reload_btn": "Reload All Nodes"
+    "confirm_batch_reload_btn": "Reload All Nodes",
+    "btn_reset_sort": "↺ Reset Sort"
   },
   "cockpit": {
     "connected_terminals": "Connected Terminals",
