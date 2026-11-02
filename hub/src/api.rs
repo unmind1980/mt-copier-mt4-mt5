@@ -2468,7 +2468,18 @@ async fn post_command(
         )
             .into_response();
     }
-    if !id.starts_with("receiver:") {
+    let is_pos_query = op == "reqpos" || op == "refreshpos" || op == "refresh";
+    if !id.starts_with("receiver:") && !id.starts_with("sender:") {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "unknown node prefix (expected receiver: or sender:)",
+                "node": id,
+            })),
+        )
+            .into_response();
+    }
+    if id.starts_with("sender:") && !is_pos_query {
         return (
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({

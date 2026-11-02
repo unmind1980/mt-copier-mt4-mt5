@@ -4875,12 +4875,12 @@ function renderPosNodeDetail(){
         sndHtml += '  <table>';
         sndHtml += '    <thead><tr>' +
                    '      <th>' + t("cockpit.th_status") + '</th>' +
-                   '      <th>' + t("cockpit.th_ticket_uid") + '</th>' +
+                   '      <th>' + t("cockpit.th_ticket") + '</th>' +
                    '      <th>' + t("cockpit.th_symbol") + '</th>' +
                    '      <th>' + t("cockpit.th_side") + '</th>' +
                    '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
                    '      <th class="num">' + t("cockpit.th_price") + '</th>' +
-                   '      <th class="num">' + t("cockpit.th_sl_tp") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_sltp") + '</th>' +
                    '      <th class="num">' + t("cockpit.th_profit") + '</th>' +
                    '      <th class="num">' + t("cockpit.th_swap") + '</th>' +
                    '      <th>' + t("cockpit.th_details") + '</th>' +
@@ -5000,29 +5000,29 @@ function closePositionsModal(){
 function requestPosUpdate(){
   var k = s.selectedPosNode || ($("pos_node_select") ? $("pos_node_select").value : "");
   if(!k) return;
-  var btn = $("pos_refresh_btn");
+  var btns = document.querySelectorAll("#pos_refresh_btn, .btn-refresh-update");
   var msg = $("pos_foot_msg");
-  if(!k.startsWith("receiver:")){
-    if(msg) msg.textContent = "Sender orders are auto-synced with market snapshots";
-    return;
-  }
   s.posRequestInFlight = true;
-  if(btn){
-    btn.disabled = true;
-    btn.textContent = "⏳ Requesting…";
-  }
+  btns.forEach(function(b){
+    b.disabled = true;
+    b.textContent = t("cockpit.btn_requesting");
+  });
   if(msg){
     msg.className = "opmsg";
     msg.textContent = "Requesting immediate position table from " + k + "…";
   }
-  sendCommand(k, "reqpos", msg, { force: true });
+  sendCommand(k, "reqpos", msg, { force: true }, function(ok){
+    if(ok){
+      setTimeout(function(){ refresh(); }, 1200);
+    }
+  });
   setTimeout(function(){
     s.posRequestInFlight = false;
-    var b = $("pos_refresh_btn");
-    if(b){
+    var bs = document.querySelectorAll("#pos_refresh_btn, .btn-refresh-update");
+    bs.forEach(function(b){
       b.disabled = false;
-      b.textContent = "🔄 Request Update";
-    }
+      b.textContent = t("cockpit.btn_request_update");
+    });
   }, 1500);
 }
 
