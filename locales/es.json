@@ -181,7 +181,19 @@
     "stage_gate_delayed": "⏱️ 2. Filtro de Seguridad",
     "stage_mkt_closed": "🔒 3. Mercado Cerrado",
     "orders_waiting_strip": "{total} Órdenes en espera de apertura ({lots} lotes):",
-    "telemetry_stream_foot": "Receptor: {node} · Sincronización cada 60s · Clic en 'Solicitar Actualización' para forzar"
+    "telemetry_stream_foot": "Receptor: {node} · Sincronización cada 60s · Clic en 'Solicitar Actualización' para forzar",
+    "sender_summary_title": "Resumen de Posiciones Abiertas",
+    "sender_card_open_pos": "Posiciones Abiertas",
+    "sender_card_open_pos_sub": "Tickets abiertos activos informados por el terminal emisor",
+    "sender_card_total_vol": "Volumen Total",
+    "sender_card_total_vol_sub": "Suma de tamaños de lote de todos los tickets abiertos",
+    "sender_card_snap_state": "Estado de Instantánea",
+    "sender_card_snaps_received": "{count} instantáneas recibidas",
+    "sender_card_snap_live": "Transmisión de instantáneas en vivo",
+    "sender_sym_breakdown_title": "Desglose de Posiciones por Símbolo",
+    "sender_th_rel_exposure": "Exposición Relativa",
+    "sender_flat_title": "No se reportan posiciones abiertas",
+    "sender_flat_desc": "La cuenta emisora está actualmente plana. Sin tickets abiertos ni exposición al riesgo."
   },
   "notices": {
     "mkt_closed_title": "[Mercado Cerrado · En Cola] ¡Orden #{ticket} en cola de ejecución!",

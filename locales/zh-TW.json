@@ -181,7 +181,19 @@
     "stage_gate_delayed": "⏱️ 2. 安全防抖延遲",
     "stage_mkt_closed": "🔒 3. 市場休市等待",
     "orders_waiting_strip": "{total} 筆訂單等待開倉 ({lots} 手):",
-    "telemetry_stream_foot": "接收端: {node} · 預設 60 秒同步 · 點擊「立即請求更新」強制刷新"
+    "telemetry_stream_foot": "接收端: {node} · 預設 60 秒同步 · 點擊「立即請求更新」強制刷新",
+    "sender_summary_title": "目前開倉持倉總覽",
+    "sender_card_open_pos": "活躍持倉數",
+    "sender_card_open_pos_sub": "發送端終端回報的目前活躍持倉訂單",
+    "sender_card_total_vol": "持倉總手數",
+    "sender_card_total_vol_sub": "所有活躍持倉訂單的手數總和",
+    "sender_card_snap_state": "快照指紋狀態",
+    "sender_card_snaps_received": "已接收 {count} 次快照",
+    "sender_card_snap_live": "即時快照廣播中",
+    "sender_sym_breakdown_title": "各品種持倉分布",
+    "sender_th_rel_exposure": "相對風險敞口",
+    "sender_flat_title": "發送端目前無持倉",
+    "sender_flat_desc": "發送端帳戶目前空倉，無任何活躍持倉或市場風險敞口。"
   },
   "notices": {
     "mkt_closed_title": "【週末休市排隊中】訂單 #{ticket} 已排隊待平！",

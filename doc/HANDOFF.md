@@ -1554,7 +1554,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `hub_cluster_test.py`：35 / 35 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
-    - `i18n_check.py`：411 / 411 键在 6 种语言环境中全量 PASS (ALL GREEN)
+    - `i18n_check.py`：423 / 423 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：248 个前端元素与 133 个函数完全校验匹配。
 - **源码与文档自洽**：
   - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测与极速平仓）与业务代码实现 100% 吻合。

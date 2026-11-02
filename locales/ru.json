@@ -181,7 +181,19 @@
     "stage_gate_delayed": "⏱️ 2. Задержка безопасности",
     "stage_mkt_closed": "🔒 3. Рынок закрыт",
     "orders_waiting_strip": "{total} ордеров в ожидании открытия ({lots} лот):",
-    "telemetry_stream_foot": "Получатель: {node} · Плановая синхронизация каждые 60с · Нажмите «Запросить обновление» для немедленного обновления"
+    "telemetry_stream_foot": "Получатель: {node} · Плановая синхронизация каждые 60с · Нажмите «Запросить обновление» для немедленного обновления",
+    "sender_summary_title": "Сводка открытых позиций",
+    "sender_card_open_pos": "Открытые позиции",
+    "sender_card_open_pos_sub": "Активные открытые тикеты от узла-отправителя",
+    "sender_card_total_vol": "Общий объем",
+    "sender_card_total_vol_sub": "Сумма объемов по всем открытым тикетам",
+    "sender_card_snap_state": "Состояние снимка",
+    "sender_card_snaps_received": "Получено снимков: {count}",
+    "sender_card_snap_live": "Прямая трансляция снимков",
+    "sender_sym_breakdown_title": "Распределение позиций по символам",
+    "sender_th_rel_exposure": "Относительный риск",
+    "sender_flat_title": "Нет открытых позиций",
+    "sender_flat_desc": "Счет отправителя в данный момент пуст. Нет активных открытых позиций или рыночного риска."
   },
   "notices": {
     "mkt_closed_title": "[Рынок закрыт · В очереди] Ордер #{ticket} поставлен в очередь!",

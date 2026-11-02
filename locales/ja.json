@@ -181,7 +181,19 @@
     "stage_gate_delayed": "⏱️ 2. セーフティゲート遅延",
     "stage_mkt_closed": "🔒 3. 市場クローズ待機",
     "orders_waiting_strip": "{total} 件の約定待機注文 ({lots} Lots):",
-    "telemetry_stream_foot": "受信端末: {node} · 通常60秒周期同期 · 「今すぐ更新要求」で即時更新"
+    "telemetry_stream_foot": "受信端末: {node} · 通常60秒周期同期 · 「今すぐ更新要求」で即時更新",
+    "sender_summary_title": "オープンポジション概要",
+    "sender_card_open_pos": "保有ポジション数",
+    "sender_card_open_pos_sub": "送信側端末が報告した有効なポジション",
+    "sender_card_total_vol": "総ロット数",
+    "sender_card_total_vol_sub": "すべての有効な注文のロット合計",
+    "sender_card_snap_state": "スナップショット状態",
+    "sender_card_snaps_received": "{count} 回のスナップショットを受信",
+    "sender_card_snap_live": "リアルタイムブロードキャスト中",
+    "sender_sym_breakdown_title": "銘柄別のポジション内訳",
+    "sender_th_rel_exposure": "相対エクスポージャー",
+    "sender_flat_title": "オープンポジションはありません",
+    "sender_flat_desc": "送信側口座は現在スクエア（ノーポジ）です。有効なポジションやリスクはありません。"
   },
   "notices": {
     "mkt_closed_title": "【市場休止中・待機登録完了】注文 #{ticket} はキューに入りました",

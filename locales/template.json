@@ -181,7 +181,19 @@
     "stage_gate_delayed": "⏱️ 2. Gate Delayed",
     "stage_mkt_closed": "🔒 3. Market Closed",
     "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):",
-    "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh"
+    "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh",
+    "sender_summary_title": "Open Positions Summary",
+    "sender_card_open_pos": "Open Positions",
+    "sender_card_open_pos_sub": "Active open tickets reported by Sender terminal",
+    "sender_card_total_vol": "Total Volume",
+    "sender_card_total_vol_sub": "Sum of lot sizes across all open tickets",
+    "sender_card_snap_state": "Snapshot State",
+    "sender_card_snaps_received": "{count} snapshots received",
+    "sender_card_snap_live": "Live snapshot broadcast",
+    "sender_sym_breakdown_title": "Positions Breakdown by Symbol",
+    "sender_th_rel_exposure": "Relative Exposure",
+    "sender_flat_title": "No Open Positions Reported",
+    "sender_flat_desc": "Sender account is currently flat. No active open tickets or market risk exposure."
   },
   "notices": {
     "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",

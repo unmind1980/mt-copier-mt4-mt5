@@ -2890,7 +2890,19 @@ var I18N_BUILTIN = {
           "stage_gate_delayed": "⏱️ 2. Gate Delayed",
           "stage_mkt_closed": "🔒 3. Market Closed",
           "orders_waiting_strip": "{total} Orders Waiting to Open ({lots} lots):",
-          "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh"
+          "telemetry_stream_foot": "Receiver: {node} · Routine sync every 60s · Click 'Request Update' for on-demand refresh",
+          "sender_summary_title": "Open Positions Summary",
+          "sender_card_open_pos": "Open Positions",
+          "sender_card_open_pos_sub": "Active open tickets reported by Sender terminal",
+          "sender_card_total_vol": "Total Volume",
+          "sender_card_total_vol_sub": "Sum of lot sizes across all open tickets",
+          "sender_card_snap_state": "Snapshot State",
+          "sender_card_snaps_received": "{count} snapshots received",
+          "sender_card_snap_live": "Live snapshot broadcast",
+          "sender_sym_breakdown_title": "Positions Breakdown by Symbol",
+          "sender_th_rel_exposure": "Relative Exposure",
+          "sender_flat_title": "No Open Positions Reported",
+          "sender_flat_desc": "Sender account is currently flat. No active open tickets or market risk exposure."
       },
       "notices": {
           "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",
@@ -3333,7 +3345,19 @@ var I18N_BUILTIN = {
           "stage_gate_delayed": "⏱️ 2. 安全防抖延遲",
           "stage_mkt_closed": "🔒 3. 市場休市等待",
           "orders_waiting_strip": "{total} 筆訂單等待開倉 ({lots} 手):",
-          "telemetry_stream_foot": "接收端: {node} · 預設 60 秒同步 · 點擊「立即請求更新」強制刷新"
+          "telemetry_stream_foot": "接收端: {node} · 預設 60 秒同步 · 點擊「立即請求更新」強制刷新",
+          "sender_summary_title": "当前开仓持仓总览",
+          "sender_card_open_pos": "活跃持仓数",
+          "sender_card_open_pos_sub": "发送端终端汇报的当前活跃持仓订单",
+          "sender_card_total_vol": "持仓总手数",
+          "sender_card_total_vol_sub": "所有活跃持仓订单的手数总和",
+          "sender_card_snap_state": "快照指纹状态",
+          "sender_card_snaps_received": "已接收 {count} 次快照",
+          "sender_card_snap_live": "实时快照广播中",
+          "sender_sym_breakdown_title": "各品种持仓分布",
+          "sender_th_rel_exposure": "相对风险敞口",
+          "sender_flat_title": "发送端当前无持仓",
+          "sender_flat_desc": "发送端账户当前空仓，无任何活跃持仓或市场风险敞口。"
       },
       "notices": {
           "mkt_closed_title": "【週末休市排隊中】訂單 #{ticket} 已排隊待平！",
@@ -4336,10 +4360,6 @@ function renderPosNodeDetail(){
       '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
       '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">' + t("cockpit.btn_close_all") + '</button>' +
       '</div>';
-  } else {
-    nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm" onclick="openPositionsView(\'' + esc(n.key) + '\')">' + t("nodes.btn_inspect") + '</button>' +
-      '</div>';
   }
 
   var finParts = [];
@@ -4749,26 +4769,27 @@ function renderPosNodeDetail(){
       var symbols = (p && p.symbols) ? p.symbols : [];
       var snaps = (p && p.snaps) ? p.snaps : "-";
 
-      var sndHtml = '<div class="pos-section-title">📊 Open Positions Summary</div>';
+      var sndHtml = '<div class="pos-section-title">📊 ' + t("cockpit.sender_summary_title") + '</div>';
       sndHtml += '<div class="pos-card-grid">';
       sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">Open Positions</div>';
-      sndHtml += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">positions</span></div>';
-      sndHtml += '    <div class="pos-card-sub">Active open tickets reported by Sender terminal</div>';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_open_pos") + '</div>';
+      sndHtml += '    <div class="pos-card-val">' + count + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>';
+      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_open_pos_sub") + '</div>';
       sndHtml += '  </div>';
       sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">Total Volume</div>';
-      sndHtml += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">lots</span></div>';
-      sndHtml += '    <div class="pos-card-sub">Sum of lot sizes across all open tickets</div>';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_total_vol") + '</div>';
+      sndHtml += '    <div class="pos-card-val">' + esc(lots) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.th_volume").toLowerCase() + '</span></div>';
+      sndHtml += '    <div class="pos-card-sub">' + t("cockpit.sender_card_total_vol_sub") + '</div>';
       sndHtml += '  </div>';
       sndHtml += '  <div class="pos-card">';
-      sndHtml += '    <div class="pos-card-label">Snapshot State</div>';
+      sndHtml += '    <div class="pos-card-label">' + t("cockpit.sender_card_snap_state") + '</div>';
       sndHtml += '    <div class="pos-card-val" style="font-size:14px;font-family:var(--mono)">H=' + esc(receipt) + '</div>';
-      sndHtml += '    <div class="pos-card-sub">' + (snaps !== "-" ? (snaps + " snapshots received") : "Live snapshot broadcast") + '</div>';
+      var snapSub = (snaps !== "-" ? t("cockpit.sender_card_snaps_received", { count: snaps }) : t("cockpit.sender_card_snap_live"));
+      sndHtml += '    <div class="pos-card-sub">' + snapSub + '</div>';
       sndHtml += '  </div>';
       sndHtml += '</div>';
 
-      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📈 Positions Breakdown by Symbol</div>';
+      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📈 ' + t("cockpit.sender_sym_breakdown_title") + '</div>';
       if(symbols.length > 0){
         var maxSymLots = 0;
         symbols.forEach(function(s){ if(Number(s.lots) > maxSymLots) maxSymLots = Number(s.lots); });
@@ -4791,7 +4812,12 @@ function renderPosNodeDetail(){
 
         sndHtml += '<div class="pos-table-wrap">';
         sndHtml += '  <table>';
-        sndHtml += '    <thead><tr><th>Symbol</th><th class="num">Positions</th><th class="num">Volume (Lots)</th><th>Relative Exposure</th></tr></thead>';
+        sndHtml += '    <thead><tr>' +
+                   '      <th>' + t("cockpit.th_symbol") + '</th>' +
+                   '      <th class="num">' + t("cockpit.sender_card_open_pos") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
+                   '      <th>' + t("cockpit.sender_th_rel_exposure") + '</th>' +
+                   '    </tr></thead>';
         sndHtml += '    <tbody>' + symRows + '</tbody>';
         sndHtml += '  </table>';
         sndHtml += '</div>';
@@ -4799,8 +4825,8 @@ function renderPosNodeDetail(){
         sndHtml += '<div class="waiting-banner clear">';
         sndHtml += '  <div class="waiting-banner-icon">✅</div>';
         sndHtml += '  <div class="waiting-banner-text">';
-        sndHtml += '    <div class="waiting-banner-title">No Open Positions Reported</div>';
-        sndHtml += '    <div class="waiting-banner-desc">Sender account is currently flat. No active open tickets or market risk exposure.</div>';
+        sndHtml += '    <div class="waiting-banner-title">' + t("cockpit.sender_flat_title") + '</div>';
+        sndHtml += '    <div class="waiting-banner-desc">' + t("cockpit.sender_flat_desc") + '</div>';
         sndHtml += '  </div>';
         sndHtml += '</div>';
       }
