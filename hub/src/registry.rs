@@ -147,7 +147,7 @@ pub struct Node {
     pub wait_items: Arc<Vec<ReceiverWaitItem>>,
 }
 
-/// One open position record reported by a receiver.
+/// One open position record reported by a receiver or sender.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct ReceiverPositionItem {
     pub ticket: u64,
@@ -162,6 +162,7 @@ pub struct ReceiverPositionItem {
     pub comment: String,
     pub profit: f64,
     pub swap: f64,
+    pub open_time: u64,
 }
 
 /// One waiting order in the receiver execution pipeline.
@@ -220,6 +221,11 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
         } else {
             0.0
         };
+        let open_time: u64 = if fields.len() >= 13 {
+            fields[12].parse().unwrap_or(0)
+        } else {
+            0
+        };
         items.push(ReceiverPositionItem {
             ticket,
             symbol,
@@ -233,6 +239,7 @@ pub fn parse_receiver_positions(pos_str: &str) -> Vec<ReceiverPositionItem> {
             comment,
             profit,
             swap,
+            open_time,
         });
     }
     items

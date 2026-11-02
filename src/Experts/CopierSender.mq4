@@ -260,6 +260,7 @@ long             g_lastSnapMs=0;
 long             g_lastHbtMs=0;
 long             g_fillSnapshotDueMs=0; // 500ms buffered snapshot deadline after pending fill
 long             g_lastPanelRenderMs=0;
+bool             g_forcePosReport=false; // on-demand telemetry request from WebUI (reqpos)
 
 //--- Pre-allocated static scratch buffers for BuildCurrent (ZERO ArrayResize in hot loop)
 CopierPos        g_rawScratch[CP_MAX_POSITIONS];
@@ -1839,9 +1840,102 @@ void HandleHubSubFrame(const CopierEnv &he)
         }
       return;
      }
+   if(he.type==CP_T_CMD)
+     {
+      string id="",op="",args="";
+      CopierKvGet(he.payload,"ID",id);
+      CopierKvGet(he.payload,"OP",op);
+      CopierKvGet(he.payload,"ARGS",args);
+      if(op=="reqpos" || op=="refreshpos" || op=="refresh")
+        {
+         g_forcePosReport=true;
+         if(StringLen(id)>0)
+           {
+            string ack="ID="+id+";OK=1";
+            CopierEnv ae;
+            ae.v=CP_PROTO_V;
+            ae.sid=(string)g_nid;
+            ae.ssid=g_ssid;
+            ae.seq=++g_seq;
+            ae.ts=CopierServerTime();
+            ae.ms=CopierNowMs();
+            ae.type=CP_T_ACK;
+            ae.payload=ack;
+            g_tp.SendUp("@hub",CopierEncodeEnv(ae));
+           }
+         g_log.Info("CMD "+id+": sender position table update requested by WebUI");
+         return;
+        }
+      return;
+     }
    if(g_once.ShouldEmit("hubctl|"+he.type))
       g_log.Info("central channel: hub sent "+he.type
                  +" (nothing to do for it yet - Phase 2 is read-only)");
+  }
+
+string EncodeSenderPositions(const int count)
+  {
+   if(count<=0) return "";
+   CopierStrBuilder sb;
+   int written=0;
+   for(int i=0;i<count;i++)
+     {
+      if(written>0) sb.Add(CP_SEP_REC);
+      string rec=(string)g_curScratch[i].ticket+CP_SEP_ITEM
+                 +g_curScratch[i].sym+CP_SEP_ITEM
+                 +(string)g_curScratch[i].side+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].openPx,5)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].sl,5)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].tp,5)+CP_SEP_ITEM
+                 +(string)g_curScratch[i].magic+CP_SEP_ITEM
+                 +"1"+CP_SEP_ITEM
+                 +g_curScratch[i].uid+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].profit,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_curScratch[i].swap,2)+CP_SEP_ITEM
+                 +(string)g_curScratch[i].openTime;
+      sb.Add(rec);
+      written++;
+      if(written>=CP_MAX_POSITIONS) break;
+     }
+   return CopierCompressField(sb.Result());
+  }
+
+void SendSenderStatusReport(const int count)
+  {
+   if(!g_hubOn) return;
+   double bal=CopierAccountBalance();
+   double eq=CopierAccountEquity();
+   double lotsSum=0.0;
+   for(int i=0;i<count;i++) lotsSum+=g_curScratch[i].lots;
+
+   string st="LOGIN="+(string)CopierAccountLogin()
+            +CP_SEP_KV+"ROLE=sender"
+            +CP_SEP_KV+"SID="+(string)g_nid
+            +CP_SEP_KV+"HELD="+(string)count
+            +CP_SEP_KV+"LOTS="+DoubleToString(lotsSum,2)
+            +CP_SEP_KV+"EQ="+DoubleToString(eq,2)
+            +CP_SEP_KV+"BL="+DoubleToString(bal,2);
+
+   long rtt=g_peers.RttFor(g_hubPeerName);
+   if(rtt<0) rtt=g_peers.RttFor("hub:primary");
+   if(rtt<0) rtt=g_peers.RttFor("hub:standby");
+   if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
+
+   string posEnc=EncodeSenderPositions(count);
+   st+=CP_SEP_KV+"POS="+posEnc;
+
+   CopierEnv e;
+   e.v=CP_PROTO_V;
+   e.sid=(string)g_nid;
+   e.ssid=g_ssid;
+   e.seq=++g_seq;
+   e.ts=CopierServerTime();
+   e.ms=CopierNowMs();
+   e.type=CP_T_STAT;
+   e.payload=st;
+
+   g_tp.SendUp("@hub",CopierEncodeEnv(e));
   }
 
 //--- N74-08 & O-04: Unified direct status frame handler for fast and slow drain passes.
@@ -1916,6 +2010,12 @@ void OnTimer()
 
    //--- 1) scan and reconcile against what we saw last tick (zero ArrayResize)
    int n=BuildCurrent();
+
+   if(g_forcePosReport && g_hubOn)
+     {
+      g_forcePosReport=false;
+      SendSenderStatusReport(n);
+     }
 
    //--- New generation: the two stamp arrays are NOT cleared - a slot or row
    //--- that nothing writes this tick simply keeps an older generation and

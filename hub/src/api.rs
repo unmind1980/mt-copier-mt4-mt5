@@ -265,7 +265,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
         "waiting": waiting,
         "risk": if n.risk.is_empty() { Value::Null } else { Value::String(n.risk.clone()) },
         "blocked": n.blocked,
-        "positions_detail": if n.role == Role::Receiver {
+        "positions_detail": if n.role == Role::Receiver || n.role == Role::Sender {
             Value::Array(n.held_items.iter().map(|p| json!({
                 "ticket": p.ticket,
                 "symbol": p.symbol,
@@ -279,6 +279,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
                 "comment": p.comment,
                 "profit": p.profit,
                 "swap": p.swap,
+                "open_time": p.open_time,
             })).collect())
         } else {
             Value::Null

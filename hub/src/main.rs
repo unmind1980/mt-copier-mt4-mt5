@@ -2418,14 +2418,14 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         if ty == "STAT" {
                             let login = envelope_kv(&payload, "LOGIN");
                             if !login.is_empty() {
+                                let role_raw = envelope_kv(&payload, "ROLE");
+                                let role = if role_raw == "sender" { "sender" } else { "receiver" };
                                 let sid = envelope_kv(&payload, "SID");
                                 let h = envelope_kv(&payload, "H");
                                 //--- M6: the risk state rides the SAME STAT the
                                 //--- receipt does. BLOCKED counts entries the
                                 //--- receiver's risk gate is holding back;
                                 //--- RISK names the limit when one tripped.
-                                //--- The node is LOGIN, and a sender's STAT is
-                                //--- not relayed here - receivers only.
                                 let blocked: u32 =
                                     envelope_kv(&payload, "BLOCKED").parse().unwrap_or(0);
                                 let risk = envelope_kv(&payload, "RISK");
@@ -2475,7 +2475,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     let mut s = shared.lock_or_recover();
                                     if need_stat {
                                         s.reg.note_stat(
-                                            "receiver",
+                                            role,
                                             &login,
                                             blocked,
                                             &risk,
@@ -2495,11 +2495,11 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                         stat_changed = true;
                                     }
                                     if let Ok(ping_ms) = envelope_kv(&payload, "PING").parse::<u64>() {
-                                        s.reg.note_ping("receiver", &login, ping_ms);
+                                        s.reg.note_ping(role, &login, ping_ms);
                                         stat_changed = true;
                                     }
 
-                                    if !sid.is_empty() && sid != "-" {
+                                    if role == "receiver" && !sid.is_empty() && sid != "-" {
                                         let warm = started.elapsed() < Duration::from_secs(60);
                                         let skey = format!("sender:{}", sid);
                                         let rkey = format!("receiver:{}", login);

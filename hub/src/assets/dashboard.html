@@ -4333,7 +4333,6 @@ function renderPosNodeDetail(){
     var pzText = n.paused ? t("cockpit.btn_resume_node") : t("cockpit.btn_pause_node");
     nodeActions = '<div class="node-banner-actions">' +
       '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">' + t("nodes.btn_config") + '</button> ' +
-      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'reqcfg\')">' + t("cockpit.btn_query_ini") + '</button> ' +
       '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
       '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">' + t("cockpit.btn_close_all") + '</button>' +
       '</div>';
@@ -4741,9 +4740,11 @@ function renderPosNodeDetail(){
       elRec.style.display = "none";
       elSnd.style.display = "";
 
+      maybeAutoRequestPositions(n);
+
       var p = findPosBySender(n.key, n.acc);
-      var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0);
-      var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : "0");
+      var count = p ? p.count : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : (n.held !== undefined && n.held !== null ? Number(n.held) : 0));
+      var lots = p ? p.lots : ((n.positions && n.positions.lots !== undefined) ? n.positions.lots : (n.held_lots !== undefined && n.held_lots !== null ? n.held_lots.toFixed(2) : "0"));
       var receipt = (p && p.receipt) ? p.receipt : ((n.positions && n.positions.receipt) ? n.positions.receipt : "-");
       var symbols = (p && p.symbols) ? p.symbols : [];
       var snaps = (p && p.snaps) ? p.snaps : "-";
@@ -4804,9 +4805,21 @@ function renderPosNodeDetail(){
         sndHtml += '</div>';
       }
 
-      var sItems = (p && p.items) ? p.items : [];
-      sndHtml += '<div class="pos-section-title" style="margin-top:20px">📋 Itemized Open Positions (' + sItems.length + ')</div>';
+      var sItems = (n.positions_detail && n.positions_detail.length > 0) ? n.positions_detail : ((p && p.items) ? p.items : []);
+      sndHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;margin-bottom:8px;flex-wrap:wrap;gap:10px">';
+      sndHtml += '  <div class="pos-section-title" style="margin-bottom:0">📋 ' + t("cockpit.table_title") + ' (' + sItems.length + ')</div>';
+      sndHtml += '  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+      sndHtml += '    <span style="font-size:11.5px;color:var(--dim);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok)"></span><span>' + t("cockpit.auto_updates_1min") + '</span></span>';
+      sndHtml += '    <button type="button" class="btn-sm btn-refresh-update" onclick="requestPosUpdate()" style="cursor:pointer">' + t("cockpit.btn_request_update") + '</button>';
+      sndHtml += '  </div>';
+      sndHtml += '</div>';
+
       if(sItems.length > 0){
+        var totLots = 0.0;
+        var totProfit = 0.0;
+        var totSwap = 0.0;
+        var hasProfitData = false;
+
         var sRows = sItems.map(function(item){
           var sideClass = (Number(item.side) > 0 || String(item.side).toUpperCase() === "BUY") ? "buy" : "sell";
           var sideText = sideClass.toUpperCase();
@@ -4814,24 +4827,82 @@ function renderPosNodeDetail(){
           var slStr = (item.sl && Number(item.sl) > 0) ? Number(item.sl).toFixed(5) : "-";
           var tpStr = (item.tp && Number(item.tp) > 0) ? Number(item.tp).toFixed(5) : "-";
           var ageStr = (item.open_time && item.open_time > 0) ? fmtAge((Date.now()/1000) - item.open_time) : "-";
+          var uidStr = item.uid ? ('<br><span style="font-family:var(--mono);color:var(--dim);font-size:11px">UID: ' + esc(item.uid) + '</span>') : '';
+
+          var lotsVal = Number(item.lots) || 0.0;
+          totLots += lotsVal;
+
+          var pVal = (item.profit !== undefined && item.profit !== null) ? Number(item.profit) : null;
+          var swVal = (item.swap !== undefined && item.swap !== null) ? Number(item.swap) : null;
+          var profitHtml = '<span style="color:var(--dim);font-family:var(--mono)">-</span>';
+          var swapHtml = '<span style="color:var(--dim);font-family:var(--mono)">-</span>';
+          if(pVal !== null){
+            hasProfitData = true;
+            totProfit += pVal;
+            var pClass = pVal > 0 ? "profit-pos" : (pVal < 0 ? "profit-neg" : "profit-zero");
+            var pSign = pVal > 0 ? "+" : "";
+            profitHtml = '<span class="' + pClass + '" style="font-weight:700;font-family:var(--mono)">' + pSign + pVal.toFixed(2) + '</span>';
+          }
+          if(swVal !== null){
+            totSwap += swVal;
+            var swClass = swVal > 0 ? "profit-pos" : (swVal < 0 ? "profit-neg" : "profit-zero");
+            var swSign = swVal > 0 ? "+" : "";
+            swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
+          }
+
           return '<tr>' +
                  '  <td><span class="pos-badge sender">OPENED</span></td>' +
-                 '  <td><strong style="font-family:var(--mono)">#' + esc(item.ticket) + '</strong></td>' +
-                 '  <td><span style="font-family:var(--mono);color:var(--dim)">UID: ' + esc(item.uid || "-") + '</span></td>' +
+                 '  <td><strong style="font-family:var(--mono)">#' + esc(item.ticket) + '</strong>' + uidStr + '</td>' +
                  '  <td><strong>' + esc(item.symbol) + '</strong></td>' +
                  '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
                  '  <td class="num" style="font-family:var(--mono)">' + esc(item.lots) + '</td>' +
                  '  <td class="num" style="font-family:var(--mono)">' + priceStr + '</td>' +
                  '  <td class="num" style="font-family:var(--mono);color:var(--dim)">' + slStr + ' / ' + tpStr + '</td>' +
+                 '  <td class="num">' + profitHtml + '</td>' +
+                 '  <td class="num">' + swapHtml + '</td>' +
                  '  <td style="font-size:12px;color:var(--dim)">Magic: #' + esc(item.magic) + ' · ' + ageStr + '</td>' +
                  '</tr>';
         }).join("");
 
+        var totPClass = totProfit > 0 ? "profit-pos" : (totProfit < 0 ? "profit-neg" : "profit-zero");
+        var totPSign = totProfit > 0 ? "+" : "";
+        var totSwClass = totSwap > 0 ? "profit-pos" : (totSwap < 0 ? "profit-neg" : "profit-zero");
+        var totSwSign = totSwap > 0 ? "+" : "";
+        var totProfitStr = hasProfitData ? ('<span class="' + totPClass + '" style="font-weight:700;font-family:var(--mono)">' + totPSign + totProfit.toFixed(2) + '</span>') : '-';
+        var totSwapStr = hasProfitData ? ('<span class="' + totSwClass + '" style="font-weight:700;font-family:var(--mono)">' + totSwSign + totSwap.toFixed(2) + '</span>') : '-';
+
         sndHtml += '<div class="pos-table-wrap">';
         sndHtml += '  <table>';
-        sndHtml += '    <thead><tr><th>Status</th><th>Ticket</th><th>UID</th><th>Symbol</th><th>Side</th><th class="num">Volume</th><th class="num">Open Price</th><th class="num">SL / TP</th><th>Details</th></tr></thead>';
+        sndHtml += '    <thead><tr>' +
+                   '      <th>' + t("cockpit.th_status") + '</th>' +
+                   '      <th>' + t("cockpit.th_ticket_uid") + '</th>' +
+                   '      <th>' + t("cockpit.th_symbol") + '</th>' +
+                   '      <th>' + t("cockpit.th_side") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_volume") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_price") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_sl_tp") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_profit") + '</th>' +
+                   '      <th class="num">' + t("cockpit.th_swap") + '</th>' +
+                   '      <th>' + t("cockpit.th_details") + '</th>' +
+                   '    </tr></thead>';
         sndHtml += '    <tbody>' + sRows + '</tbody>';
+        sndHtml += '    <tfoot><tr class="pos-subtotal-row">' +
+                   '      <td colspan="4" style="font-weight:700">' + t("cockpit.subtotal_label", { count: '<span>' + sItems.length + '</span>' }) + '</td>' +
+                   '      <td class="num" style="font-weight:700;font-family:var(--mono)">' + totLots.toFixed(2) + '</td>' +
+                   '      <td colspan="2"></td>' +
+                   '      <td class="num">' + totProfitStr + '</td>' +
+                   '      <td class="num">' + totSwapStr + '</td>' +
+                   '      <td></td>' +
+                   '    </tr></tfoot>';
         sndHtml += '  </table>';
+        sndHtml += '</div>';
+      } else {
+        sndHtml += '<div class="waiting-banner clear" style="margin-top:10px">';
+        sndHtml += '  <div class="waiting-banner-icon">ℹ️</div>';
+        sndHtml += '  <div class="waiting-banner-text">';
+        sndHtml += '    <div class="waiting-banner-title">' + t("cockpit.no_orders_filter") + '</div>';
+        sndHtml += '    <div class="waiting-banner-desc">' + t("cockpit.no_orders_filter_desc") + '</div>';
+        sndHtml += '  </div>';
         sndHtml += '</div>';
       }
 
@@ -4882,10 +4953,10 @@ function openPositionsModal(focusKey){
 //--- account is a valid answer, not a missing one.
 var _autoPosAt = {};
 function maybeAutoRequestPositions(n){
-  if(!n || n.role !== "receiver") return;
+  if(!n) return;
   // BUG-01: Standby Hub is read-only; positions replicate automatically via cluster sync
   if(s.data && s.data.cluster && s.data.cluster.role === "standby") return;
-  var held = (n.positions && n.positions.count) || 0;
+  var held = (n.positions && n.positions.count) || (n.held !== undefined && n.held !== null ? n.held : 0);
   var rows = (n.positions_detail || []).length + (n.waiting_detail || []).length;
   if(held <= 0) return;
   if(rows > 0) return;
@@ -5077,7 +5148,7 @@ function startPosAutoPoll(){
       return;
     }
     var k = s.selectedPosNode || ($("pos_node_select") ? $("pos_node_select").value : "");
-    if(k && k.startsWith("receiver:") && (!s.data || !s.data.cluster || s.data.cluster.role !== "standby")){
+    if(k && (!s.data || !s.data.cluster || s.data.cluster.role !== "standby")){
       sendCommand(k, "reqpos", null, { force: false });
     }
   }, 60000);

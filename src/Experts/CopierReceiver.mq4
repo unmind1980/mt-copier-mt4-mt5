@@ -4558,7 +4558,8 @@ string EncodeReceiverPositions()
                  +(string)isManaged+CP_SEP_ITEM
                  +CopierSanitizeComment(cmt)+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].profit,2)+CP_SEP_ITEM
-                 +CopierFmtDouble(g_acctAllPos[i].swap,2);
+                 +CopierFmtDouble(g_acctAllPos[i].swap,2)+CP_SEP_ITEM
+                 +(string)g_acctAllPos[i].openTime;
       sb.Add(rec);
       count++;
       //--- CP_MAX_POSITIONS, not 128. 128 was a leftover from when the
