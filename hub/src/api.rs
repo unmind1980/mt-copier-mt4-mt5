@@ -277,6 +277,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
                 "magic": p.magic,
                 "managed": p.managed,
                 "comment": p.comment,
+                "uid": if n.role == Role::Sender { p.comment.clone() } else { String::new() },
                 "profit": p.profit,
                 "swap": p.swap,
                 "open_time": p.open_time,
@@ -2626,16 +2627,22 @@ async fn commands_global(
             .into_response();
     }
 
-    //--- Parse the operation exactly as the per-node endpoint does.
-    let op = {
+    //--- Parse the operation and optional arguments.
+    let (op, args) = {
         let body = body.trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-            v.get("op")
+            let o = v.get("op")
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| body.to_string())
+                .unwrap_or_else(|| body.to_string());
+            let a = v.get("args")
+                .and_then(|x| x.as_str())
+                .or_else(|| v.get("ticket").and_then(|x| x.as_str()))
+                .unwrap_or("")
+                .to_string();
+            (o, a)
         } else {
-            body.to_string()
+            (body.to_string(), String::new())
         }
     };
     if !crate::commands::is_known_op(&op) {
@@ -2645,6 +2652,18 @@ async fn commands_global(
                 "error": "unknown operation",
                 "op": op,
                 "known": crate::commands::OPS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            })),
+        )
+            .into_response();
+    }
+
+    // N83-09: Prevent dispatching close command with empty ticket/args across fleet
+    if op == "close" && args.trim().is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "close command requires ticket in 'args' or 'ticket' field",
+                "op": op,
             })),
         )
             .into_response();
@@ -2674,7 +2693,7 @@ async fn commands_global(
     };
     let mut issued: Vec<Value> = Vec::new();
     for node in &nodes {
-        let cmd = cmds.issue_op(node, &op, "", &actor, "");
+        let cmd = cmds.issue_op(node, &op, &args, &actor, "");
         audit.record(
             &actor,
             "",
@@ -2884,6 +2903,31 @@ async fn notifications_upsert(
                 Json(json!({ "error": e })),
             )
                 .into_response();
+        }
+    }
+
+    // N83-05: Validate WeChat token if URL or raw token
+    if b.channel_type == "wechat" || b.channel_type == "xtuis" {
+        if let Some(tok) = config_for_val.get("token").and_then(|t| t.as_str()) {
+            let t = tok.trim();
+            if t.starts_with("http://") || t.starts_with("https://") {
+                if let Err(e) = crate::notifications::validate_outgoing_url(t).await {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": e })),
+                    )
+                        .into_response();
+                }
+            } else if !t.is_empty() {
+                let clean = t.trim_end_matches(".send");
+                if !clean.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "WeChat (Xtuis) token contains invalid characters" })),
+                    )
+                        .into_response();
+                }
+            }
         }
     }
 
@@ -4011,7 +4055,14 @@ async fn tls_renew(
             crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
         };
         let acme = crate::tls::AcmeClient::new(dir_url.to_string());
-        let _ = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await;
+        // N83-01: Handle enrollment failure in background task to log error and reset in_progress state
+        if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await {
+            eprintln!("[hub] TLS ERR: Renewal failed for {}: {}", domain_bg, e);
+            let mut c = mgr_bg.config.lock().unwrap();
+            c.status.in_progress = false;
+            c.status.last_error = Some(e);
+            let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+        }
     });
 
     audit.record(&sess.user_id, "", "tls.renew", &domain, None, None, "ok");

@@ -9,7 +9,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use p256::ecdsa::signature::Signer;
@@ -134,14 +134,29 @@ pub fn format_sslip_domain(ip: &str) -> String {
     }
 }
 
+static DETECTED_IP_CACHE: std::sync::Mutex<Option<(Option<String>, Instant)>> =
+    std::sync::Mutex::new(None);
+
 /// Query outbound IP probe services with a short timeout to discover the host's public IP.
+/// N83-06: Caches result for 60s to prevent blocking UI/status queries up to 16s on slow/offline networks.
 pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
+    {
+        if let Ok(guard) = DETECTED_IP_CACHE.lock() {
+            if let Some((ref ip, ref ts)) = *guard {
+                if ts.elapsed() < Duration::from_secs(60) {
+                    return ip.clone();
+                }
+            }
+        }
+    }
+
     let endpoints = [
         "https://api.ipify.org",
         "https://icanhazip.com",
         "https://ifconfig.me/ip",
         "https://checkip.amazonaws.com",
     ];
+    let mut detected = None;
     for ep in endpoints {
         if let Ok(res) = client
             .get(ep)
@@ -153,13 +168,17 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
                 if let Ok(body) = res.text().await {
                     let candidate = body.trim();
                     if candidate.parse::<std::net::Ipv4Addr>().is_ok() {
-                        return Some(candidate.to_string());
+                        detected = Some(candidate.to_string());
+                        break;
                     }
                 }
             }
         }
     }
-    None
+    if let Ok(mut guard) = DETECTED_IP_CACHE.lock() {
+        *guard = Some((detected.clone(), Instant::now()));
+    }
+    detected
 }
 
 /// Load `tls_config.json`, falling back to safe defaults if missing or corrupted.
@@ -176,6 +195,7 @@ pub fn load_config(path: &Path) -> TlsConfig {
 }
 
 /// Save `tls_config.json` atomically via write-and-rename.
+/// N83-07: Uses atomic_replace_file with safe copy-fallback on Windows instead of deleting target before rename.
 pub fn save_config(path: &Path, cfg: &TlsConfig) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -190,14 +210,7 @@ pub fn save_config(path: &Path, cfg: &TlsConfig) -> io::Result<()> {
         f.sync_all()?;
     }
 
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            // Windows file-lock fallback
-            let _ = fs::remove_file(path);
-            fs::rename(&tmp, path)
-        }
-    }
+    crate::cluster::atomic_replace_file(&tmp, path)
 }
 
 /// Certificate file paths managed by the hub.
@@ -955,7 +968,24 @@ impl AcmeClient {
     }
 
     /// Execute end-to-end ACME order, HTTP-01 challenge completion, and certificate enrollment.
+    /// N83-08: Guarantees status.in_progress is reset and status.last_error is recorded on any failure path.
     pub async fn enroll_certificate(
+        &self,
+        tls_mgr: &Arc<TlsManager>,
+        domain: &str,
+        email: Option<&str>,
+    ) -> Result<(), String> {
+        let res = self.enroll_certificate_inner(tls_mgr, domain, email).await;
+        if let Err(ref e) = res {
+            let mut c = tls_mgr.config.lock().unwrap();
+            c.status.in_progress = false;
+            c.status.last_error = Some(e.clone());
+            let _ = save_config(&tls_mgr.config_path, &c);
+        }
+        res
+    }
+
+    async fn enroll_certificate_inner(
         &self,
         tls_mgr: &Arc<TlsManager>,
         domain: &str,

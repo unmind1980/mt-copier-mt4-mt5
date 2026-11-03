@@ -2255,12 +2255,22 @@ void CmdStateSave()
    string body="PAUSED="+(g_cmdPaused?"1":"0")
               +"\nID="+g_cmdId
               +"\nACK="+CopierIniEscape(g_cmdAck);
+   // N83-02: Persist operator manually closed UIDs so they survive receiver restarts
+   int mcCount=g_manualClosed.Count();
+   for(int i=0;i<mcCount;i++)
+     {
+      string mUid=g_manualClosed.GetUid(i);
+      long mTicket=g_manualClosed.GetTicket(i);
+      if(StringLen(mUid)>0)
+         body+="\nMC="+mUid+"|"+(string)mTicket;
+     }
    CopierIniWriteAll(CmdStatePath(),body);
   }
 
 void CmdStateLoad()
   {
    g_cmdPaused=false; g_cmdId=""; g_cmdAck="";
+   g_manualClosed.Clear();
    string text="";
    if(!CopierIniReadAll(CmdStatePath(),text)) return;
    string lines[];
@@ -2272,6 +2282,20 @@ void CmdStateLoad()
       if(CopierKvGet(line,"PAUSED",v)) g_cmdPaused=(v=="1");
       if(CopierKvGet(line,"ID",v))     g_cmdId=v;
       if(CopierKvGet(line,"ACK",v))    CopierIniUnescape(v,g_cmdAck);
+      if(CopierKvGet(line,"MC",v))
+        {
+         int sep=StringFind(v,"|");
+         if(sep>0)
+           {
+            string uid=StringSubstr(v,0,sep);
+            long ticket=CopierParseLong(StringSubstr(v,sep+1));
+            g_manualClosed.Add(uid,ticket);
+           }
+         else if(StringLen(v)>0)
+           {
+            g_manualClosed.Add(v,0);
+           }
+        }
      }
   }
 
@@ -5549,6 +5573,7 @@ void ConvergeSender(const int si)
    //--- Garbage collect manually closed UIDs that the sender no longer holds in desired set
    if(g_manualClosed.Count()>0 && g_desiredCount[si]>=0 && StringLen(g_snapHash[si])>0)
      {
+      bool gcChanged=false;
       for(int m=g_manualClosed.Count()-1; m>=0; m--)
         {
          string mUid=g_manualClosed.GetUid(m);
@@ -5574,9 +5599,11 @@ void ConvergeSender(const int si)
               {
                g_log.Info("ManualClosed GC: UID "+mUid+" was closed by operator and sender no longer holds it. Removed from ignore table.");
                g_manualClosed.Forget(mUid);
+               gcChanged=true;
               }
            }
         }
+      if(gcChanged) CmdStateSave(); // N83-02: Synchronize disk state when manual closed entries are GC'd
      }
   }
 
@@ -6380,6 +6407,7 @@ void HandleCmd(const CopierEnv &e)
 
       // Add to manual closed table so it is NEVER restored while sender holds it
       g_manualClosed.Add(uid,targetPos.ticket);
+      CmdStateSave(); // N83-02: Persist manual closed UID immediately
 
       string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
       string actKey=sname+":"+(string)CP_ACT_CLOSE+":"+uid;

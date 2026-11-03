@@ -1460,6 +1460,8 @@ public:
 
    int Count() const { return m_n; }
    string GetUid(const int idx) const { if(idx>=0 && idx<m_n) return m_uid[idx]; return ""; }
+   long GetTicket(const int idx) const { if(idx>=0 && idx<m_n) return m_ticket[idx]; return 0; }
+   void Clear() { m_n=0; for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; } }
   };
 
 #endif

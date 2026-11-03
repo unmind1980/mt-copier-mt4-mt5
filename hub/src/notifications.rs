@@ -416,20 +416,51 @@ impl NotificationStore {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
             }
         }
+        // N83-05: Validate WeChat token if URL or raw token
+        if channel.channel_type == "wechat" || channel.channel_type == "xtuis" {
+            if let Some(tok) = channel.config.get("token").and_then(|v| v.as_str()) {
+                let t = tok.trim();
+                if t.starts_with("http://") || t.starts_with("https://") {
+                    if let Err(e) = check_url_base(t) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
+                    }
+                } else if !t.is_empty() {
+                    let clean = t.trim_end_matches(".send");
+                    if !clean.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "WeChat (Xtuis) token contains invalid characters",
+                        ));
+                    }
+                }
+            }
+        }
         if channel.created_at == 0 {
             channel.created_at = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
         }
-        self.channels.insert(channel.id.clone(), channel.clone());
-        self.save()?;
+        let prev = self.channels.insert(channel.id.clone(), channel.clone());
+        // N83-03: Rollback in-memory map if disk save fails
+        if let Err(e) = self.save() {
+            if let Some(old) = prev {
+                self.channels.insert(channel.id.clone(), old);
+            } else {
+                self.channels.remove(&channel.id);
+            }
+            return Err(e);
+        }
         Ok(channel)
     }
 
     pub fn remove(&mut self, id: &str) -> io::Result<bool> {
-        if self.channels.remove(id).is_some() {
-            self.save()?;
+        if let Some(removed) = self.channels.remove(id) {
+            // N83-03: Rollback in-memory map if disk save fails
+            if let Err(e) = self.save() {
+                self.channels.insert(id.to_string(), removed);
+                return Err(e);
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -989,6 +1020,8 @@ async fn send_telegram(
     );
 
     let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+    // N83-04: Validate api.telegram.org via resolve_pinned_client to enforce SSRF and DNS rebinding protections
+    let client = resolve_pinned_client(client, &url).await?;
     let payload = json!({
         "chat_id": chat_id,
         "text": text,
@@ -1489,6 +1522,10 @@ async fn send_wechat(
         raw_token.to_string()
     } else {
         let clean_token = raw_token.trim_end_matches(".send");
+        // N83-05: Enforce character whitelist on raw WeChat token
+        if !clean_token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return Err("WeChat (Xtuis) token contains invalid characters".to_string());
+        }
         format!("https://wx.xtuis.cn/{}.send", clean_token)
     };
 

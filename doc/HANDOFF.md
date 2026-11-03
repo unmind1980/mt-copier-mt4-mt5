@@ -1621,6 +1621,26 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - `dash_check.py` 更新为 252 个元素 ID 与 138 个函数匹配；
      - 157/157 Rust 测试与 26/26 通知回归测试全部通过。
 
+### 九十五次演进：TLS 续期状态机自愈、MQL 手动平仓跨重启持久化与第 83 轮全栈审计核销 (2026-11-03 12:00；全部闭环)
+
+- **技术落地项**：
+  1. **N83-01 & N83-08（TLS 自动续期停摆防线与状态机自愈）**：
+     - 在 `hub/src/tls.rs` 中为 `enroll_certificate` 建立自包含失败恢复机制，任何 early-return 失败分支均自动清空 `in_progress` 并记入 `last_error`，彻底消除自动续期 worker 的死锁；
+     - 在 `hub/src/api.rs:4005` `tls_renew` 后台任务中补齐与 `tls_configure` 对齐的错误处理块；
+  2. **N83-02（MQL 接收端手动平仓跨重启持久化）**：
+     - 在 `src/Include/Copier/CopierState.mqh` 为 `CopierManualClosedRing` 扩充 `GetTicket` 与 `Clear`；
+     - 在 `src/Experts/CopierReceiver.mq4` 中将 `g_manualClosed` 以 `MC=<uid>|<ticket>` 格式并入 `CmdStateSave` 与 `CmdStateLoad`；
+     - 手动平仓与 GC 自动清理均联动 `CmdStateSave()`，彻底杜绝 Receiver 重启后误重新开仓被平掉的订单；
+  3. **N83-03, N83-04, N83-05（通知系统加固）**：
+     - `NotificationStore::upsert/remove` 增加写盘失败内存回滚机制；
+     - `send_telegram` 补齐 `resolve_pinned_client`，杜绝 Telegram 路径的 SSRF 与 DNS 劫持风险；
+     - WeChat(Xtuis) Token 增加字符白名单，并在 `notifications_upsert` 阶段提前检验语法与 SSRF；
+  4. **N83-06, N83-07, N83-09, N83-10（可靠性与性能优化）**：
+     - `detect_public_ip` 增加 60 秒缓存，解决慢网或无外网环境下 `tls_status` 16 秒阻塞延迟；
+     - `save_config` 复用 `cluster::atomic_replace_file`，杜绝 Windows 文件占用时删除原配置风险；
+     - `commands_global` 补充 `close` 指令的 ticket/args 门禁校验；
+     - `node_json` 为 `Role::Sender` 映射 `uid` 字段（取自 `p.comment`），修复持仓明细表 UID 显示。
+
 ---
 
 ## 9. 最终交付状态确认
