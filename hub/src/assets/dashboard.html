@@ -837,7 +837,7 @@
 
   /* Sections */
   section{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-  section h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.06em;
+  section h2{margin:0;font-size:calc(var(--font-base) * 1.05);text-transform:uppercase;letter-spacing:.06em;
              color:var(--ink);padding:11px 16px;border-bottom:1px solid var(--line);
              display:flex;justify-content:space-between;align-items:center;background:var(--surface-header)}
   section h2 span{font-family:var(--mono);text-transform:none;letter-spacing:0}
@@ -996,7 +996,7 @@
   .side-badge.sell{background:#fef2f2;color:#dc2626;border:1px solid #fee2e2}
 
   .pos-filter-toolbar{display:flex;align-items:center;gap:6px;margin:12px 0;flex-wrap:wrap}
-  .pos-filter-btn{padding:5px 12px;font-size:12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--dim);cursor:pointer;font-weight:500;transition:all .15s ease}
+  .pos-filter-btn{padding:calc(var(--font-base) * 0.38) calc(var(--font-base) * 0.88);font-size:calc(var(--font-base) * 0.92);border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--dim);cursor:pointer;font-weight:500;transition:all .15s ease}
   .pos-filter-btn:hover{background:var(--panel);color:var(--ink);border-color:var(--dim)}
   .pos-filter-btn.active{background:var(--accent);color:#ffffff;border-color:var(--accent);font-weight:600;box-shadow:0 1px 2px rgba(37,99,235,0.25)}
 
@@ -1703,11 +1703,21 @@
     font-size: calc(var(--font-base) * 0.88) !important;
   }
 
-  /* 7. Topology & Activity Log (#toposec, #msgsec - Screenshot 5) */
-  #toposec h2, #msgsec h2, #btn-dismiss-alerts {
-    font-size: calc(var(--font-base) * 0.95) !important;
+  /* 7. All Section Headers (Terminals & Nodes, Topology, Message Center, Notifications, Users) */
+  section h2, section h2 span, section h2 strong,
+  .msg-center-card h2, .msg-center-card h2 span,
+  #nodes-sec h2, #nodes-sec h2 span,
+  #topo h2, #topo h2 span,
+  #msgcenter-card h2, #msgcenter-card h2 span,
+  #notif-sec h2, #notif-sec h2 span,
+  #users-sec h2, #users-sec h2 span,
+  #ncount, #tcount, #ucount, #notifcount {
+    font-size: calc(var(--font-base) * 1.08) !important;
   }
-  #toposec text, svg#toposvg text, .lbl {
+  #btn-dismiss-alerts {
+    font-size: calc(var(--font-base) * 0.88) !important;
+  }
+  #topo text, svg text, .lbl {
     font-size: calc(var(--font-base) * 0.85) !important;
   }
   .msg-item {
@@ -1733,6 +1743,28 @@
   }
   .toast-item {
     font-size: calc(var(--font-base) * 0.92) !important;
+  }
+
+  /* 8b. Cockpit Filter Toolbar, Status Strips & Subtotal Rows (Screenshot 2) */
+  .pos-filter-toolbar, .pos-filter-btn, button.pos-filter-btn,
+  #chk_fast_close_wrap, #chk_fast_close_wrap span {
+    font-size: calc(var(--font-base) * 0.92) !important;
+  }
+  .pos-filter-btn, button.pos-filter-btn {
+    padding: calc(var(--font-base) * 0.38) calc(var(--font-base) * 0.88) !important;
+  }
+  .waiting-strip, .waiting-strip-text, .waiting-strip-text strong {
+    font-size: calc(var(--font-base) * 0.92) !important;
+  }
+  .waiting-strip-icon {
+    font-size: calc(var(--font-base) * 1.1) !important;
+  }
+  .pos-node-select {
+    font-size: var(--font-base) !important;
+    padding: calc(var(--font-base) * 0.3) calc(var(--font-base) * 0.6) !important;
+  }
+  .pos-subtotal-row td, #subtotal_orders_label, #subtotal_volume, #subtotal_profit, #subtotal_swap {
+    font-size: var(--font-base) !important;
   }
 
   /* 9. Header Tools, Cockpit Sidebar & Footer */
@@ -1913,7 +1945,7 @@
     <section id="msgcenter-card" class="msg-center-card">
       <h2>
         <span data-i18n="msgcenter.title">📢 Message Center &amp; Activity Log (Recent 20)</span>
-        <button type="button" class="btn-sm" id="btn-dismiss-alerts" style="font-size:11px" data-i18n="msgcenter.dismiss_all_read">Dismiss All (Mark Read)</button>
+        <button type="button" class="btn-sm" id="btn-dismiss-alerts" data-i18n="msgcenter.dismiss_all_read">Dismiss All (Mark Read)</button>
       </h2>
       <div id="alerts" class="msg-center-body"></div>
     </section>
@@ -2004,7 +2036,7 @@
                 <button type="button" id="pos_filter_managed" class="pos-filter-btn" onclick="setPosDetailFilter('managed')">Managed (0)</button>
                 <button type="button" id="pos_filter_unmanaged" class="pos-filter-btn" onclick="setPosDetailFilter('unmanaged')">Orphan / Manual (0)</button>
                 <button type="button" id="pos_sort_reset_btn" class="pos-filter-btn" style="display:none" onclick="resetPosSort()" data-i18n="cockpit.btn_reset_sort">↺ Reset Sort</button>
-                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="Close orders immediately on click without confirmation dialog" data-i18n-title="cockpit.fast_close_tooltip">
+                <label id="chk_fast_close_wrap" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;margin-left:auto;cursor:pointer;padding:4px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" title="Close orders immediately on click without confirmation dialog" data-i18n-title="cockpit.fast_close_tooltip">
                   <input type="checkbox" id="chk_fast_close" onchange="onToggleFastClose(this.checked)">
                   <span style="color:var(--ink)" data-i18n="cockpit.fast_close_mode">⚡ Fast Close Mode</span>
                 </label>
@@ -2031,11 +2063,11 @@
                   <tfoot id="pos_rec_tfoot">
                     <tr class="pos-subtotal-row">
                       <td colspan="4" style="text-align:right;font-weight:700" id="subtotal_orders_label">Subtotal (<span id="subtotal_orders_count">0</span> orders):</td>
-                      <td class="num" style="font-family:var(--mono);font-weight:700;font-size:13px" id="subtotal_volume">0.00</td>
+                      <td class="num" style="font-family:var(--mono);font-weight:700" id="subtotal_volume">0.00</td>
                       <td></td>
                       <td></td>
-                      <td class="num" style="font-weight:700;font-size:13px" id="subtotal_profit">$0.00</td>
-                      <td class="num" style="font-weight:700;font-size:13px" id="subtotal_swap">$0.00</td>
+                      <td class="num" style="font-weight:700" id="subtotal_profit">$0.00</td>
+                      <td class="num" style="font-weight:700" id="subtotal_swap">$0.00</td>
                       <td colspan="2"></td>
                     </tr>
                   </tfoot>
