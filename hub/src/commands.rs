@@ -59,7 +59,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use crate::lockx::LockExt;
@@ -363,6 +363,9 @@ impl CommandStore {
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
         let mut to_append = Vec::new();
+        let mut staged_commands: HashMap<String, Command> = HashMap::new();
+        let mut staged_seq: HashMap<String, u64> = HashMap::new();
+
         for line in raw_lines {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
                 let id = v["id"].as_str().unwrap_or("").to_string();
@@ -372,8 +375,12 @@ impl CommandStore {
                 }
                 let seq = v["seq"].as_u64().unwrap_or(0);
                 if seq > 0 {
-                    let cur_seq = inner.seq.get(&node).copied().unwrap_or(0);
-                    inner.seq.insert(node.clone(), cur_seq.max(seq));
+                    let cur_seq = staged_seq
+                        .get(&node)
+                        .copied()
+                        .or_else(|| inner.seq.get(&node).copied())
+                        .unwrap_or(0);
+                    staged_seq.insert(node.clone(), cur_seq.max(seq));
                 }
                 let attempts = v["attempts"].as_u64().unwrap_or(0) as u32;
                 let step = RETRY_LADDER_SECS
@@ -400,7 +407,7 @@ impl CommandStore {
                 // For identical ts, higher state_rank wins; for identical ts and state, higher attempts
                 // wins so retry lines are appended on Standby without dropping lines, but duplicate
                 // identical retransmissions are ignored, preventing Standby journal inflation (N74-04).
-                let should_insert = match inner.commands.get(&id) {
+                let should_insert = match staged_commands.get(&id).or_else(|| inner.commands.get(&id)) {
                     Some(existing) => {
                         if cmd.ts > existing.ts {
                             true
@@ -421,13 +428,7 @@ impl CommandStore {
                     None => true,
                 };
                 if should_insert {
-                    // P1-3 & P1-4: Maintain in_flight collection synchronously
-                    if cmd.state == STATE_PENDING {
-                        inner.in_flight.insert(id.clone());
-                    } else if cmd.is_terminal() {
-                        inner.in_flight.remove(&id);
-                    }
-                    inner.commands.insert(id, cmd.clone());
+                    staged_commands.insert(id, cmd.clone());
                     // P0-03 & N75-01: Append valid replicated lines so Standby's journal matches Primary's
                     // line count without inflating on duplicate/stale lines (matching config.rs N74-04).
                     to_append.push(cmd);
@@ -435,8 +436,22 @@ impl CommandStore {
                 }
             }
         }
+        // F-01: Persist to journal file BEFORE modifying in-memory commands, in_flight, or seq.
+        // If append fails, return Err(e) without altering memory state, allowing Standby to report sync_err.
         if !to_append.is_empty() {
-            inner.append_many(&to_append);
+            inner.append_many(&to_append)?;
+        }
+        for (node, seq) in staged_seq {
+            let cur = inner.seq.get(&node).copied().unwrap_or(0);
+            inner.seq.insert(node, cur.max(seq));
+        }
+        for (id, cmd) in staged_commands {
+            if cmd.state == STATE_PENDING {
+                inner.in_flight.insert(id.clone());
+            } else if cmd.is_terminal() {
+                inner.in_flight.remove(&id);
+            }
+            inner.commands.insert(id, cmd);
         }
         //--- N57-11: bound what a standby holds in memory.
         //---
@@ -821,7 +836,7 @@ impl CommandStore {
             inner.in_flight.remove(&f);
         }
         //--- ONE fsync for the whole batch instead of one per command
-        inner.append_many(&changed);
+        let _ = inner.append_many(&changed);
         out
     }
 
@@ -893,7 +908,7 @@ impl CommandStore {
 
 impl Inner {
     fn append(&mut self, c: &Command) -> bool {
-        self.append_many(std::slice::from_ref(c))
+        self.append_many(std::slice::from_ref(c)).is_ok()
     }
 
     /// Append one or more state transitions, then fsync ONCE.
@@ -905,14 +920,12 @@ impl Inner {
     /// durability contract is unchanged (everything written is flushed before
     /// the call returns); only the number of flushes changed.
     ///
-    /// N56-12: returns whether the batch actually reached the disk. Callers that
-    /// advance an in-memory counter BEFORE writing must check this - swallowing
-    /// the failure is how a command id gets consumed in memory while being
-    /// absent from the journal, and then reused after a restart.
-    fn append_many(&mut self, cs: &[Command]) -> bool {
+    /// N56-12 & F-01: returns Result to ensure callers propagate write failures
+    /// and do not commit in-memory state when disk writes fail.
+    fn append_many(&mut self, cs: &[Command]) -> io::Result<()> {
         let f = match self.file.as_mut() {
             Some(f) => f,
-            None => return false,
+            None => return Ok(()),
         };
         let mut buf = String::new();
         self.line_count += cs.len();
@@ -939,18 +952,18 @@ impl Inner {
             buf.push('\n');
         }
         if buf.is_empty() {
-            return true;
+            return Ok(());
         }
         // Same rule as the audit and the revisions: append, flush, never seek.
         // "What did we tell that node to do" must survive the machine losing
         // power - so the fsync is still there, just not once per line.
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
-            Ok(()) => true,
+            Ok(()) => Ok(()),
             Err(e) => {
                 eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
                 // Keep the in-memory line counter honest: the lines did not land.
                 self.line_count -= cs.len();
-                false
+                Err(e)
             }
         }
     }
@@ -1595,6 +1608,43 @@ mod tests {
         // Step 3: Exact duplicate of line1 must be rejected to prevent inflation
         let applied_dup = s.apply_delta_lines(&[line1]).unwrap();
         assert_eq!(applied_dup, 0, "duplicate identical retry line must not be applied");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// F-01: Verify that when journal append fails (e.g. read-only file / disk full),
+    /// apply_delta_lines returns Err and does NOT mutate in-memory commands or in_flight.
+    #[test]
+    fn test_apply_delta_lines_propagates_journal_error_without_committing_memory() {
+        let p = tmp("delta_err");
+        let s = CommandStore::open(&p).unwrap();
+        let ts = 1700000000;
+        let line = serde_json::json!({
+            "id": "cmd-fail-1",
+            "node": "receiver:1",
+            "seq": 1,
+            "op": "pause",
+            "args": "",
+            "actor": "op",
+            "note": "",
+            "state": "pending",
+            "attempts": 0,
+            "ts": ts,
+            "err": "",
+            "step": 0
+        }).to_string();
+
+        // Swap inner file with a read-only file descriptor to simulate write failure
+        {
+            let mut inner = s.inner.lock().unwrap();
+            let ro_file = OpenOptions::new().read(true).open(&p).unwrap();
+            inner.file = Some(ro_file);
+        }
+
+        let res = s.apply_delta_lines(&[line]);
+        assert!(res.is_err(), "must propagate journal write error as Err");
+        assert!(s.command("cmd-fail-1").is_none(), "failed write must not mutate commands map in memory");
+        assert_eq!(s.stats().1, 0, "failed write must not mutate in_flight collection");
 
         let _ = std::fs::remove_file(&p);
     }

@@ -228,6 +228,25 @@ void TestSnapshot()
       int got=CopierDecodeSnapshot(pld,back,10);
       Ok("roundtrip: probe lots="+DoubleToString(probe[i],10)+" N==decoded", got==kept);
      }
+
+   //--- F-04: Test CopierValidateSnapshot chokepoint gate
+   string valErr="";
+   Ok("val: valid snapshot accepted",CopierValidateSnapshot(payload,3,CP_MAX_POSITIONS,valErr));
+   Ok("val: empty snapshot accepted",CopierValidateSnapshot(empty,0,CP_MAX_POSITIONS,valErr));
+
+   string noH="N=1;R=0:AAAA1111,1,EURUSD,1,0.50,1.0845,0,0,0,1780000000";
+   Ok("val: legacy snapshot without H= accepted",CopierValidateSnapshot(noH,1,CP_MAX_POSITIONS,valErr));
+
+   string badH=payload+";H=00000000";
+   Ok("val: mismatched H= rejected",!CopierValidateSnapshot(badH,3,CP_MAX_POSITIONS,valErr));
+
+   string noN="R=0:AAAA1111,1,EURUSD,1,0.50,1.0845,0,0,0,1780000000;H=12345678";
+   Ok("val: missing N= rejected",!CopierValidateSnapshot(noN,1,CP_MAX_POSITIONS,valErr));
+
+   Ok("val: count mismatch (decoded 2 vs expected 3) rejected",!CopierValidateSnapshot(payload,2,CP_MAX_POSITIONS,valErr));
+
+   string hugeN="N=99999999;R=0:";
+   Ok("val: absurdly large N rejected",!CopierValidateSnapshot(hugeN,0,CP_MAX_POSITIONS,valErr));
   }
 
 void TestUid()

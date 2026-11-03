@@ -1664,6 +1664,28 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - `detect_public_ip` 仅在探测成功时缓存，避免临时网络波动造成 60s 负面假象；
      - WeChat 校验全面覆盖 `token`、`key` 与 `webhook_url`。
 
+### 九十七次演进：备机命令增量同步持久化原子屏障、HA Epoch 防溢出与快照门禁全测试闭环 (2026-11-03 17:00；全部闭环)
+
+- **技术落地项**：
+  1. **F-01（Standby 命令增量同步持久化原子屏障与错误传播）**：
+     - 在 `hub/src/commands.rs` 中将 `Inner::append_many` 改造为返回 `io::Result<()>`；
+     - 在 `CommandStore::apply_delta_lines` 中实现两阶段先落盘再发布：若磁盘追加失败（如磁盘满、占用），立即返回 `Err(e)`，内存中的 `commands`、`in_flight` 与 `seq` 维持零污染；
+     - 在 `hub/src/cluster.rs` 中完整捕获 `cmds/cfg` 的 `apply_delta_lines` 与 `replace_all` 错误，正确置位 `file_sync_err` 与 `sync_status = "sync_err"`，杜绝写盘失败却谎报 `synced`；
+     - 新增 `test_apply_delta_lines_propagates_journal_error_without_committing_memory` 单元测试；
+  2. **F-02（HA Epoch 安全自增与溢出枯竭防护）**：
+     - 在 `hub/src/cluster.rs` 引入统一的 `next_epoch(base: u64) -> u64`（通过 `checked_add(1).unwrap_or(u64::MAX)`），彻底杜绝 release 模式整数环绕和 debug 模式 panic；
+     - 在 `ClusterManager::load_or_create` 中增加 `epoch == u64::MAX` 拒绝门禁，杜绝损坏状态文件导致脑裂；
+     - 全面替换 `promote`、自动 failback、人工 promote 与人工 failback 中的裸加法；
+     - 新增 `test_epoch_overflow_protection_and_exhausted_load_rejection` 单元测试，Rust 单元测试基线提升至 **160 / 160 PASS**；
+  3. **F-04（MQL 接收端快照门禁断言补全）**：
+     - 在 `src/Include/Copier/CopierCodec.mqh` 抽象出独立的 `CopierValidateSnapshot(...)` 判定器并由 `HandleSnapshot` 接入；
+     - 在 `src/Scripts/CopierSelfTest.mq4` 补齐有效快照、老版本无 H 快照、坏 H、缺 N、记录数不匹配以及巨大 N 截断的端到端单测断言；
+  4. **O-02 & O-04（可审计性与编译清洁度）**：
+     - 改进 `tools/tests.sh` 汇总正则，让所有套件输出可审计的测试结论/数量，消灭 `ran (no summary line)`；
+     - 标记 `tls.rs:635` `port` 字段 `#[allow(dead_code)]`，Rust 编译实现 **0 warning**；
+  5. **F-03（业务决策分析与记录）**：
+     - 完成多 Hub XSUB uplink 机制复核，对双发 fan-out 与端到端确认机制形成完整架构论证备忘供用户审阅。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1673,19 +1695,21 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**158 / 158 单元测试全量 PASS**；
-  - 核心 Python 测试套件全部绿灯：
+  - Rust Hub Release 构建成功，**160 / 160 单元测试全量 PASS，0 warnings**；
+  - 核心 Python 测试套件全部绿灯（覆盖率与断言可审计）：
     - `hub_tls_test.py`：13 / 13 PASS
     - `hub_notifications_test.py`：26 / 26 PASS
     - `hub_config_test.py`：71 / 71 PASS
     - `hub_commands_test.py`：47 / 47 PASS
     - `hub_cluster_test.py`：35 / 35 PASS
+    - `ha_chaos_test.py`：5 / 5 PASS
+    - `ha_probe_test.py`：5 / 5 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
     - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护与定向 GC 门禁）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障与 Epoch 溢出防护）与业务代码实现 100% 吻合。
 
 ---
 

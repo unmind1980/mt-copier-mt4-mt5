@@ -532,6 +532,61 @@ string CopierSnapshotHash(const string payload)
    return h;
   }
 
+//+------------------------------------------------------------------+
+//| F-04: Standalone snapshot validation predicate matching HandleSnapshot gate.
+//| Returns true if payload satisfies N declaration, H= integrity,
+//| and decoded count == min(N, maxCapacity).
+//+------------------------------------------------------------------+
+bool CopierValidateSnapshot(const string payload,const int decodedCount,const int maxCapacity,string &err)
+  {
+   err="";
+   string cnt="";
+   if(!CopierKvGet(payload,"N",cnt))
+     {
+      err="missing declared count N=";
+      return false;
+     }
+   long sentLong=CopierParseLong(cnt);
+   if(sentLong<0 || sentLong>(long)maxCapacity*10)
+     {
+      err="invalid declared count N="+cnt;
+      return false;
+     }
+   int sent=(int)sentLong;
+
+   string hOnWire="";
+   bool hasH=CopierKvGet(payload,"H",hOnWire);
+   if(hasH)
+     {
+      if(StringLen(hOnWire)!=8)
+        {
+         err="malformed H= field";
+         return false;
+        }
+      int hPos=StringFind(payload,CP_SEP_KV+"H="+hOnWire);
+      if(hPos<=0)
+        {
+         err="invalid H= field position";
+         return false;
+        }
+      string body=StringSubstr(payload,0,hPos);
+      string hCalc=CopierHashHex(CopierHash32(body));
+      if(hCalc!=hOnWire)
+        {
+         err="H mismatch (wire="+hOnWire+" computed="+hCalc+")";
+         return false;
+        }
+     }
+
+   int expected=(sent>maxCapacity)?maxCapacity:sent;
+   if(decodedCount<0 || decodedCount!=expected)
+     {
+      err="count mismatch: decoded "+(string)decodedCount+" expected "+(string)expected;
+      return false;
+     }
+   return true;
+  }
+
 int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
   {
    string n="";

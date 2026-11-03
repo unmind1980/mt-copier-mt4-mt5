@@ -3466,7 +3466,8 @@ async fn cluster_promote(
     //--- When the peer is unreachable its last known epoch is 0, so this
     //--- degrades to the old local+1, which is correct for a lone survivor.
     let peer_ep = s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0);
-    let target_ep = peer_ep.max(s.cluster.state.epoch) + 1;
+    // F-02: Safely compute next target epoch with checked_add
+    let target_ep = crate::cluster::next_epoch(peer_ep.max(s.cluster.state.epoch));
     let new_epoch = s.cluster.promote(Some(target_ep));
     s.writes = s.writes_allowed; // P1-2: Respect CLI --writes setting
     let current_writes = s.writes;
@@ -3601,8 +3602,8 @@ async fn cluster_failback_now(
             if let Ok(h_data) = r.json::<crate::cluster::HandoverResponse>().await {
                 if h_data.agreed {
                     let mut s = st.lock_or_recover();
-                    // P0-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
-                    let target_ep = Some(h_data.new_epoch.max(s.cluster.epoch()) + 1);
+                    // P0-02 & F-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
+                    let target_ep = Some(crate::cluster::next_epoch(h_data.new_epoch.max(s.cluster.epoch())));
                     let new_epoch = s.cluster.promote(target_ep);
                     s.writes = s.writes_allowed; // P1-3: Respect CLI --writes setting
                     let current_writes = s.writes;

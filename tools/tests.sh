@@ -98,10 +98,8 @@ rc=0
 for t in $PY_TESTS; do
   printf "   %-26s " "$t"
   if out="$("$PY" "$HERE/$t" 2>&1)"; then
-    #--- dash_check.py reports "dashboard OK: ..." rather than "pass=", and it
-    #--- is the only thing that catches a JS syntax error in dashboard.html -
-    #--- which blanks the whole page - so it must be in this sweep.
-    echo "$out" | grep -E "pass=|dashboard OK" || echo "ran (no summary line)"
+    #--- Capture pass= or explicit summary/verdict line for full test auditability (O-02)
+    echo "$out" | grep -E "pass=|dashboard OK|ALL .*PASSED|ALL .*GREEN|VERDICT:|comment\(s\) checked" | tail -1 || echo "ran (no summary line)"
   else
     echo "FAILED"
     echo "$out" | tail -12

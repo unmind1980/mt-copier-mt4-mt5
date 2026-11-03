@@ -5686,108 +5686,14 @@ void HandleSnapshot(const int si,const CopierEnv &e)
   {
    int n=CopierDecodeSnapshot(e.payload,g_scratch,CP_MAX_POSITIONS);
 
-   string cnt="";
-   long sentLong=-1;
-   bool declared=CopierKvGet(e.payload,"N",cnt);
-   if(declared) sentLong=CopierParseLong(cnt);
-   // H-03: Reject invalid or absurdly large N= declarations (>10x max positions) to prevent overflow/wrap
-   if(!declared || sentLong<0 || sentLong>(long)CP_MAX_POSITIONS*10)
+   // F-04: Validate snapshot integrity, N declaration, H= checksum and decoded record count
+   string valErr="";
+   if(!CopierValidateSnapshot(e.payload,n,CP_MAX_POSITIONS,valErr))
      {
       g_snapDeclFailed++;
-      g_log.Warn("sender "+g_sid[si]+" snapshot rejected: invalid declared count N="+cnt);
-      return;
-     }
-   int sent=(int)sentLong;
-
-   // NH-02, R48-02 & N84-04: Fail-closed wire payload integrity check using receiver-computed hash against wire H=
-   // If H= field is present, it must be exactly 8 hex chars and match computed hash.
-   // If H= field is absent, sender is an older build (CopierSnapshotHash returns ""); accept without hash check.
-   string hOnWire="";
-   bool hasH=CopierKvGet(e.payload,"H",hOnWire);
-   if(hasH)
-     {
-      if(StringLen(hOnWire)!=8)
-        {
-         g_snapDeclFailed++;
-         g_snapRejectStreak[si]++;
-         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbad|"+g_sid[si]))
-            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" malformed H= field; rejected to prevent false close-all.");
-         return;
-        }
-      int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
-      if(hPos<=0)
-        {
-         g_snapDeclFailed++;
-         g_snapRejectStreak[si]++;
-         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbadpos|"+g_sid[si]))
-            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
-         return;
-        }
-      string body=StringSubstr(e.payload,0,hPos);
-      string hCalc=CopierHashHex(CopierHash32(body));
-      if(hCalc!=hOnWire)
-        {
-         g_snapRejectStreak[si]++;
-         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hmismatch|"+g_sid[si]))
-            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
-                        +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
-         return;
-        }
-     }
-
-   //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
-   //---
-   //--- The sender declares its own count in N=. If the number of records we
-   //--- actually decoded disagrees with it - zero records, or a partial set
-   //--- from a truncated / half-decodable payload - the snapshot is NOT the
-   //--- state the sender is in, and accepting it is worse than dropping it:
-   //--- every position that failed to decode is simply absent from the
-   //--- desired set, so converge reads that as "the sender closed it" and
-   //--- closes the local mirror. That is a false close-all triggered by a
-   //--- corrupt packet, which is exactly the failure this guard exists for.
-   //---
-   //--- Zero-vs-N was the first version of this check; it caught the total
-   //--- loss but let a HALF-decoded snapshot through, which closes only the
-   //--- missing half - quieter, and no less wrong.
-   //---
-   //--- One case is NOT corruption and must stay accepted: a sender holding
-   //--- more positions than this table can carry. Decode then legitimately
-   //--- stops at CP_MAX_POSITIONS, so that is the count we expect.
-   //---
-   //--- Returning here also leaves g_snapHash untouched, so the sender sees a
-   //--- stale receipt and repairs the snapshot on its next pass.
-   int expected=(sent>CP_MAX_POSITIONS)?CP_MAX_POSITIONS:sent;
-   if(n<0 || n!=expected)
-     {
-      //--- Rate-limited, and counted.
-      //---
-      //--- A sender whose snapshots keep failing to decode is heard from
-      //--- once a second, so an unthrottled ERROR here is 3,600 lines an
-      //--- hour - which buries everything else in the log, the same trap
-      //--- every other per-tick warning in this file fell into.
-      //---
-      //--- The count matters for a different reason. Rejecting leaves the
-      //--- desired set at its last good state, which is correct, but if the
-      //--- bytes the sender is re-sending are the bad ones (the repair path
-      //--- re-sends the SAME cached payload) then this repeats forever and
-      //--- the receiver stands still with nothing on screen saying so. A
-      //--- rising streak is the signal that a NEW snapshot - not another
-      //--- repair - is required.
       g_snapRejectStreak[si]++;
-      bool fresh=(g_snapRejectStreak[si]==1);
-      bool milestone=(g_snapRejectStreak[si]%30)==0;
-      if(fresh || g_once.ShouldEmit("snapreject|"+g_sid[si]) || milestone)
-        {
-         string extra=(g_snapRejectStreak[si]>=30)
-            ?(" - "+(string)g_snapRejectStreak[si]+" in a row. The sender is"
-              +" re-sending the same payload, so a repair cannot fix this: it"
-              +" needs to BUILD a new snapshot (restart the sender EA, or"
-              +" clear its state file if it keeps failing)")
-            :"";
-         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" declared N="+(string)sent
-                     +" but decoded "+(string)n+" record(s) (decompression or parse failure)!"
-                     +" Rejecting snapshot to prevent false close-all."+extra);
-        }
+      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("snapval|"+g_sid[si]))
+         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" validation failed ("+valErr+"); rejected to prevent false close-all.");
       return;
      }
 
@@ -5799,6 +5705,10 @@ void HandleSnapshot(const int si,const CopierEnv &e)
 
    //--- Store this sender's receipt hash once validated.
    g_snapHash[si]=CopierSnapshotHash(e.payload);
+
+   string nStr="";
+   int sent=n;
+   if(CopierKvGet(e.payload,"N",nStr)) sent=(int)CopierParseLong(nStr);
 
    //--- A sender can hold more than our table. Decode caps at
    //--- CP_MAX_POSITIONS and drops the remainder SILENTLY - the worst

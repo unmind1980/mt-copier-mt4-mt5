@@ -632,6 +632,7 @@ where
 /// ACME validation is in flight, and shuts down / unbinds immediately upon completion.
 pub struct TempChallengeServer {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    #[allow(dead_code)]
     pub port: u16,
 }
 

@@ -173,8 +173,13 @@ impl ClusterManager {
         let mut state: ClusterStateFile = if state_path.exists() {
             let data = fs::read_to_string(state_path)
                 .map_err(|e| format!("cannot read {}: {}", state_path.display(), e))?;
-            serde_json::from_str(&data)
-                .map_err(|e| format!("cannot parse {}: {}", state_path.display(), e))?
+            let s: ClusterStateFile = serde_json::from_str(&data)
+                .map_err(|e| format!("cannot parse {}: {}", state_path.display(), e))?;
+            // F-02: Reject corrupted or exhausted epoch values
+            if s.epoch == u64::MAX {
+                return Err(format!("invalid epoch {} in cluster state (exhausted)", s.epoch));
+            }
+            s
         } else {
             let default_role = cli_role.unwrap_or("primary").to_string();
             let is_configured_primary = default_role == "primary";
@@ -327,7 +332,8 @@ impl ClusterManager {
     }
 
     pub fn promote(&mut self, target_epoch: Option<u64>) -> u64 {
-        let new_epoch = target_epoch.unwrap_or(self.state.epoch + 1);
+        // F-02: Use next_epoch to prevent integer overflow wrapping to 0
+        let new_epoch = target_epoch.unwrap_or_else(|| next_epoch(self.state.epoch));
         self.state.epoch = new_epoch;
         self.state.role = "primary".to_string();
         self.state.last_promoted_at = unix_secs();
@@ -375,6 +381,11 @@ impl ClusterManager {
             last_sync_err: String::new(),
         }
     }
+}
+
+/// F-02: Safely calculate the next epoch without overflow wrap in release or panic in debug.
+pub fn next_epoch(base: u64) -> u64 {
+    base.checked_add(1).unwrap_or(u64::MAX)
 }
 
 /// Replace target file atomically, with Windows file-lock fallback (copy + delete tmp).
@@ -721,28 +732,45 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 if full_cfg_resync {
                                     // N71-04: Validate batch completeness against response's total_cfg_lines
                                     if data.cfg_delta_lines.len() >= data.total_cfg_lines {
-                                        let _ = cfg.replace_all(&data.cfg_delta_lines);
+                                        if let Err(e) = cfg.replace_all(&data.cfg_delta_lines) {
+                                            let msg = format!("cfg replace_all failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        }
                                     } else {
                                         let msg = format!("full cfg resync received truncated batch ({} < {}), deferring replace_all", data.cfg_delta_lines.len(), data.total_cfg_lines);
                                         eprintln!("[hub] WARN {}", msg);
                                         file_sync_err = Some(msg);
                                     }
                                 } else if !data.cfg_delta_lines.is_empty() {
-                                    let _ = cfg.apply_delta_lines(&data.cfg_delta_lines);
+                                    if let Err(e) = cfg.apply_delta_lines(&data.cfg_delta_lines) {
+                                        let msg = format!("cfg apply_delta_lines failed: {}", e);
+                                        eprintln!("[hub] cluster sync: {}", msg);
+                                        file_sync_err = Some(msg);
+                                    }
                                 }
 
                                 // Apply delta commands (or replace if Primary was compacted or full resync triggered)
                                 if full_cmd_resync {
                                     // N71-04: Validate batch completeness against response's total_cmd_lines
                                     if data.cmd_delta_lines.len() >= data.total_cmd_lines {
-                                        let _ = cmds.replace_all(&data.cmd_delta_lines);
+                                        if let Err(e) = cmds.replace_all(&data.cmd_delta_lines) {
+                                            let msg = format!("cmds replace_all failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        }
                                     } else {
                                         let msg = format!("full cmd resync received truncated batch ({} < {}), deferring replace_all", data.cmd_delta_lines.len(), data.total_cmd_lines);
                                         eprintln!("[hub] WARN {}", msg);
                                         file_sync_err = Some(msg);
                                     }
                                 } else if !data.cmd_delta_lines.is_empty() {
-                                    let _ = cmds.apply_delta_lines(&data.cmd_delta_lines);
+                                    // F-01: Check and propagate apply_delta_lines failure to prevent false synced status
+                                    if let Err(e) = cmds.apply_delta_lines(&data.cmd_delta_lines) {
+                                        let msg = format!("cmds apply_delta_lines failed: {}", e);
+                                        eprintln!("[hub] cluster sync: {}", msg);
+                                        file_sync_err = Some(msg);
+                                    }
                                 }
 
                                 // Apply full users content if updated
@@ -930,8 +958,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             if h_data.agreed {
                                 let (audit_rec, new_ep, save_info) = {
                                     let mut s = st.lock_or_recover();
-                                    // P0-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
-                                    let target_ep = Some(h_data.new_epoch.max(s.cluster.epoch()) + 1);
+                                    // P0-02 & F-02: Target epoch must strictly exceed both peer and local epochs to prevent tie/split-brain
+                                    let target_ep = Some(next_epoch(h_data.new_epoch.max(s.cluster.epoch())));
                                     let new_ep = s.cluster.promote(target_ep);
                                     s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
                                     let current_writes = s.writes;
@@ -1071,6 +1099,52 @@ mod tests {
         // Non-existent file gives empty string
         let no_hash = file_sha256(&dir.join("non_existent.txt"));
         assert_eq!(no_hash, "");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_epoch_overflow_protection_and_exhausted_load_rejection() {
+        // F-02: Test that next_epoch does not overflow-wrap to 0
+        assert_eq!(next_epoch(1), 2);
+        assert_eq!(next_epoch(u64::MAX - 1), u64::MAX);
+        assert_eq!(next_epoch(u64::MAX), u64::MAX);
+
+        // Test that load_or_create rejects state file with epoch == u64::MAX
+        let dir = std::env::temp_dir().join(format!("mtc_test_epoch_max_{}", crate::users::random_token()));
+        let _ = fs::create_dir_all(&dir);
+        let state_path = dir.join("cluster_state.json");
+        let curve_path = dir.join("curve_clients.txt");
+
+        let bad_state = serde_json::json!({
+            "cluster_id": "test",
+            "hub_id": "hub-bad",
+            "role": "primary",
+            "epoch": u64::MAX,
+            "last_promoted_at": 100,
+            "is_configured_primary": true,
+            "failback_stabilization_hours": 24.0,
+            "failback_locked": false,
+            "cluster_token": "ctok_1234567890123456",
+            "peer_url": "",
+            "peer_zmq": ""
+        });
+        fs::write(&state_path, bad_state.to_string()).unwrap();
+
+        let res = ClusterManager::load_or_create(
+            &state_path,
+            &curve_path,
+            None,
+            "",
+            "",
+            "",
+            24.0,
+            false,
+        );
+        match res {
+            Err(e) => assert!(e.contains("exhausted")),
+            Ok(_) => panic!("must reject exhausted epoch state"),
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
