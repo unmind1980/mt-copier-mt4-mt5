@@ -98,7 +98,9 @@ def start():
                           #--- suite (hub_curve_test.py); since CURVE became the
                           #--- hub's DEFAULT, a suite that does not test it must
                           #--- say so explicitly.
-                          "--curve", "off"],
+                          "--curve", "off",
+                          #--- F-TEST: Never leak simulated test alerts to live alert channels (e.g. Telegram/WeChat)
+                          "--notifications", "none"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     #--- ANY status counts as up, including 401: since M9 the topology
     #--- endpoint answers without a session, which is exactly the signal

@@ -112,7 +112,7 @@ def start(writes, audit, cfg, cmds):
     users = os.path.join(HERE, "_hub_cmd_users.json")
     args = [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
             "--audit", audit, "--config", cfg, "--commands", cmds,
-            "--users", users,
+            "--users", users, "--notifications", "none",
             #--- --curve off: this suite tests the command engine, and its fake
             #--- receivers speak plaintext. CURVE has its own suite
             #--- (hub_curve_test.py); since CURVE became the hub's DEFAULT,

@@ -61,6 +61,7 @@ def main():
     p = subprocess.Popen(
         [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
          "--audit", audit, "--commands", cmds, "--users", users,
+         "--notifications", "none",
          "--stats-every", "0", "--duration", "40"],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     try:

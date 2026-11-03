@@ -196,7 +196,7 @@ def main():
         pass
     hub = subprocess.Popen(
         [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
-         "--audit", audit_path, "--users", users_path,
+         "--audit", audit_path, "--users", users_path, "--notifications", "none",
          #--- --curve off: this suite tests the API/audit/http surface, and its
          #--- fake clients speak plaintext. CURVE has its own suite
          #--- (hub_curve_test.py); since CURVE became the hub's DEFAULT, every
