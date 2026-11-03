@@ -46,7 +46,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use crate::lockx::LockExt;
@@ -307,16 +307,22 @@ impl ConfigStore {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
-        crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
+        let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
+        // BUG-85-02: Ensure file handle is reopened regardless of replace success/failure so inner.file never stays None
+        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        {
+            let mut inner = self.inner.lock_or_recover();
+            if let Ok(file) = reopen_res {
+                inner.file = Some(file);
+            }
+        }
+        replace_res?;
         // N73-03: Propagate load error instead of unwrap_or_default() wiping in-memory state
         let (current, count, torn) = load(&self.path)?;
         let mut inner = self.inner.lock_or_recover();
         inner.current = current;
         inner.count = count;
         inner.torn = torn;
-        if let Ok(file) = OpenOptions::new().create(true).append(true).open(&self.path) {
-            inner.file = Some(file);
-        }
         Ok(lines.len())
     }
 
@@ -576,6 +582,9 @@ impl Inner {
                 eprintln!("[hub] CONFIG BATCH WRITE FAILED: {}", e);
                 return Err(e);
             }
+        } else {
+            // BUG-85-02: If file handle is missing on an enabled store, fail-closed rather than pretending success
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "config journal file handle is not open"));
         }
         self.count += revs.len() as u64;
         Ok(())

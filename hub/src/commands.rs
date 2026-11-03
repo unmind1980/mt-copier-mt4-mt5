@@ -482,7 +482,16 @@ impl CommandStore {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
-        crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
+        let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
+        // BUG-85-02: Ensure file handle is reopened regardless of replace success/failure
+        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        {
+            let mut inner = self.inner.lock_or_recover();
+            if let Ok(file) = reopen_res {
+                inner.file = Some(file);
+            }
+        }
+        replace_res?;
         let (mut commands, seq, torn, line_count, max_seq) = load(&self.path);
         let now = unix_secs();
         let mut inner = self.inner.lock_or_recover();
@@ -502,9 +511,6 @@ impl CommandStore {
         }
         inner.line_count = line_count;
         inner.max_seq = max_seq;
-        if let Ok(file) = OpenOptions::new().create(true).append(true).open(&self.path) {
-            inner.file = Some(file);
-        }
         Ok(lines.len())
     }
 
@@ -925,7 +931,10 @@ impl Inner {
     fn append_many(&mut self, cs: &[Command]) -> io::Result<()> {
         let f = match self.file.as_mut() {
             Some(f) => f,
-            None => return Ok(()),
+            None => {
+                // BUG-85-02: If file handle is missing on an enabled store, fail-closed rather than pretending success
+                return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
+            }
         };
         let mut buf = String::new();
         self.line_count += cs.len();

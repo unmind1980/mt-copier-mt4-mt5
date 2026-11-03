@@ -4555,6 +4555,12 @@ int ScanAndResolveAccountPositions()
    //--- the same rule.
    for(int i=0;i<an;i++)
       if(g_cacheSrc[i]>0) g_posCache[i]=g_posCacheNext[i];
+   // OPT-85-04: Clear string handles in vacated slots when position count contracts
+   for(int i=an;i<g_posCacheCount;i++)
+     {
+      g_posCache[i].uid="";
+      g_posCache[i].cmt="";
+     }
    g_posCacheCount=an;
 
    return an;
@@ -5359,45 +5365,69 @@ void ConvergeSender(const int si)
              || g_senderCfg[si].requirepositionfillwithinminutes>0
              || g_senderCfg[si].requirepositionfillwithinseconds>0)
             && g_once.ShouldEmit("noclocks|"+d.uid))
-            g_log.Warn("cannot measure how old "+d.uid+" "+rsym+" is, so the"
-                       +" configured wait / fill timeout CANNOT be applied and"
-                       +" it enters immediately. sender openTime="
-                       +(string)d.openTime+", sender clock known="
+            g_log.Warn("cannot measure how old "+d.uid+" "+rsym+" is (sender openTime="
+                       +(string)d.openTime+", clock known="
                        +(g_senderClockKnown[si]?"yes":"no")+", offset="
-                       +(string)g_senderClockOffset[si]+"s");
+                       +(string)g_senderClockOffset[si]+"s). Holding until clock offset is calibrated.");
         }
 
       {
        long waitSec=(long)g_senderCfg[si].waitforhours*3600+(long)g_senderCfg[si].waitforminutes*60
                    +(long)g_senderCfg[si].waitforseconds;
-       if(waitSec>0 && openedOurs>0 && ageSec<waitSec)
+       if(waitSec>0)
          {
-          if(g_once.ShouldEmit("wait|"+g_sid[si]+"|"+rsym))
-             g_log.Info("holding "+rsym+" - the sender opened it "
-                        +CopierSecText(ageSec)+" ago and the configured wait"
-                        +" is "+CopierSecText(waitSec)+", so it will enter in"
-                        +" "+CopierSecText(waitSec-ageSec));
-          g_waitHeld++;
-          g_waitLots+=lots;
-          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Wait open delay ("+CopierSecText(waitSec-ageSec)+")");
-          continue;
+          if(openedOurs>0)
+            {
+             if(ageSec<waitSec)
+               {
+                if(g_once.ShouldEmit("wait|"+g_sid[si]+"|"+rsym))
+                   g_log.Info("holding "+rsym+" - the sender opened it "
+                              +CopierSecText(ageSec)+" ago and the configured wait"
+                              +" is "+CopierSecText(waitSec)+", so it will enter in"
+                              +" "+CopierSecText(waitSec-ageSec));
+                g_waitHeld++;
+                g_waitLots+=lots;
+                AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Wait open delay ("+CopierSecText(waitSec-ageSec)+")");
+                continue;
+               }
+            }
+          else
+            {
+             // BUG-85-01: Fail-safe: waitSec was configured > 0, but clock offset is not yet calibrated (openedOurs <= 0).
+             // Do NOT enter immediately! Hold until clock offset is calibrated.
+             g_waitHeld++;
+             g_waitLots+=lots;
+             AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Holding: waiting for clock offset calibration");
+             continue;
+            }
          }
       }
 
-      if(g_senderCfg[si].waitforminutesbar>0 && openedOurs>0)
+      if(g_senderCfg[si].waitforminutesbar>0)
         {
-         int bars=CopierM1BarsSince(rsym,(datetime)openedOurs,
-                                    g_senderCfg[si].waitforminutesbar);
-         if(bars<g_senderCfg[si].waitforminutesbar)
+         if(openedOurs>0)
            {
-            if(g_once.ShouldEmit("waitbar|"+g_sid[si]+"|"+rsym))
-               g_log.Info("holding "+rsym+" - waiting for "
-                          +(string)g_senderCfg[si].waitforminutesbar+" M1 bar(s) and "
-                          +(string)bars+" have formed since the sender opened"
-                          +" it");
+            int bars=CopierM1BarsSince(rsym,(datetime)openedOurs,
+                                       g_senderCfg[si].waitforminutesbar);
+            if(bars<g_senderCfg[si].waitforminutesbar)
+              {
+               if(g_once.ShouldEmit("waitbar|"+g_sid[si]+"|"+rsym))
+                  g_log.Info("holding "+rsym+" - waiting for "
+                             +(string)g_senderCfg[si].waitforminutesbar+" M1 bar(s) and "
+                             +(string)bars+" have formed since the sender opened"
+                             +" it");
+               g_waitHeld++;
+               g_waitLots+=lots;
+               AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for M1 bars ("+(string)bars+"/"+(string)g_senderCfg[si].waitforminutesbar+")");
+               continue;
+              }
+           }
+         else
+           {
+            // BUG-85-01: Fail-safe: waitforminutesbar was configured > 0, hold until clock is calibrated
             g_waitHeld++;
             g_waitLots+=lots;
-            AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for M1 bars ("+(string)bars+"/"+(string)g_senderCfg[si].waitforminutesbar+")");
+            AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Holding: waiting for clock offset calibration for bars");
             continue;
            }
         }
@@ -6703,6 +6733,8 @@ void HubAnnounce(const bool isReg)
 
 void HandleHeartbeat(const int si,const CopierEnv &e)
   {
+   // BUG-85-01: Learn sender clock from periodic heartbeats to maintain active offset calibration
+   LearnSenderClock(si,e.ts);
    double eq=CopierKvGetDouble(e.payload,"EQ",0.0);
    int npos=CopierKvGetInt(e.payload,"NPOS",-1);
 
@@ -8209,6 +8241,11 @@ void OnTimer()
        g_srvSeenTime=st;
        g_srvChangedMs=now;
        g_srvEverMoved=true;
+       // BUG-85-01: Update sender clock offset validity once our server clock advances
+       for(int s=0;s<g_nSenders;s++)
+         {
+          if(g_senderClockKnown[s]) g_senderClockOffsetValid[s]=true;
+         }
       }
    }
    for(int i=0;i<g_nSenders;i++) ConvergeSender(i);

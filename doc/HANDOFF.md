@@ -1686,6 +1686,29 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **F-03（业务决策分析与记录）**：
      - 完成多 Hub XSUB uplink 机制复核，对双发 fan-out 与端到端确认机制形成完整架构论证备忘供用户审阅。
 
+### 九十八次演进：时钟门禁 Fail-Safe 自愈、replace_all 句柄防丢与第 85 轮全栈审计核销 (2026-11-04 02:40；全部闭环)
+
+- **技术落地项**：
+  1. **BUG-85-01（MQL 接收端时钟门禁 Fail-Safe 与自愈刷新）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `ConvergeSender` 中重构等待门禁：当配置了 `waitSec > 0` 或 `waitforminutesbar > 0` 但时钟尚未校准（`openedOurs <= 0`）时，遵循 Fail-Safe 保持等待（`continue` 并上报 `gate_delayed`），杜绝启动期和无报价期间误绕过门禁直接开仓；
+     - 在 `OnTimer` 时钟移动（`g_srvEverMoved = true`）与 `HandleHeartbeat` 消息到达时实时刷新 `LearnSenderClock`，使时钟有效性即时自愈；
+  2. **BUG-85-02（replace_all 句柄防丢与 append_many 失败抛错防御）**：
+     - 在 `hub/src/config.rs` 与 `hub/src/commands.rs` 的 `replace_all` 中，无论替换/加载是否成功，均立即重新打开文件句柄，杜绝文件句柄遗留 `None`；
+     - 在 `append_many` 中，若 `self.file.is_none()` 且 store 处于 `enabled`，严格返回 `io::ErrorKind::NotConnected` 错误，彻底根除“假写盘、静默丢数据”的幽灵状态；
+  3. **BUG-85-03（API 操作命令写入失败状态校验）**：
+     - 在 `hub/src/api.rs` 的 `post_command` 与 `commands_global` 中检查 `cmd.state`，若写入失败返回 500 并在审计日志中准确记录 `failed`，杜绝向客户端谎报 202 与后续 404；
+  4. **BUG-85-04 & OPT-85-01（Sender Bootstrap 快照登记与 Hash 缓冲扩容）**：
+     - 在 `src/Experts/CopierSender.mq4` 的 `SnapRepairMaybe` 中，Bootstrap 快照发送后无条件调用 `NoteRecentSnapHash` 记录 Hash；
+     - 将最近快照 Hash 环形缓冲容量 `CP_RECENT_HASH_COUNT` 从 4 扩容至 16，提升抗网络抖动与并发变动的容忍度；
+  5. **BUG-85-05（全局命令接口放行只读遥测）**：
+     - 在 `hub/src/api.rs` 的 `commands_global` 中先解析操作类型，若为 `reqpos` 等只读操作，放行 `--writes off` 限制并允许 viewer 角色调用，使单节点与全局接口行为策略严格对齐；
+  6. **BUG-85-06 & OPT-85-02（配置拉取熔断与 snap-worker 崩溃防御）**：
+     - 在 `hub/src/main.rs` 中为 `reqcfg` 引入重试退避梯度：超过 5 次失败后退避至 1800 秒（30 分钟），杜绝向不支持 `reqcfg` 的旧节点无限发送垃圾命令；
+     - 在 `snap-worker` 消息循环中包裹 `std::panic::catch_unwind`，隔离非标快照异常，防止后台解析线程退出挂死；
+  7. **OPT-85-03 & OPT-85-04（重定向提示与持仓缓存清理）**：
+     - 通知模块在遇到 3xx 重定向时明确提示由于 SSRF 策略被拦截，引导使用直连 HTTPS；
+     - `CopierReceiver.mq4` 在持仓数量回落时主动置空 `g_posCache` 尾部空出槽位的字符串句柄。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1709,7 +1732,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障与 Epoch 溢出防护）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护与时钟门禁 Fail-Safe）与业务代码实现 100% 吻合。
 
 ---
 

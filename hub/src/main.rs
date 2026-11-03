@@ -1627,49 +1627,52 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
                 std::collections::HashMap::new();
             while let Some((sid, payload, pos_now)) = snap_rx.blocking_recv() {
-                let view = parse_snap(&payload);
-                let declared = view.declared;
-                let carried = view.records;
-                let mismatched_now = {
-                    let mut s = snap_shared.lock_or_recover();
-                    let before = s.pos.mismatched;
-                    s.pos.on_snap(&sid, view, pos_now);
-                    s.pos.mismatched - before
-                };
-                if mismatched_now > 0 {
-                    let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
-                    let should_audit = match wire_audit_throttle.get(&throttle_key) {
-                        Some(t) => t.elapsed() >= Duration::from_secs(10),
-                        None => true,
+                // OPT-85-02: Protect snap-worker loop against panics so malformed payloads cannot kill the thread
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let view = parse_snap(&payload);
+                    let declared = view.declared;
+                    let carried = view.records;
+                    let mismatched_now = {
+                        let mut s = snap_shared.lock_or_recover();
+                        let before = s.pos.mismatched;
+                        s.pos.on_snap(&sid, view, pos_now);
+                        s.pos.mismatched - before
                     };
-                    if should_audit {
-                        wire_audit_throttle.insert(throttle_key, Instant::now());
-                        snap_audit.record(
-                            "", "",
-                            "snapshot.mismatch",
-                            &format!("sender:{}", sid),
-                            None,
-                            Some(serde_json::json!({
-                                "declared": declared,
-                                "carried": carried,
-                            })),
-                            "mismatch",
-                        );
-                    }
-                }
-                // P1-8: Throttle snap worker broadcast by 200ms window to eliminate CPU spikes
-                static LAST_SNAP_POKE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                let now_ms = unix_millis();
-                let last_ms = LAST_SNAP_POKE.load(Ordering::Relaxed);
-                if now_ms.saturating_sub(last_ms) >= POKE_MIN_MS {
-                    LAST_SNAP_POKE.store(now_ms, Ordering::Relaxed);
-                    if let Some(tx) = &snap_poke {
-                        if tx.receiver_count() > 0 {
-                            let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
-                            let _ = tx.send(body);
+                    if mismatched_now > 0 {
+                        let throttle_key = (format!("sender:{}", sid), "snapshot.mismatch".to_string());
+                        let should_audit = match wire_audit_throttle.get(&throttle_key) {
+                            Some(t) => t.elapsed() >= Duration::from_secs(10),
+                            None => true,
+                        };
+                        if should_audit {
+                            wire_audit_throttle.insert(throttle_key, Instant::now());
+                            snap_audit.record(
+                                "", "",
+                                "snapshot.mismatch",
+                                &format!("sender:{}", sid),
+                                None,
+                                Some(serde_json::json!({
+                                    "declared": declared,
+                                    "carried": carried,
+                                })),
+                                "mismatch",
+                            );
                         }
                     }
-                }
+                    // P1-8: Throttle snap worker broadcast by 200ms window to eliminate CPU spikes
+                    static LAST_SNAP_POKE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let now_ms = unix_millis();
+                    let last_ms = LAST_SNAP_POKE.load(Ordering::Relaxed);
+                    if now_ms.saturating_sub(last_ms) >= POKE_MIN_MS {
+                        LAST_SNAP_POKE.store(now_ms, Ordering::Relaxed);
+                        if let Some(tx) = &snap_poke {
+                            if tx.receiver_count() > 0 {
+                                let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
+                                let _ = tx.send(body);
+                            }
+                        }
+                    }
+                }));
             }
         })
         .expect("cannot spawn snap-worker thread");
@@ -1966,11 +1969,14 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                                 let (throttled, attempts) = match last_cfg_pull.get(&node_key) {
                                                     Some(&(last_t, attempts)) => {
                                                         // First retry allowed after 5s for fast bootstrap/reconnect recovery;
-                                                        // subsequent retries back off to 60s to prevent command flood.
+                                                        // subsequent retries back off to 60s, and to 1800s (30m) after 5 attempts (BUG-85-06)
+                                                        // to prevent command flood and repeated timeouts against legacy receivers.
                                                         let delay = if attempts <= 1 {
                                                             Duration::from_secs(5)
-                                                        } else {
+                                                        } else if attempts < 5 {
                                                             Duration::from_secs(60)
+                                                        } else {
+                                                            Duration::from_secs(1800)
                                                         };
                                                         (last_t.elapsed() < delay, attempts)
                                                     }

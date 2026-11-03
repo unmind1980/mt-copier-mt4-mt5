@@ -1305,6 +1305,9 @@ async fn send_wecom(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+    if status.is_redirection() {
+        return Err(format!("WeCom request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
+    }
     //--- N56-06: WeCom answers HTTP 200 even when it REFUSES the message - the
     //--- real verdict is `errcode` in the JSON body. Treating 200 as success
     //--- makes a revoked key, an IP-whitelist rejection or a rate limit look
@@ -1398,6 +1401,9 @@ async fn send_dingtalk(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+    if status.is_redirection() {
+        return Err(format!("DingTalk request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
+    }
     //--- N56-06: same trap as WeCom - DingTalk returns HTTP 200 with
     //--- {"errcode":310000,...} for an expired token or a keyword mismatch.
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -1496,6 +1502,9 @@ async fn send_webhook(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+    if status.is_redirection() {
+        return Err(format!("Webhook request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
+    }
     if status.is_success() {
         Ok(format!("Webhook sent: HTTP {}", status))
     } else {
@@ -1582,6 +1591,10 @@ async fn send_wechat(
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
+
+    if status.is_redirection() {
+        return Err(format!("WeChat (Xtuis) request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
+    }
 
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(format!(

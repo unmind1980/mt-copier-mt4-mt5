@@ -292,7 +292,8 @@ int              g_stampGen=1;
 //--- means "this receiver is behind". See doc/SNAPSHOT-DEMAND-PLAN.md.
 string           g_snapHash="";
 string           g_latestSnapHash="";
-#define CP_RECENT_HASH_COUNT 4
+//--- OPT-85-01: Expanded from 4 to 16 to tolerate fast consecutive revisions across multiple receivers
+#define CP_RECENT_HASH_COUNT 16
 string           g_recentSnapHashes[CP_RECENT_HASH_COUNT];
 long             g_recentSnapHashTime[CP_RECENT_HASH_COUNT];
 int              g_recentSnapHashHead=0;
@@ -1372,6 +1373,11 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
         {
          g_snapHash=CopierSnapshotHash(g_snapPayload);
          NoteRecentSnapHash(g_snapHash);
+        }
+      else
+        {
+         // BUG-85-04: Note the bootstrap snapshot hash in recent history so receiver's first ACK is recognized
+         NoteRecentSnapHash(CopierSnapshotHash(snapPayload));
         }
       // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
       // to this single receiver. Other receivers on the hub have not received this frame.

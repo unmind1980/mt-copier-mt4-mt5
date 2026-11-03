@@ -2554,6 +2554,28 @@ async fn post_command(
         (Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     let cmd = cmds.issue_op(&id, &op, &args, &actor, "");
+    // BUG-85-03: Validate that command was successfully persisted before returning 202 Accepted
+    if cmd.state == crate::commands::STATE_UNKNOWN && !cmd.err.is_empty() {
+        audit.record(
+            &actor,
+            "",
+            "command.issued",
+            &id,
+            None,
+            Some(json!({ "id": cmd.id, "op": op, "args": args, "known_node": known, "error": cmd.err })),
+            "failed",
+        );
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": cmd.err,
+                "node": id,
+                "op": op,
+            })),
+        )
+            .into_response();
+    }
+
     audit.record(
         &actor,
         "",
@@ -2597,37 +2619,8 @@ async fn commands_global(
     body: String,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // M9: operator or admin (the plan's §17.2 matrix).
-    if sess.role < UserRole::Operator {
-        return deny(&st, &sess, "operator");
-    }
 
-    //--- THE GATE, identical to the per-node endpoint's.
-    let (writes, is_primary) = {
-        let s = st.lock_or_recover();
-        (s.writes, s.cluster.is_primary())
-    };
-    if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
-    }
-    if !writes {
-        return (
-            axum::http::StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "writes are disabled",
-                "detail": "this hub was started with --writes off. \
-                           Restart it with --writes on to allow commands.",
-                "why": "the hub-side write gate; the role check (M9) is the front door",
-            })),
-        )
-            .into_response();
-    }
-
-    //--- Parse the operation and optional arguments.
+    //--- Parse the operation and optional arguments FIRST (BUG-85-05) to check read-only ops.
     let (op, args) = {
         let body = body.trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
@@ -2652,6 +2645,39 @@ async fn commands_global(
                 "error": "unknown operation",
                 "op": op,
                 "known": crate::commands::OPS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            })),
+        )
+            .into_response();
+    }
+
+    let is_read_only = crate::commands::is_read_only_op(&op);
+
+    // M9: operator or admin for state-changing commands; viewers allowed for read-only ops (like reqpos).
+    if !is_read_only && sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
+
+    //--- THE GATE, identical to the per-node endpoint's.
+    let (writes, is_primary) = {
+        let s = st.lock_or_recover();
+        (s.writes, s.cluster.is_primary())
+    };
+    if !is_primary {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+        )
+            .into_response();
+    }
+    // BUG-85-05: Allow read-only operations (reqpos/reqcfg) even when --writes off
+    if !is_read_only && !writes {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "writes are disabled",
+                "detail": "this hub was started with --writes off. \
+                           Restart it with --writes on to allow commands.",
+                "why": "the hub-side write gate; the role check (M9) is the front door",
             })),
         )
             .into_response();
@@ -2692,26 +2718,49 @@ async fn commands_global(
         (Arc::clone(&s.cmds), Arc::clone(&s.audit))
     };
     let mut issued: Vec<Value> = Vec::new();
+    let mut any_failed = false;
     for node in &nodes {
         let cmd = cmds.issue_op(node, &op, &args, &actor, "");
-        audit.record(
-            &actor,
-            "",
-            "command.issued",
-            node,
-            None,
-            Some(json!({ "id": cmd.id, "op": op, "global": true })),
-            "ok",
-        );
-        issued.push(json!({
-            "node": node,
-            "command_id": cmd.id,
-            "poll": format!("/api/v1/commands/{}", cmd.id),
-        }));
+        // BUG-85-03: Validate persistence per node command
+        if cmd.state == crate::commands::STATE_UNKNOWN && !cmd.err.is_empty() {
+            any_failed = true;
+            audit.record(
+                &actor,
+                "",
+                "command.issued",
+                node,
+                None,
+                Some(json!({ "id": cmd.id, "op": op, "global": true, "error": cmd.err })),
+                "failed",
+            );
+            issued.push(json!({
+                "node": node,
+                "command_id": cmd.id,
+                "error": cmd.err,
+                "failed": true,
+            }));
+        } else {
+            audit.record(
+                &actor,
+                "",
+                "command.issued",
+                node,
+                None,
+                Some(json!({ "id": cmd.id, "op": op, "global": true })),
+                "ok",
+            );
+            issued.push(json!({
+                "node": node,
+                "command_id": cmd.id,
+                "poll": format!("/api/v1/commands/{}", cmd.id),
+            }));
+        }
     }
 
     let note = if issued.is_empty() {
         "no receiver is known to this hub yet"
+    } else if any_failed {
+        "some commands failed to queue to journal"
     } else {
         "one command per receiver; each walks its own ladder"
     };
