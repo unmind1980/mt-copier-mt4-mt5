@@ -2906,9 +2906,13 @@ async fn notifications_upsert(
         }
     }
 
-    // N83-05: Validate WeChat token if URL or raw token
+    // N83-05 & N84-14: Validate WeChat token/key/webhook_url if URL or raw token
     if b.channel_type == "wechat" || b.channel_type == "xtuis" {
-        if let Some(tok) = config_for_val.get("token").and_then(|t| t.as_str()) {
+        let tok_val = config_for_val.get("token")
+            .or_else(|| config_for_val.get("key"))
+            .or_else(|| config_for_val.get("webhook_url"))
+            .and_then(|t| t.as_str());
+        if let Some(tok) = tok_val {
             let t = tok.trim();
             if t.starts_with("http://") || t.starts_with("https://") {
                 if let Err(e) = crate::notifications::validate_outgoing_url(t).await {
@@ -3852,6 +3856,14 @@ async fn tls_configure(
 
     {
         let mut c = tls_mgr.config.lock().unwrap();
+        // N84-05: Prevent concurrent ACME enrollment jobs from colliding
+        if c.status.in_progress {
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({ "error": "A TLS certificate enrollment is already in progress." })),
+            )
+                .into_response();
+        }
         c.mode = b.mode;
         c.domain = target_domain.clone();
         c.https_port = https_port;
@@ -3891,6 +3903,7 @@ async fn tls_configure(
             eprintln!("[hub] TLS ERR: Enrollment failed for {}: {}", domain_bg, e);
             let mut c = mgr_bg.config.lock().unwrap();
             c.status.in_progress = false;
+            c.status.progress_step = "failed".to_string(); // N84-11
             c.status.last_error = Some(e);
             let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
         }
@@ -4035,16 +4048,28 @@ async fn tls_renew(
     }
 
     let (domain, email, staging) = {
-        let c = tls_mgr.config.lock().unwrap();
+        let mut c = tls_mgr.config.lock().unwrap();
+        // N84-05: Prevent concurrent ACME renewal jobs from colliding
+        if c.status.in_progress {
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({ "error": "A TLS certificate enrollment is already in progress." })),
+            )
+                .into_response();
+        }
+        if c.domain.is_empty() {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "No domain configured to renew." })),
+            )
+                .into_response();
+        }
+        c.status.in_progress = true;
+        c.status.progress_step = "initiating".to_string();
+        c.status.last_error = None;
+        let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
         (c.domain.clone(), c.email.clone(), c.staging_mode)
     };
-    if domain.is_empty() {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "No domain configured to renew." })),
-        )
-            .into_response();
-    }
 
     let mgr_bg = Arc::clone(&tls_mgr);
     let domain_bg = domain.clone();
@@ -4055,11 +4080,12 @@ async fn tls_renew(
             crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
         };
         let acme = crate::tls::AcmeClient::new(dir_url.to_string());
-        // N83-01: Handle enrollment failure in background task to log error and reset in_progress state
+        // N83-01 & N84-11: Handle enrollment failure in background task to log error and reset in_progress state
         if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await {
             eprintln!("[hub] TLS ERR: Renewal failed for {}: {}", domain_bg, e);
             let mut c = mgr_bg.config.lock().unwrap();
             c.status.in_progress = false;
+            c.status.progress_step = "failed".to_string();
             c.status.last_error = Some(e);
             let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
         }

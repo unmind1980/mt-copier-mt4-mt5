@@ -616,8 +616,15 @@ int CopierSplitLines(const string s,string &out[])
 bool CopierIniReadAll(const string path,string &out)
   {
    out="";
-   if(!FileIsExist(path)) return false;
-   int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   string actualPath=path;
+   // N84-03: If main file is missing (e.g. crash during write), fall back to successor .tmp
+   if(!FileIsExist(actualPath))
+     {
+      string tmp=path+".tmp";
+      if(FileIsExist(tmp)) actualPath=tmp;
+      else return false;
+     }
+   int h=FileOpen(actualPath,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE) return false;
    //--- chunked: this reads a whole config, and `out += line` per line is
    //--- O(n^2) on a 100-sender file
@@ -635,15 +642,26 @@ bool CopierIniReadAll(const string path,string &out)
    return true;
   }
 
+// N84-03: Atomic successor write-and-replace to protect critical state across crashes/power loss
 bool CopierIniWriteAll(const string path,const string text)
   {
+   string tmp=path+".tmp";
+   FileDelete(tmp);
+   int th=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI);
+   if(th==INVALID_HANDLE) return false;
+   FileWriteString(th,text);
+   FileFlush(th);
+   FileClose(th);
+
    FileDelete(path);
    int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
-   if(h==INVALID_HANDLE) return false;
+   if(h==INVALID_HANDLE) return false; // tmp is kept, CopierIniReadAll will fall back to it
    //--- FileWriteString, NOT FileWrite: FileWrite appends a newline of its
    //--- own, and the ini already has them.
    FileWriteString(h,text);
+   FileFlush(h);
    FileClose(h);
+   FileDelete(tmp);
    return true;
   }
 

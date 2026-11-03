@@ -1641,6 +1641,29 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - `commands_global` 补充 `close` 指令的 ticket/args 门禁校验；
      - `node_json` 为 `Role::Sender` 映射 `uid` 字段（取自 `p.comment`），修复持仓明细表 UID 显示。
 
+### 九十六次演进：命令重试差行消解、定向 GC 门禁、后继文件保护与第 84 轮全栈审计核销 (2026-11-03 13:45；全部闭环)
+
+- **技术落地项**：
+  1. **N84-01（命令重试日志备机同步差行与 1Hz 死循环消解）**：
+     - 在 `hub/src/commands.rs` 的 `apply_delta_lines` 与 `load()` 中建立 `(ts, attempts)` 二维序；
+     - 当同时间戳且同为 `pending` 状态时，比较 `cmd.attempts > existing.attempts`：备机能够完整追加重试日志行，行数与主机严格对齐，彻底消除 1Hz 持续全量同步的死循环，同时杜绝重复行导致的膨胀；
+     - 新增 `test_retry_delta_replication_accepts_later_attempts_and_rejects_duplicates` 单元测试，Rust 单元测试基线提升至 **158 / 158 PASS**；
+  2. **N84-02 & N84-07（手动平仓定向 GC 与复杂度优化）**：
+     - 在 `CopierState.mqh` 的 `CopierManualClosedRing` 中增加 `m_sid` 发送端标识记录；
+     - 在 `CopierReceiver.mq4` 中将 `MC=` 格式扩展为 `MC=<uid>|<ticket>|<sid>`，并重构 GC 判定：仅当条目归属该 sender 且 `g_ready[si]` 为真时进行针对性检查；未 ready 的 sender 绝对不会触发误判提前删除，且将复杂度由 $O(S^2 \cdot M \cdot D)$ 降低为 $O(M \cdot D)$；
+  3. **N84-03（状态文件原子写入与掉电后继保护）**：
+     - 在 `CopierConfig.mqh` 中将 `CopierIniWriteAll` 重构为先写入 `.tmp` 临时文件并刷新、再执行目标替换的原子写入模式；并在 `CopierIniReadAll` 中增加主文件缺失时自动回退读取 `.tmp` 的后继恢复机制；
+  4. **N84-04（老版本发送端快照兼容性修复）**：
+     - 在 `CopierReceiver.mq4` 中将缺少 `H=` 字段与 `H=` 损坏的判断解耦；老版本不带 `H=` 字段的快照予以正常接收并按规范将收据置空，杜绝版本混布时的整包拒收与误报；
+  5. **N84-05 & N84-11（TLS 并发申领冲突防护与失败状态清理）**：
+     - 在 `hub/src/api.rs` 的 `tls_configure` 与 `tls_renew` 入口处增加 `c.status.in_progress` 冲突检测（409 Conflict），防止并发点击产生订单碰撞与密钥错配；在失败时自动将 `progress_step` 标记为 `"failed"`；
+  6. **N84-06（手动平仓风控维护门禁精准化）**：
+     - 在 `CopierReceiver.mq4` 的收敛循环中，将 `g_manualClosed.Has(d.uid)` 门禁精准下移至 `li < 0`（仅禁止重新开仓），本地在持仓期间的 SL/TP 动态修改与减仓跟随继续正常执行，杜绝平仓失败时的风控静默冻结；
+  7. **N84-08, N84-12, N84-14（细节漏洞补强）**：
+     - `notifications.rs::save` 接入 `atomic_replace_file` 消除 Windows 占用隐患；
+     - `detect_public_ip` 仅在探测成功时缓存，避免临时网络波动造成 60s 负面假象；
+     - WeChat 校验全面覆盖 `token`、`key` 与 `webhook_url`。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1650,7 +1673,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**157 / 157 单元测试全量 PASS**；
+  - Rust Hub Release 构建成功，**158 / 158 单元测试全量 PASS**；
   - 核心 Python 测试套件全部绿灯：
     - `hub_tls_test.py`：13 / 13 PASS
     - `hub_notifications_test.py`：26 / 26 PASS
@@ -1662,7 +1685,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择与全界面响应式字号缩放）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护与定向 GC 门禁）与业务代码实现 100% 吻合。
 
 ---
 

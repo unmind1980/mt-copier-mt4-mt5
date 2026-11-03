@@ -1386,26 +1386,31 @@ class CopierManualClosedRing
 private:
    string            m_uid[CP_MAX_MANUAL_CLOSED];
    long              m_ticket[CP_MAX_MANUAL_CLOSED];
+   string            m_sid[CP_MAX_MANUAL_CLOSED];
    int               m_n;
 
 public:
                      CopierManualClosedRing(): m_n(0)
      {
-      for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; }
+      for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; }
      }
 
-   void Add(const string uid, const long ticket)
+   void Add(const string uid, const long ticket, const string sid="")
      {
       if(StringLen(uid)==0 && ticket<=0) return;
       for(int i=0;i<m_n;i++)
         {
          if((StringLen(uid)>0 && m_uid[i]==uid) || (ticket>0 && m_ticket[i]==ticket))
+           {
+            if(StringLen(sid)>0) m_sid[i]=sid;
             return;
+           }
         }
       if(m_n<CP_MAX_MANUAL_CLOSED)
         {
          m_uid[m_n]=uid;
          m_ticket[m_n]=ticket;
+         m_sid[m_n]=sid;
          m_n++;
         }
       else
@@ -1414,9 +1419,11 @@ public:
            {
             m_uid[i]=m_uid[i+1];
             m_ticket[i]=m_ticket[i+1];
+            m_sid[i]=m_sid[i+1];
            }
          m_uid[CP_MAX_MANUAL_CLOSED-1]=uid;
          m_ticket[CP_MAX_MANUAL_CLOSED-1]=ticket;
+         m_sid[CP_MAX_MANUAL_CLOSED-1]=sid;
         }
      }
 
@@ -1451,8 +1458,10 @@ public:
             m_n--;
             m_uid[j]=m_uid[m_n];
             m_ticket[j]=m_ticket[m_n];
+            m_sid[j]=m_sid[m_n];
             m_uid[m_n]="";
             m_ticket[m_n]=0;
+            m_sid[m_n]="";
            }
          else j++;
         }
@@ -1461,7 +1470,8 @@ public:
    int Count() const { return m_n; }
    string GetUid(const int idx) const { if(idx>=0 && idx<m_n) return m_uid[idx]; return ""; }
    long GetTicket(const int idx) const { if(idx>=0 && idx<m_n) return m_ticket[idx]; return 0; }
-   void Clear() { m_n=0; for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; } }
+   string GetSid(const int idx) const { if(idx>=0 && idx<m_n) return m_sid[idx]; return ""; }
+   void Clear() { m_n=0; for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; } }
   };
 
 #endif

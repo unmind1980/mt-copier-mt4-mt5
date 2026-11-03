@@ -2255,14 +2255,15 @@ void CmdStateSave()
    string body="PAUSED="+(g_cmdPaused?"1":"0")
               +"\nID="+g_cmdId
               +"\nACK="+CopierIniEscape(g_cmdAck);
-   // N83-02: Persist operator manually closed UIDs so they survive receiver restarts
+   // N83-02 & N84-02: Persist operator manually closed UIDs and sender identity
    int mcCount=g_manualClosed.Count();
    for(int i=0;i<mcCount;i++)
      {
       string mUid=g_manualClosed.GetUid(i);
       long mTicket=g_manualClosed.GetTicket(i);
+      string mSid=g_manualClosed.GetSid(i);
       if(StringLen(mUid)>0)
-         body+="\nMC="+mUid+"|"+(string)mTicket;
+         body+="\nMC="+mUid+"|"+(string)mTicket+"|"+mSid;
      }
    CopierIniWriteAll(CmdStatePath(),body);
   }
@@ -2288,12 +2289,24 @@ void CmdStateLoad()
          if(sep>0)
            {
             string uid=StringSubstr(v,0,sep);
-            long ticket=CopierParseLong(StringSubstr(v,sep+1));
-            g_manualClosed.Add(uid,ticket);
+            string rem=StringSubstr(v,sep+1);
+            int sep2=StringFind(rem,"|");
+            long ticket=0;
+            string sid="";
+            if(sep2>0)
+              {
+               ticket=CopierParseLong(StringSubstr(rem,0,sep2));
+               sid=StringSubstr(rem,sep2+1);
+              }
+            else
+              {
+               ticket=CopierParseLong(rem);
+              }
+            g_manualClosed.Add(uid,ticket,sid);
            }
          else if(StringLen(v)>0)
            {
-            g_manualClosed.Add(v,0);
+            g_manualClosed.Add(v,0,"");
            }
         }
      }
@@ -4996,8 +5009,8 @@ void ConvergeSender(const int si)
      {
       CopierPos d=g_desired[base+i];
 
-      //--- the operator asked us to leave this one alone (IgnoreUids or manually closed by operator)
-      if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid) || g_manualClosed.Has(d.uid)) continue;
+      //--- the operator asked us to leave this one alone (IgnoreUids)
+      if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
 
       int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
@@ -5118,6 +5131,12 @@ void ConvergeSender(const int si)
          QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
          continue;
         }
+
+      //--- N84-06: Desired but not mirrored = an OPEN candidate.
+      //--- If operator manually closed this position, NEVER reopen it while sender still holds it.
+      //--- Placed here after li>=0 check so if manual close is still pending or delayed by broker,
+      //--- the existing local position continues to have SL/TP/Trim managed normally.
+      if(g_manualClosed.Has(d.uid)) continue;
 
       //--- Desired but not mirrored = an OPEN. This is the one half the
       //--- stale gate holds back: with the sender silent there is no fresh
@@ -5570,21 +5589,43 @@ void ConvergeSender(const int si)
         }
      }
 
-   //--- Garbage collect manually closed UIDs that the sender no longer holds in desired set
-   if(g_manualClosed.Count()>0 && g_desiredCount[si]>=0 && StringLen(g_snapHash[si])>0)
+   //--- N84-02 & N84-07: Garbage collect manually closed UIDs that the sender no longer holds in desired set
+   if(g_manualClosed.Count()>0 && g_ready[si])
      {
       bool gcChanged=false;
+      string curSid=g_sid[si];
       for(int m=g_manualClosed.Count()-1; m>=0; m--)
         {
          string mUid=g_manualClosed.GetUid(m);
          if(StringLen(mUid)==0) continue;
-         bool senderStillHolds=false;
-         for(int d=0; d<g_desiredCount[si]; d++)
+         string mSid=g_manualClosed.GetSid(m);
+
+         if(StringLen(mSid)>0)
            {
-            if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
+            // Direct O(D) GC: if entry belongs to this sender, check this sender's desired set only
+            if(mSid!=curSid) continue;
+            bool senderStillHolds=false;
+            for(int d=0; d<g_desiredCount[si]; d++)
+              {
+               if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
+              }
+            if(!senderStillHolds)
+              {
+               g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") was closed by operator and sender no longer holds it. Removed from ignore table.");
+               g_manualClosed.Forget(mUid);
+               gcChanged=true;
+              }
            }
-         if(!senderStillHolds)
+         else
            {
+            // Legacy entry without sid: require ALL senders to be ready before evaluating
+            bool allReady=true;
+            for(int os=0; os<g_nSenders; os++)
+              {
+               if(!g_ready[os]) { allReady=false; break; }
+              }
+            if(!allReady) continue;
+
             bool anyHolds=false;
             for(int os=0; os<g_nSenders; os++)
               {
@@ -5597,7 +5638,7 @@ void ConvergeSender(const int si)
               }
             if(!anyHolds)
               {
-               g_log.Info("ManualClosed GC: UID "+mUid+" was closed by operator and sender no longer holds it. Removed from ignore table.");
+               g_log.Info("ManualClosed GC: legacy UID "+mUid+" was closed by operator and no sender holds it. Removed from ignore table.");
                g_manualClosed.Forget(mUid);
                gcChanged=true;
               }
@@ -5658,34 +5699,40 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    int sent=(int)sentLong;
 
-   // NH-02 & R48-02: Fail-closed wire payload integrity check using receiver-computed hash against wire H=
+   // NH-02, R48-02 & N84-04: Fail-closed wire payload integrity check using receiver-computed hash against wire H=
+   // If H= field is present, it must be exactly 8 hex chars and match computed hash.
+   // If H= field is absent, sender is an older build (CopierSnapshotHash returns ""); accept without hash check.
    string hOnWire="";
-   if(!CopierKvGet(e.payload,"H",hOnWire) || StringLen(hOnWire)!=8)
+   bool hasH=CopierKvGet(e.payload,"H",hOnWire);
+   if(hasH)
      {
-      g_snapDeclFailed++;
-      g_snapRejectStreak[si]++;
-      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbad|"+g_sid[si]))
-         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" missing or malformed H= field; rejected to prevent false close-all.");
-      return;
-     }
-   int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
-   if(hPos<=0)
-     {
-      g_snapDeclFailed++;
-      g_snapRejectStreak[si]++;
-      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbadpos|"+g_sid[si]))
-         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
-      return;
-     }
-   string body=StringSubstr(e.payload,0,hPos);
-   string hCalc=CopierHashHex(CopierHash32(body));
-   if(hCalc!=hOnWire)
-     {
-      g_snapRejectStreak[si]++;
-      if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hmismatch|"+g_sid[si]))
-         g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
-                     +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
-      return;
+      if(StringLen(hOnWire)!=8)
+        {
+         g_snapDeclFailed++;
+         g_snapRejectStreak[si]++;
+         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbad|"+g_sid[si]))
+            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" malformed H= field; rejected to prevent false close-all.");
+         return;
+        }
+      int hPos=StringFind(e.payload,CP_SEP_KV+"H="+hOnWire);
+      if(hPos<=0)
+        {
+         g_snapDeclFailed++;
+         g_snapRejectStreak[si]++;
+         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hbadpos|"+g_sid[si]))
+            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" invalid H= field position; rejected to prevent false close-all.");
+         return;
+        }
+      string body=StringSubstr(e.payload,0,hPos);
+      string hCalc=CopierHashHex(CopierHash32(body));
+      if(hCalc!=hOnWire)
+        {
+         g_snapRejectStreak[si]++;
+         if(g_snapRejectStreak[si]==1 || g_once.ShouldEmit("hmismatch|"+g_sid[si]))
+            g_log.Error("CRITICAL: snapshot from sender "+g_sid[si]+" H mismatch (wire="
+                        +hOnWire+" computed="+hCalc+") - payload corrupted in flight; rejected to prevent false close-all.");
+         return;
+        }
      }
 
    //--- CRITICAL DEFENSE: Corrupt snapshot / Decompression failure guard.
@@ -6405,11 +6452,12 @@ void HandleCmd(const CopierEnv &e)
       if(StringLen(uid)==0)
          uid="#t"+(string)targetPos.ticket;
 
-      // Add to manual closed table so it is NEVER restored while sender holds it
-      g_manualClosed.Add(uid,targetPos.ticket);
+      string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
+
+      // N84-02: Add to manual closed table with sender sid so it is NEVER restored while sender holds it
+      g_manualClosed.Add(uid,targetPos.ticket,sname);
       CmdStateSave(); // N83-02: Persist manual closed UID immediately
 
-      string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
       string actKey=sname+":"+(string)CP_ACT_CLOSE+":"+uid;
       g_seen.Forget(actKey);
       g_backoff.Clear(actKey);

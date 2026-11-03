@@ -176,7 +176,10 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
         }
     }
     if let Ok(mut guard) = DETECTED_IP_CACHE.lock() {
-        *guard = Some((detected.clone(), Instant::now()));
+        // N84-12: Only cache successful detection results; transient network failures are retried immediately
+        if detected.is_some() {
+            *guard = Some((detected.clone(), Instant::now()));
+        }
     }
     detected
 }
@@ -979,6 +982,7 @@ impl AcmeClient {
         if let Err(ref e) = res {
             let mut c = tls_mgr.config.lock().unwrap();
             c.status.in_progress = false;
+            c.status.progress_step = "failed".to_string(); // N84-11: Clear intermediate step on failure
             c.status.last_error = Some(e.clone());
             let _ = save_config(&tls_mgr.config_path, &c);
         }

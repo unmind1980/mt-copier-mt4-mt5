@@ -384,7 +384,8 @@ impl NotificationStore {
             f.flush()?;
             f.sync_all()?;
         }
-        fs::rename(&tmp_path, &self.path)?;
+        // N84-08: Use atomic_replace_file with Windows copy-fallback instead of bare rename
+        crate::cluster::atomic_replace_file(Path::new(&tmp_path), &self.path)?;
         Ok(())
     }
 
@@ -416,9 +417,13 @@ impl NotificationStore {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
             }
         }
-        // N83-05: Validate WeChat token if URL or raw token
+        // N83-05 & N84-14: Validate WeChat token/key/webhook_url
         if channel.channel_type == "wechat" || channel.channel_type == "xtuis" {
-            if let Some(tok) = channel.config.get("token").and_then(|v| v.as_str()) {
+            let tok_val = channel.config.get("token")
+                .or_else(|| channel.config.get("key"))
+                .or_else(|| channel.config.get("webhook_url"))
+                .and_then(|v| v.as_str());
+            if let Some(tok) = tok_val {
                 let t = tok.trim();
                 if t.starts_with("http://") || t.starts_with("https://") {
                     if let Err(e) = check_url_base(t) {

@@ -395,15 +395,25 @@ impl CommandStore {
                     err: v["err"].as_str().unwrap_or("").to_string(),
                     next_at: Instant::now() + Duration::from_secs(step),
                 };
-                // N76-04 & N82-05: Evaluate time order. Replicated lines with strictly newer ts (including revivals)
-                // take precedence. For identical ts, strict '>' breaks ties so duplicate identical retransmissions
-                // are ignored, preventing Standby journal line count inflation (N74-04).
+                // N76-04 & N82-05 & N84-01: Evaluate time and attempt order.
+                // Replicated lines with strictly newer ts (including revivals) take precedence.
+                // For identical ts, higher state_rank wins; for identical ts and state, higher attempts
+                // wins so retry lines are appended on Standby without dropping lines, but duplicate
+                // identical retransmissions are ignored, preventing Standby journal inflation (N74-04).
                 let should_insert = match inner.commands.get(&id) {
                     Some(existing) => {
                         if cmd.ts > existing.ts {
                             true
                         } else if cmd.ts == existing.ts {
-                            state_rank(&cmd.state) > state_rank(&existing.state)
+                            let rank_new = state_rank(&cmd.state);
+                            let rank_old = state_rank(&existing.state);
+                            if rank_new > rank_old {
+                                true
+                            } else if rank_new == rank_old {
+                                cmd.attempts > existing.attempts
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
@@ -1075,15 +1085,23 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
             err: v["err"].as_str().unwrap_or("").to_string(),
             next_at: Instant::now(),
         };
-        // P0-03, R60-04, N76-04 & N82-05: Journal on disk is sequentially ordered. Later written lines take
+        // P0-03, R60-04, N76-04, N82-05 & N84-01: Journal on disk is sequentially ordered. Later written lines take
         // precedence over older lines. If a command was revived (unknown/acked -> pending), its ts is
-        // strictly newer so it wins. For identical ts on disk, '>=' allows subsequent chronological lines to win.
+        // strictly newer so it wins. For identical ts on disk, higher state_rank or equal/higher attempts wins.
         let should_insert = match commands.get(id) {
             Some(existing) => {
                 if cmd.ts > existing.ts {
                     true
                 } else if cmd.ts == existing.ts {
-                    state_rank(&cmd.state) >= state_rank(&existing.state)
+                    let rank_new = state_rank(&cmd.state);
+                    let rank_old = state_rank(&existing.state);
+                    if rank_new > rank_old {
+                        true
+                    } else if rank_new == rank_old {
+                        cmd.attempts >= existing.attempts
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -1524,6 +1542,60 @@ mod tests {
         let unknowns = s.recent_unknown(3600, now_s);
         assert_eq!(unknowns.len(), 1);
         assert_eq!(unknowns[0].id, c.id);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// N84-01: Verify that retry delta lines with same ts and same state (pending) but increasing attempts
+    /// are accepted and appended on Standby, while exact duplicate transmissions are ignored.
+    #[test]
+    fn test_retry_delta_replication_accepts_later_attempts_and_rejects_duplicates() {
+        let p = tmp("delta_retry");
+        let s = CommandStore::open(&p).unwrap();
+        let ts = 1700000000;
+        let line0 = serde_json::json!({
+            "id": "cmd-test-1",
+            "node": "receiver:1",
+            "seq": 1,
+            "op": "pause",
+            "args": "",
+            "actor": "op",
+            "note": "",
+            "state": "pending",
+            "attempts": 0,
+            "ts": ts,
+            "err": "",
+            "step": 0
+        }).to_string();
+
+        let line1 = serde_json::json!({
+            "id": "cmd-test-1",
+            "node": "receiver:1",
+            "seq": 1,
+            "op": "pause",
+            "args": "",
+            "actor": "op",
+            "note": "",
+            "state": "pending",
+            "attempts": 1,
+            "ts": ts,
+            "err": "",
+            "step": 2
+        }).to_string();
+
+        // Step 1: Initial pending line is applied
+        let applied = s.apply_delta_lines(&[line0.clone()]).unwrap();
+        assert_eq!(applied, 1);
+        assert_eq!(s.command("cmd-test-1").unwrap().attempts, 0);
+
+        // Step 2: Retry line with attempts=1 (same ts, same state) MUST be accepted (N84-01)
+        let applied_retry = s.apply_delta_lines(&[line1.clone()]).unwrap();
+        assert_eq!(applied_retry, 1, "retry line with higher attempts must be applied");
+        assert_eq!(s.command("cmd-test-1").unwrap().attempts, 1);
+
+        // Step 3: Exact duplicate of line1 must be rejected to prevent inflation
+        let applied_dup = s.apply_delta_lines(&[line1]).unwrap();
+        assert_eq!(applied_dup, 0, "duplicate identical retry line must not be applied");
+
         let _ = std::fs::remove_file(&p);
     }
 }
