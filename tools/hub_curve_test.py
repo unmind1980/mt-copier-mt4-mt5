@@ -74,6 +74,7 @@ def start(clients_text, learn=False):
     args = [HUB, "--port", str(ZMQ_PORT), "--http", f"127.0.0.1:{HTTP_PORT}",
             "--curve", "on", "--curve-keys", keys, "--curve-clients", clients,
             "--audit", audit, "--users", users,
+            "--notifications", "none",
             "--stats-every", "0", "--duration", "60"]
     if learn:
         args += ["--curve-learn", "on"]

@@ -1868,6 +1868,9 @@ pub fn spawn(
                         }
                         let channels = {
                             let s = notif_store_worker.lock_or_recover();
+                            if !s.enabled() {
+                                continue;
+                            }
                             s.matching_channels_for_alert(&alert)
                         };
                         for ch in channels {

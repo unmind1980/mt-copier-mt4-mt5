@@ -96,7 +96,7 @@ def main():
     # --curve off: the suite speaks PLAINTEXT ZMQ to fake nodes (see
     # hub_positions_test) - without it the ZAP handler refuses every client.
     hub = subprocess.Popen([HUB, "--port", str(PORT), "--stats-every", "2",
-                            "--curve", "off"],
+                            "--curve", "off", "--notifications", "none"],
                            stdout=out, stderr=subprocess.STDOUT)
     time.sleep(1.5)               # let it bind
 

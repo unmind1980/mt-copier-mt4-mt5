@@ -1747,7 +1747,11 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 在 `hub/src/commands.rs` 中为 `issue_cfg_at` 增加与 `issue_op` 对齐的 fail-closed 保护，写盘失败时不加入 `in_flight` 并返回失败态；
      - 在 `ack`、`supersede` 与 `due_gated_with` 的写盘失败处增加明确的 `[hub] COMMAND JOURNAL WRITE FAILED` 错误告警输出；
   5. **N87-09（CopierPump ArmFast 逻辑修正）**：
-     - 在 `src/Include/Copier/CopierPump.mqh` 的 `ArmFast` 中，在延长 deadline 之前保存 `wasExpired = (now > m_fastPumpUntil)`，修复过期判断恒为假的死逻辑。
+     - 在 `src/Include/Copier/CopierPump.mqh` 的 `ArmFast` 中，在延长 deadline 之前保存 `wasExpired = (now > m_fastPumpUntil)`，修复过期判断恒为假的死逻辑；
+  6. **测试通知外溢彻底根除（NotificationStore 禁用模式与全套测试沙箱隔离）**：
+     - 在 `hub/src/notifications.rs` 中根除当传入 `None`（`--notifications none`）时错误回退到 `DEFAULT_STORE_PATH`（`alert_channels.json`）的缺陷；显式引入 `enabled: bool` 标识，当未配置存储路径时直接禁止读取磁盘任何渠道、禁止保存磁盘，并在匹配告警时恒返回空列表；
+     - 在 `hub/src/api.rs` 的通知工作循环中前置检查 `notif_store.enabled()`，未启用时彻底阻断外部 HTTP 任务派发；
+     - 在 `tools/hub_curve_test.py`、`hub_positions_test.py`、`hub_stat_path_test.py`、`hub_tls_test.py` 等全套启动 Hub 的测试脚本中统一显式追加 `--notifications none`，彻底杜绝自动化回归测试向真实微信或 Telegram 发送任何模拟风控告警。
 
 ---
 

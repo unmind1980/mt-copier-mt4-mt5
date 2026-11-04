@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 use crate::alerts::{Alert, Severity};
 use crate::users;
 
-const DEFAULT_STORE_PATH: &str = "alert_channels.json";
+#[allow(dead_code)]
+pub const DEFAULT_STORE_PATH: &str = "alert_channels.json";
 pub const HTTP_TIMEOUT_SECS: u64 = 8;
 const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -320,33 +321,37 @@ fn is_standard_plain_header(h: &str) -> bool {
 pub struct NotificationStore {
     path: PathBuf,
     channels: HashMap<String, NotificationChannel>,
+    enabled: bool,
 }
 
 impl NotificationStore {
     pub fn new(path: Option<&Path>) -> Self {
-        let p = path
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_STORE_PATH));
+        let (p, enabled) = match path {
+            Some(p) => (p.to_path_buf(), true),
+            None => (PathBuf::new(), false),
+        };
         let mut store = NotificationStore {
             path: p,
             channels: HashMap::new(),
+            enabled,
         };
-        //--- A store that fails to load used to be swallowed here
-        //--- (`let _ = store.load()`), so a corrupt JSON or a permission
-        //--- error looked identical to "no channels configured" - and the
-        //--- operator's channels silently stopped existing for that run.
-        //--- Configuration that fails to load is a fact about THIS run, and
-        //--- an alert channel that silently isn't there is worse than one
-        //--- that never existed: when it matters, nothing gets paged.
-        //--- Say it loudly, at start, where the log is being read anyway.
-        if let Err(e) = store.load() {
-            eprintln!(
-                "[hub] notification store {} failed to load ({}): starting with ZERO channels",
-                store.path.display(),
-                e
-            );
+        //--- Only load from disk when notifications are explicitly enabled with a path.
+        //--- Passing None (--notifications none) keeps channels in memory only and MUST NOT
+        //--- load alert_channels.json or dispatch live alerts.
+        if store.enabled && !store.path.as_os_str().is_empty() && store.path.exists() {
+            if let Err(e) = store.load() {
+                eprintln!(
+                    "[hub] notification store {} failed to load ({}): starting with ZERO channels",
+                    store.path.display(),
+                    e
+                );
+            }
         }
         store
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
     }
 
     pub fn path(&self) -> &Path {
@@ -354,7 +359,7 @@ impl NotificationStore {
     }
 
     pub fn load(&mut self) -> io::Result<()> {
-        if !self.path.exists() {
+        if !self.enabled || self.path.as_os_str().is_empty() || !self.path.exists() {
             return Ok(());
         }
         let data = fs::read_to_string(&self.path)?;
@@ -371,6 +376,9 @@ impl NotificationStore {
     }
 
     pub fn save(&self) -> io::Result<()> {
+        if !self.enabled || self.path.as_os_str().is_empty() {
+            return Ok(());
+        }
         let mut list: Vec<&NotificationChannel> = self.channels.values().collect();
         list.sort_by_key(|c| c.created_at);
 
@@ -474,6 +482,9 @@ impl NotificationStore {
 
     #[allow(dead_code)]
     pub fn matching_channels(&self, severity: Severity) -> Vec<NotificationChannel> {
+        if !self.enabled {
+            return Vec::new();
+        }
         self.channels
             .values()
             .filter(|c| {
@@ -492,6 +503,9 @@ impl NotificationStore {
     /// Match channels for an alert, ensuring recovery notifications (closed loop)
     /// reach all channels that were eligible for outage alerts (even if min_severity is critical).
     pub fn matching_channels_for_alert(&self, alert: &Alert) -> Vec<NotificationChannel> {
+        if !self.enabled {
+            return Vec::new();
+        }
         self.channels
             .values()
             .filter(|c| {
@@ -2053,5 +2067,21 @@ mod tests {
         assert_eq!(fmt_es.severity_badge, "🟡 ADVERTENCIA");
         assert!(fmt_es.title.contains("Prueba de conectividad"));
         assert_eq!(fmt_es.lbl_severity, "Severidad");
+    }
+
+    #[test]
+    fn notifications_disabled_mode_does_not_load_disk_or_match_alerts() {
+        let store = NotificationStore::new(None);
+        assert!(!store.enabled());
+        assert_eq!(store.list_safe().len(), 0);
+        let alert = Alert {
+            ts: 1000,
+            kind: "risk.tripped",
+            severity: Severity::Critical,
+            node: "receiver:252034803".to_string(),
+            detail: json!({ "trip": "maxtot" }),
+        };
+        assert_eq!(store.matching_channels_for_alert(&alert).len(), 0);
+        assert_eq!(store.matching_channels(Severity::Critical).len(), 0);
     }
 }

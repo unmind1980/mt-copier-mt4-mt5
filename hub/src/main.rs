@@ -1434,6 +1434,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     }
 
     let notif_path = if args.notifications.is_empty() {
+        println!("[hub] notifications in-memory only (--notifications none) - alert_channels.json will NOT be loaded or notified");
         None
     } else {
         Some(std::path::Path::new(&args.notifications))

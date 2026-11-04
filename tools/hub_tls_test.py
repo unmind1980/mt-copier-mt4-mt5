@@ -182,6 +182,7 @@ def main():
             "--writes", "on",
             "--curve", "off",
             "--audit", "none",
+            "--notifications", "none",
         ],
         cwd=work_dir,
         env=env,
