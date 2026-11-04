@@ -1753,6 +1753,34 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 在 `hub/src/api.rs` 的通知工作循环中前置检查 `notif_store.enabled()`，未启用时彻底阻断外部 HTTP 任务派发；
      - 在 `tools/hub_curve_test.py`、`hub_positions_test.py`、`hub_stat_path_test.py`、`hub_tls_test.py` 等全套启动 Hub 的测试脚本中统一显式追加 `--notifications none`，彻底杜绝自动化回归测试向真实微信或 Telegram 发送任何模拟风控告警。
 
+### 一百零一次演进：ACME 续期死循环根除、64位 Ticket 溢出修复、服务重装配置更新与全栈审计闭环 (2026-11-04 19:40；全部闭环)
+
+- **技术落地项**：
+  1. **RUST-BUG-01（ACME 证书自动续期死循环根除与 X.509 有效期解析）**：
+     - 在 `hub/src/tls.rs` 中引入独立的 `parse_pem_validity` 算法，从证书 DER 中直接解析真实生效与过期时间戳；
+     - 在 `enroll_certificate_inner` 与 `apply_imported_cert` 中，签发成功后立即刷新 `c.status.issued_at` 与 `c.status.expires_at`，彻底消除了续期后时间戳未更新导致后台自动续期线程每 12 小时死循环重复申请证书直至触发速率限制的致命隐患；新增 `notifications_disabled_mode_does_not_load_disk_or_match_alerts` 等单元测试；
+  2. **MQL-BUG-01（单笔平仓 64 位 Ticket 溢出拦截修复）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `HandleCmd` 中，单笔平仓指令 `op == "close"` 改用 `CopierParseLong` 取代 32 位 `StringToInteger`，杜绝大于 21 亿的 64 位订单号溢出为负数并拒绝平仓；
+  3. **RUST-BUG-02（Windows 服务已注册时重装配置更新）**：
+     - 在 `hub/src/service.rs` 的 `win_service::install` 中，当服务已注册时显式调用 `service.change_config(&service_info)`，使修改对端 IP、端口或二进制路径的重装操作即时生效；
+  4. **RUST-BUG-03 与 RUST-OPT-01（443 端口明文防暴露与 Router 内存分配优化）**：
+     - 在 `hub/src/api.rs` 中，仅当 `tls_enabled` 且为专用端口时才绑定 HTTPS，且在连接握手失败或未启用时直接丢弃连接，绝不在 0.0.0.0:443 暴露明文 HTTP；在 `accept()` 循环外预编译 `Router`，每个连接仅执行 $O(1)$ 的 `Arc::clone`；
+  5. **MQL-BUG-02 与 MQL-BUG-03（自检断言对齐与反向跟单保本止损对齐）**：
+     - 在 `src/Scripts/CopierSelfTest.mq4` 中同步 `CopierClockAgeMs` 同秒断言为 `0`；
+     - 在 `src/Include/Copier/CopierDefs.mqh` 的 `CopierMirrorStopInverted` 中，当 `dist == 0.0`（发送端移至保本位）时直接返回 `localOpen`，彻底消除反向跟单下保本位误判为无法计算并保留旧止损的缺陷；
+  6. **MQL-BUG-04 与 MQL-BUG-05（手动单 GC 遗留与空 ini 备份恢复）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中，本地手动单平仓不再加入 `g_manualClosed`，且在 GC 中自动回收未知 sender 条目；
+     - 在 `src/Include/Copier/CopierConfig.mqh` 的 `CopierIniReadAll` 中，当主文件因断电截断为 0 字节时，自动回退读取 `.tmp` 完整备份；
+  7. **RUST-BUG-04、05、06 与 RUST-OPT-02（Cookie Secure 标识、锁毒化保护、审计串行归档与公网 IP 探测优化）**：
+     - 启用原生 TLS 时登录 Cookie 自动打上 `; Secure` 标识；
+     - `tls.rs` 与 `api.rs` 全面接入 `LockExt` 与 `RwLockExt`，消除锁毒化 panic；
+     - `hub/src/audit.rs` 串行等待上一轮后台 gzip 压缩完成，杜绝轮转序号竞态；
+     - 仅在 Auto 模式且未填域名时探测公网 IP，探测超时缩短至 1.5s 并加 15s 负缓存；
+  8. **TOOL-BUG-01、02 与 MQL-OPT-01（密码重置工具修复、全量测试流水线闭环与峰值哈希索引重建）**：
+     - `tools/reset_password.py` 修复密码打印为 None 缺陷并支持 `--users` 路径自定义与 8 位长度门禁；
+     - `tools/tests.sh` 全量纳入 `hub_tls_test.py` 与 `i18n_check.py`，全套 24 个 Python 测试套件自动化回归绿灯；
+     - `CopierReceiver.mq4` 在 `PruneSenderPeakLots` 压缩数组后自动重建 `g_peakLookup` 哈希索引，保持 O(1) 访问。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1762,9 +1790,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - MetaTrader 4 (Alpari MT4-1 / MT4-2)：0 errors, 0 warnings (ALL GREEN)
   - 4 个终端全部 16 个二进制编译产物均已验证部署。
 - **后端引擎与自动化测试**：
-  - Rust Hub Release 构建成功，**161 / 161 单元测试全量 PASS，0 warnings**；
+  - Rust Hub Release 构建成功，**162 / 162 单元测试全量 PASS，0 warnings**；
   - 核心 Python 测试套件全部绿灯（覆盖率与断言可审计）：
-    - `hub_tls_test.py`：13 / 13 PASS
+    - `hub_tls_test.py`：13 / 13 PASS (已纳入主流水线)
+    - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (已纳入主流水线)
     - `hub_notifications_test.py`：26 / 26 PASS
     - `hub_config_test.py`：71 / 71 PASS
     - `hub_commands_test.py`：47 / 47 PASS
@@ -1773,10 +1802,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `ha_probe_test.py`：5 / 5 PASS
     - `hub_users_test.py`：57 / 57 PASS
     - `snapshot_receipt_test.py`：49 / 49 PASS
-    - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损对齐、命令日志有效物理行严格对齐与锁外状态 SHA256）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损对齐、命令日志有效物理行严格对齐、锁外状态 SHA256 与 ACME 证书生命周期自愈）与业务代码实现 100% 吻合。
 
 ---
 

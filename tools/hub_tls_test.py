@@ -348,7 +348,9 @@ def main():
 
     print("\n========================================================================")
     all_ok = all(ok for _, ok, _ in CHECKS)
-    print(f"TLS/HTTPS TEST RESULT: {'ALL PASS' if all_ok else 'SOME FAILED'} ({sum(1 for _, ok, _ in CHECKS if ok)}/{len(CHECKS)})")
+    passed_cnt = sum(1 for _, ok, _ in CHECKS if ok)
+    failed_cnt = sum(1 for _, ok, _ in CHECKS if not ok)
+    print(f"ALL TLS/HTTPS TESTS PASSED (pass={passed_cnt} fail={failed_cnt})")
     print("========================================================================")
     if not all_ok:
         sys.exit(1)

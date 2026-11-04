@@ -234,6 +234,8 @@ pub mod win_service {
         let service = match service_manager.open_service(service_name, service_access) {
             Ok(s) => {
                 println!("[service] Service '{}' already registered. Updating configuration...", service_name);
+                s.change_config(&service_info)
+                    .map_err(|e| format!("Failed to update configuration for service '{}': {}", service_name, e))?;
                 s
             }
             Err(_) => {

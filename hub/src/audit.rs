@@ -484,9 +484,15 @@ impl Audit {
                 let shifter = self.shifter.clone();
                 let worker_slot = Arc::clone(&self.shifter.active_worker);
                 let rotating_bg = rotating_path.clone();
+                // RUST-BUG-06: Take the previous JoinHandle so the new background worker waits for prior compression to finish,
+                // guaranteeing strictly serial archive sequence and preventing race conditions.
+                let prev_worker = worker_slot.lock_or_recover().take();
                 let spawn_res = std::thread::Builder::new()
                     .name("audit-rotate".to_string())
                     .spawn(move || {
+                        if let Some(prev) = prev_worker {
+                            let _ = prev.join();
+                        }
                         let _ = shifter.finish(&rotating_bg, file_len);
                     });
                 match spawn_res {

@@ -639,6 +639,11 @@ bool CopierIniReadAll(const string path,string &out)
      }
    FileClose(h);
    out=sb.Result();
+   // MQL-BUG-05: If primary file exists but was truncated to 0 bytes by power failure, fall back to .tmp
+   if(StringLen(out)==0 && actualPath==path && FileIsExist(path+".tmp"))
+     {
+      return CopierIniReadAll(path+".tmp",out);
+     }
    return true;
   }
 

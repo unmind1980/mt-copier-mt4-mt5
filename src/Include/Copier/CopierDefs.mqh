@@ -1351,7 +1351,8 @@ double CopierMirrorStopInverted(const double senderStop,
    if(localOpen<=0.0)  return 0.0;
 
    double dist=MathAbs(senderStop-senderOpen);
-   if(dist<=0.0) return 0.0;
+   // MQL-BUG-03: break-even stop (dist == 0) maps directly to localOpen rather than returning 0.0
+   if(dist<=0.0) return localOpen;
 
    //--- where OUR stop belongs, given OUR side
    bool below=(isSl ? (side==CP_SIDE_BUY) : (side==CP_SIDE_SELL));

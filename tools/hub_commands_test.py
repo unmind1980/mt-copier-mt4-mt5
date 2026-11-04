@@ -126,8 +126,11 @@ def start(writes, audit, cfg, cmds):
     deadline = time.time() + 6.0
     while time.time() < deadline:
         time.sleep(0.2)
-        if login():
-            return p, out
+        try:
+            if login():
+                return p, out
+        except Exception:
+            pass
     raise RuntimeError("could not log in to the test hub - M9 bootstrap failed?")
     return p, out
 

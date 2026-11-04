@@ -49,7 +49,7 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use crate::audit::Audit;
-use crate::lockx::LockExt;
+use crate::lockx::{LockExt, RwLockExt};
 use crate::commands::CommandStore;
 use crate::alerts::AlertEngine;
 use crate::notifications::{NotificationChannel, NotificationStore};
@@ -1285,9 +1285,12 @@ async fn login(
             let trust_proxy = std::env::var("MTC_TRUST_PROXY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
-            let is_https = std::env::var("MTC_HTTPS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
+            // RUST-BUG-04: Include native TLS manager enabled status so Secure attribute is set on HTTPS sessions
+            let tls_active = st.lock_or_recover().tls.config.lock().unwrap().enabled;
+            let is_https = tls_active
+                || std::env::var("MTC_HTTPS")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
                 || (trust_proxy
                     && (headers
                         .get("x-forwarded-proto")
@@ -1896,11 +1899,15 @@ pub fn spawn(
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
 
                 // If user selected standard 443 (or custom port distinct from current_port), spawn a dedicated HTTPS listener
-                let https_port = tls_mgr.config.lock().unwrap().https_port;
-                if https_port > 0 && https_port != current_port {
+                let (https_port, tls_enabled) = {
+                    let c = tls_mgr.config.lock_or_recover();
+                    (c.https_port, c.enabled)
+                };
+                if tls_enabled && https_port > 0 && https_port != current_port {
                     let st_https = st.clone();
                     let tx_https = tx.clone();
                     let tls_mgr_https = Arc::clone(&tls_mgr);
+                    let app_base_https = router(st_https.clone(), tx_https.clone());
                     tokio::spawn(async move {
                         let bind_addr = format!("0.0.0.0:{}", https_port);
                         match tokio::net::TcpListener::bind(&bind_addr).await {
@@ -1911,19 +1918,15 @@ pub fn spawn(
                                         Ok(conn) => conn,
                                         Err(_) => continue,
                                     };
-                                    let acceptor_opt = tls_mgr_https.acceptor.read().unwrap().clone();
-                                    let app = router(st_https.clone(), tx_https.clone());
+                                    let acceptor_opt = tls_mgr_https.acceptor.read_or_recover().clone();
+                                    let app = app_base_https.clone();
                                     tokio::spawn(async move {
                                         if let Some(acceptor) = acceptor_opt {
-                                            match acceptor.accept(tcp_stream).await {
-                                                Ok(tls_stream) => {
-                                                    crate::tls::serve_stream_with_router(tls_stream, app).await;
-                                                }
-                                                Err(_) => {}
+                                            if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
+                                                crate::tls::serve_stream_with_router(tls_stream, app).await;
                                             }
-                                        } else {
-                                            crate::tls::serve_stream_with_router(tcp_stream, app).await;
                                         }
+                                        // RUST-BUG-03: Never serve cleartext HTTP on the dedicated HTTPS port
                                     });
                                 }
                             }
@@ -1944,8 +1947,8 @@ pub fn spawn(
                     }
                 };
                 let is_tls = {
-                    let c = tls_mgr.config.lock().unwrap();
-                    c.enabled && c.https_port == current_port && tls_mgr.acceptor.read().unwrap().is_some()
+                    let c = tls_mgr.config.lock_or_recover();
+                    c.enabled && c.https_port == current_port && tls_mgr.acceptor.read_or_recover().is_some()
                 };
                 println!(
                     "[hub] dashboard + REST on {}://{}",
@@ -1953,21 +1956,23 @@ pub fn spawn(
                     addr
                 );
 
+                // RUST-OPT-01: Build Router once outside accept loop and clone per connection (O(1) Arc clone)
+                let app_base_main = router(st.clone(), tx.clone());
                 loop {
                     let (tcp_stream, _) = match listener.accept().await {
                         Ok(conn) => conn,
                         Err(_) => continue,
                     };
                     let is_https_on_main = {
-                        let c = tls_mgr.config.lock().unwrap();
+                        let c = tls_mgr.config.lock_or_recover();
                         c.enabled && c.https_port == current_port
                     };
                     let acceptor_opt = if is_https_on_main {
-                        tls_mgr.acceptor.read().unwrap().clone()
+                        tls_mgr.acceptor.read_or_recover().clone()
                     } else {
                         None
                     };
-                    let app = router(st.clone(), tx.clone());
+                    let app = app_base_main.clone();
                     tokio::spawn(async move {
                         if let Some(acceptor) = acceptor_opt {
                             match acceptor.accept(tcp_stream).await {
@@ -3816,7 +3821,7 @@ async fn cluster_set_peer(
         "ok": true,
         "peer_url": new_url,
         "peer_zmq": new_zmq,
-        "message": if new_url.is_empty() { "已切换为单机独立运行模式 (Standalone)" } else { "对端集群设置已更新并已开始连接" }
+        "message": if new_url.is_empty() { "Switched to Standalone mode" } else { "Peer cluster settings updated and connecting" }
     }))
     .into_response()
 }
@@ -3857,7 +3862,7 @@ async fn tls_status(
     use axum::response::IntoResponse;
     let cfg = {
         let s = st.lock_or_recover();
-        let c = s.tls.config.lock().unwrap().clone();
+        let c = s.tls.config.lock_or_recover().clone();
         c
     };
     let client = reqwest::Client::new();
@@ -3894,21 +3899,23 @@ async fn tls_configure(
             .into_response();
     }
 
-    let client = reqwest::Client::new();
-    let detected_ip = crate::tls::detect_public_ip(&client).await;
-
+    // RUST-OPT-02: Only detect public IP on-demand when Auto mode is selected and domain is not explicitly provided
     let target_domain = match b.mode {
         crate::tls::TlsMode::Auto => {
             if let Some(d) = b.domain.as_deref().filter(|s| !s.trim().is_empty()) {
                 d.trim().to_string()
-            } else if let Some(ip) = detected_ip.as_deref() {
-                crate::tls::format_sslip_domain(ip)
             } else {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "Could not auto-detect public IP. Please specify domain explicitly." })),
-                )
-                    .into_response();
+                let client = reqwest::Client::new();
+                let detected_ip = crate::tls::detect_public_ip(&client).await;
+                if let Some(ip) = detected_ip.as_deref() {
+                    crate::tls::format_sslip_domain(ip)
+                } else {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "Could not auto-detect public IP. Please specify domain explicitly." })),
+                    )
+                        .into_response();
+                }
             }
         }
         _ => b.domain.unwrap_or_default().trim().to_string(),
@@ -3929,7 +3936,7 @@ async fn tls_configure(
     let staging = b.staging_mode.unwrap_or(false);
 
     {
-        let mut c = tls_mgr.config.lock().unwrap();
+        let mut c = tls_mgr.config.lock_or_recover();
         // N84-05: Prevent concurrent ACME enrollment jobs from colliding
         if c.status.in_progress {
             return (
@@ -4086,11 +4093,11 @@ async fn tls_disable(
     }
 
     {
-        let mut acc = tls_mgr.acceptor.write().unwrap();
+        let mut acc = tls_mgr.acceptor.write_or_recover();
         *acc = None;
     }
     {
-        let mut c = tls_mgr.config.lock().unwrap();
+        let mut c = tls_mgr.config.lock_or_recover();
         c.enabled = false;
         c.status.cert_valid = false;
         c.status.progress_step = "disabled".to_string();
@@ -4122,7 +4129,7 @@ async fn tls_renew(
     }
 
     let (domain, email, staging) = {
-        let mut c = tls_mgr.config.lock().unwrap();
+        let mut c = tls_mgr.config.lock_or_recover();
         // N84-05: Prevent concurrent ACME renewal jobs from colliding
         if c.status.in_progress {
             return (

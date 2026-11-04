@@ -89,6 +89,8 @@ zmq_topic_test.py
 ha_probe_test.py
 hub_cluster_test.py
 ha_chaos_test.py
+hub_tls_test.py
+i18n_check.py
 dash_check.py
 "
 

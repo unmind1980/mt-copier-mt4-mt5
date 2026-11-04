@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use yasna::models::ObjectIdentifier;
 use yasna::tags::TAG_UTCTIME;
 
+use crate::lockx::{LockExt, RwLockExt};
+
 pub const DEFAULT_TLS_CONFIG_PATH: &str = "tls_config.json";
 pub const DEFAULT_HTTPS_PORT: u16 = 443;
 pub const DEFAULT_HTTP_PORT: u16 = 80;
@@ -138,12 +140,13 @@ static DETECTED_IP_CACHE: std::sync::Mutex<Option<(Option<String>, Instant)>> =
     std::sync::Mutex::new(None);
 
 /// Query outbound IP probe services with a short timeout to discover the host's public IP.
-/// N83-06: Caches result for 60s to prevent blocking UI/status queries up to 16s on slow/offline networks.
+/// N83-06 & RUST-OPT-02: Caches positive results for 60s and negative results for 15s to prevent blocking UI/status queries.
 pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
     {
         if let Ok(guard) = DETECTED_IP_CACHE.lock() {
             if let Some((ref ip, ref ts)) = *guard {
-                if ts.elapsed() < Duration::from_secs(60) {
+                let cache_ttl = if ip.is_some() { 60 } else { 15 };
+                if ts.elapsed() < Duration::from_secs(cache_ttl) {
                     return ip.clone();
                 }
             }
@@ -160,7 +163,7 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
     for ep in endpoints {
         if let Ok(res) = client
             .get(ep)
-            .timeout(Duration::from_secs(4))
+            .timeout(Duration::from_millis(1500))
             .send()
             .await
         {
@@ -176,10 +179,8 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
         }
     }
     if let Ok(mut guard) = DETECTED_IP_CACHE.lock() {
-        // N84-12: Only cache successful detection results; transient network failures are retried immediately
-        if detected.is_some() {
-            *guard = Some((detected.clone(), Instant::now()));
-        }
+        // Cache positive for 60s, negative for 15s
+        *guard = Some((detected.clone(), Instant::now()));
     }
     detected
 }
@@ -273,6 +274,107 @@ pub fn extract_pem_blocks(pem_str: &str, tag: &str) -> Vec<Vec<u8>> {
         }
     }
     out
+}
+
+/// RUST-BUG-01: Parse X.509 validity (notBefore, notAfter) unix timestamps from PEM certificate text.
+pub fn parse_pem_validity(cert_pem: &str) -> Option<(u64, u64)> {
+    let blocks = extract_pem_blocks(cert_pem, "CERTIFICATE");
+    let leaf = blocks.get(0)?;
+    parse_x509_der_validity(leaf)
+}
+
+fn parse_x509_der_validity(der: &[u8]) -> Option<(u64, u64)> {
+    let mut i = 0;
+    while i + 4 < der.len() {
+        if der[i] == 0x30 {
+            let (len, len_bytes) = parse_asn1_len(&der[i + 1..])?;
+            let content_start = i + 1 + len_bytes;
+            if content_start + len <= der.len() {
+                let sub = &der[content_start..content_start + len];
+                if let Some((nb, na)) = parse_two_times(sub) {
+                    return Some((nb, na));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_asn1_len(bytes: &[u8]) -> Option<(usize, usize)> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let first = bytes[0];
+    if first < 0x80 {
+        Some((first as usize, 1))
+    } else {
+        let n = (first & 0x7f) as usize;
+        if n == 0 || n > 4 || bytes.len() < 1 + n {
+            return None;
+        }
+        let mut len = 0usize;
+        for &b in &bytes[1..1 + n] {
+            len = (len << 8) | (b as usize);
+        }
+        Some((len, 1 + n))
+    }
+}
+
+fn parse_two_times(bytes: &[u8]) -> Option<(u64, u64)> {
+    let (t1, rem) = parse_one_time(bytes)?;
+    let (t2, _) = parse_one_time(rem)?;
+    Some((t1, t2))
+}
+
+fn parse_one_time(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    if bytes.len() < 2 {
+        return None;
+    }
+    let tag = bytes[0];
+    let (len, len_bytes) = parse_asn1_len(&bytes[1..])?;
+    let start = 1 + len_bytes;
+    if bytes.len() < start + len {
+        return None;
+    }
+    let time_bytes = &bytes[start..start + len];
+    let rem = &bytes[start + len..];
+    let s = std::str::from_utf8(time_bytes).ok()?;
+    if tag == 0x17 && s.len() >= 12 {
+        // UTCTime: YYMMDDHHMMSSZ
+        let y2: u64 = s[0..2].parse().ok()?;
+        let year = if y2 >= 50 { 1900 + y2 } else { 2000 + y2 };
+        let m: u64 = s[2..4].parse().ok()?;
+        let d: u64 = s[4..6].parse().ok()?;
+        let h: u64 = s[6..8].parse().ok()?;
+        let min: u64 = s[8..10].parse().ok()?;
+        let sec: u64 = s[10..12].parse().ok()?;
+        return Some((ymd_to_unix(year, m, d, h, min, sec), rem));
+    } else if tag == 0x18 && s.len() >= 14 {
+        // GeneralizedTime: YYYYMMDDHHMMSSZ
+        let year: u64 = s[0..4].parse().ok()?;
+        let m: u64 = s[4..6].parse().ok()?;
+        let d: u64 = s[6..8].parse().ok()?;
+        let h: u64 = s[8..10].parse().ok()?;
+        let min: u64 = s[10..12].parse().ok()?;
+        let sec: u64 = s[12..14].parse().ok()?;
+        return Some((ymd_to_unix(year, m, d, h, min, sec), rem));
+    }
+    None
+}
+
+fn ymd_to_unix(year: u64, month: u64, day: u64, hour: u64, min: u64, sec: u64) -> u64 {
+    let mut y = year as i64;
+    let m = month as i64;
+    if m <= 2 {
+        y -= 1;
+    }
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) as u64 + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe as i64 - 719468;
+    (days as u64) * 86400 + hour * 3600 + min * 60 + sec
 }
 
 /// Convert PEM certificate chain and PEM private key into standard PKCS#12 (PFX) bytes.
@@ -465,9 +567,9 @@ impl TlsManager {
 
     /// Read persistent certificate files from disk and reload TlsAcceptor without restarting the hub.
     pub fn reload_from_disk(&self) -> Result<(), String> {
-        let cfg = self.config.lock().unwrap().clone();
+        let cfg = self.config.lock_or_recover().clone();
         if !cfg.enabled {
-            let mut acc = self.acceptor.write().unwrap();
+            let mut acc = self.acceptor.write_or_recover();
             *acc = None;
             return Ok(());
         }
@@ -488,13 +590,13 @@ impl TlsManager {
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
 
         {
-            let mut acc = self.acceptor.write().unwrap();
+            let mut acc = self.acceptor.write_or_recover();
             *acc = Some(new_acceptor);
         }
 
         // Update in-memory status
         {
-            let mut c = self.config.lock().unwrap();
+            let mut c = self.config.lock_or_recover();
             c.status.cert_valid = true;
             c.status.subject = c.domain.clone();
             c.status.issuer = match c.mode {
@@ -503,7 +605,14 @@ impl TlsManager {
                 TlsMode::Import => "Custom Imported".to_string(),
                 TlsMode::SelfSigned => "Self-Signed".to_string(),
             };
-            if c.status.issued_at == 0 {
+            // RUST-BUG-01: Read real certificate validity from PEM if available
+            if let Ok(pem) = fs::read_to_string(&self.cert_paths.fullchain_pem) {
+                if let Some((nb, na)) = parse_pem_validity(&pem) {
+                    c.status.issued_at = nb;
+                    c.status.expires_at = na;
+                }
+            }
+            if c.status.issued_at == 0 || c.status.expires_at <= c.status.issued_at {
                 c.status.issued_at = unix_now();
                 c.status.expires_at = unix_now() + 90 * 86400;
             }
@@ -527,12 +636,12 @@ impl TlsManager {
         let _ = fs::write(&self.cert_paths.pfx_file, &pfx_bytes);
 
         {
-            let mut acc = self.acceptor.write().unwrap();
+            let mut acc = self.acceptor.write_or_recover();
             *acc = Some(new_acceptor);
         }
 
         {
-            let mut c = self.config.lock().unwrap();
+            let mut c = self.config.lock_or_recover();
             c.enabled = true;
             c.mode = TlsMode::Import;
             c.domain = domain.to_string();
@@ -540,9 +649,15 @@ impl TlsManager {
             c.status.cert_valid = true;
             c.status.issuer = "Custom Imported".to_string();
             c.status.subject = domain.to_string();
-            c.status.issued_at = unix_now();
-            c.status.expires_at = unix_now() + 365 * 86400;
-            c.status.days_remaining = 365;
+            let now = unix_now();
+            if let Some((nb, na)) = parse_pem_validity(cert_pem) {
+                c.status.issued_at = nb;
+                c.status.expires_at = na;
+            } else {
+                c.status.issued_at = now;
+                c.status.expires_at = now + 365 * 86400;
+            }
+            c.status.days_remaining = ((c.status.expires_at as i64) - (now as i64)) / 86400;
             c.status.last_error = None;
             let _ = save_config(&self.config_path, &c);
         }
@@ -562,12 +677,12 @@ impl TlsManager {
         let _ = fs::write(&self.cert_paths.pfx_file, &pfx_bytes);
 
         {
-            let mut acc = self.acceptor.write().unwrap();
+            let mut acc = self.acceptor.write_or_recover();
             *acc = Some(new_acceptor);
         }
 
         {
-            let mut c = self.config.lock().unwrap();
+            let mut c = self.config.lock_or_recover();
             c.enabled = true;
             c.mode = TlsMode::SelfSigned;
             c.domain = domain.to_string();
@@ -587,19 +702,19 @@ impl TlsManager {
 
     /// Register an ACME challenge token for HTTP-01 verification.
     pub fn register_acme_token(&self, token: &str, key_auth: &str) {
-        let mut tokens = self.acme_tokens.write().unwrap();
+        let mut tokens = self.acme_tokens.write_or_recover();
         tokens.insert(token.to_string(), key_auth.to_string());
     }
 
     /// Remove an ACME challenge token after verification completes.
     pub fn unregister_acme_token(&self, token: &str) {
-        let mut tokens = self.acme_tokens.write().unwrap();
+        let mut tokens = self.acme_tokens.write_or_recover();
         tokens.remove(token);
     }
 
     /// Retrieve key authorization string for a requested ACME challenge token.
     pub fn get_acme_token(&self, token: &str) -> Option<String> {
-        let tokens = self.acme_tokens.read().unwrap();
+        let tokens = self.acme_tokens.read_or_recover();
         tokens.get(token).cloned()
     }
 }
@@ -981,7 +1096,7 @@ impl AcmeClient {
     ) -> Result<(), String> {
         let res = self.enroll_certificate_inner(tls_mgr, domain, email).await;
         if let Err(ref e) = res {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.in_progress = false;
             c.status.progress_step = "failed".to_string(); // N84-11: Clear intermediate step on failure
             c.status.last_error = Some(e.clone());
@@ -997,7 +1112,7 @@ impl AcmeClient {
         email: Option<&str>,
     ) -> Result<(), String> {
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.in_progress = true;
             c.status.progress_step = "fetching_directory".to_string();
             c.status.last_error = None;
@@ -1011,7 +1126,7 @@ impl AcmeClient {
 
         // Step 1: Create or fetch account (newAccount)
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.progress_step = "registering_account".to_string();
         }
         let mut account_payload = serde_json::json!({
@@ -1046,7 +1161,7 @@ impl AcmeClient {
 
         // Step 2: Create new order (newOrder)
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.progress_step = "submitting_order".to_string();
         }
         let order_payload = serde_json::json!({
@@ -1084,11 +1199,11 @@ impl AcmeClient {
 
         // Step 3: Complete HTTP-01 challenges for each authorization
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.progress_step = "answering_challenges".to_string();
         }
 
-        let http_port = tls_mgr.config.lock().unwrap().http_port;
+        let http_port = tls_mgr.config.lock_or_recover().http_port;
         // On-Demand: Dynamically open HTTP-01 listener on port 80 ONLY during challenge verification
         let mut temp_server = TempChallengeServer::start(Arc::clone(tls_mgr), http_port).await?;
 
@@ -1179,7 +1294,7 @@ impl AcmeClient {
 
         // Step 4: Generate site key, CSR, and finalize order
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.progress_step = "generating_csr_and_finalizing".to_string();
         }
         let site_key = {
@@ -1239,7 +1354,7 @@ impl AcmeClient {
 
         // Step 5: Download certificate chain
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.status.progress_step = "downloading_certificate".to_string();
         }
         if nonce.is_empty() {
@@ -1268,12 +1383,22 @@ impl AcmeClient {
 
         // Step 6: Mark enabled and reload into active acceptor
         {
-            let mut c = tls_mgr.config.lock().unwrap();
+            let mut c = tls_mgr.config.lock_or_recover();
             c.enabled = true;
             c.domain = domain.to_string();
             c.status.in_progress = false;
             c.status.progress_step = "ready".to_string();
             c.status.last_error = None;
+            // RUST-BUG-01: Update issued_at and expires_at upon ACME issuance
+            let now = unix_now();
+            if let Some((nb, na)) = parse_pem_validity(&cert_pem) {
+                c.status.issued_at = nb;
+                c.status.expires_at = na;
+            } else {
+                c.status.issued_at = now;
+                c.status.expires_at = now + 90 * 86400;
+            }
+            c.status.days_remaining = ((c.status.expires_at as i64) - (now as i64)) / 86400;
             let _ = save_config(&tls_mgr.config_path, &c);
         }
 
@@ -1292,7 +1417,7 @@ pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
             tokio::time::sleep(Duration::from_secs(12 * 3600)).await;
 
             let (should_renew, domain, email, staging) = {
-                let c = tls_mgr.config.lock().unwrap();
+                let c = tls_mgr.config.lock_or_recover();
                 if c.enabled && c.auto_renew && (c.mode == TlsMode::Auto || c.mode == TlsMode::CustomDomain) {
                     let now = unix_now();
                     let days_left = if c.status.expires_at > now {
@@ -1308,15 +1433,17 @@ pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
 
             if should_renew && !domain.is_empty() {
                 println!("[hub] TLS: Certificate for {} expires within 30 days. Initiating automatic renewal...", domain);
-                let dir_url = if staging {
-                    LETS_ENCRYPT_STAGING_DIR
+                let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
+                    custom
+                } else if staging {
+                    LETS_ENCRYPT_STAGING_DIR.to_string()
                 } else {
-                    LETS_ENCRYPT_PRODUCTION_DIR
+                    LETS_ENCRYPT_PRODUCTION_DIR.to_string()
                 };
-                let client = AcmeClient::new(dir_url.to_string());
+                let client = AcmeClient::new(dir_url);
                 if let Err(e) = client.enroll_certificate(&tls_mgr, &domain, email.as_deref()).await {
                     eprintln!("[hub] TLS ERR: Automatic renewal failed for {}: {}", domain, e);
-                    let mut c = tls_mgr.config.lock().unwrap();
+                    let mut c = tls_mgr.config.lock_or_recover();
                     c.status.in_progress = false;
                     c.status.last_error = Some(e);
                     let _ = save_config(&tls_mgr.config_path, &c);

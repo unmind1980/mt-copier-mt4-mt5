@@ -951,6 +951,12 @@ void PruneSenderPeakLots()
    g_uidPeakLotsCount=writeIdx;
    //--- the compaction moved rows, so every cached index is suspect
    ArrayInitialize(g_peakLookup,0);
+   // MQL-OPT-01: Rebuild hash index immediately after compaction so subsequent lookups remain O(1)
+   for(int k=0; k<writeIdx; k++)
+     {
+      int h=(int)(CopierHash32(g_uidPeakLots[k].uid)&(CP_PEAK_LOOKUP-1));
+      g_peakLookup[h]=k+1;
+     }
   }
 
 double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
@@ -5709,6 +5715,19 @@ void ConvergeSender(const int si)
 
          if(StringLen(mSid)>0)
            {
+            // MQL-BUG-04: If mSid is "manual" or belongs to a removed sender, safely clean it up
+            bool senderFound=false;
+            for(int os=0; os<g_nSenders; os++)
+              {
+               if(g_sid[os]==mSid) { senderFound=true; break; }
+              }
+            if(!senderFound)
+              {
+               g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") no longer belongs to any active sender. Cleaned up.");
+               g_manualClosed.Forget(mUid);
+               gcChanged=true;
+               continue;
+              }
             // Direct O(D) GC: if entry belongs to this sender, check this sender's desired set only
             if(mSid!=curSid) continue;
             bool senderStillHolds=false;
@@ -6427,13 +6446,13 @@ void HandleCmd(const CopierEnv &e)
 
    if(op=="close")
      {
-      long targetTicket=StringToInteger(args);
-      if(targetTicket<=0)
-        {
-         string tstr="";
-         if(CopierKvGet(args,"ticket",tstr) || CopierKvGet(args,"TICKET",tstr))
-            targetTicket=StringToInteger(tstr);
-        }
+      // MQL-BUG-01: Parse 64-bit ticket using CopierParseLong to prevent 32-bit integer overflow
+      long targetTicket=0;
+      string tstr="";
+      if(CopierKvGet(args,"ticket",tstr) || CopierKvGet(args,"TICKET",tstr))
+         targetTicket=CopierParseLong(tstr);
+      else
+         targetTicket=CopierParseLong(args);
       if(targetTicket<=0)
         {
          g_cmdId=id;
@@ -6471,9 +6490,13 @@ void HandleCmd(const CopierEnv &e)
 
       string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
 
-      // N84-02: Add to manual closed table with sender sid so it is NEVER restored while sender holds it
-      g_manualClosed.Add(uid,targetPos.ticket,sname);
-      CmdStateSave(); // N83-02: Persist manual closed UID immediately
+      // N84-02 & MQL-BUG-04: Only add to g_manualClosed if trade belongs to an active configured sender.
+      // Pure manual trades (si < 0) are never part of any sender's snapshot and cannot be re-opened by copier.
+      if(si>=0 && si<g_nSenders)
+        {
+         g_manualClosed.Add(uid,targetPos.ticket,sname);
+         CmdStateSave(); // N83-02: Persist manual closed UID immediately
+        }
 
       string actKey=sname+":"+(string)CP_ACT_CLOSE+":"+uid;
       g_seen.Forget(actKey);

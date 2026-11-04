@@ -29,15 +29,17 @@ def main():
     parser.add_argument("--user", default="admin", help="Username to reset (default: admin)")
     parser.add_argument("--password", default=None, help="New password (if omitted, a secure random password is generated)")
     parser.add_argument("--role", default="admin", choices=["admin", "operator", "viewer"], help="Role (default: admin)")
+    parser.add_argument("--file", "--users", dest="users_file", default=USERS_FILE, help=f"Path to users.json file (default: {USERS_FILE})")
     args = parser.parse_args()
 
+    target_file = args.users_file
     users = []
-    if os.path.exists(USERS_FILE):
+    if os.path.exists(target_file):
         try:
-            with open(USERS_FILE, "r", encoding="utf-8") as f:
+            with open(target_file, "r", encoding="utf-8") as f:
                 users = json.load(f)
         except Exception as e:
-            print(f"[WARN] Failed to read {USERS_FILE}: {e}, initializing fresh user list.")
+            print(f"[WARN] Failed to read {target_file}: {e}, initializing fresh user list.")
             users = []
 
     pw = args.password
@@ -45,6 +47,9 @@ def main():
         pw = secrets.token_urlsafe(12)
         print(f"[RESET] Generated random password for '{args.user}': {pw}")
     else:
+        if len(pw) < 8:
+            print("[ERROR] Password must be at least 8 characters long.")
+            sys.exit(1)
         print(f"[RESET] Updating password for '{args.user}'...")
 
     salt = secrets.token_hex(8)
@@ -67,18 +72,18 @@ def main():
             "disabled": False
         })
 
-    tmp_file = USERS_FILE + ".tmp"
+    tmp_file = target_file + ".tmp"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=2)
-    os.replace(tmp_file, USERS_FILE)
+    os.replace(tmp_file, target_file)
 
     print("")
     print("=" * 60)
     print(f"  [OK] User '{args.user}' password successfully updated!")
     print(f"       User ID:  {args.user}")
-    print(f"       Password: {args.password}")
+    print(f"       Password: {pw}")
     print(f"       Role:     {args.role}")
-    print(f"       File:     {USERS_FILE}")
+    print(f"       File:     {target_file}")
     print("=" * 60)
     print("  IMPORTANT: You must RESTART the Hub (hublog.bat / copier-hub)")
     print("             for the new credentials to take effect in memory.")

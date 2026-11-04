@@ -1095,6 +1095,10 @@ void TestMirrorStop()
          CopierMirrorStop(1.09900,1.10000,1.10300,CP_SIDE_BUY,false),0.0,0.0000001);
    OkDbl("mirror: sell tp above its own entry is refused",
          CopierMirrorStop(1.10100,1.10000,1.09700,CP_SIDE_SELL,false),0.0,0.0000001);
+
+   //--- MQL-BUG-03: Inverted mirror break-even test
+   OkDbl("mirror inverted: break-even stop maps to localOpen",
+         CopierMirrorStopInverted(1.10000,1.10000,1.09700,CP_SIDE_SELL,true),1.09700,0.0000001);
   }
 
 //=====================================================================
@@ -2146,8 +2150,9 @@ void TestSymbolQuoteAge()
    long now=1780000000;                          // any fixed instant
    Ok("symfresh: the clock age is the gap in milliseconds",
       CopierClockAgeMs((datetime)(now-120),now)==120000);
-   Ok("symfresh: a symbol quoting right now has no clock age",
-      CopierClockAgeMs((datetime)now,now)==-1);
+   //--- N77-04 & MQL-BUG-02: Same-second quote is 0ms age (fresh), only future quote returns -1
+   Ok("symfresh: a symbol quoting right now has 0 clock age",
+      CopierClockAgeMs((datetime)now,now)==0);
    Ok("symfresh: a quote in the FUTURE is not information, not a negative age",
       CopierClockAgeMs((datetime)(now+5),now)==-1);
    Ok("symfresh: a symbol with no quote time at all has no clock age",
