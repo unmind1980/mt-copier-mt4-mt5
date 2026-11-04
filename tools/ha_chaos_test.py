@@ -28,10 +28,11 @@ import zmq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-HUB = os.path.join(REPO, "hub", "target", "release", "copier-hub.exe")
+HUB_BIN = "copier-hub.exe" if sys.platform == "win32" else "copier-hub"
+HUB = os.path.join(REPO, "hub", "target", "release", HUB_BIN)
 
 if not os.path.exists(HUB):
-    HUB = os.path.join(REPO, "hub", "target", "debug", "copier-hub.exe")
+    HUB = os.path.join(REPO, "hub", "target", "debug", HUB_BIN)
 
 P_ZMQ_PORT = 6480
 P_HTTP_PORT = 6481

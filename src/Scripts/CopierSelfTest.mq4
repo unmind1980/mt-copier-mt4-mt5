@@ -1096,9 +1096,15 @@ void TestMirrorStop()
    OkDbl("mirror: sell tp above its own entry is refused",
          CopierMirrorStop(1.10100,1.10000,1.09700,CP_SIDE_SELL,false),0.0,0.0000001);
 
-   //--- MQL-BUG-03: Inverted mirror break-even test
+   //--- MQL-BUG-03 & BUG-06: Inverted mirror break-even & trailing profit lock tests
    OkDbl("mirror inverted: break-even stop maps to localOpen",
          CopierMirrorStopInverted(1.10000,1.10000,1.09700,CP_SIDE_SELL,true),1.09700,0.0000001);
+   OkDbl("mirror inverted: buy sender sl in loss maps to sell tp below entry",
+         CopierMirrorStopInverted(1.09500,1.10000,1.10000,CP_SIDE_SELL,false),1.09500,0.0000001);
+   OkDbl("mirror inverted: buy sender sl in profit lock maps to sell tp above entry",
+         CopierMirrorStopInverted(1.10200,1.10000,1.10000,CP_SIDE_SELL,false),1.10200,0.0000001);
+   OkDbl("mirror inverted: sell sender sl in profit lock maps to buy tp below entry",
+         CopierMirrorStopInverted(1.09800,1.10000,1.10000,CP_SIDE_BUY,false),1.09800,0.0000001);
   }
 
 //=====================================================================

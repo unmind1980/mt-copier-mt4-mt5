@@ -315,12 +315,14 @@ fn parse_x509_der_validity(der: &[u8]) -> Option<(u64, u64)> {
     let mut i = 0;
     while i + 4 < der.len() {
         if der[i] == 0x30 {
-            let (len, len_bytes) = parse_asn1_len(&der[i + 1..])?;
-            let content_start = i + 1 + len_bytes;
-            if content_start + len <= der.len() {
-                let sub = &der[content_start..content_start + len];
-                if let Some((nb, na)) = parse_two_times(sub) {
-                    return Some((nb, na));
+            // BUG-01: Use if-let instead of ? so non-matching 0x30 bytes continue the scan
+            if let Some((len, len_bytes)) = parse_asn1_len(&der[i + 1..]) {
+                let content_start = i + 1 + len_bytes;
+                if content_start + len <= der.len() {
+                    let sub = &der[content_start..content_start + len];
+                    if let Some((nb, na)) = parse_two_times(sub) {
+                        return Some((nb, na));
+                    }
                 }
             }
         }

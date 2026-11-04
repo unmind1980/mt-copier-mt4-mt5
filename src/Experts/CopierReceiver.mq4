@@ -2835,6 +2835,17 @@ void ClearQueueExceptRiskReducing()
    if(g_qn<=0) g_qHead=0;
   }
 
+// OPT-01: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer()
+void CopierWaitMs(const int waitMs)
+  {
+   if(waitMs<=0) return;
+   long start=CopierNowMs();
+   while(CopierNowMs()-start<waitMs)
+     {
+      // busy-wait to provide genuine flow control in timer-driven EA
+     }
+  }
+
 double PipSize(const CopierSymInfo &si)
   {
    //--- the digits-based pip rule used to live here; it is now the single
@@ -3237,8 +3248,8 @@ void ExecuteQueue()
             asyncBatchCount++;
             if((asyncBatchCount % 10) == 0)
               {
-               // Token-Bucket Pacing: 20ms pause every 10 orders to protect broker rate limit
-               Sleep(20);
+               // OPT-01: Token-Bucket Pacing: 20ms pause every 10 orders to protect broker rate limit
+               CopierWaitMs(20);
               }
            }
          double prefetchedPx = 0.0;
@@ -3621,7 +3632,8 @@ void ExecuteQueue()
 #ifndef __MQL5__
       RefreshRates();
 #endif
-      Sleep(30);
+      // OPT-01: Paced second sweep wait
+      CopierWaitMs(30);
       for(int s=0; s<sweepCount; s++)
         {
          CopierAction sa = g_sweepFailed[s];

@@ -563,10 +563,14 @@ bool CopierValidateSnapshot(const string payload,const int decodedCount,const in
          err="malformed H= field";
          return false;
         }
-      int hPos=StringFind(payload,CP_SEP_KV+"H="+hOnWire);
-      if(hPos<=0)
+      string hField=CP_SEP_KV+"H="+hOnWire;
+      int hLen=StringLen(hField);
+      int pLen=StringLen(payload);
+      // OPT-03: Anchor H= field to the end of the wire payload
+      int hPos=pLen-hLen;
+      if(hPos<=0 || StringSubstr(payload,hPos)!=hField)
         {
-         err="invalid H= field position";
+         err="invalid H= field position (must be at payload tail)";
          return false;
         }
       string body=StringSubstr(payload,0,hPos);

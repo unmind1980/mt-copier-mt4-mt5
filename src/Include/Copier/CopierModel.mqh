@@ -375,39 +375,56 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
    long pt=CopierPendToPlatformType(p.ptype);
    if(pt<0) { outErr=-4; return false; }
 
+   // BUG-03: MT5 pending orders require ORDER_FILLING_RETURN per MT5 spec.
+   // Fallback order: RETURN first (standard for pending orders), then FOK/IOC if supported.
    long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
-   ENUM_ORDER_TYPE_FILLING filling=ORDER_FILLING_RETURN;
-   if((fillMode&SYMBOL_FILLING_FOK)!=0)      filling=ORDER_FILLING_FOK;
-   else if((fillMode&SYMBOL_FILLING_IOC)!=0) filling=ORDER_FILLING_IOC;
+   ENUM_ORDER_TYPE_FILLING candidates[3];
+   int nCand=0;
+   candidates[nCand++]=ORDER_FILLING_RETURN;
+   if((fillMode&SYMBOL_FILLING_FOK)!=0) candidates[nCand++]=ORDER_FILLING_FOK;
+   if((fillMode&SYMBOL_FILLING_IOC)!=0) candidates[nCand++]=ORDER_FILLING_IOC;
 
    MqlTradeRequest req;
    MqlTradeResult  res;
-   ZeroMemory(req);
-   ZeroMemory(res);
-   req.action      =TRADE_ACTION_PENDING;
-   req.symbol      =sym;
-   req.volume      =p.lots;
-   req.type        =(ENUM_ORDER_TYPE)pt;
-   req.price       =px;
-   req.sl          =sl;
-   req.tp          =tp;
-   req.deviation   =(ulong)deviationPoints;
-   req.magic       =(ulong)magic;
-   req.comment     =cmt;
-   req.type_filling=filling;
-   if(CopierPendingNeedsStop(p.ptype)) req.stoplimit=stop;
-   if(p.pexpire>0)
+
+   for(int attempt=0;attempt<nCand;attempt++)
      {
-      req.type_time =ORDER_TIME_SPECIFIED;
-      req.expiration=(datetime)p.pexpire;
+      ZeroMemory(req);
+      ZeroMemory(res);
+      req.action      =TRADE_ACTION_PENDING;
+      req.symbol      =sym;
+      req.volume      =p.lots;
+      req.type        =(ENUM_ORDER_TYPE)pt;
+      req.price       =px;
+      req.sl          =sl;
+      req.tp          =tp;
+      req.deviation   =(ulong)deviationPoints;
+      req.magic       =(ulong)magic;
+      req.comment     =cmt;
+      req.type_filling=candidates[attempt];
+      if(CopierPendingNeedsStop(p.ptype)) req.stoplimit=stop;
+      if(p.pexpire>0)
+        {
+         req.type_time =ORDER_TIME_SPECIFIED;
+         req.expiration=(datetime)p.pexpire;
+        }
+      else
+        {
+         req.type_time =ORDER_TIME_GTC;
+        }
+
+      bool sent=OrderSend(req,res);
+      if(sent && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED))
+         return true;
+
+      // 10030 (TRADE_RETCODE_INVALID_FILL): try next candidate
+      if(res.retcode==10030 && attempt+1<nCand)
+         continue;
+
+      outErr=(int)res.retcode;
+      return false;
      }
-   else
-     {
-      req.type_time =ORDER_TIME_GTC;
-     }
-   if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
-   if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED)
-      return true;
+
    outErr=(int)res.retcode;
    return false;
 #else

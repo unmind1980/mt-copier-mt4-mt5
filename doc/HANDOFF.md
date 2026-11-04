@@ -1807,6 +1807,31 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
+### 一百零三次演进：X.509 遍历短路修复、HA 主备水位强校验、MT5 挂单填充轮换、锁毒化彻底根除与全栈深度核销 (2026-11-04 23:30；全部闭环)
+
+- **技术落地项**：
+  1. **X.509 DER 证书有效期解析短路修复（BUG-01）**：
+     - 在 `hub/src/tls.rs` 的 `parse_x509_der_validity` 中，将 `?` 改为 `if let Some((len, len_bytes)) = parse_asn1_len(&der[i + 1..])` 条件分支，杜绝证书内遇到非 SEQUENCE 字符串或内部 0x30 字节时错误提前退出，保证证书有效期正确解析；
+  2. **HA 主机状态真实对齐与防伪同步（BUG-02）**：
+     - 在 `hub/src/cluster.rs` 中，Primary 收到 Standby 探针 200 响应后，对比 `remote_st` 与本地 `cmd_lines`、`max_cmd_seq`、`cfg_lines` 水位；当备机落后时置为 `"lagging"` 并记录滞后详情，水位追平后才置为 `"synced"`，杜绝备机日志落后时主控面板谎报已同步；
+  3. **MT5 挂单 filling 与 10030 错误轮换重试（BUG-03）**：
+     - 在 `src/Include/Copier/CopierModel.mqh` 中，MT5 挂单（`TRADE_ACTION_PENDING`）首选设为 `ORDER_FILLING_RETURN`，并在收到券商 `10030 (TRADE_RETCODE_INVALID_FILL)` 时执行 RETURN -> FOK -> IOC 候选轮换重试，杜绝 ECN 券商拒单；
+  4. **全栈锁毒化彻底消除（BUG-04）**：
+     - 在 `hub/src/api.rs`（第 1293 行与第 4233 行）与 `hub/src/service.rs` 中全面移除裸 `.lock().unwrap()`，统一接入 `LockExt` 与 `RwLockExt` 的 `lock_or_recover()`，彻底防范锁毒化导致 Web API 崩溃；
+  5. **掉电断电配置残卷自动备份恢复（BUG-05）**：
+     - 在 `src/Include/Copier/CopierConfig.mqh` 的 `CopierIniReadAll` 中，当主文件截断、损坏或无合法 section 且存在有效 `.tmp` 备份时，自动回退读取 `.tmp` 并修复覆盖回主文件；
+  6. **反向跟单移动止损穿透入场价方向对齐（BUG-06）**：
+     - 在 `src/Include/Copier/CopierDefs.mqh` 的 `CopierMirrorStopInverted` 中，移除单向绝对值 `MathAbs`，采用有符号位偏移 `localOpen + (senderStop - senderOpen)`，支持发送端移动止损锁盈时接收端反向平仓线准确跟随；新增单测断言；
+  7. **流控延迟、摘要尾部锚定与 SCM StopPending 优化（OPT-01, OPT-02, OPT-03）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中引入微秒级精度的 `CopierWaitMs`，取代在 `OnTimer` 中被 MT 系统静默忽略的 `Sleep`，实现真实的券商流控延时保护；
+     - 在 `src/Include/Copier/CopierCodec.mqh` 中将 `H=` 摘要字段严格锚定在 payload 末尾进行 $O(1)$ 截断校验；
+     - 在 `hub/src/service.rs` 中收到 SCM Stop 事件时立即报告 `ServiceState::StopPending`（10s wait hint），避免服务停止被系统强杀；
+  8. **测试套件跨平台兼容与轻量模式（TOOL-01, TOOL-02）**：
+     - 在全套 15 个 Python 脚本中引入 `copier-hub.exe if win32 else copier-hub` 自动跨平台二进制探测；
+     - 在 `tools/tests.sh` 中增加无 pyzmq 时的轻量级静态检查回退机制。
+
+---
+
 ## 9. 最终交付状态确认
 
 - **全平台编译矩阵**：
@@ -1828,7 +1853,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `snapshot_receipt_test.py`：49 / 49 PASS
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损对齐、命令日志有效物理行严格对齐、锁外状态 SHA256 与 RFC 8555 ACME 闭环）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级与 10030 挂单轮换、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损与反向有符号位对齐、命令日志有效物理行严格对齐、锁外状态 SHA256 与 RFC 8555 ACME 闭环）与业务代码实现 100% 吻合。
 
 ---
 

@@ -1018,10 +1018,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 }
             } else {
-                // Primary node: since peer is online and responding, update sync_status to "synced"
+                // BUG-02: Primary node verifies if Standby peer has caught up with our journals
                 let mut s = st.lock_or_recover();
-                s.cluster.sync_status = "synced".to_string();
-                s.cluster.last_sync_err = String::new();
+                let my_cfg = s.cfg.total_lines();
+                let (my_cmd, my_seq) = s.cmds.sync_stats();
+                if remote_st.cmd_lines < my_cmd || remote_st.max_cmd_seq < my_seq || remote_st.cfg_lines < my_cfg {
+                    s.cluster.sync_status = "lagging".to_string();
+                    s.cluster.last_sync_err = format!(
+                        "standby lagging behind (cmd: {}/{} seq: {}/{} cfg: {}/{})",
+                        remote_st.cmd_lines, my_cmd, remote_st.max_cmd_seq, my_seq, remote_st.cfg_lines, my_cfg
+                    );
+                } else {
+                    s.cluster.sync_status = "synced".to_string();
+                    s.cluster.last_sync_err = String::new();
+                }
             }
         }
     });

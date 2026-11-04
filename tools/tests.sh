@@ -43,6 +43,7 @@ if [[ -n "${PYTHON:-}" ]]; then
   fi
 fi
 
+HAS_ZMQ=1
 PY="${PY:-}"
 for c in "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
          python3 python \
@@ -55,12 +56,23 @@ for c in "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
 done
 
 if [[ -z "$PY" ]]; then
-  echo "no interpreter with pyzmq found."
-  echo "install it once, then re-run:"
-  echo "  pip install pyzmq"
-  echo "or point me at one:"
-  echo "  PYTHON=/full/path/to/python ./tools/tests.sh"
-  exit 1
+  # TOOL-02: Fallback to any python interpreter for lightweight checks (dash, i18n, inputcheck)
+  for c in "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+           python3 python \
+           "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe" \
+           "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python"; do
+    if command -v "$c" >/dev/null 2>&1 || [[ -x "$c" ]]; then
+      PY="$c"
+      HAS_ZMQ=0
+      break
+    fi
+  done
+  if [[ -z "$PY" ]]; then
+    echo "no python interpreter found. install python to run tests."
+    exit 1
+  fi
+  echo "NOTE: pyzmq is not installed; running lightweight static and UI validation suites only."
+  echo "      install pyzmq to run full ZMQ contract tests: pip install pyzmq"
 fi
 
 # --- 2. the suites -----------------------------------------------------
@@ -99,6 +111,10 @@ echo "   interpreter: $PY"
 rc=0
 for t in $PY_TESTS; do
   printf "   %-26s " "$t"
+  if [[ "$HAS_ZMQ" -eq 0 && "$t" != "dash_check.py" && "$t" != "i18n_check.py" && "$t" != "inputcheck.py" ]]; then
+    echo "SKIPPED (pyzmq not installed)"
+    continue
+  fi
   if out="$("$PY" "$HERE/$t" 2>&1)"; then
     #--- Capture pass= or explicit summary/verdict line for full test auditability (O-02)
     echo "$out" | grep -E "pass=|dashboard OK|ALL .*PASSED|ALL .*GREEN|VERDICT:|comment\(s\) checked" | tail -1 || echo "ran (no summary line)"

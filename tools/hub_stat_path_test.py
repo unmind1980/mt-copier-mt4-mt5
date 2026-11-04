@@ -47,7 +47,8 @@ import time
 import zmq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HUB = os.path.join(os.path.dirname(HERE), "hub", "target", "release", "copier-hub.exe")
+HUB_BIN = "copier-hub.exe" if sys.platform == "win32" else "copier-hub"
+HUB = os.path.join(os.path.dirname(HERE), "hub", "target", "release", HUB_BIN)
 
 PORT = 6199                      # deliberately NOT 6000 - do not disturb a live hub
 NID_SENDER = "252033316"

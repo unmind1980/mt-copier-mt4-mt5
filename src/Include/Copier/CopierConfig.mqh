@@ -639,10 +639,22 @@ bool CopierIniReadAll(const string path,string &out)
      }
    FileClose(h);
    out=sb.Result();
-   // MQL-BUG-05: If primary file exists but was truncated to 0 bytes by power failure, fall back to .tmp
-   if(StringLen(out)==0 && actualPath==path && FileIsExist(path+".tmp"))
+   // MQL-BUG-05 & BUG-05: If primary file exists but was truncated/corrupted by crash or power failure,
+   // verify whether .tmp exists and has valid content to recover from
+   if(actualPath==path && FileIsExist(path+".tmp"))
      {
-      return CopierIniReadAll(path+".tmp",out);
+      bool isCorrupt=(StringLen(out)==0 || (StringFind(out,"[")<0 && StringFind(out,"=")<0));
+      if(isCorrupt)
+        {
+         string tmpOut="";
+         if(CopierIniReadAll(path+".tmp",tmpOut) && StringLen(tmpOut)>0)
+           {
+            out=tmpOut;
+            // Restore main file from valid .tmp successor
+            CopierIniWriteAll(path,out);
+            return true;
+           }
+        }
      }
    return true;
   }

@@ -15,6 +15,7 @@ pub mod win_service {
     use std::sync::atomic::Ordering;
     use std::sync::Mutex;
     use std::time::Duration;
+    use crate::lockx::LockExt;
 
     use windows_service::{
         define_windows_service,
@@ -63,7 +64,7 @@ pub mod win_service {
 
     pub fn run_as_service(service_name: &str) -> Result<(), String> {
         {
-            let mut name_guard = RUNNING_SERVICE_NAME.lock().unwrap();
+            let mut name_guard = RUNNING_SERVICE_NAME.lock_or_recover();
             *name_guard = Some(service_name.to_string());
         }
         service_dispatcher::start(service_name, ffi_service_main)
@@ -73,8 +74,7 @@ pub mod win_service {
     pub fn hub_service_main(_args: Vec<OsString>) {
         let service_name = {
             RUNNING_SERVICE_NAME
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .clone()
                 .unwrap_or_else(|| PRIMARY_SERVICE_NAME.to_string())
         };
@@ -85,11 +85,29 @@ pub mod win_service {
 
         println!("[service] Initializing Windows Service '{}'...", service_name);
 
+        let status_handle_slot: std::sync::Arc<Mutex<Option<service_control_handler::ServiceStatusHandle>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let handle_for_event = std::sync::Arc::clone(&status_handle_slot);
+
         let event_handler = move |control_event| -> ServiceControlHandlerResult {
             match control_event {
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     println!("[service] Received SCM Stop/Shutdown event. Signalling hub exit...");
+                    // OPT-02: Report StopPending with 10s wait hint so SCM doesn't pop timeout dialog
+                    if let Ok(guard) = handle_for_event.lock() {
+                        if let Some(ref h) = *guard {
+                            let _ = h.set_service_status(ServiceStatus {
+                                service_type: ServiceType::OWN_PROCESS,
+                                current_state: ServiceState::StopPending,
+                                controls_accepted: ServiceControlAccept::empty(),
+                                exit_code: ServiceExitCode::Win32(0),
+                                checkpoint: 1,
+                                wait_hint: Duration::from_secs(10),
+                                process_id: None,
+                            });
+                        }
+                    }
                     crate::EXIT.store(true, Ordering::SeqCst);
                     ServiceControlHandlerResult::NoError
                 }
@@ -104,6 +122,12 @@ pub mod win_service {
                 return;
             }
         };
+
+        {
+            if let Ok(mut guard) = status_handle_slot.lock() {
+                *guard = Some(status_handle.clone());
+            }
+        }
 
         // Tell SCM that the service is running
         let _ = status_handle.set_service_status(ServiceStatus {

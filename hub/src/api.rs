@@ -1289,8 +1289,8 @@ async fn login(
             let trust_proxy = std::env::var("MTC_TRUST_PROXY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
-            // RUST-BUG-04: Include native TLS manager enabled status so Secure attribute is set on HTTPS sessions
-            let tls_active = st.lock_or_recover().tls.config.lock().unwrap().enabled;
+            // RUST-BUG-04 & BUG-04: Include native TLS manager enabled status safely with lock_or_recover()
+            let tls_active = st.lock_or_recover().tls.config.lock_or_recover().enabled;
             let is_https = tls_active
                 || std::env::var("MTC_HTTPS")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -4230,7 +4230,7 @@ async fn tls_renew(
         // N83-01 & N84-11: Handle enrollment failure in background task to log error and reset in_progress state
         if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await {
             eprintln!("[hub] TLS ERR: Renewal failed for {}: {}", domain_bg, e);
-            let mut c = mgr_bg.config.lock().unwrap();
+            let mut c = mgr_bg.config.lock_or_recover();
             c.status.in_progress = false;
             c.status.progress_step = "failed".to_string();
             c.status.last_error = Some(e);
