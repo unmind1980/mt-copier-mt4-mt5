@@ -3202,29 +3202,49 @@ async fn cluster_status(
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let s = st.lock_or_recover();
-    // P1-3 & P2-3: Fast memory accessors & cached file hashes under lock (zero disk I/O)
-    let cfg_lines = s.cfg.total_lines();
-    let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
-    let users_hash = crate::cluster::file_sha256(&s.users.path());
-    let notif_hash = crate::cluster::file_sha256(&s.notif_store.lock_or_recover().path());
-    let curve_clients_hash = crate::cluster::file_sha256(&s.cluster.curve_clients_path);
+    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path) = {
+        let s = st.lock_or_recover();
+        let cfg_lines = s.cfg.total_lines();
+        let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
+        let users_p = s.users.path().to_path_buf();
+        let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
+        let curve_p = s.cluster.curve_clients_path.clone();
+        (
+            s.cluster.state.cluster_id.clone(),
+            s.cluster.state.hub_id.clone(),
+            s.cluster.state.role.clone(),
+            s.cluster.state.epoch,
+            s.writes,
+            s.cluster.state.is_configured_primary,
+            s.cluster.state.failback_locked,
+            cfg_lines,
+            cmd_lines,
+            max_cmd_seq,
+            users_p,
+            notif_p,
+            curve_p,
+        )
+    };
+    // N87-02: Compute file hashes strictly OUTSIDE SharedState lock so 1Hz polling does not block forwarding thread
+    let users_hash = crate::cluster::file_sha256(&users_path);
+    let notif_hash = crate::cluster::file_sha256(&notif_path);
+    let curve_clients_hash = crate::cluster::file_sha256(&curve_clients_path);
 
     let resp = crate::cluster::ClusterStatusResponse {
         ok: true,
-        cluster_id: s.cluster.state.cluster_id.clone(),
-        hub_id: s.cluster.state.hub_id.clone(),
-        role: s.cluster.state.role.clone(),
-        epoch: s.cluster.state.epoch,
-        writes: s.writes,
+        cluster_id,
+        hub_id,
+        role,
+        epoch,
+        writes,
         cfg_lines,
         cmd_lines,
         max_cmd_seq,
         users_hash,
         notif_hash,
         curve_clients_hash,
-        is_configured_primary: s.cluster.state.is_configured_primary,
-        failback_locked: s.cluster.state.failback_locked,
+        is_configured_primary,
+        failback_locked,
         ts: unix_secs(),
     };
     Json(resp).into_response()
@@ -3343,8 +3363,9 @@ async fn cluster_sync(
         notif_content,
         curve_clients_content,
         total_cfg_lines,
-        total_cmd_lines,
-        max_cmd_seq,
+        // N87-03: If commands are disabled (--commands none), report 0 to avoid truncated batch errors on Standby
+        total_cmd_lines: if cmd_enabled { total_cmd_lines } else { 0 },
+        max_cmd_seq: if cmd_enabled { max_cmd_seq } else { 0 },
     };
     Json(resp).into_response()
 }

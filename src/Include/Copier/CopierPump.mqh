@@ -34,13 +34,15 @@ public:
       long now=CopierNowMs();
       // P2-18 fix: Check latch timeout before extending deadline
       if(m_inFlight && now>m_fastPumpUntil) m_inFlight=false;
+      // N87-09: Capture expired state BEFORE extending deadline so condition is not permanently false
+      bool wasExpired=(now>m_fastPumpUntil);
       int effectiveTimeout=timeoutMs;
       if(effectiveTimeout<=0 || effectiveTimeout>CP_PUMP_TIMEOUT_MS)
          effectiveTimeout=CP_PUMP_TIMEOUT_MS;
       long until=now+effectiveTimeout;
       if(until>m_fastPumpUntil) m_fastPumpUntil=until;
-      // N81-05: Reset burst counter only when re-arming from inactive or expired state
-      if(!m_inFlight || now>m_fastPumpUntil) m_burstCount=0;
+      // N81-05 & N87-09: Reset burst counter only when re-arming from inactive or expired state
+      if(!m_inFlight || wasExpired) m_burstCount=0;
       Trigger();
      }
 

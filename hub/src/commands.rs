@@ -311,6 +311,10 @@ impl CommandStore {
 
     /// Fast memory accessor for (total_lines, max_seq) in command journal for cluster sync (zero disk I/O).
     pub fn sync_stats(&self) -> (usize, u64) {
+        // N87-03: If commands are disabled (--commands none), report (0, 0) for cluster sync
+        if !self.enabled {
+            return (0, 0);
+        }
         let inner = self.inner.lock_or_recover();
         (inner.line_count, inner.max_seq)
     }
@@ -332,15 +336,20 @@ impl CommandStore {
             if trimmed.is_empty() {
                 continue;
             }
+            // N87-01: Count only valid, parseable command lines, matching load()'s count & skipping torn/empty lines
             if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-                if let Some(s) = v["seq"].as_u64() {
-                    max_seq = max_seq.max(s);
+                let id = v["id"].as_str().unwrap_or("");
+                let node = v["node"].as_str().unwrap_or("");
+                if !id.is_empty() && !node.is_empty() {
+                    if let Some(s) = v["seq"].as_u64() {
+                        max_seq = max_seq.max(s);
+                    }
+                    if total >= from_line {
+                        lines.push(trimmed.to_string());
+                    }
+                    total += 1;
                 }
             }
-            if total >= from_line {
-                lines.push(trimmed.to_string());
-            }
-            total += 1;
         }
         Ok((lines, total, max_seq))
     }
@@ -564,16 +573,22 @@ impl CommandStore {
             .filter(|cmd| cmd.node == node && cmd.kind == KIND_CONFIG && cmd.rev < rev && cmd.state == STATE_PENDING)
             .map(|cmd| cmd.id.clone())
             .collect();
+        let mut superseded_snaps = Vec::new();
         for sid in stale_ids {
             inner.in_flight.remove(&sid);
             if let Some(sc) = inner.commands.get_mut(&sid) {
                 sc.state = STATE_SUPERSEDED.to_string();
                 sc.err = format!("superseded by rev {}", rev);
-                let s_snap = sc.clone();
-                inner.append(&s_snap);
+                superseded_snaps.push(sc.clone());
+            }
+        }
+        if !superseded_snaps.is_empty() {
+            if let Err(e) = inner.append_many(&superseded_snaps) {
+                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on batch supersede: {}", e);
             }
         }
 
+        let mut revive_cmd: Option<Command> = None;
         if let Some(c) = inner.commands.get_mut(&id) {
             if c.state == STATE_PENDING {
                 //--- H-01: Only operator-initiated re-issues should pull the retry clock
@@ -621,9 +636,18 @@ impl CommandStore {
             if !ip.is_empty() {
                 c.ip = ip.to_string();
             }
-            let updated = c.clone();
+            revive_cmd = Some(c.clone());
+        }
+
+        if let Some(updated) = revive_cmd {
+            if !inner.append(&updated) {
+                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on revive for {}", id);
+                let mut failed = updated;
+                failed.state = STATE_UNKNOWN.to_string();
+                failed.err = "command journal write failed on revive".to_string();
+                return failed;
+            }
             inner.in_flight.insert(id);
-            inner.append(&updated);
             return updated;
         }
         let c = Command {
@@ -643,9 +667,15 @@ impl CommandStore {
             err: String::new(),
             next_at: Instant::now(),
         };
+        // N87-05: Defend against journal write failure symmetrically with issue_op
+        if !inner.append(&c) {
+            let mut failed = c;
+            failed.state = STATE_UNKNOWN.to_string();
+            failed.err = "command journal write failed - NOT queued".to_string();
+            return failed;
+        }
         inner.in_flight.insert(id.clone());
         inner.commands.insert(id, c.clone());
-        inner.append(&c);
         c
     }
 
@@ -843,7 +873,9 @@ impl CommandStore {
             inner.in_flight.remove(&f);
         }
         //--- ONE fsync for the whole batch instead of one per command
-        let _ = inner.append_many(&changed);
+        if let Err(e) = inner.append_many(&changed) {
+            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED in due_gated: {}", e);
+        }
         out
     }
 
@@ -883,7 +915,9 @@ impl CommandStore {
                 c.clone()
             }
         };
-        inner.append(&updated);
+        if !inner.append(&updated) {
+            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on ACK for {}", id);
+        }
         true
     }
 
@@ -907,7 +941,9 @@ impl CommandStore {
                 c.state = STATE_SUPERSEDED.to_string();
                 c.err = format!("superseded by rev {}", current_rev);
                 let snap = c.clone();
-                inner.append(&snap);
+                if !inner.append(&snap) {
+                    eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on supersede for {}", id);
+                }
             }
         }
     }
@@ -1077,7 +1113,6 @@ fn load(path: &Path) -> io::Result<(HashMap<String, Command>, HashMap<String, u6
         if line.trim().is_empty() {
             continue;
         }
-        line_count += 1;
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(_) => {
@@ -1088,10 +1123,12 @@ fn load(path: &Path) -> io::Result<(HashMap<String, Command>, HashMap<String, u6
             }
         };
         let id = v["id"].as_str().unwrap_or("");
-        if id.is_empty() {
+        let node = v["node"].as_str().unwrap_or("").to_string();
+        if id.is_empty() || node.is_empty() {
             continue;
         }
-        let node = v["node"].as_str().unwrap_or("").to_string();
+        // N87-01: Count only valid, parseable command lines, matching read_lines_from_path and apply_delta_lines
+        line_count += 1;
         let kind = v["kind"].as_str().unwrap_or(KIND_CONFIG).to_string();
         let seqn = v["seq"].as_u64().unwrap_or(0);
         max_seq = max_seq.max(seqn);
@@ -1118,9 +1155,9 @@ fn load(path: &Path) -> io::Result<(HashMap<String, Command>, HashMap<String, u6
             err: v["err"].as_str().unwrap_or("").to_string(),
             next_at: Instant::now(),
         };
-        // P0-03, R60-04, N76-04, N82-05 & N84-01: Journal on disk is sequentially ordered. Later written lines take
-        // precedence over older lines. If a command was revived (unknown/acked -> pending), its ts is
-        // strictly newer so it wins. For identical ts on disk, higher state_rank or equal/higher attempts wins.
+        // P0-03, R60-04, N76-04, N82-05, N84-01 & N87-08: Replicated lines with strictly newer ts take precedence.
+        // For identical ts, higher state_rank wins; for identical ts and state, strictly higher attempts wins,
+        // matching apply_delta_lines symmetrically.
         let should_insert = match commands.get(id) {
             Some(existing) => {
                 if cmd.ts > existing.ts {
@@ -1131,7 +1168,7 @@ fn load(path: &Path) -> io::Result<(HashMap<String, Command>, HashMap<String, u6
                     if rank_new > rank_old {
                         true
                     } else if rank_new == rank_old {
-                        cmd.attempts >= existing.attempts
+                        cmd.attempts > existing.attempts
                     } else {
                         false
                     }
@@ -1672,6 +1709,48 @@ mod tests {
         assert!(res.is_err(), "must propagate journal write error as Err");
         assert!(s.command("cmd-fail-1").is_none(), "failed write must not mutate commands map in memory");
         assert_eq!(s.stats().1, 0, "failed write must not mutate in_flight collection");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// N87-01: Verify torn (unparseable) lines and empty id lines are NOT counted
+    /// in load() line_count or read_lines_from_path() total, ensuring perfect alignment
+    /// between Primary and Standby journal watermarks.
+    #[test]
+    fn test_load_and_read_lines_skip_torn_and_align_line_count() {
+        let p = tmp("torn_align");
+        let valid_line = serde_json::json!({
+            "id": "cmd-valid-1",
+            "node": "receiver:1",
+            "seq": 1,
+            "op": "pause",
+            "args": "",
+            "actor": "op",
+            "note": "",
+            "state": "pending",
+            "attempts": 0,
+            "ts": 1700000000,
+            "err": "",
+            "step": 0
+        }).to_string();
+
+        let torn_line = "{\"id\":\"cmd-incomplete-broken-json...";
+        let empty_id_line = "{\"id\":\"\",\"node\":\"receiver:1\",\"state\":\"pending\"}";
+
+        let file_content = format!("{}\n{}\n{}\n", valid_line, torn_line, empty_id_line);
+        std::fs::write(&p, file_content.as_bytes()).unwrap();
+
+        // 1. load() should report exactly 1 valid line and 1 torn line
+        let (cmds, _seq, torn, line_count, _max_seq) = load(&p).unwrap();
+        assert_eq!(line_count, 1, "only valid command lines should be counted");
+        assert_eq!(torn, 1, "torn line should be counted in torn counter");
+        assert_eq!(cmds.len(), 1);
+
+        // 2. read_lines_from_path() should return total = 1 and only valid_line
+        let (lines, total, _max_s) = CommandStore::read_lines_from_path(&p, 0).unwrap();
+        assert_eq!(total, 1, "total should match load's line_count");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], valid_line);
 
         let _ = std::fs::remove_file(&p);
     }

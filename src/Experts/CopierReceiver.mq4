@@ -3033,7 +3033,21 @@ void ExecuteQueue()
               {
                if(g_desired[base+d].uid==a.uid)
                  {
-                  stillDesired=true;
+                  // N87-04: Verify side, order kind (market vs pending), and that lots haven't been reduced
+                  int expectedSide = g_senderCfg[asi].inverttrades ? -g_desired[base+d].side : g_desired[base+d].side;
+                  if(expectedSide==a.side && g_desired[base+d].kind==a.ordKind)
+                    {
+                     // Check target lots: if sender trimmed volume while queued, drop stale oversized OPEN
+                     double targetLots = ComputeTargetLotsForMirror(asi, g_desired[base+d], a.sym);
+                     if(targetLots > 0.0 && a.lots > targetLots + 0.0001)
+                       {
+                        if(g_once.ShouldEmit("draintrimmed|"+g_sid[asi]+"|"+a.uid))
+                           g_log.Info("queued open "+a.uid+" "+a.sym+" dropped: sender trimmed volume while queued ("
+                                      +DoubleToString(a.lots,2)+" -> "+DoubleToString(targetLots,2)+"); will re-derive.");
+                        break; // stillDesired remains false -> dropped and re-derived next tick
+                       }
+                     stillDesired=true;
+                    }
                   break;
                  }
               }
@@ -3041,7 +3055,7 @@ void ExecuteQueue()
               {
                if(g_once.ShouldEmit("drainundesired|"+g_sid[asi]+"|"+a.uid))
                   g_log.Info("queued open "+a.uid+" "+a.sym+" dropped: sender "+g_sid[asi]
-                             +" no longer holds it (closed/cancelled while open was queued).");
+                             +" no longer holds matching position (closed, flipped, changed kind, or trimmed).");
                ShiftQueue();
                continue;
               }
@@ -4002,6 +4016,25 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          wantTp=CopierEmergencyTp(local.sym,local.side,anchorPx,
                                   g_senderCfg[si].emergencyTPPips,si2,e);
         }
+     }
+
+   // N87-07: Defend against clearing existing protective SL/TP when sender HAS a stop,
+   // but mirror calculation failed to compute a valid level (e.g. invalid entry price / calculation failure).
+   if(feedSl>0.0 && wantSl<=0.0)
+     {
+      wantSl=local.sl;
+      if(g_once.ShouldEmit("slcalcunavail|"+local.uid))
+         g_log.Warn("sender has SL="+DoubleToString(feedSl,si2.digits)
+                    +" but mirror stop calculation returned 0; retaining local protective SL="
+                    +DoubleToString(local.sl,si2.digits)+" to prevent bare position");
+     }
+   if(feedTp>0.0 && wantTp<=0.0)
+     {
+      wantTp=local.tp;
+      if(g_once.ShouldEmit("tpcalcunavail|"+local.uid))
+         g_log.Warn("sender has TP="+DoubleToString(feedTp,si2.digits)
+                    +" but mirror TP calculation returned 0; retaining local TP="
+                    +DoubleToString(local.tp,si2.digits));
      }
 
    //--- clear the broker's minimum distance BEFORE comparing, or a stop
