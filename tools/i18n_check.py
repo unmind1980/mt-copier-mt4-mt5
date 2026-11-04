@@ -97,30 +97,42 @@ def main():
         if not check_locale_file(base_keys, fp):
             all_ok = False
 
-    # Also check dashboard.html built-in I18N_BUILTIN keys
+    # TEST-02: Check dashboard.html built-in I18N_BUILTIN keys & reverse check t("...") usages
     dash_path = os.path.join(repo, "hub", "src", "assets", "dashboard.html")
     if os.path.exists(dash_path):
         print("Checking dashboard.html built-in I18N_BUILTIN...", end=" ")
         dash_content = open(dash_path, "r", encoding="utf-8").read()
-        m = re.search(r"var\s+I18N_BUILTIN\s*=\s*(\{[\s\S]*?\n\s*\};)", dash_content)
-        if m:
-            # Simple JS-to-JSON cleaning
-            raw_js = m.group(1).rstrip(";").strip()
-            # Test key presence
-            missing_en = []
-            missing_zh = []
-            for k in base_keys:
-                if k.startswith("meta."):
-                    continue
-                leaf = k.split(".")[-1]
-                if f'"{leaf}"' not in raw_js:
-                    missing_en.append(k)
-            if missing_en:
-                print(f"WARN: Some keys may be missing in built-in ({len(missing_en)})")
-            else:
-                print("PASS (built-in keys verified)")
+
+        # Reverse check: Extract all t("foo.bar") and data-i18n="foo.bar" from dashboard.html
+        used_keys = set()
+        for match in re.finditer(r'\bt\(\s*["\']([a-zA-Z0-9_\.]+)["\']', dash_content):
+            used_keys.add(match.group(1))
+        for match in re.finditer(r'data-i18n(?:-[a-z]+)?=["\']([a-zA-Z0-9_\.]+)["\']', dash_content):
+            used_keys.add(match.group(1))
+
+        unregistered = [k for k in sorted(used_keys) if k not in base_keys]
+        if unregistered:
+            print(f"\nFAIL: dashboard.html uses undefined i18n keys: {unregistered}")
+            all_ok = False
         else:
-            print("SKIP (could not isolate I18N_BUILTIN)")
+            # Check presence of base_keys in I18N_BUILTIN
+            m = re.search(r"var\s+I18N_BUILTIN\s*=\s*(\{[\s\S]*?\n\s*\};)", dash_content)
+            if m:
+                raw_js = m.group(1).rstrip(";").strip()
+                missing_keys = []
+                for k in base_keys:
+                    if k.startswith("meta."):
+                        continue
+                    leaf = k.split(".")[-1]
+                    if f'"{leaf}"' not in raw_js:
+                        missing_keys.append(k)
+                if missing_keys:
+                    print(f"\nFAIL: Missing keys in dashboard.html I18N_BUILTIN ({len(missing_keys)}): {missing_keys[:5]}")
+                    all_ok = False
+                else:
+                    print(f"PASS (built-in keys verified, {len(used_keys)} HTML references verified)")
+            else:
+                print("SKIP (could not isolate I18N_BUILTIN)")
 
     if all_ok:
         print("\n========================================================")

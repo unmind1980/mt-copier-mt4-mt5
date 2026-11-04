@@ -194,7 +194,9 @@
     "sender_sym_breakdown_title": "各品種持倉分布",
     "sender_th_rel_exposure": "相對風險敞口",
     "sender_flat_title": "發送端目前無持倉",
-    "sender_flat_desc": "發送端帳戶目前空倉，無任何活躍持倉或市場風險敞口。"
+    "sender_flat_desc": "發送端帳戶目前空倉，無任何活躍持倉或市場風險敞口。",
+    "no_orders_filter": "無符合條件的訂單",
+    "no_orders_filter_desc": "目前篩選條件下沒有找到相符的訂單。"
   },
   "notices": {
     "mkt_closed_title": "【週末休市排隊中】訂單 #{ticket} 已排隊待平！",

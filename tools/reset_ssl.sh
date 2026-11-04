@@ -14,8 +14,9 @@ fi
 echo "[1/3] Backing up current configuration to $CFG.bak ..."
 cp -f "$CFG" "$CFG.bak"
 
-echo "[2/3] Disabling TLS/HTTPS in $CFG ..."
+echo "[2/3] Disabling TLS/HTTPS and resetting in_progress in $CFG ..."
 sed -i 's/"enabled"[[:space:]]*:[[:space:]]*true/"enabled": false/g' "$CFG"
+sed -i 's/"in_progress"[[:space:]]*:[[:space:]]*true/"in_progress": false/g' "$CFG"
 
 echo "[3/3] Verification:"
 grep -E '"enabled"[[:space:]]*:' "$CFG" || true

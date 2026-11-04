@@ -1783,6 +1783,30 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
+### 一百零二次演进：ACME 订单轮询规范化、动态独立端口 HTTPS、SSRF 云元数据封堵、持仓即时刷新与全栈深度审计核销 (2026-11-04 22:30；全部闭环)
+
+- **技术落地项**：
+  1. **MQL 客户端持仓与门控优化（MQL-01, MQL-02, MQL-03, MQL-05）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中，当 Web 控制台单笔平仓触发 `g_forcePosReport` 时，在序列化持仓前强制调用一次 `RefreshRisk()` 重新扫描券商账户，杜绝刚平掉的订单在 WebUI 明细表中残留滞后；
+     - 在 `src/Experts/CopierSender.mq4` 的 `RebuildSnapshotPayload` 中移除 `|| SnapshotSeconds<=0`，防止按需快照模式下每次本地脏重建静默修改未广播的快照哈希引发 15 秒后全舰队误报 `BEHIND` 修复风暴；
+     - 在 `CopierAction` 中新增 `openPx` 字段并在 `PushAction` 中记录，修复排队中的市价单开仓价上报为 0.00000 的缺陷；
+     - 将 `WaitForProfitPips` 浮盈门控限定为仅对市价单（`d.kind == CP_ORD_MARKET`）生效，杜绝未成交挂单受虚假浮盈计算干扰；
+  2. **Rust Hub TLS 与 ACME 协议规范化（HUB-01, HUB-02, HUB-05, HUB-06）**：
+     - 在 `hub/src/tls.rs` 中规范 ACME Order 状态轮询：Step 2 创建订单时捕获 Location 头作为 Order URL，Step 4 严格对该 Order URL 进行 POST-as-GET 状态轮询（符合 RFC 8555 §7.4），杜绝向 finalize 端点发送空轮询被拒；
+     - 修复动态启用独立端口 HTTPS 监听缺失：实现 `ensure_dedicated_https_listener`，在启动时及证书签发/导入成功后即刻在后台动态绑定专用端口，且在 `TlsManager::new` 中重置可能残留的 `in_progress=true`，彻底消除 409 死锁；
+     - 引入 `write_secret_atomic` 实现私钥与证书的原子写入并在 Unix 下赋予 `0o600` 权限；公网 IP 探测成功缓存延长至 10 分钟并加 30 秒负缓存；
+  3. **时钟告警、SSRF 防御与命令接口（HUB-03, HUB-04, HUB-07）**：
+     - 在 `hub/src/alerts.rs` 中，仅在时钟漂移告警成功触发或首次记录基准时更新 `last_drift_secs`，杜绝渐进式漂移被持续推高导致漏报；
+     - 在 `hub/src/notifications.rs` 中重构 SSRF 校验：无论 `MTC_ALLOW_LOCAL_WEBHOOK` 是否开启，所有域名必须进行 DNS 解析，且解析出的 IP 必须通过 `check_single_ip` 坚决拦截 `169.254.x.x` 云元数据与链路本地地址；
+     - 在 `hub/src/api.rs` 的 `commands_global` 中对 `args`/`ticket` 增加整数解析支持，与单节点接口保持一致；
+  4. **WebUI 前端与多语言及自动化测试（WEB-01, WEB-02, WEB-03, TEST-01, TEST-02, TEST-03）**：
+     - 修复 `dashboard.html` 切换通知渠道状态时漏传 `lang` 字段导致语言重置的缺陷；
+     - 统一 `I18N_BUILTIN["zh-CN"]` 为规范简体中文，与 `zh-TW.json` 彻底解耦；补齐 `cockpit.no_orders_filter` 等缺失键名；
+     - 在 `tools/hub_tls_test.py` 中基于本地 Mock ACME 服务器打通真实端到端 ACME 证书签发、热重载与真实 HTTPS 访问闭环（16/16 PASS）；
+     - 升级 `tools/i18n_check.py`，反向校验前端 394 处 HTML 实际引用并精确校验内置词典；清理 `tools/_*` 历史调试脚本并加入 `.gitignore`。
+
+---
+
 ## 9. 最终交付状态确认
 
 - **全平台编译矩阵**：
@@ -1792,8 +1816,8 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 - **后端引擎与自动化测试**：
   - Rust Hub Release 构建成功，**162 / 162 单元测试全量 PASS，0 warnings**；
   - 核心 Python 测试套件全部绿灯（覆盖率与断言可审计）：
-    - `hub_tls_test.py`：13 / 13 PASS (已纳入主流水线)
-    - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (已纳入主流水线)
+    - `hub_tls_test.py`：16 / 16 PASS (含端到端 ACME 签发闭环)
+    - `i18n_check.py`：437 / 437 键在 6 种语言环境中全量 PASS (含 394 处 HTML 反向校验)
     - `hub_notifications_test.py`：26 / 26 PASS
     - `hub_config_test.py`：71 / 71 PASS
     - `hub_commands_test.py`：47 / 47 PASS
@@ -1804,7 +1828,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `snapshot_receipt_test.py`：49 / 49 PASS
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损对齐、命令日志有效物理行严格对齐、锁外状态 SHA256 与 ACME 证书生命周期自愈）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞、移动保本止损对齐、命令日志有效物理行严格对齐、锁外状态 SHA256 与 RFC 8555 ACME 闭环）与业务代码实现 100% 吻合。
 
 ---
 

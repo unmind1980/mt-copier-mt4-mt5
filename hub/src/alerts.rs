@@ -365,9 +365,13 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                 if s.alerts.allow(a.kind, &n.key, now, silence::CLOCK_DRIFT) {
                     s.alerts.push(a.clone());
                     fired.push(a);
+                    // HUB-03: Update baseline only when alert actually fires
+                    s.alerts.last_drift_secs.insert(n.key.clone(), cur);
                 }
+            } else if prev.is_none() {
+                // HUB-03: Record initial baseline offset once per node
+                s.alerts.last_drift_secs.insert(n.key.clone(), cur);
             }
-            s.alerts.last_drift_secs.insert(n.key.clone(), cur);
         }
 
         //--- risk: entries the receiver's risk gates are blocking right now.

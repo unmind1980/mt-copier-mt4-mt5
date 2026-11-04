@@ -194,7 +194,9 @@
     "sender_sym_breakdown_title": "Desglose de Posiciones por Símbolo",
     "sender_th_rel_exposure": "Exposición Relativa",
     "sender_flat_title": "No se reportan posiciones abiertas",
-    "sender_flat_desc": "La cuenta emisora está actualmente plana. Sin tickets abiertos ni exposición al riesgo."
+    "sender_flat_desc": "La cuenta emisora está actualmente plana. Sin tickets abiertos ni exposición al riesgo.",
+    "no_orders_filter": "No se encontraron órdenes",
+    "no_orders_filter_desc": "Ninguna posición abierta coincide con los criterios de filtro actuales."
   },
   "notices": {
     "mkt_closed_title": "[Mercado Cerrado · En Cola] ¡Orden #{ticket} en cola de ejecución!",

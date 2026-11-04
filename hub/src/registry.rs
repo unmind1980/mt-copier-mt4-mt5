@@ -105,6 +105,7 @@ pub struct Node {
     /// broken clock, and only the second is alertable.
     pub node_ts: Option<i64>,
     pub drift_secs: Option<i64>,
+    #[allow(dead_code)]
     pub drift_prev_secs: Option<i64>,
     /// M5b on the dashboard: the node's own report of hub-pause (PAUSED= on
     /// its REG/HBT2). A receiver sets it when `closeall` paused it or a

@@ -160,6 +160,8 @@ pub struct Shared {
     pub cluster: crate::cluster::ClusterManager,
     pub writes_allowed: bool,
     pub tls: Arc<crate::tls::TlsManager>,
+    pub http_port: u16,
+    pub tx: Option<tokio::sync::broadcast::Sender<Arc<String>>>,
 }
 
 pub type SharedState = Arc<Mutex<Shared>>;
@@ -201,6 +203,8 @@ impl Shared {
                 std::path::Path::new("."),
                 std::path::Path::new(crate::tls::DEFAULT_TLS_CONFIG_PATH),
             )),
+            http_port: 0,
+            tx: None,
         }
     }
 
@@ -1897,45 +1901,14 @@ pub fn spawn(
                 let tls_mgr = Arc::clone(&st.lock_or_recover().tls);
                 let _ = tls_mgr.reload_from_disk();
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
-
-                // If user selected standard 443 (or custom port distinct from current_port), spawn a dedicated HTTPS listener
-                let (https_port, tls_enabled) = {
-                    let c = tls_mgr.config.lock_or_recover();
-                    (c.https_port, c.enabled)
-                };
-                if tls_enabled && https_port > 0 && https_port != current_port {
-                    let st_https = st.clone();
-                    let tx_https = tx.clone();
-                    let tls_mgr_https = Arc::clone(&tls_mgr);
-                    let app_base_https = router(st_https.clone(), tx_https.clone());
-                    tokio::spawn(async move {
-                        let bind_addr = format!("0.0.0.0:{}", https_port);
-                        match tokio::net::TcpListener::bind(&bind_addr).await {
-                            Ok(l) => {
-                                println!("[hub] TLS: Dedicated HTTPS listener active on https://0.0.0.0:{}", https_port);
-                                loop {
-                                    let (tcp_stream, _) = match l.accept().await {
-                                        Ok(conn) => conn,
-                                        Err(_) => continue,
-                                    };
-                                    let acceptor_opt = tls_mgr_https.acceptor.read_or_recover().clone();
-                                    let app = app_base_https.clone();
-                                    tokio::spawn(async move {
-                                        if let Some(acceptor) = acceptor_opt {
-                                            if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
-                                                crate::tls::serve_stream_with_router(tls_stream, app).await;
-                                            }
-                                        }
-                                        // RUST-BUG-03: Never serve cleartext HTTP on the dedicated HTTPS port
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[hub] TLS: cannot bind dedicated HTTPS listener on {}: {}", bind_addr, e);
-                            }
-                        }
-                    });
+                {
+                    let mut s = st.lock_or_recover();
+                    s.http_port = current_port;
+                    s.tx = Some(tx.clone());
                 }
+
+                // HUB-02: Ensure dedicated HTTPS listener is spawned if enabled on custom port
+                ensure_dedicated_https_listener(&st);
 
                 crate::tls::spawn_auto_renewal_worker(Arc::clone(&tls_mgr));
 
@@ -1990,6 +1963,64 @@ pub fn spawn(
         })
         .map_err(|e| format!("cannot spawn the API thread: {}", e))?;
     Ok(tx_out)
+}
+
+/// HUB-02: Ensure dedicated HTTPS listener is spawned when TLS is active on custom/standard port
+pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
+    let (current_port, tls_mgr, tx) = {
+        let s = st.lock_or_recover();
+        (s.http_port, Arc::clone(&s.tls), s.tx.clone())
+    };
+    let (https_port, tls_enabled) = {
+        let c = tls_mgr.config.lock_or_recover();
+        (c.https_port, c.enabled)
+    };
+    if !tls_enabled || https_port == 0 || https_port == current_port {
+        return;
+    }
+    {
+        let mut active_port = tls_mgr.active_https_port.lock_or_recover();
+        if *active_port == Some(https_port) {
+            return; // Already listening on this port
+        }
+        *active_port = Some(https_port);
+    }
+
+    let st_https = st.clone();
+    let tls_mgr_https = Arc::clone(&tls_mgr);
+    let tx_https = match tx {
+        Some(t) => t,
+        None => return,
+    };
+    let app_base_https = router(st_https, tx_https);
+    tokio::spawn(async move {
+        let bind_addr = format!("0.0.0.0:{}", https_port);
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(l) => {
+                println!("[hub] TLS: Dedicated HTTPS listener active on https://0.0.0.0:{}", https_port);
+                loop {
+                    let (tcp_stream, _) = match l.accept().await {
+                        Ok(conn) => conn,
+                        Err(_) => continue,
+                    };
+                    let acceptor_opt = tls_mgr_https.acceptor.read_or_recover().clone();
+                    let app = app_base_https.clone();
+                    tokio::spawn(async move {
+                        if let Some(acceptor) = acceptor_opt {
+                            if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
+                                crate::tls::serve_stream_with_router(tls_stream, app).await;
+                            }
+                        }
+                    });
+                }
+            }
+            Err(e) => {
+                eprintln!("[hub] TLS: cannot bind dedicated HTTPS listener on {}: {}", bind_addr, e);
+                let mut active_port = tls_mgr_https.active_https_port.lock_or_recover();
+                *active_port = None;
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2636,11 +2667,29 @@ async fn commands_global(
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| body.to_string());
-            let a = v.get("args")
-                .and_then(|x| x.as_str())
-                .or_else(|| v.get("ticket").and_then(|x| x.as_str()))
-                .unwrap_or("")
-                .to_string();
+            // HUB-07: Symmetrize with post_command to parse integer ticket/args
+            let mut a = v.get("args")
+                .map(|x| {
+                    if let Some(s) = x.as_str() {
+                        s.to_string()
+                    } else if let Some(n) = x.as_i64() {
+                        n.to_string()
+                    } else {
+                        x.to_string()
+                    }
+                })
+                .unwrap_or_default();
+            if a.is_empty() {
+                if let Some(t) = v.get("ticket") {
+                    a = if let Some(s) = t.as_str() {
+                        s.to_string()
+                    } else if let Some(n) = t.as_i64() {
+                        n.to_string()
+                    } else {
+                        t.to_string()
+                    };
+                }
+            }
             (o, a)
         } else {
             (body.to_string(), String::new())
@@ -2878,13 +2927,9 @@ struct NotificationUpsertBody {
     enabled: bool,
     #[serde(default = "default_notif_severity")]
     min_severity: String,
-    #[serde(default = "default_notif_lang")]
+    #[serde(default)]
     lang: String,
     config: Value,
-}
-
-fn default_notif_lang() -> String {
-    "zh-CN".to_string()
 }
 
 fn default_notif_enabled() -> bool {
@@ -2992,10 +3037,14 @@ async fn notifications_upsert(
         }
     }
 
+    // WEB-01: Preserve channel's existing language if omitted in request (e.g. toggle active)
     let lang = if !b.lang.trim().is_empty() {
         b.lang.trim().to_string()
+    } else if let Some(l) = b.config.get("lang").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        l.trim().to_string()
     } else {
-        b.config.get("lang").and_then(|v| v.as_str()).unwrap_or("zh-CN").to_string()
+        let store = notif_store.lock_or_recover();
+        store.get(&id).map(|c| c.lang.clone()).unwrap_or_else(|| "zh-CN".to_string())
     };
 
     let ch = NotificationChannel {
@@ -3973,20 +4022,29 @@ async fn tls_configure(
     let mgr_bg = Arc::clone(&tls_mgr);
     let domain_bg = target_domain.clone();
     let email_bg = b.email.clone();
+    let st_bg = st.clone();
     tokio::spawn(async move {
-        let dir_url = if staging {
-            crate::tls::LETS_ENCRYPT_STAGING_DIR
+        let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
+            custom
+        } else if staging {
+            crate::tls::LETS_ENCRYPT_STAGING_DIR.to_string()
         } else {
-            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
+            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR.to_string()
         };
-        let acme = crate::tls::AcmeClient::new(dir_url.to_string());
-        if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email_bg.as_deref()).await {
-            eprintln!("[hub] TLS ERR: Enrollment failed for {}: {}", domain_bg, e);
-            let mut c = mgr_bg.config.lock().unwrap();
-            c.status.in_progress = false;
-            c.status.progress_step = "failed".to_string(); // N84-11
-            c.status.last_error = Some(e);
-            let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+        let acme = crate::tls::AcmeClient::new(dir_url);
+        match acme.enroll_certificate(&mgr_bg, &domain_bg, email_bg.as_deref()).await {
+            Ok(()) => {
+                // HUB-02: Dynamically spawn HTTPS listener on dedicated port once cert is active
+                ensure_dedicated_https_listener(&st_bg);
+            }
+            Err(e) => {
+                eprintln!("[hub] TLS ERR: Enrollment failed for {}: {}", domain_bg, e);
+                let mut c = mgr_bg.config.lock_or_recover();
+                c.status.in_progress = false;
+                c.status.progress_step = "failed".to_string(); // N84-11
+                c.status.last_error = Some(e);
+                let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+            }
         }
     });
 
@@ -4027,6 +4085,8 @@ async fn tls_import(
     match tls_mgr.apply_imported_cert(&b.cert_pem, &b.key_pem, &b.domain, port) {
         Ok(()) => {
             audit.record(&sess.user_id, "", "tls.import", &b.domain, None, None, "ok");
+            // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port
+            ensure_dedicated_https_listener(&st);
             Json(json!({ "ok": true, "message": "Certificate imported and activated." })).into_response()
         }
         Err(e) => (
@@ -4062,6 +4122,8 @@ async fn tls_self_signed(
     match tls_mgr.apply_self_signed(&b.domain, port) {
         Ok(()) => {
             audit.record(&sess.user_id, "", "tls.self_signed", &b.domain, None, None, "ok");
+            // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port
+            ensure_dedicated_https_listener(&st);
             Json(json!({ "ok": true, "message": "Self-signed certificate generated and activated." })).into_response()
         }
         Err(e) => (
@@ -4102,6 +4164,10 @@ async fn tls_disable(
         c.status.cert_valid = false;
         c.status.progress_step = "disabled".to_string();
         let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
+    }
+    {
+        let mut active_port = tls_mgr.active_https_port.lock_or_recover();
+        *active_port = None;
     }
     audit.record(&sess.user_id, "", "tls.disable", "", None, None, "ok");
 

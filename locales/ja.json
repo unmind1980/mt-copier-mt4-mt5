@@ -194,7 +194,9 @@
     "sender_sym_breakdown_title": "銘柄別のポジション内訳",
     "sender_th_rel_exposure": "相対エクスポージャー",
     "sender_flat_title": "オープンポジションはありません",
-    "sender_flat_desc": "送信側口座は現在スクエア（ノーポジ）です。有効なポジションやリスクはありません。"
+    "sender_flat_desc": "送信側口座は現在スクエア（ノーポジ）です。有効なポジションやリスクはありません。",
+    "no_orders_filter": "一致する注文がありません",
+    "no_orders_filter_desc": "現在のフィルター条件に一致するオープンポジションは見つかりませんでした。"
   },
   "notices": {
     "mkt_closed_title": "【市場休止中・待機登録完了】注文 #{ticket} はキューに入りました",

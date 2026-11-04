@@ -1649,11 +1649,10 @@ void RebuildSnapshotPayload()
    dn=valid;
    g_latestSnapPayload=CopierEncodeSnapshot(dense,dn);
    g_latestSnapHash=CopierSnapshotHash(g_latestSnapPayload);
-   // MQL-03: RebuildSnapshotPayload only updates the latest local payload.
-   // Only update g_snapPayload and NoteRecentSnapHash when no snapshot has ever been sent
-   // or periodic broadcast is disabled, preventing unbroadcast local states from crowding out
-   // the broadcast hash in g_recentSnapHashes[4].
-   if(StringLen(g_snapPayload)==0 || StringLen(g_snapHash)==0 || SnapshotSeconds<=0)
+   // MQL-02: Only initialize g_snapPayload and NoteRecentSnapHash when no snapshot has ever been built.
+   // BroadcastSnapshot() updates and broadcasts g_snapPayload and g_snapHash to all receivers.
+   // Do not overwrite g_snapHash without broadcasting, otherwise receivers reporting the broadcast hash will be falsely deemed BEHIND.
+   if(StringLen(g_snapPayload)==0 || StringLen(g_snapHash)==0)
      {
       g_snapPayload=g_latestSnapPayload;
       g_snapHash=g_latestSnapHash;

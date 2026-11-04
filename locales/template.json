@@ -194,7 +194,9 @@
     "sender_sym_breakdown_title": "Positions Breakdown by Symbol",
     "sender_th_rel_exposure": "Relative Exposure",
     "sender_flat_title": "No Open Positions Reported",
-    "sender_flat_desc": "Sender account is currently flat. No active open tickets or market risk exposure."
+    "sender_flat_desc": "Sender account is currently flat. No active open tickets or market risk exposure.",
+    "no_orders_filter": "No Orders Found",
+    "no_orders_filter_desc": "No open positions match the current filter criteria."
   },
   "notices": {
     "mkt_closed_title": "[Market Closed · Queued] Order #{ticket} queued for execution!",

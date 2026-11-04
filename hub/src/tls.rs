@@ -140,12 +140,12 @@ static DETECTED_IP_CACHE: std::sync::Mutex<Option<(Option<String>, Instant)>> =
     std::sync::Mutex::new(None);
 
 /// Query outbound IP probe services with a short timeout to discover the host's public IP.
-/// N83-06 & RUST-OPT-02: Caches positive results for 60s and negative results for 15s to prevent blocking UI/status queries.
+/// N83-06, RUST-OPT-02 & HUB-06: Caches positive results for 600s (10min) and negative results for 30s to prevent blocking UI/status queries.
 pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
     {
         if let Ok(guard) = DETECTED_IP_CACHE.lock() {
             if let Some((ref ip, ref ts)) = *guard {
-                let cache_ttl = if ip.is_some() { 60 } else { 15 };
+                let cache_ttl = if ip.is_some() { 600 } else { 30 };
                 if ts.elapsed() < Duration::from_secs(cache_ttl) {
                     return ip.clone();
                 }
@@ -179,7 +179,7 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
         }
     }
     if let Ok(mut guard) = DETECTED_IP_CACHE.lock() {
-        // Cache positive for 60s, negative for 15s
+        // Cache positive for 600s, negative for 30s
         *guard = Some((detected.clone(), Instant::now()));
     }
     detected
@@ -215,6 +215,34 @@ pub fn save_config(path: &Path, cfg: &TlsConfig) -> io::Result<()> {
     }
 
     crate::cluster::atomic_replace_file(&tmp, path)
+}
+
+/// HUB-05: Write private key or sensitive certificate material atomically with 0o600 permissions.
+pub fn write_secret_atomic(path: &Path, content: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let tmp = format!("{}.tmp.{}", path.display(), std::process::id());
+    let tmp_path = Path::new(&tmp);
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(tmp_path)
+        .map_err(|e| format!("cannot create tmp file {}: {}", tmp_path.display(), e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(tmp_path, fs::Permissions::from_mode(0o600));
+    }
+
+    f.write_all(content).map_err(|e| e.to_string())?;
+    f.flush().map_err(|e| e.to_string())?;
+    f.sync_all().map_err(|e| e.to_string())?;
+    drop(f);
+
+    crate::cluster::atomic_replace_file(tmp_path, path).map_err(|e| e.to_string())
 }
 
 /// Certificate file paths managed by the hub.
@@ -550,18 +578,29 @@ pub struct TlsManager {
     pub acceptor: Arc<RwLock<Option<tokio_native_tls::TlsAcceptor>>>,
     /// In-memory ACME challenge tokens: token -> key_authorization
     pub acme_tokens: Arc<RwLock<HashMap<String, String>>>,
+    /// HUB-02: Currently active dedicated HTTPS listener port
+    pub active_https_port: Arc<Mutex<Option<u16>>>,
 }
 
 impl TlsManager {
     pub fn new(base_dir: &Path, config_path: &Path) -> Self {
         let cert_paths = CertPaths::new(base_dir);
-        let cfg = load_config(config_path);
+        let mut cfg = load_config(config_path);
+        // HUB-02: Clear stale in_progress flag upon startup to prevent permanent 409 deadlock
+        if cfg.status.in_progress {
+            cfg.status.in_progress = false;
+            if cfg.status.progress_step != "ready" && cfg.status.progress_step != "disabled" {
+                cfg.status.progress_step = "interrupted".to_string();
+            }
+            let _ = save_config(config_path, &cfg);
+        }
         TlsManager {
             config: Mutex::new(cfg),
             config_path: config_path.to_path_buf(),
             cert_paths,
             acceptor: Arc::new(RwLock::new(None)),
             acme_tokens: Arc::new(RwLock::new(HashMap::new())),
+            active_https_port: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -585,7 +624,7 @@ impl TlsManager {
 
         let pfx_bytes = pem_to_pkcs12(&cert_pem, &key_pem, "mtc_tls_pass")?;
         // Persist PFX cache file for fast native reload
-        let _ = fs::write(&self.cert_paths.pfx_file, &pfx_bytes);
+        let _ = write_secret_atomic(&self.cert_paths.pfx_file, &pfx_bytes);
 
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
 
@@ -631,9 +670,9 @@ impl TlsManager {
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
 
         self.cert_paths.ensure_dir().map_err(|e| e.to_string())?;
-        fs::write(&self.cert_paths.fullchain_pem, cert_pem).map_err(|e| e.to_string())?;
-        fs::write(&self.cert_paths.privkey_pem, key_pem).map_err(|e| e.to_string())?;
-        let _ = fs::write(&self.cert_paths.pfx_file, &pfx_bytes);
+        write_secret_atomic(&self.cert_paths.fullchain_pem, cert_pem.as_bytes())?;
+        write_secret_atomic(&self.cert_paths.privkey_pem, key_pem.as_bytes())?;
+        let _ = write_secret_atomic(&self.cert_paths.pfx_file, &pfx_bytes);
 
         {
             let mut acc = self.acceptor.write_or_recover();
@@ -672,9 +711,9 @@ impl TlsManager {
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
 
         self.cert_paths.ensure_dir().map_err(|e| e.to_string())?;
-        fs::write(&self.cert_paths.fullchain_pem, &cert_pem).map_err(|e| e.to_string())?;
-        fs::write(&self.cert_paths.privkey_pem, &key_pem).map_err(|e| e.to_string())?;
-        let _ = fs::write(&self.cert_paths.pfx_file, &pfx_bytes);
+        write_secret_atomic(&self.cert_paths.fullchain_pem, cert_pem.as_bytes())?;
+        write_secret_atomic(&self.cert_paths.privkey_pem, key_pem.as_bytes())?;
+        let _ = write_secret_atomic(&self.cert_paths.pfx_file, &pfx_bytes);
 
         {
             let mut acc = self.acceptor.write_or_recover();
@@ -1018,10 +1057,7 @@ impl AcmeClient {
                 "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
                 b64_key.chars().collect::<Vec<_>>().chunks(64).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
             );
-            if let Some(p) = key_path.parent() {
-                let _ = fs::create_dir_all(p);
-            }
-            let _ = fs::write(key_path, key_pem);
+            let _ = write_secret_atomic(key_path, key_pem.as_bytes());
         }
         Ok(SigningKey::from(&sec_key))
     }
@@ -1184,6 +1220,14 @@ impl AcmeClient {
             .await?;
         nonce = next_nonce;
 
+        // HUB-01: Capture Order Location URL for RFC 8555 status polling
+        let order_location_url = order_res
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
         let order_data = order_res
             .json::<serde_json::Value>()
             .await
@@ -1324,13 +1368,24 @@ impl AcmeClient {
             .await?;
         nonce = next_nonce;
 
+        let fin_loc = finalize_res
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let mut order_obj = finalize_res
             .json::<serde_json::Value>()
             .await
             .map_err(|e| format!("Failed to parse finalize response: {}", e))?;
 
-        // Poll order until status is valid
-        let order_poll_url = order_obj["finalize"].as_str().unwrap_or(&finalize_url).to_string();
+        // Poll order until status is valid.
+        // HUB-01: Poll the Order URL (from newOrder Location header) per RFC 8555, NOT the finalize URL
+        let order_poll_url = if !order_location_url.is_empty() {
+            order_location_url
+        } else {
+            fin_loc.unwrap_or(finalize_url)
+        };
         for _ in 0..15 {
             if order_obj["status"].as_str() == Some("valid") {
                 break;
@@ -1376,10 +1431,10 @@ impl AcmeClient {
             site_b64.chars().collect::<Vec<_>>().chunks(64).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
         );
 
-        // Save certificate files to data/certs
+        // HUB-05: Atomically save certificate files with 0o600 permissions
         tls_mgr.cert_paths.ensure_dir().map_err(|e| e.to_string())?;
-        fs::write(&tls_mgr.cert_paths.fullchain_pem, &cert_pem).map_err(|e| e.to_string())?;
-        fs::write(&tls_mgr.cert_paths.privkey_pem, &site_key_pem).map_err(|e| e.to_string())?;
+        write_secret_atomic(&tls_mgr.cert_paths.fullchain_pem, cert_pem.as_bytes())?;
+        write_secret_atomic(&tls_mgr.cert_paths.privkey_pem, site_key_pem.as_bytes())?;
 
         // Step 6: Mark enabled and reload into active acceptor
         {

@@ -645,6 +645,7 @@ struct CopierAction
    double pprice;
    double pstop;
    long   pexpire;
+   double openPx;        // MQL-03: Sender's entry price for market orders or reporting
    string key;           // the dedup key this action was admitted under, so
                          // the seen-ring records the SAME key PushAction
                          // tested (TRIM keys carry the target volume, MODIFY
@@ -2684,7 +2685,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
                 const double sl=0.0,const double tp=0.0,
                 const int ordKind=CP_ORD_MARKET,const int ptype=0,
                 const double pprice=0.0,const double pstop=0.0,
-                const long pexpire=0)
+                const long pexpire=0,const double openPx=0.0)
   {
    //--- keyExtra distinguishes actions that share a kind and a UID but are
    //--- genuinely different, e.g. two successive partial closes to two
@@ -2759,6 +2760,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    g_q[t].pprice=pprice;
    g_q[t].pstop=pstop;
    g_q[t].pexpire=pexpire;
+   g_q[t].openPx=openPx;
    g_q[t].key=key;
    g_qn++;
    return true;
@@ -4706,11 +4708,13 @@ string EncodeReceiverWaitList()
      {
       if(g_q[g_qHead+i].kind!=CP_ACT_OPEN) continue;
       if(count>0) sb.Add(CP_SEP_REC);
+      // MQL-03: Use sender openPx for market orders, fallback to pprice for pending orders
+      double qPx=(g_q[g_qHead+i].openPx>0.0)?g_q[g_qHead+i].openPx:g_q[g_qHead+i].pprice;
       string rec=g_q[g_qHead+i].uid+CP_SEP_ITEM
                  +g_q[g_qHead+i].sym+CP_SEP_ITEM
                  +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
                  +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
-                 +CopierFmtDouble(MathMax(0.0,g_q[g_qHead+i].pprice),5)+CP_SEP_ITEM
+                 +CopierFmtDouble(MathMax(0.0,qPx),5)+CP_SEP_ITEM
                  +"queued"+CP_SEP_ITEM
                  +"Queued in broker dispatch";
       sb.Add(rec);
@@ -5515,7 +5519,8 @@ void ConvergeSender(const int si)
            }
         }
 
-      if(g_senderCfg[si].waitforprofitpips!=0.0 && d.openPx>0.0)
+      // MQL-05: Profit/pullback gating only applies to active market positions, not pending orders
+      if(d.kind==CP_ORD_MARKET && g_senderCfg[si].waitforprofitpips!=0.0 && d.openPx>0.0)
         {
          CopierSymInfo pi;
          if(CopierGetSymbolInfo(rsym,pi))
@@ -5650,7 +5655,7 @@ void ConvergeSender(const int si)
 
       bool queued=PushAction(si,CP_ACT_OPEN,d.uid,rsym,d.side,lots,0,d.ticket,
                              ":"+(string)d.kind,osl,otp,
-                             d.kind,d.ptype,d.pprice,d.pstop,d.pexpire);
+                             d.kind,d.ptype,d.pprice,d.pstop,d.pexpire,d.openPx);
       if(queued)
         {
          pendCount++;
@@ -8532,6 +8537,8 @@ void OnTimer()
             //--- or on-demand when requested by WebUI (g_forcePosReport) in Hub mode
             if(dueDetail && g_hubOn)
               {
+               // MQL-01: Re-scan live account positions if forced report was requested (e.g. after CMD close)
+               if(g_forcePosReport) RefreshRisk();
                string posEnc=EncodeReceiverPositions();
                string waitEnc=EncodeReceiverWaitList();
                st+=CP_SEP_KV+"POS="+posEnc

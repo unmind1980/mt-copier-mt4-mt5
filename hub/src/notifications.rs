@@ -1070,23 +1070,25 @@ async fn send_telegram(
     }
 }
 
-fn check_single_ip(ip: std::net::IpAddr) -> Result<(), String> {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return Err("URL points to prohibited loopback or unspecified IP".to_string());
-    }
+fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String> {
+    // 1. Prohibit link-local and cloud metadata addresses under ALL conditions (even if allow_local is true)
     match ip {
         std::net::IpAddr::V4(v4) => {
             let oct = v4.octets();
-            if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
-                || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
-                || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
-                return Err("URL points to prohibited private, CGNAT, or reserved IPv4".to_string());
+            // 169.254.0.0/16 (link-local, AWS/GCP/Alibaba IMDS 169.254.169.254)
+            // 100.100.100.200 (Tencent Cloud metadata)
+            if v4.is_link_local()
+                || (oct[0] == 169 && oct[1] == 254)
+                || (oct[0] == 100 && oct[1] == 100 && oct[2] == 100 && oct[3] == 200)
+            {
+                return Err("URL points to prohibited cloud metadata or link-local IPv4".to_string());
             }
         }
         std::net::IpAddr::V6(v6) => {
             let segs = v6.segments();
-            if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xffc0) == 0xfe80 {
-                return Err("URL points to prohibited private or link-local IPv6".to_string());
+            // fe80::/10 link-local or fd00:ec2::254 (AWS IMDS IPv6)
+            if (segs[0] & 0xffc0) == 0xfe80 || (segs[0] == 0xfd00 && segs[1] == 0xec2 && segs[7] == 0x254) {
+                return Err("URL points to prohibited cloud metadata or link-local IPv6".to_string());
             }
             if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
                 let v4 = std::net::Ipv4Addr::new(
@@ -1096,7 +1098,47 @@ fn check_single_ip(ip: std::net::IpAddr) -> Result<(), String> {
                     (segs[7] & 0xff) as u8,
                 );
                 let oct = v4.octets();
-                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                if v4.is_link_local()
+                    || (oct[0] == 169 && oct[1] == 254)
+                    || (oct[0] == 100 && oct[1] == 100 && oct[2] == 100 && oct[3] == 200)
+                {
+                    return Err("URL points to prohibited cloud metadata or link-local IPv4".to_string());
+                }
+            }
+        }
+    }
+
+    if allow_local {
+        return Ok(());
+    }
+
+    // 2. Prohibit loopback, private networks, and reserved ranges when allow_local is false
+    if ip.is_loopback() || ip.is_unspecified() {
+        return Err("URL points to prohibited loopback or unspecified IP".to_string());
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let oct = v4.octets();
+            if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
+                || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+                || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                return Err("URL points to prohibited private, CGNAT, or reserved IPv4".to_string());
+            }
+        }
+        std::net::IpAddr::V6(v6) => {
+            let segs = v6.segments();
+            if (segs[0] & 0xfe00) == 0xfc00 {
+                return Err("URL points to prohibited private IPv6".to_string());
+            }
+            if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
+                let v4 = std::net::Ipv4Addr::new(
+                    (segs[6] >> 8) as u8,
+                    (segs[6] & 0xff) as u8,
+                    (segs[7] >> 8) as u8,
+                    (segs[7] & 0xff) as u8,
+                );
+                let oct = v4.octets();
+                if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
                     || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
                     || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
                     return Err("URL points to prohibited IPv4-mapped private or loopback".to_string());
@@ -1123,6 +1165,7 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
     let host = host_raw.trim_start_matches('[').trim_end_matches(']');
 
     let host_lower = host.to_ascii_lowercase();
+    // Prohibit link-local and cloud metadata under ALL conditions
     if host_lower.starts_with("169.254.")
         || host_lower == "metadata.google.internal"
         || host_lower == "fd00:ec2::254"
@@ -1161,21 +1204,21 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
         {
             return Err("URL points to prohibited private network address".to_string());
         }
-
-        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            check_single_ip(ip)?;
-            return Ok(None);
-        }
-
-        return Ok(Some(host.to_string()));
     }
 
-    Ok(None)
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        check_single_ip(ip, allow_local)?;
+        return Ok(None);
+    }
+
+    // HUB-04: Always return Some(host) for hostnames, ensuring DNS resolution and IP verification against cloud metadata
+    Ok(Some(host.to_string()))
 }
 
 
 pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     if let Some(host) = check_url_base(url)? {
+        let allow_local = std::env::var("MTC_ALLOW_LOCAL_WEBHOOK").is_ok();
         let parsed_url = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
         let port = parsed_url.port_or_known_default().unwrap_or(80);
         let lookup_target = format!("{}:{}", host, port);
@@ -1190,7 +1233,7 @@ pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
             Ok(Ok(mut addrs)) => {
                 let mut found = false;
                 while let Some(addr) = addrs.next() {
-                    check_single_ip(addr.ip())?;
+                    check_single_ip(addr.ip(), allow_local)?;
                     found = true;
                 }
                 if !found {
@@ -1212,6 +1255,7 @@ pub(crate) async fn resolve_pinned_client(
     url_str: &str,
 ) -> Result<reqwest::Client, String> {
     if let Some(host) = check_url_base(url_str)? {
+        let allow_local = std::env::var("MTC_ALLOW_LOCAL_WEBHOOK").is_ok();
         let parsed_url = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
         let port = parsed_url.port_or_known_default().unwrap_or(80);
         let lookup_target = format!("{}:{}", host, port);
@@ -1227,7 +1271,7 @@ pub(crate) async fn resolve_pinned_client(
         match lookup {
             Ok(Ok(mut it)) => {
                 while let Some(addr) = it.next() {
-                    check_single_ip(addr.ip())?;
+                    check_single_ip(addr.ip(), allow_local)?;
                     addrs.push(addr);
                 }
             }
@@ -1961,8 +2005,12 @@ mod tests {
 
     #[tokio::test]
     async fn validate_outgoing_url_ssrf_protection() {
-        // Disallow metadata and link-local
+        // HUB-04: Even when MTC_ALLOW_LOCAL_WEBHOOK=1, cloud metadata (169.254.x.x) is strictly blocked
+        std::env::set_var("MTC_ALLOW_LOCAL_WEBHOOK", "1");
         assert!(validate_outgoing_url("http://169.254.169.254/latest/meta-data").await.is_err());
+        assert!(validate_outgoing_url("http://100.100.100.200/latest/meta-data").await.is_err());
+        assert!(validate_outgoing_url("http://127.0.0.1:8080/hook").await.is_ok());
+        std::env::remove_var("MTC_ALLOW_LOCAL_WEBHOOK");
         assert!(validate_outgoing_url("http://metadata.google.internal/computeMetadata/v1").await.is_err());
         assert!(validate_outgoing_url("http://[fe80::1]:8080/hook").await.is_err());
         // Disallow loopback and private networks by default

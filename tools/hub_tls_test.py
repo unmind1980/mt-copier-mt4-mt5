@@ -12,6 +12,7 @@ Verifies:
   7. End-to-end ACME HTTP-01 challenge completion with local mock ACME RFC 8555 server.
   8. Fail-safe reset script execution (tools/reset_ssl.sh).
 """
+import base64
 import http.client
 import http.server
 import json
@@ -46,6 +47,9 @@ def check(name, ok, detail=""):
 # ---------------------------------------------------------------------------
 class MockAcmeHandler(http.server.BaseHTTPRequestHandler):
     nonce_counter = 1000
+    ca_key_path = None
+    ca_crt_path = None
+    issued_cert_pem = None
 
     def log_message(self, format, *args):
         pass  # Quiet logging
@@ -78,29 +82,20 @@ class MockAcmeHandler(http.server.BaseHTTPRequestHandler):
                 "newOrder": f"http://127.0.0.1:{ACME_PORT}/newOrder",
             })
         elif self.path == "/cert":
-            # Generate a minimal valid PEM certificate chain
-            MockAcmeHandler.nonce_counter += 1
-            sample_cert = (
-                "-----BEGIN CERTIFICATE-----\n"
-                "MIIBkzCCATagAwIBAgIUQz1j34Z9oK8wz5b7X6Z5Z5Z5Z5YwDAYIKoZIzj0EAwIF\n"
-                "ADAPMQ0wCwYDVQQDDAR0ZXN0MB4XDTI0MDEwMTAwMDAwMFoXDTI1MDEwMTAwMDAw\n"
-                "MFowDzENMAsGA1UEAwwEdGVzdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMVV\n"
-                "Xv6w0N1dFf9O+0c+YxQd0Jp5u8uY9b+3sT6wQ0d5h4vY8w0d5h4vY8w0d5h4vY8w\n"
-                "0d5h4vY8w0d5h4vY86NFMEMwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUYx5a\n"
-                "5u8uY9b+3sT6wQ0d5h4vY8wwDAYIKoZIzj0EAwIFAANJADBGAiEA2k7uX1x0d5h4\n"
-                "vY8w0d5h4vY8w0d5h4vY8w0d5h4vY8wCIQC2k7uX1x0d5h4vY8w0d5h4vY8w0d5h\n"
-                "4vY8w0d5h4vY8w==\n"
-                "-----END CERTIFICATE-----\n"
-            ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/pem-certificate-chain")
-            self.send_header("Replay-Nonce", f"nonce-{MockAcmeHandler.nonce_counter}")
-            self.send_header("Content-Length", str(len(sample_cert)))
-            self.end_headers()
-            self.wfile.write(sample_cert)
+            self.handle_cert_download()
         else:
             self.send_response(404)
             self.end_headers()
+
+    def handle_cert_download(self):
+        MockAcmeHandler.nonce_counter += 1
+        cert_data = MockAcmeHandler.issued_cert_pem or b""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pem-certificate-chain")
+        self.send_header("Replay-Nonce", f"nonce-{MockAcmeHandler.nonce_counter}")
+        self.send_header("Content-Length", str(len(cert_data)))
+        self.end_headers()
+        self.wfile.write(cert_data)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -137,17 +132,61 @@ class MockAcmeHandler(http.server.BaseHTTPRequestHandler):
                 "token": "mock-token-xyz-123456",
             })
 
-        elif self.path == "/finalize/1":
+        elif self.path == "/order/1":
+            # HUB-01: Order status polling endpoint (RFC 8555)
             self.send_acme_json(200, {
                 "status": "valid",
                 "certificate": f"http://127.0.0.1:{ACME_PORT}/cert",
             })
+
+        elif self.path == "/finalize/1":
+            # TEST-01: Extract CSR from JWS payload and dynamically sign matching cert with CA key
+            try:
+                payload_b64 = jws.get("payload", "")
+                if payload_b64:
+                    pad = len(payload_b64) % 4
+                    if pad: payload_b64 += "=" * (4 - pad)
+                    payload_json = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+                    csr_b64 = payload_json.get("csr", "")
+                    if csr_b64 and MockAcmeHandler.ca_key_path and MockAcmeHandler.ca_crt_path:
+                        pad_c = len(csr_b64) % 4
+                        if pad_c: csr_b64 += "=" * (4 - pad_c)
+                        csr_der = base64.urlsafe_b64decode(csr_b64)
+                        with tempfile.NamedTemporaryFile(suffix=".der", delete=False) as f_csr:
+                            f_csr.write(csr_der)
+                            csr_tmp = f_csr.name
+                        cert_tmp = csr_tmp + ".crt"
+                        res = subprocess.run([
+                            "openssl", "x509", "-req", "-in", csr_tmp, "-inform", "der",
+                            "-CA", MockAcmeHandler.ca_crt_path, "-CAkey", MockAcmeHandler.ca_key_path,
+                            "-CAcreateserial", "-days", "90", "-out", cert_tmp
+                        ], capture_output=True)
+                        if res.returncode == 0 and os.path.exists(cert_tmp):
+                            with open(cert_tmp, "rb") as fc:
+                                MockAcmeHandler.issued_cert_pem = fc.read()
+                            try: os.remove(cert_tmp)
+                            except: pass
+                        try: os.remove(csr_tmp)
+                        except: pass
+            except Exception as e:
+                pass
+
+            self.send_acme_json(200, {
+                "status": "valid",
+                "certificate": f"http://127.0.0.1:{ACME_PORT}/cert",
+            }, {"Location": f"http://127.0.0.1:{ACME_PORT}/order/1"})
+
+        elif self.path == "/cert":
+            self.handle_cert_download()
+
         else:
             self.send_response(404)
             self.end_headers()
 
 
-def run_mock_acme_server(port):
+def run_mock_acme_server(port, ca_key_path=None, ca_crt_path=None):
+    MockAcmeHandler.ca_key_path = ca_key_path
+    MockAcmeHandler.ca_crt_path = ca_crt_path
     server = http.server.HTTPServer(("127.0.0.1", port), MockAcmeHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -168,11 +207,17 @@ def main():
     if os.path.exists(zmq_dll):
         shutil.copy(zmq_dll, os.path.join(work_dir, "libzmq.dll"))
 
-    mock_acme = run_mock_acme_server(ACME_PORT)
+    # Generate a lightweight EC CA key and certificate for local Mock ACME signing
+    ca_key = os.path.join(work_dir, "mock_ca.key")
+    ca_crt = os.path.join(work_dir, "mock_ca.crt")
+    subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key], check=True)
+    subprocess.run(["openssl", "req", "-new", "-x509", "-key", ca_key, "-out", ca_crt, "-subj", "/CN=MockACME_CA", "-days", "365"], check=True)
+    mock_acme = run_mock_acme_server(ACME_PORT, ca_key, ca_crt)
 
     env = os.environ.copy()
     env["MTC_ADMIN_PASSWORD"] = "test-admin-pass-123"
     env["RUST_BACKTRACE"] = "1"
+    env["MTC_ACME_DIR_URL"] = f"http://127.0.0.1:{ACME_PORT}/directory"
 
     proc = subprocess.Popen(
         [
@@ -325,17 +370,63 @@ def main():
         plain_res = plain_conn.getresponse()
         check("11. Hub seamlessly reverted to plain HTTP on the same port", plain_res.status == 200)
 
-        # 7. Test Emergency Reset Script (tools/reset_ssl.sh)
+        # 7. TEST-01: End-to-end ACME Enrollment via Mock ACME RFC 8555 Server
+        st_acme, acme_data, _ = http_req(
+            "/api/v1/tls/configure",
+            method="POST",
+            body={
+                "mode": "custom_domain",
+                "domain": "test.sslip.io",
+                "https_port": HTTP_PORT,
+            },
+            cookie_str=cookie,
+        )
+        check("12. POST /api/v1/tls/configure initiates ACME enrollment", st_acme == 202 and bool(acme_data and acme_data.get("accepted")))
+
+        # Poll status until cert_valid is true (hub seamlessly switches to HTTPS on the port)
+        acme_ok = False
+        for _ in range(20):
+            time.sleep(0.5)
+            stat_now = None
+            try:
+                _, stat_now, _ = http_req("/api/v1/tls/status", cookie_str=cookie)
+            except Exception:
+                try:
+                    https_stat_req = urllib.request.Request(
+                        f"https://127.0.0.1:{HTTP_PORT}/api/v1/tls/status",
+                        headers={"Cookie": cookie},
+                    )
+                    with urllib.request.urlopen(https_stat_req, context=ctx, timeout=2.0) as resp:
+                        stat_now = json.loads(resp.read().decode("utf-8"))
+                except Exception:
+                    pass
+            if stat_now and stat_now.get("config", {}).get("status", {}).get("in_progress") is False:
+                if stat_now.get("config", {}).get("status", {}).get("cert_valid") is True:
+                    acme_ok = True
+                    break
+        check("13. ACME certificate issued and activated by mock ACME server", acme_ok)
+
+        # Allow acceptor transition and verify real HTTPS request with newly issued ACME cert
+        time.sleep(0.5)
+        https_acme_req = urllib.request.Request(
+            f"https://127.0.0.1:{HTTP_PORT}/api/v1/whoami",
+            headers={"Cookie": cookie},
+        )
+        with urllib.request.urlopen(https_acme_req, context=ctx, timeout=3.0) as resp:
+            acme_whoami = json.loads(resp.read().decode("utf-8"))
+            check("14. ACME-issued HTTPS endpoint answers 200 OK", resp.status == 200 and acme_whoami.get("user") == "admin")
+
+        # 8. Test Emergency Reset Script (tools/reset_ssl.sh)
         cfg_file = os.path.join(work_dir, "tls_config.json")
         with open(cfg_file, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"enabled": True, "mode": "auto", "domain": "test.sslip.io"}))
+            f.write(json.dumps({"enabled": True, "in_progress": True, "mode": "auto", "domain": "test.sslip.io"}))
 
         script_sh = os.path.join(REPO, "tools", "reset_ssl.sh")
         script_res = subprocess.run(["bash", script_sh], cwd=work_dir, capture_output=True, text=True)
-        check("12. Emergency reset script runs successfully", script_res.returncode == 0)
+        check("15. Emergency reset script runs successfully", script_res.returncode == 0)
         with open(cfg_file, "r", encoding="utf-8") as f:
             reset_cfg = json.loads(f.read())
-            check("13. Reset script cleanly turned enabled flag to false", reset_cfg.get("enabled") is False)
+            check("16. Reset script cleanly turned enabled flag to false", reset_cfg.get("enabled") is False)
 
     finally:
         proc.terminate()
