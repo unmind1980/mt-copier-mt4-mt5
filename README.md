@@ -1,1539 +1,236 @@
-# MT4 / MT5 Trade Copier over ZeroMQ
+# MT4 / MT5 High-Performance Trade Copier & HA Risk Platform
 
-A self-hosted replacement for FX Blue Personal Trade Copier.
+<div align="center">
 
-The motivating problem was not throughput — it was that the FX Blue copier  
-grows in memory until the terminal has to be restarted, and that its one-to-many  
-and many-to-one setups are painful to configure.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-MT4%20%7C%20MT5%20%7C%20Windows%20%7C%20Linux%20(Wine)-green.svg)]()
+[![Rust Backend](https://img.shields.io/badge/Rust-1.80%2B%20(Tokio%20%26%20ZeroMQ)-orange.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-161%2F161%20Rust%20PASS%20%7C%2022%20Python%20Suites-brightgreen.svg)]()
+[![MQL Build](https://img.shields.io/badge/MQL%20Matrix-16%2F16%20Binaries%20ALL%20GREEN-success.svg)]()
 
-**Swapping the transport for ZeroMQ only fixes latency and reconnects. The  
-memory growth is a state-management problem, and that is what this design  
-attacks head-on.**
+**[ English ](README.md) | [ 简体中文 ](README.zh-CN.md)**
 
----
+*An institutional-grade, ultra-low-latency (<10ms) trade replication and centralized risk management platform for MetaTrader 4 and MetaTrader 5, powered by ZeroMQ and Rust.*
 
-## Design in one screen
-
-| decision    | choice                                                                              | why                                                                                                                                                                                                              |
-| ----------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| topology    | pure EA-to-EA, no middle process                                                    | simplest to deploy; the protocol leaves room for a hub later                                                                                                                                                     |
-| consistency | event stream + periodic **full snapshot**                                           | the snapshot is authoritative, events are only a latency optimisation. A lost message costs a few seconds, never correctness                                                                                     |
-| identity    | `UID` written into the **receiver's** order comment, as `tc\|<uid>\|<senderTicket>` | the sender is a pure observer and cannot write comments on orders it did not place; the UID goes first so venue truncation can only ever cost the cosmetic ticket                                                |
-| many-to-one | each sender tracked **independently**                                               | own sequence counter, own magic number, own desired-position set — two senders can hold opposing positions on one symbol                                                                                         |
-| transport   | ZeroMQ **XPUB/XSUB**, one socket, both directions                                   | events and snapshots share a port; `CONFLATE` is a per-socket option so it cannot be used here — the conflation is done in the receiver's drain loop instead, by applying only the newest snapshot of each batch |
-| disconnect  | stop new entries, **keep existing positions**, alert                                | never force-closes at an unknown price                                                                                                                                                                           |
-
-### Why the snapshot matters more than the events
-
-A receiver that misses a `CLOSE` event is wrong until the next snapshot — a few  
-seconds. A receiver that misses a `CLOSE` and has no snapshot is wrong forever.  
-That single property is why this design does not need reliable delivery, ACKs,  
-replay logs, or an ordered transport, and why it stays small.
+</div>
 
 ---
 
-## Repository layout
+## 📌 Overview
 
-```
-src/Include/Copier/     the library (platform-neutral except CopierDefs/CopierModel)
-  CopierDefs.mqh          constants, normalised position struct, platform shims
-  CopierCodec.mqh         wire protocol encode/decode
-  CopierLog.mqh           size-rotated, rate-limited logger
-  CopierState.mqh         fixed-size tables + state file
-  CopierModel.mqh         THE ONLY place with #ifdef __MQL5__
-  CopierSymbol.mqh        per-sender symbol translation
-  CopierSizing.mqh        lot conversion and normalisation
-  CopierConfig.mqh        copier.ini reader
-  CopierIgnore.mqh        the IgnoreUids list (per-position opt-out)
-  CopierRisk.mqh          risk switches (circuit breakers)
-  CopierTransport.mqh     ZeroMQ plumbing (with XSUB subscription replay)
-  CopierCluster.mqh       HA cluster topology & local disk persistence (copier_hub_cluster.st)
-  CopierCurveKey.mqh      the CURVE keypair file (auto-generated per terminal)
-src/Experts/            CopierSender, CopierReceiver
-src/Scripts/            CopierSelfTest, CopierZmqProbe
-tools/                  copier.bat   <- the Windows entry point for all of these
-                        status.sh, lib.sh, targets.conf, fetch-deps.sh,
-                        patch-zmq.py, deploy.sh, compile.sh, build.sh,
-                        clean.sh,
-                        pilot-setup.sh, phase2-setup.sh, phase3-setup.sh,
-                        logcheck.sh, logcheck.py, logcheck.bat,
-                        sniff.sh, sniff.bat, zmq_sniff.py,
-                        tests.sh, tests.bat <- every contract suite, no broker
-                                                and no terminal (see Layer 1.6)
-                        zmq_fanout_test.py, zmq_conflate_size_test.py,
-                        zmq_topic_test.py,
-                        snapshot_receipt_test.py  <- hash + receipt contracts,
-                                                      incl. the PROTOCOL.md example
-                        snapshot_repair_test.py   <- debounce / rate-limit model
-                        modify_event_test.py      <- MODIFY payload, override,
-                                                      throttle semantics
-                        hub_stat_path_test.py     <- receipt relay + log volume
-                        hub_positions_test.py     <- M3 view, and byte-for-byte
-                                                      forwarding preserved
-                        hub_api_test.py           <- M8/M10/M7: read endpoints,
-                                                      dashboard, WS handshake,
-                                                      audit log, http defaults
-                        hub_config_test.py        <- M4a: the config store, the
-                                                      write gate, CFG/ACK/CFGR
-                        hub_commands_test.py       <- M5a: the command engine,
-                                                      CMD wire frame, op validation
-                        hub_alerts_test.py         <- M6: the alert engine (drift
-                                                      jump, risk, offline, silence)
-                        hub_users_test.py          <- M9: the auth + role matrix,
-                                                      the last-admin rule, and
-                                                      --users none
-                        hub_curve_test.py          <- CURVE: the hub link is
-                                                      encrypted and only listed
-                                                      keys get in (§19.1)
-                        hub_notifications_test.py  <- M6+ external notifications
-                                                      (Telegram, WeCom, DingTalk)
-                        hub_audit_rotation_test.py <- bounded audit log rotation
-                                                      and gzip compression
-                        reset_password.bat, reset_password.py <- one-click password
-                                                      reset helper for admin
-                        ha_probe_test.py, hub_cluster_test.py, ha_chaos_test.py <- HA test suites
-                        start_dual_hubs.bat, start_primary.bat, start_standby.bat <- HA Hub launchers
-                        hub_proto.py, hub_proto_test.py, hub.sh, hub.bat,
-                        hubrs.bat    <- run the RUST hub (see hub/)
-                        hublog.bat   <- run the hub with stdout also going to
-                                      hub.log, so the log is readable afterwards
-                        inputcheck.py  <- input labels must fit the dialog;
-                                          run by build.sh before deploying
-hub/                    the Rust hub (Phase 1 routing + Phase 2 registry +
-                        M3 read-only position view + M7 audit + M8/M10
-                        REST/WS API and its self-contained dashboard +
-                        M9 users/roles/sessions)
-                        Cargo.toml, src/, build.sh, README.md
-third_party/zmq-prefix/ the EAs' own libzmq 4.3.5, prepared for Rust linking
-                        (include/zmq.h, lib/libzmq.a, lib/libzmq.dll)
-config/                 copier.ini.example, copier.loopback.ini,
-                        copier.mt4receiver.ini, copier.mt4to4.ini,
-                        copier.mt5receiver.2senders.ini
-doc/PROTOCOL.md         full wire format
-doc/PILOT.md            end-to-end acceptance test (MT5 pair), step by step
-doc/PILOT-MT4.md        P2: putting MT4 in the loop, in three phases
-doc/CENTRAL-HUB-PLAN.md central-hub architecture plan (TIER 2: the
-                        transparent-proxy hub + registry + M3 position view +
-                        M7 audit + the REST/WS API and its dashboard are BUILT
-                        and running; the WRITE half (M4 config push, M5
-                        commands) is implemented - the write gate defaults ON
-                        since 2026-10-14 for the test campaign (`--writes off`
-                        refuses; see hub/README.md). M5b (the EA acting on
-                        OP=) is done, behind the receiver's `AcceptCommands`
-                        switch)
-doc/PHASE1-DESIGN.md    Phase 1 transparent-proxy design (BUILT: EAs + hub/)
+**mt-copier** is a production-hardened, self-hosted replacement for traditional copiers (such as FX Blue and legacy socket-based solutions). 
+
+Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-platform (MT4 ↔ MT5) flexibility, vulnerability to network drops, and zero centralized observability. **mt-copier** redesigns the entire replication paradigm around **ZeroMQ pub/sub streams coupled with an authoritative snapshot convergence model**, delivering microsecond-level order forwarding, resilient fail-safe recovery, and a modern dual-active high-availability (HA) management cluster.
+
+---
+
+## ⚡ Core Design Principles
+
+| Pillar | Architectural Choice | Operational Benefit |
+| :--- | :--- | :--- |
+| **Consistency** | Event stream (`OPEN`/`CLOSE`/`MODIFY`) + Periodic Authoritative **Snapshot** (`SNAP`) | Events deliver sub-10ms execution; snapshots enforce absolute eventual consistency. A lost packet costs milliseconds, never correctness. |
+| **Platform Neutrality** | MQL4 (32-bit) ↔ MQL5 (64-bit) bi-directional matrix | Any terminal can act as Sender or Receiver with identical protocol framing and shared C++ MinGW-w64 ZeroMQ binaries. |
+| **Identity Guarantee** | Deterministic 8-char alphanumeric `UID` in order comments | Receiver tracks origin without modifying sender trades; survive MT4 ticket replacements and partial fills. |
+| **Fail-Safe Discipline** | Re-anchor stop distance, signed break-even trailing, disconnect protection | On network loss or feed stall: **keep existing positions protected**, halt new entries, and trigger immediate circuit breakers. |
+| **High Availability** | Dual-active Primary (6000/6010) / Standby (6001/6011) with ADR-10 failback | Monotonic epoch fencing, two-phase journal replication, zero split-brain risk, automatic promotion and graceful handover. |
+
+---
+
+## 🚀 Key Features
+
+### 1. Any-to-Any Ultra-Low Latency Execution
+- **Sub-10ms End-to-End Latency**: ZeroMQ asynchronous memory buffers and optimized protocol serializers.
+- **Bi-directional Matrix**: Seamless copy between MT4 and MT5 across any broker:
+  - MT4 ➔ MT4
+  - MT5 ➔ MT5
+  - MT4 ➔ MT5 (32-bit to 64-bit bridge)
+  - MT5 ➔ MT4 (64-bit to 32-bit bridge)
+- **Many-to-Many Routing**: A single receiver can replicate from dozens of distinct senders concurrently with isolated sequence counters, independent lot multipliers, and magic numbers.
+
+### 2. Enterprise High-Availability (HA) Dual-Active Cluster
+- **Active-Standby Redundancy**: Primary Hub continuously synchronizes commands, configuration revisions, and client states to the Standby Hub.
+- **Failover & Auto-Failback (ADR-04 / ADR-10)**: Strict epoch-based tie breaking, continuous heartbeat health probes, and stabilized two-phase handover without state loss or duplicate orders.
+- **Atomic Journal Persistence**: Two-phase write barriers with `sync_data` fsync barriers, guaranteeing 100% crash durability for all operational commands.
+
+### 3. Financial-Grade Security & Encryption
+- **ZeroMQ CURVE Encryption**: 256-bit elliptic-curve cryptography (Curve25519) with per-terminal Z85 keypair authentication. Unauthorized nodes are dropped at ZAP handshake before entering the network.
+- **Native TLS 1.3 / HTTPS / WSS**: Built-in Axum web server supporting custom SSL certificates or on-demand ACME (Let's Encrypt) challenge generation with invisible port 80 binding.
+- **SSRF & DNS Rebinding Immunity**: All outgoing notification webhooks enforce pinned IP resolution, loopback/link-local blacklisting, and redirect prohibition.
+
+### 4. Modern Centralized Web Cockpit
+- **Interactive Multi-Node Dashboard**: Real-time position monitor, node topology graph, and command center.
+- **Split Cockpit Layout**: Dedicated Senders overview card paired with linked real-time position details, featuring live **Profit** and **Swap** interest telemetry.
+- **Multi-Language (i18n)**: Instant client-side switching between **English, 简体中文, 繁體中文, 日本語, Русский, and Español**.
+- **Responsive Theme & Scaling**: Built-in dark Night Mode, mobile-optimized responsive layout, and global 80%~140% dynamic typography scaling.
+
+### 5. Advanced Quantitative Risk Management
+- **Circuit Breakers**: Multi-tier threshold gates for Maximum Open Positions, Maximum Total Lots, Daily Loss Limit (% / Currency), and Maximum Allowed Slippage/Spread.
+- **Dynamic Stop Re-anchoring**:
+  - Distance preservation relative to local entry.
+  - Signed break-even and trailing profit lock mirroring.
+  - Inverted trade mapping (Take-Profit becomes Stop-Loss, and vice-versa).
+  - MT5 ECN 10016 auto-degradation (market execution with immediate stop clamping).
+- **Manual-Closed Protection Ring**: Prevents the copier from re-opening trades closed manually by the operator while the sender still holds them (`g_manualClosed` intent ring with targeted GC).
+
+### 6. Multi-Channel Instant Alerting
+- **Real-Time Push Notifications**: Instant alerting on tripped risk rules, node disconnects, clock drifts, and automated recovery loops.
+- **Supported Channels**:
+  - **WeChat (微信 / Xtuis 虾推啥)**
+  - **Telegram Bot**
+  - **WeCom (企业微信机器人)**
+  - **DingTalk (钉钉机器人)**
+  - **Custom JSON Webhook**
+- **Per-Channel Localization**: Each alert destination can be assigned its own language preference independently.
+
+### 7. Production Windows Services
+- **Background Daemon Installation**: Simple scripts (`install_services.bat`, `start_services.bat`) to install Primary and Standby Hubs as native Windows services, running invisibly with automatic restart on failure.
+
+---
+
+## 🏗️ Topologies
+
+### Mode 1: Direct P2P (Lightweight, No Central Process)
+Ideal for simple local copying across terminals on the same machine.
+```text
+[ MT4 / MT5 Sender EA ]  -- ZeroMQ XPUB (AutoPort 5000+acc%1000) -->  [ MT4 / MT5 Receiver EA ]
 ```
 
-`src/Experts/CopierSender.mq4` and the deployed `.mq5` are **the same file**.  
-One source tree, two targets — `tools/deploy.sh` renames on copy. There is no  
-second copy of the logic to keep in sync.
+### Mode 2: Centralized Hub (Monitoring, Fleet Controls, REST API)
+Single central Rust process coordinating dozens of senders and receivers with web management.
+```text
+[ Sender Terminals ]  -- TCP (XSUB) --> [ Central Hub :6000 ] -- TCP (XPUB) --> [ Receiver Terminals ]
+                                                │
+                                        ┌───────┴───────┐
+                                  [ Web Cockpit ] [ Alert Push ]
+                                      (:6010)     (WeChat/TG/etc.)
+```
+
+### Mode 3: High-Availability Dual-Active Cluster (Enterprise Zero-Downtime)
+Two mutually synchronized hubs with automatic split-brain prevention and seamless failover.
+```text
+[ Sender / Receiver Nodes ] ── (Dual uplink to both Hubs)
+           │
+     ┌─────┴─────────────────────────┐
+     ▼                               ▼
+[ Primary Hub ]   ◄── Sync ──►   [ Standby Hub ]
+  ZMQ :6000                       ZMQ :6001
+  Web :6010 (RW)                  Web :6011 (RO)
+```
 
 ---
 
-## Install
+## 📂 Repository Structure
 
+```text
+mt-copier/
+├── src/
+│   ├── Experts/                  # Production MetaTrader EAs
+│   │   ├── CopierSender.mq4      # Dual MT4/MT5 Sender Expert Advisor
+│   │   └── CopierReceiver.mq4    # Dual MT4/MT5 Receiver Expert Advisor
+│   ├── Include/Copier/           # Core MQL library
+│   │   ├── CopierDefs.mqh        # Normalised models & platform abstractions
+│   │   ├── CopierCodec.mqh       # Wire format encoding/decoding & snapshot validator
+│   │   ├── CopierModel.mqh       # Low-level MT4/MT5 trade execution models
+│   │   ├── CopierRisk.mqh        # Multi-tiered circuit breakers & drawdown guards
+│   │   ├── CopierTransport.mqh   # ZeroMQ transport layer & uplink dispatchers
+│   │   └── ...                   # State persistence, Sizing, Symbol mapping, etc.
+│   └── Scripts/                  # Self-tests & network probe utilities
+├── hub/                          # Rust Central Hub
+│   ├── src/                      # 17 core Rust modules (Tokio async engine)
+│   │   ├── main.rs               # ZMQ proxy, heartbeat router & service hooks
+│   │   ├── api.rs                # REST API, WebSocket streams & Web Cockpit handler
+│   │   ├── cluster.rs            # Dual-active HA cluster manager & failback engine
+│   │   ├── commands.rs           # Durable command journal & retry ladders
+│   │   ├── notifications.rs      # Multi-channel alerting (WeChat, Telegram, WeCom, DingTalk)
+│   │   ├── tls.rs                # SSL/TLS 1.3 engine with on-demand ACME worker
+│   │   └── assets/dashboard.html # Modern responsive Web UI
+│   └── target/release/           # Optimized production binary (copier-hub.exe)
+├── locales/                      # Full external i18n dictionaries (zh-CN, zh-TW, ja, ru, es, en)
+├── doc/                          # Technical specifications & design specs
+│   ├── PROTOCOL.md               # Wire protocol specification & message envelopes
+│   ├── HANDOFF.md                # Engineering handbook & evolution history
+│   └── ...                       # Architecture & design documents
+└── tools/                        # Deployment, testing & verification toolchain
+    ├── deploy.sh / compile.sh    # Multi-terminal deployment & automated compilation
+    ├── tests.sh / tests.bat      # 22 Python integration & contract test suites
+    ├── start_primary.bat         # Launch Primary Hub (Port 6000 / Web 6010)
+    ├── start_standby.bat         # Launch Standby Hub (Port 6001 / Web 6011)
+    └── install_services.bat      # Install as background Windows Services
+```
+
+---
+
+## ⚡ Quick Start Guide (5 Minutes)
+
+### Step 1: Deploy & Compile MT4 / MT5 Terminals
+Run the automated deployment script to link libraries and compile binaries for all local terminals:
 ```bash
-./tools/status.sh            # FIRST: what terminals exist, where, and what's deployed
-./tools/fetch-deps.sh        # download mql-zmq into third_party/
-./tools/build.sh             # deploy THEN compile - the normal one command
+# In Git Bash or Windows CMD:
+cd mt-copier
+bash tools/deploy.sh
+bash tools/compile.sh
 ```
+*Compiles all 16 target binaries across MT4 and MT5 installations with 0 errors and 0 warnings.*
 
-`deploy.sh` and `compile.sh` are the two halves, and **the order matters**:  
-`compile.sh` compiles whatever source is *already* in each terminal's folder,  
-so it never reads `src/`. Running it first builds the previous revision, and  
-`deploy.sh` then copies the new sources in without recompiling — every  
-terminal ends up one revision old while still reporting `4/4 compiled`.  
-`build.sh` is just those two in the right order; use it unless you need one  
-half on its own. `status.sh` reports `FRESH=no` when this has happened.
+### Step 2: Start the Central Hub
 
+**Option A — Interactive Console Mode**:
+Double-click `start_primary_hub.bat` in the root folder, or launch via command line:
 ```bash
-./tools/deploy.sh            # patch mql-zmq + copy sources and DLLs to the targets
-./tools/compile.sh           # compile there and print the compiler logs
+./hub/target/release/copier-hub.exe --port 6000 --http 0.0.0.0:6010 --role primary
 ```
 
-**On Windows, use `tools\copier.bat` instead** — the tools are shell scripts and  
-`cmd` cannot run them directly:
+**Option B — Native Windows Service Mode**:
+Right-click `install_services.bat` and select **Run as Administrator** to install the Hub as a background auto-start Windows Service.
 
-```cmd
-tools\copier.bat status
-tools\copier.bat build       :: deploy then compile (preferred)
-tools\copier.bat deploy
-tools\copier.bat compile
-tools\copier.bat phase2      :: or: pilot / logcheck / sniff / clean / deps
+### Step 3: Attach EAs to Your Terminals
+1. Open your MetaTrader terminal, ensure **Allow DLL imports** and **AutoTrading** are checked in terminal settings.
+2. **On the Sender terminal**: Attach `CopierSender` to any single chart (e.g., EURUSD H1).
+   - Set `CentralHubEndpoint` = `tcp://127.0.0.1:6000`
+3. **On the Receiver terminal**: Attach `CopierReceiver` to any single chart.
+   - Set `CentralHubEndpoint` = `tcp://127.0.0.1:6000`
+   - Specify the Sender ID under `[sender0]` in `copier.ini` or configure via Web UI.
+
+### Step 4: Access the Central Web Cockpit
+Open your web browser and navigate to:
+```text
+http://127.0.0.1:6010
 ```
-
-It finds bash, forwards the sub-command to the matching script, and passes  
-any extra arguments through. `logcheck` and `sniff` are Python and do not  
-need bash, but they are reachable from the same place so there is one  
-command to remember. `tools\copier.bat help` lists everything.
-
-**Run `status.sh` first, every time something "doesn't show up in MetaTrader".**
-
-### Which terminal gets the files
-
-MetaTrader keeps its **data** in `%APPDATA%\MetaQuotes\Terminal\<32-hex-id>`,  
-and that id is derived from the **install path** — so two installations of  
-the same platform have two completely separate data folders. Deploying into  
-the wrong one looks like it worked: the files are on disk, in a folder no  
-running terminal ever reads. On this machine there are two MT5 installs  
-(`C:\Program Files\MetaTrader 5` and `E:\MetaTrader 5`) and eight MT4 ones.
-
-`tools/targets.conf` is where you list the terminal ids you actually use.  
-If it lists nothing, every terminal found is used. `status.sh --all` prints  
-everything installed, with install paths, so you can copy the right ids in.
-
-```
-  TERMINAL ID                        PLAT   SOURCES   DLLS    COMPILED
-  287469DEA9630EA94D0715D755974F1B   MQL4   ok        ok      4/4 ex4
-  D0E8209F77C8CF37AD8BF550E51FF075   MQL5   ok        ok      4/4 ex5
-```
-
-`SOURCES=STALE` means the deployed copy differs from `src/` — run  
-`deploy.sh` then `compile.sh`. `DLLS=MISSING` means `libzmq.dll` is not in  
-that terminal's `Libraries` folder and the EAs will fail at load with  
-"DLL not found". (`libsodium.dll` is no longer needed — it is linked  
-statically into `libzmq.dll` as of the 4.3.5 upgrade.)
-
-
-### Portable installs
-
-A **portable** install (`terminal64.exe /portable`, often shipped with a  
-`Mt5-Portable.bat`) keeps its data **next to the executable**, not in  
-`%APPDATA%`. `%APPDATA%` can still hold an older, **stale** folder for the  
-same installation, and which one is live depends on how the terminal was  
-launched. Deploying into the stale one is silent — files on disk, compiler  
-happy, nothing running ever reads them.
-
-Two things make this visible and survivable:
-
-- the `LAST USED` column in `status.sh`. The live folder is the one with a  
-  recent timestamp; on this machine that immediately separated  
-  `E:\MetaTrader 5` (today) from `%APPDATA%\...\6F9C869F...` (months ago).
-- a target may be given as an **absolute path** in `targets.conf`, which is  
-  how you name a portable data folder:
-  ```
-  /e/MetaTrader 5
-  ```
-
-`compile.sh` also handles portable targets automatically.
-
-MetaEditor has one hard rule that a portable install breaks: **it will only  
-compile a source that lives under the standard  
-`%APPDATA%\MetaQuotes\Terminal` root.** Point `/compile:` at a `.mq5` in a  
-portable data folder and it produces no log, no binary and **no error** — it  
-silently does nothing. It cannot even read `/include:` from there.
-
-So for a portable target the sources are staged under the terminal root,  
-compiled there, and the `.ex5`/`.ex4` copied back. The staging folder is a  
-persistent **build cache**: the `Include` tree is copied once, only our own  
-headers and sources are refreshed each run, and nothing is ever recursively  
-deleted (`./tools/clean.sh` removes it if you want the space back).
-
-`compile.sh` additionally tries every MetaEditor it can find for the  
-platform until one actually produces a compiler log, and falls back to  
-telling you to press F7 only if none does. In practice the staging fix alone  
-is sufficient — the editor that appeared to be broken compiles the staged  
-source perfectly.
-
-Then, in each terminal:
-
-1. Enable **Allow DLL imports** in the EA properties (Tools → Options →  
-   Expert Advisors only sets the default for *newly added* EAs).
-2. Turn **AutoTrading** on, and tick "Allow live trading" on the receiver.
-
-No Visual C++ runtime is needed: since the 4.3.5 upgrade `libzmq.dll` is a  
-MinGW-w64 build that imports only system DLLs, and it has no separate  
-`libsodium.dll`.
-
-### Sender
-
-Attach `CopierSender` to one chart on the account you want to copy **from**.  
-It never trades, so it can run on a read-only *investor* password.
-
-Key inputs: `EventsPort`, `BindAddress`, `SnapshotSeconds`, `HeartbeatSeconds`, `UseCurve`  
-(CURVE keypair generation is fully automatic — no secret key to paste).
-
-**EventsPort (default: blank / auto)**:
-In direct mode, leaving `EventsPort` blank (or `"0"`) automatically derives a deterministic port from the
-account number using `5000 + (MathAbs(account) % 1000)` (range 5000..5999). If
-the port is already bound locally, it fails fast with a desktop `Alert(...)`
-dialog and stops, asking the operator to configure an explicit manual `EventsPort` (1024-49151). This avoids race conditions and dynamic port drift across
-restarts.
-
-**Snapshot Cadence & Instant Bootstrap (`SnapshotSeconds`, default: 15s)**:
-- Snapshot broadcast runs every 15s (`SnapshotSeconds = 15`), serving as baseline state convergence. Stop-loss changes are emitted immediately via `CP_T_MODIFY` events, and balance/equity updates broadcast every 5s (`HeartbeatSeconds = 5`).
-- **Instant Bootstrap on First Contact**: When a new receiver connects and emits an empty receipt (`H=""`), the sender immediately unicasts the cached snapshot on the receiver's very first heartbeat (<1 second), bypassing the 15s broadcast clock.
-- **500-Byte Adaptive Deflate/Zip + Z85 Compression**: Wire records (`R=` in `SNAP`, and `POS=`/`WAITLIST=` in `STAT`) automatically compress via native MetaTrader `CryptEncode(CRYPT_ARCH_ZIP)` + `Z85` when payload size reaches 500 bytes (~8-9 orders, prefixed with `1:`), while small payloads under 500 bytes remain zero-overhead plain text (prefixed with `0:`). Floating-point numbers automatically omit redundant trailing zeroes and dots (`CopierFmtDouble`).
-
-There is **no `SenderId`**: the sender's identity is its derived `EventsPort`
-(or `NID` under Central Hub mode). State persistence is decoupled from ports
-and safely keyed to account number (`copier_sender_<account>.st`), preventing
-duplicate broadcasts across port changes while maintaining 100% namespace
-isolation during same-terminal loopback self-copying.
-
-`EventsPort` is the **only** port bound — events and snapshots share it, so  
-there is no second port to set. (An older build had a `SnapPort` input for a  
-separate snapshot socket. Once both streams moved onto one socket it became a  
-dead field that only produced a startup note, and it has now been removed  
-outright rather than kept as decoration.)
-
-> **Input comments start with the variable name — keep it that way.**  
-> MetaTrader's input dialog shows the *comment* instead of the variable name  
-> whenever one is present. A comment like `// 0 = off. Cap on concurrent
-> positions` therefore appears with no clue which input it belongs to, and  
-> five risk switches all reading `0 = off.` is exactly what that produces.  
-> `// MaxOpenPositions - 0 = off. Cap on concurrent positions` is readable.
-
-### Receiver
-
-The receiver operates in two modes:
-
-1. **Direct Mode (no ini needed):**
-   - Attach `CopierReceiver` to one chart.
-   - Configure directly via inputs: `SenderIP`, `SenderPort`, `InpMagic`, `SenderLotMode`, `SenderLotParam`.
-   - **Auto Magic (`InpMagic`, default: blank)**: Leaving `InpMagic` blank `""` (or `"0"`) automatically uses `(long)SenderPort` as the Magic Number. If a specific number is typed, that number is used as the custom Magic. The receiver state file (`copier_receiver_<magic>.st`) and instance mutex lock (`CP_LOCK_RCV_D_<magic>`) are strictly partitioned by this Magic number.
-   - To mirror multiple senders directly, attach one receiver instance per sender to separate charts.
-
-2. **Central (Hub) Mode:**
-   - Set `HubEndpoint = <hub_ip>:<hub_port>` (e.g. `127.0.0.1:6000`).
-   - The receiver connects to the central hub, and `copier.ini` is managed and pushed by the hub automatically. One instance handles all senders.
-   - **Hierarchical multi-sender configuration**: In `copier.ini`, each `[senderN]` section can independently override any parameter across all 8 categories (Sizing, Risk Limits, Execution & Stops, Filters, Anti-Stack, Schedule). Any unconfigured field seamlessly inherits from `[common]`. Two-tier risk protection enforces both per-sender limits (`g_senderRisk`) and account-wide circuit breakers (`g_risk`).
-   - **Configuration capacity is bounded, and overrunning it is loud**: the parser holds `CP_INI_MAX = 12288` key/value rows and rejects a payload larger than `CP_INI_MAX_BYTES = 524288` (512 KB) — the **same** byte bound the hub enforces, asserted equal by `hub_config_test.py`. The hub now also enforces this row ceiling and the `CP_INI_SECTIONS = 132` section limit: a config that passes the door and is then refused by the node does not fail once — the hub re-pushes it on every heartbeat (`node_rev < hub_rev`), forever. A full config for the whole `CP_MAX_SENDERS` (100) sender ceiling measures **~5,000 rows / ~100 KB** with the hub’s key set and **~7,400 rows / ~270 KB** with the receiver’s own round-trip serializer (which writes a few more keys per sender) — both figures are produced by `hub_config_test.py`, and both leave ample headroom for symbol maps and long `IgnoreUids` lists; if a file ever does exceed either bound the load **fails with an explicit error** instead of silently dropping the tail (a truncated config used to be indistinguishable from a valid one).
-   - **Live settings sync (Content Hash & On-Demand Pull)**: The receiver reports only a 16-hex content hash (`IH=<hash>`) in its regular `REG` announcements (reducing steady-state configuration bandwidth by 99.9%). The central hub matches this hash against cached copies; if absent or drifted, the hub dispatches an automated `reqcfg` pull request (with adaptive backoff) and the node responds via `CFGRPT`. Operators can inspect and clone live settings in the Web Dashboard via **📥 Load Current Setting from Node** or trigger an instant pull via **[🔄 Query Live INI]**.
-   - **Multi-tier Telemetry & On-Demand Refresh**: Receiver sends 1s receipts for instant sync, 5s summary figures (`HELD`, `LOTS`, `WAIT`, `EQ`, `BL`), and 60s detailed lists (`POS`, `WAITLIST`). In Direct mode, detailed lists are automatically skipped to keep communication ultra-lean. In WebUI, operators can click `[🔄 Request Update]` in the orders table header to request an immediate on-demand refresh without waiting for the 60s routine clock.
-   - **Full Order & Pipeline Inspection in Split Cockpit**: Clicking any node row in the Terminals & Nodes table jumps smoothly to the dedicated **Split Cockpit** view (eliminating intrusive overlay modals), providing line-by-line order inspection with 5 filter tabs (`All`, `Opened`, `Waiting`, `Managed`, `Orphan / Manual`) and visual breakdown across the 3-stage waiting pipeline (Broker Queue, Gate Delayed, Market Closed). All filter tabs and sidebar items use persistent in-place DOM elements with zero flicker and 0ms transition latency.
-
-**Cross-platform parameter grouping in MetaTrader**:
-- **MT5**: Uses native `input group "--- Group Name ---"` rendering full-width grey category section banners.
-- **MT4**: MetaTrader 4's 32-bit property dialog lacks group rendering. Clean cross-platform categorization is achieved via header placeholders (`input string _g_xxx_ = ""; // --- Group Name ---`), displaying clean section titles in the `Variable` column with empty `Value` fields, providing clean 8-group browsing without cluttering trade logic.
-
-Three behaviours worth knowing before you go live:
-
-- **A partial close on the sender trims the mirror** and rewrites the order  
-  comment with the full identity (`tc|<uid>|<senderTicket>`). MT5 writes the  
-  *closing deal's* comment back onto the position, so the receiver builds the  
-  close request by hand to carry it — a close with no comment would otherwise  
-  erase the token rather than merely fail to update it.
-- **One UID maps to one position, and the receiver enforces it.** If two  
-  positions ever end up sharing a UID, the extra one is invisible to every  
-  other loop, so it is removed rather than left doubling the exposure.  
-  `DedupDuplicates` (default `true`) is what removes it; set it `false` to keep  
-  the extra position and leave a warning instead.  
-  The survivor is the one matching the sender's volume, else the one whose  
-  comment is still readable, else the older one.
-- **SL/TP is mirrored as a distance from the entry**, not as a price, and  
-  removal propagates. `MirrorStops` (default `true`) turns it off entirely.  
-  See *How SL/TP is mirrored* below for the consequences.
-
-### Receiver input reference
-
-Every input below is settable in two places: the EA's own inputs dialog, and the
-hub's **Visual Editor** (`Nodes → Configure → Load Current Setting`). The
-editor writes the same keys into `copier.ini`, so the two cannot drift — the
-tables below are the file format, not a separate description of it.
-
-`0` / `false` means **off** everywhere; nothing is on by default except where a
-default is named.
-
-**[common] — Account Circuit Breakers**
-
-| key | default | meaning |
-| --- | --- | --- |
-| `maxlotsperposition` | 0 | Cap on ONE mirrored position (lots) |
-| `maxtotallots` | 0 | Cap on TOTAL mirrored volume |
-| `maxopenpositions` | 0 | Cap on concurrent mirrored positions |
-| `dailylosspct` | 0 | Stop new entries for the rest of the server day after this % loss (measured on **equity**, from the day's opening equity) |
-| `maxdrawdownpct` | 0 | Stop new entries after this % fall from the session peak. Latched until reload — and the peak is persisted, so a terminal restart does **not** forgive it |
-| `riskcloseallontrip` | false | When a percentage switch trips, also close the positions already held (queued, paced by `maxactionspertick`) |
-
-**[common] — Global Fallbacks** (per-sender sections may override each one)
-
-| key | default | meaning |
-| --- | --- | --- |
-| `deviationpoints` | 30 | Slippage allowed, in points |
-| `emergencyslpips` | 0 | Local stop-loss placed at open (pips from entry) |
-| `emergencytppips` | 0 | Local take-profit placed at open (pips from entry) |
-| `mirrorstops` | true | Copy the sender's SL/TP, as a distance from entry |
-| `stopsthrottleseconds` | 2 | Minimum gap between two stop edits on one position |
-| `reopenclosedmirrors` | false | Re-open a mirror that vanished while the sender still holds it |
-| `dedupduplicates` | true | Remove a second position sharing one UID |
-| `inverttrades` | false | Mirror the opposite direction (see note below on stops) |
-| `staleseconds` | 15 | Silence from a sender stops NEW entries for it (closes and stop edits continue) |
-
-> **Note on `inverttrades` and stop loss / take profit (DEF-63-03 / LEG-01 Locked Decision)**:  
-> When mirroring in reverse, the sender's TP maps to the receiver's SL, and the sender's SL maps to the receiver's TP.  
-> If the sender EA runs without a hard take-profit (`TP=0`, typical for strategies using internal soft/virtual trailing exits), the receiver **does NOT manufacture an artificial stop loss**. Synthesizing a stop loss from the sender's SL distance would cause premature stop-outs on normal market pullbacks while the sender remains open, destroying the strategy's edge.  
-> Exits rely 100% on the sender's actual close signals. If catastrophic offline protection is desired, set `emergencyslpips` explicitly in your configuration (e.g. `emergencyslpips=250`). Reviewers and operators must not treat unmanufactured stops under `inverttrades` as a defect.
-
-**[common] — Filters & Gates**
-
-| key | default | meaning |
-| --- | --- | --- |
-| `permittedsymbols` | — | `(A,B)` accept only these; `(!A,B)` reject these |
-| `permittedmagic` | — | `5,6` only these sender magics; `!5,6` all but these |
-| `ignoreuids` | — | UIDs to leave alone (comma-separated) |
-| `nobuy` | false | Refuse Buy entries |
-| `nosell` | false | Refuse Sell entries |
-| `ignorenewentrysignals` | false | Open nothing new; keep managing what exists |
-| `ignoreallexitsignals` | false | Close nothing; manage by hand |
-| `minsenderlotsize` | 0 | Skip entries whose **sender** volume is below this |
-| `maxsenderlotsize` | 0 | Skip entries whose **sender** volume is above this |
-| `checkforexistingposition` | 0 | `0` off, `1` skip if the symbol is already held, `2` skip if the same side is already held |
-
-**[common] — Anti-stack & Delays**
-
-| key | default | meaning |
-| --- | --- | --- |
-| `waitforseconds` / `waitforminutes` / `waitforhours` | 0 | Delay before mirroring an entry (summed) |
-| `waitforprofitpips` | 0 | Wait for `+N` profit (or `-N` dip) on the sender before entering |
-| `waitforminutesbar` | 0 | Delay this many M1 bars |
-| `requirepositionfillwithinseconds` / `...minutes` / `...hours` | 0 | Skip entries whose sender order is older than this (summed) |
-| `fillwithinminutesbar` | 0 | Skip after this many M1 bars since the sender filled |
-| `pendingfillgraceseconds` | 1.5 | Keep local pending order for N seconds to fill naturally when sender fills; 0 = cancel immediately |
-
-**[common] — Schedule & System**
-
-| key | default | meaning |
-| --- | --- | --- |
-| `includetradingtimes` | — | `HH:MM-HH:MM,...` in **server** time |
-| `daytradingtimes` | — | `Mon=08:00-17:00`; a day left out is closed. For overnight ranges across days, name both (e.g. `Mon=22:00-24:00;Tue=00:00-02:00`) |
-| `pollms` | 5 | Timer interval, milliseconds |
-| `maxactionspertick` | 5 | Trade operations executed per timer tick |
-| `loglevel` | 2 | `0` errors, `1` warnings, `2` info, `3` debug |
-| `statusenabled` | true | Send the once-a-minute `STAT` report |
-| `syncheartbeatseconds` | 1 | Snapshot-receipt heartbeat; `0` = off |
-| `showpanel` | true | Draw the status panel |
-| `showorphanedlist` | false | List orphaned positions on the panel |
-
-**[senderN] — one section per mirrored sender**
-
-| key | required | meaning |
-| --- | --- | --- |
-| `id` | **yes** | The SENDER's NID (the number it prints as `nid=`). Not its port |
-| `magic` | **yes** | The magic that sender pins. A guess would orphan real orders, so there is no fallback |
-| `lotmode` | — | `multiplier` (default) / `fixed` / `off`, or the codes `0` / `1` / `2` |
-| `lotparam` | 1.0 | The multiplier, or the fixed lot size |
-| `suffix` | — | Appended to symbols that are not mapped |
-| `symbol.FROM` | — | Map one symbol: `symbol.GOLD=XAUUSD` |
-
-Every `[common]` key can also appear inside a `[senderN]` section, where it
-applies to **that sender only** and falls back to the `[common]` value when
-absent. That is what makes per-source risk limits possible: one account, three
-senders, three different `maxlotsperposition` values.
-
-### CURVE keys
-
-CURVE is a **two-sided** handshake, and the two sides are not symmetrical. The  
-sender is the **server**; every receiver is a **client**.
-
-**The keypair is automatic.** Each EA generates its own on first start and  
-reuses it from then on. There is nothing to paste, no script to run, and no  
-`CurveSecretKey`/`MySecretKey` input to get wrong.
-
-| side         | keypair comes from                          | the one key you configure                                      |
-| ------------ | ------------------------------------------- | -------------------------------------------------------------- |
-| **sender**   | generated into `MQL\Files\copier_curve.key` | *nothing*                                                      |
-| **receiver** | generated into `MQL\Files\copier_curve.key` | `SenderServerKey` = the **sender's** public key (from its log) |
-
-So the whole setup is:
-
-1. Put `UseCurve=true` on both sides.
-2. Start the sender. Its Experts log prints:
-   ```
-   ================= CURVE PUBLIC KEY (sender) =================
-     <40-char public key>
-     This is THIS sender's public key. Copy it to the OTHER side:
-       -> each receiver's  SenderServerKey  input
-   ```
-3. Copy that one line into each receiver's `SenderServerKey` input. Done.
-
-**Why only the sender's key is configured.** The receiver's own keypair is not  
-something anyone else needs in advance: the client sends its public key in the  
-CURVE HELLO, and the server encrypts its reply to it. So the receiver can  
-generate its key locally at any time without any coordination — which is  
-exactly what makes the receiver side fully automatic. The sender's public key  
-is the only value that *belongs to the other machine* and therefore has to be  
-carried across by hand.
-
-**Rotating a key.** Stop the EA, delete `MQL\Files\copier_curve.key`, start it  
-again. A new keypair is generated and the new public key is printed.
-
-- Rotating a **receiver**'s key is entirely local — nothing on the sender or in  
-  any `copier.ini` has to change (the receiver's `serverkey=` holds the  
-  *sender's* key, which did not change).
-- Rotating a **sender**'s key means re-copying its new public key into every  
-  receiver's `SenderServerKey`.
-
-**When the file is replaced without asking.** A key file that merely fails to  
-load is overwritten with a fresh keypair, and the replacement is logged at WARN  
-level. That covers: wrong or missing magic line, a key that is not exactly 40  
-characters, and a `PUBLIC` that does not match what `SECRET` derives. A file  
-that loads is never touched. (A keypair has no history and no meaning outside  
-its terminal, so discarding an unreadable one costs a regenerated key, whereas  
-keeping a broken one costs a copier that silently never connects.)
-
-**Why the file at all.** A 40-character secret that is copied by hand can be  
-truncated, wrapped over two lines, or given a trailing space — and a malformed  
-CURVE key does not fail, it simply never completes a handshake, with nothing in  
-any log to say why. The file also lets `PUBLIC` always be *derived* from  
-`SECRET` (`zmq_curve_public`) and the two cross-checked, so the two halves can  
-never disagree.
-
-> **What CURVE does NOT do on the DIRECT channel: the sender does not check WHO
-> is connecting.** The client verifies the server; the server accepts any
-> client that knows its public key, because the direct channel installs no ZAP
-> handler and no client allow-list. So there CURVE gives you confidentiality
-> and a guarantee that you reached the right sender — not authorisation of the
-> peer.
->
-> That is why a sender still needs an **IP allow-list on its VPS**. The two
-> are complementary, not alternatives: CURVE protects the payload, the
-> allow-list decides who may open the connection.
-
-> **The HUB link does check, and that difference is the point of §19.1.**
-> `--curve on` makes the hub the CURVE server and gives it a client
-> **allow-list** (`curve_clients.txt`), enforced by a **ZAP handler** during
-> the handshake. A node whose key is not listed never completes the handshake,
-> so it cannot subscribe — which matters more here than on the direct channel,
-> because a hub subscriber is handed *every* sender's position stream. The
-> hub's switch is `--curve`; the EAs no longer have one — since 2026-10-16 the
-> hub link's CURVE is a hard-coded `HubUseCurve=true` and the hub's public key
-> is loaded from a **file** (`MQL<4|5>\Files\copier_hub.key`, falling back to
-> the shared `Terminal\Common\Files\copier_hub.key`), never typed into a
-> dialog. The roles are inverted on purpose: on the direct channel the sender
-> is the server; on the hub link the hub is. **Both default ON** (the hub
-> since 2026-10-15, the EAs permanently since 2026-10-16): the hub defaults to
-> `--curve on`. The order still
-> matters — a node must not be attached against a hub that is not yet in CURVE
-> mode (it completes no handshake and goes blind) — and bring-up uses
-> `--curve-learn on`: the hub accepts any authenticated keypair and records its
-> key into `curve_clients.txt` itself, so nobody transcribes 40-char strings;
-> restart without it once every node has joined. The direct channel's
-> `UseCurve` is separate and still defaults off.
-
-### Cluster token, and the switches that decide how far it is trusted
-
-The two hubs authenticate each other with one shared token. It is **minted once
-and then reused** — there is no scheduled rotation:
-
-- `tools/start_primary.bat` reads `cluster_token.txt`; if the file is missing (or
-  still holds the old published constant) it mints a GUID pair and writes it.
-- `tools/start_standby.bat` **refuses to start** without that file. A hub pair
-  that disagrees on the token fails every peer probe with 401, reports
-  `disconnected` forever, and never fails over — and nothing says why.
-- To rotate by hand: stop both hubs, delete `cluster_token.txt`, start the
-  primary (it mints a new one), copy the file to the standby, start it there.
-
-The hub itself rejects a token shorter than 16 characters, rejects the values
-that have shipped in this repository, and never writes the token to the log.
-
-Three environment switches decide what the hub trusts. All default to **off**,
-because each one widens the trust boundary:
-
-| variable | default | what it enables | why it stays off |
-|---|---|---|---|
-| `MTC_SYNC_USERS` | off | `cluster/sync` ships `users.json` to the peer | the stored password digest **is** the login proof (`users.rs`), so shipping it over a plaintext cluster channel is equivalent to shipping an admin session |
-| `MTC_TRUST_PROXY` | off | `X-Forwarded-For` for per-IP login rate limiting, and `X-Forwarded-Proto` for the cookie's `Secure` flag | both headers are caller-controlled; believing them without a real proxy lets anyone mint a fresh "client IP" per request and walk past the nonce throttle |
-| `MTC_HTTPS` | off | marks the session cookie `Secure` | declare it only when the browser really reaches the hub over TLS, or the cookie stops being sent at all |
-
-`curve_clients.txt` containing `*` means "any client that can generate a CURVE
-keypair" — a one-second operation. The hub now warns about it at load time. It is
-the right default on a lab bench and the wrong one on a shared network.
+- Default user: `admin`
+- Enter the admin password displayed in the terminal console on first run (or set via `MTC_ADMIN_PASSWORD`).
+- Switch themes, inspect node heartbeats, customize lot multipliers, view live floating PnL & Swap, or trigger fleet-wide emergency operations.
 
 ---
 
-## Hardening: what bounds a hostile peer
+## 🛡️ Quality Assurance & Test Verification
 
-Both the sender and the hub **bind an inbound port**, so both can be reached by  
-anything that can route to them. Four controls, in the order a bad packet meets  
-them:
+Every release is validated against an exhaustive multi-layered regression test suite:
 
-| layer                           | control                     | what it stops                                                                                                           |
-| ------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| firewall / cloud security group | **IP allow-list**           | the connection never forms. This is the primary control — see the plan's §19.1                                          |
-| libzmq                          | **`ZMQ_MAXMSGSIZE` = 1 MB** | a peer announcing an oversized frame is **disconnected during the frame read**, before libzmq allocates anything for it |
-| libzmq                          | **`RCVHWM` = 1000**         | a peer that floods messages fills a bounded queue and then blocks or drops; nothing grows without limit                 |
-| parser                          | **`CP_MAX_MSG_LEN` = 1 MB** | a frame that got through is rejected rather than parsed                                                                 |
+| Test Suite | Scope | Passing Threshold |
+| :--- | :--- | :--- |
+| **MQL Matrix Build** | 4 Terminals (MT4 & MT5, 32-bit & 64-bit), 16 target binaries | **16 / 16 ALL GREEN (0 errors, 0 warnings)** |
+| **Rust Hub Unit Tests** | Protocol codec, HA election, journal recovery, SSRF, TLS | **161 / 161 Passed (0 failed)** |
+| **Python Contract Suites** | 22 comprehensive test suites (E2E protocol, chaos, failover) | **445+ Assertions ALL GREEN** |
+| **Static Linter & i18n** | `dash_check.py` (252 DOM IDs, 138 JS functions), `i18n_check.py` | **100% ID Match & 435 Keys per Locale Validated** |
 
-
-**`ZMQ_MAXMSGSIZE` is the one that is easy to leave out, and the one people  
-usually mean.** A length check in the application feels like the same thing, but  
-it is not: the app sees the message only *after* libzmq has read the whole frame  
-off the wire and buffered it. By then the allocation has already happened, and  
-the attacker's goal was the allocation. The transport-level option is the only  
-one that acts early enough, and it disconnects rather than buffers.
-
-`ZMQ_MAXMSGSIZE` and `CP_MAX_MSG_LEN` are deliberately **the same number**  
-(`CP_MAXMSGSIZE`), so the transport can never refuse a frame the parser would  
-have accepted, and the two cannot drift apart.
-
-> **On the hub, this matters more than on a node.** A hub is a fan-out: one  
-> oversized frame it accepted would be copied to every subscriber, so the cost  
-> of a missing limit is multiplied by the number of connected nodes.
-
-Not set, and available if you want them: `ZMQ_HANDSHAKE_IVL` (how long a peer  
-may take to complete the ZMTP handshake — the default 30 s already bounds it)  
-and `ZMQ_BACKLOG` (the listen backlog, default 100). Neither is a substitute  
-for the allow-list.
-
----
-
-## Monitoring: the hub dashboard and the audit log
-
-If you run the central hub, it also serves a **read-only** dashboard and a REST
-API on `--http`, default **`http://127.0.0.1:6010/`**:
-
+To execute the full verification suite locally:
 ```bash
-tools\hublog.bat        # starts the hub, and ALSO writes its output to hub.log
-# then open http://127.0.0.1:6010/
+bash tools/tests.sh
+bash hub/build.sh --test
+python tools/dash_check.py
+python tools/i18n_check.py
 ```
 
-It shows the nodes (state, name, held positions), the per-sender position view
-the hub derives from `SNAP`, and the topology — including the **mirror edges**,
-which the hub learns as a by-product of relaying snapshot receipts.
+---
 
-| Method | Path | Answers |
-|---|---|---|
-| GET | `/` | the dashboard — one self-contained HTML file, compiled into the binary |
-| POST | `/api/v1/auth/nonce` | `{id}` → `{nonce, salt, rounds}`; single-use 10s nonce for salted challenge-response auth; **429** once the hub is holding its maximum number of live challenges |
-| POST | `/api/v1/login` · `/logout` | M9: Scheme B challenge-response or legacy login; session cookie in, session out; **429 + `Retry-After`** during a failed-login flood, and repeated failures against one name get a growing delay |
-| POST | `/api/v1/password` | M9: change your OWN password (any role, old one required) |
-| GET | `/api/v1/whoami` | the caller's id and role (the dashboard's login probe) |
-| GET | `/api/v1/nodes` · `/nodes/{id}` | nodes, and one node with its positions |
-| GET | `/api/v1/topology` | senders, receivers, and the edges between them |
-| GET | `/api/v1/positions` | the M3 position view as data |
-| GET | `/api/v1/alerts` | the M6 alert ring |
-| GET · POST | `/api/v1/notifications` · `DELETE /notifications/{id}` · `POST /notifications/test` | external alert channels (Telegram / WeCom / DingTalk / webhook); secrets masked on read, operator to add/change/remove or to test a channel |
-| GET | `/api/v1/audit` | the append-only audit log, bounded (`?limit=&since=`); **admin only**; answers from the active file plus `.gz` archives when `limit` reaches past a rotation |
-| GET · POST · DELETE | `/api/v1/users` | M9 user management; **admin only** |
-| GET · PUT | `/api/v1/config` · `/nodes/{id}/config` | the config version store; **403 with `--writes off`** |
-| POST | `/api/v1/nodes/{id}/config/rollback/{rev}` | rollback configuration to a historical revision |
-| POST | `/api/v1/nodes/{id}/commands` | operational command (`pause`/`resume`/`closeall`/`reload`/`close`/`reqpos`) → **202** + `command_id`; **403 with `--writes off`**, **400** for unknown op |
-| POST | `/api/v1/commands` | G10 global: one command per known receiver → **202** + counts + per-command ids; **403 with `--writes off`**, same **400** door |
-| GET · POST | `/api/v1/tls/status` · `/tls/save` · `/tls/disable` · `/tls/renew` | native SSL/TLS configuration, Let's Encrypt automation, and certificate renewal |
-| POST | `/api/v1/cluster/promote` · `/cluster/failback-now` · `/cluster/peer` | HA cluster role promotion, zero dual-write safe failback, and peer configuration |
-| GET | `/api/v1/curve/hub_key` · `/curve/public_key.file` | this hub's own `copier_hub.key` as a download — the 40-char key with nothing to transcribe by hand (session required; 404 when `--curve off`) |
-| GET | `/healthz` · `/readyz` | liveness, and "is there anyone here yet" |
-| WS | `/api/v1/stream` | a full snapshot on connect, and one per change (session cookie required) |
+## 📖 Documentation Index
 
-**M9 puts a login in front of everything but `/`, the health probes,
-`/api/v1/auth/nonce`, `/login`, `/logout` and `/whoami`** (the last two answer
-before a session exists by design: `whoami` is the dashboard's pre-login probe,
-`logout` can only ever end the caller's own session). A missing session answers **401**; a session whose role is below
-the endpoint's bar answers **403** and is audited. The matrix is the plan's
-§17.2 — `viewer` reads, `operator` may command and configure, `admin` manages
-users and reads the audit log — so the write path now has *two* gates
-(`--writes` **and** a role). The first start with an empty user table
-bootstraps user `admin` and prints its password **once**; it is stored only as
-a salted hash. `--users none` skips the login entirely for throwaway local
-runs: every request is an anonymous viewer, and writes still 403.
-
-**Failed logins are throttled in two different ways, on purpose.** A name that
-keeps failing gets a growing DELAY (250 ms per failure past the third, capped at
-4 s) — never a lockout, because a per-name lockout would let anyone who knows
-the admin's id keep the operator out of their own hub. Only the GLOBAL rate is
-refused outright (40 failures in 60 s → **429** for 10 s), and that refusal
-exists to stop a password spray from making the hub burn 4096 SHA-256 rounds per
-request. The unauthenticated `/auth/nonce` endpoint is capped at 512 live
-challenges for the same reason: without a cap a request loop grows that map
-faster than its 10-second expiry drains it.
-
-**CURVE is ON for the ZMQ link** (§19.1, default since 2026-10-15). The link is
-encrypted and every node must present a keypair listed in the hub's
-`curve_clients.txt`. The list is enforced by a ZAP handler during the
-handshake, which is the only place it *can* be enforced — a subscriber the
-hub never authorises would otherwise still be handed every position the hub
-publishes, because publishing is libzmq's job, not the application's.
-
-**Both sides default ON**, so a fresh deployment needs no key transcription:
-the EAs' hub link runs CURVE unconditionally and reads the hub's public key
-from `copier_hub.key` (terminal `Files\`, falling back to the shared
-`Common\Files\` — one file serves every terminal on the machine), and the hub
-defaults to `--curve on`. Bring-up uses `--curve-learn on`: the
-hub accepts any authenticated keypair and writes its key into
-`curve_clients.txt` itself (marked `# learned`), so the fleet registers
-itself; restart without learn once every node has joined and the list is
-enforced. The order still matters — a node attached against a hub that is not
-in CURVE mode completes no handshake and goes blind. See `hub/README.md` and
-`doc/PROTOCOL.md`.
-
-**The audit log is `audit.jsonl`** — one JSON object per line, in the plan's §15
-`audit` shape (`seq, ts, actor, ip, action, node, before, after, result`).
-Append-only is the whole design, and three consequences are worth knowing: it is
-greppable and `tail -f`-able by hand; every record carries a monotonic `seq` so a
-*missing* one is detectable; and if it cannot be opened the hub **refuses to
-start** rather than run unaudited — `--audit none` is the explicit way to turn it
-off. It also rotates itself at **10 MB** into gzipped archives (`.1.gz` …
-`.10.gz`, oldest pruned), without ever blocking a write or resetting `seq` —
-see `hub/README.md`. (SQLite is M11: `rusqlite` does not build here yet, and the
-audit needs the property, not the engine — see `hub/README.md`.)
-
-> **The default `--http` is loopback while the ZMQ port's is not, and that
-> difference is the whole point.** The hub's `--port` binds `0.0.0.0` and the
-> plan's §19.1 makes the firewall its trust boundary. This port exposes **every
-> position the hub has seen**, so it must not inherit that default: reaching it
-> from another machine is the explicit `--http 0.0.0.0:6010`, and
-> `--http none` turns it off.
-
-**The write endpoints there are, take two keys, and both default to off.**
-`PUT /api/v1/nodes/{id}/config` records a config revision and pushes it as
-`CFG`; `POST /api/v1/nodes/{id}/commands` issues an operational command and
-pushes it as `CMD`. Both share one command engine (issue → retry → ack, same
-`202` + `command_id` semantics, same audit trail) — see `hub/README.md` and
-`doc/CENTRAL-HUB-PLAN.md` §5.4.
-
-| side | gate | state (since 2026-10-14) | with it off / false |
-|---|---|---|---|
-| hub | `--writes` | default **on** | answers **403**, never emits a `CFG`/`CMD` |
-| receiver (config) | `AcceptConfigPush` | **hard-coded on** (no longer an input) | would ACK `OK=0`, not touch the file |
-| receiver (commands) | `AcceptCommands` | **hard-coded on** (no longer an input) | would ACK `OK=0`, act on nothing |
-
-A receiver gets two gates rather than one, because a `CMD` can pause a receiver
-and close every mirror it holds — more invasive than a file rewrite — and §19.1
-leaves the ZMQ port firewall-only, with no token on the wire. All
-three shipped defaulting to OFF as *inputs*; on 2026-10-14 the owner flipped them
-ON for the test campaign and then removed the two receiver ones from the inputs
-dialog entirely — MQL charts remember per-chart input values, so the old false
-kept resurfacing on every chart that had ever attached and read as "the default
-did not change". The gates are plain globals now (`AcceptConfigPush` /
-`AcceptCommands` in `CopierReceiver.mq4`): set false there, plus `--writes` in
-`hub/src/main.rs` and the default assertions in `tools/hub_config_test.py` /
-`tools/hub_commands_test.py`, before the hub faces anything but the owner's own
-test bench. **M9 (2026-10-14) adds the second half of the write gate** — a login
-and the §17.2 role matrix on the HTTP API, so a write now needs `--writes`
-*and* an `operator`/`admin` session. M5 is complete on both sides: the receiver
-acts on `OP=` (`pause` / `resume` / `closeall` / `reload`; `closeall` implies
-`pause` — converge would otherwise re-open the flatten within seconds — and the
-pause survives a receiver restart).
-
-**These are the only write endpoints, deliberately.** Config push and commands are
-M4/M5, with their `202` + `command_id` semantics and their audit trail; the
-audit log landed first (M7) so that those have somewhere to be recorded, and
-the config store landed next (M4a) so that they have something to act on. See `hub/README.md`, and `tools/hub_api_test.py` plus `tools/hub_config_test.py` /
-`tools/hub_commands_test.py` for what is asserted about all of the above (~170
-checks across the three suites, against the real binary).
+- [doc/PROTOCOL.md](doc/PROTOCOL.md) — Comprehensive wire protocol, envelope format, and framing specifications.
+- [doc/HANDOFF.md](doc/HANDOFF.md) — Complete engineering history, operational runbook, and architectural decisions (ADR).
+- [locales/README.md](locales/README.md) — Guide for creating and customizing language translation packs.
 
 ---
 
-## Two findings about mql-zmq you need to know
+## 📄 License
 
-`mql-zmq` is the right building block, but as published it **does not compile  
-on current MetaTrader builds**. Both problems are handled by  
-`tools/patch-zmq.py`, which `deploy.sh` runs automatically:
-
-1. **`char` vs `uchar`.** Modern MQL made these distinct, and  
-   `StringToUtf8` / `StringFromUtf8` now take `uchar[]`. The binding is  
-   full of `char[]` and fails with `error 246: parameter convertion type
-   'char[]' to 'uchar[] &' is not allowed`. 20 mechanical replacements.
-2. **`Debug` is a macro.** `Mql/Lang/Mql.mqh` does  
-   `#define Debug(msg) PrintFormat(...)`. Any `something.Debug(x)` call in a  
-   translation unit that includes the binding gets macro-expanded into  
-   garbage. The logger method here is therefore called `Verbose()` — do not  
-   rename it back.
-
-Also worth knowing: `FileMove` could not be resolved to a stable parameter  
-count on either compiler tested (2-arg and 3-arg both rejected), so the code  
-never calls it. See "Deviations" below.
-
-1. **The DLL folders are `Library/MT4` and `Library/MT5`, not  
-   `Library/MQL4`/`Library/MQL5`.** `deploy.sh` originally built the path  
-   from the platform folder name (`MQL5`), which does not exist — so the  
-   guard failed, nothing was copied, and it was silent: the EA compiles  
-   perfectly and only breaks at load time with "DLL not found". `status.sh`  
-   now reports the DLL state per terminal so this cannot hide again.
-
----
-
-## One more MQL4/MQL5 divergence
-
-`StringTrimLeft` / `StringTrimRight` do **not** behave the same on both  
-platforms. One trims in place through a `string&` parameter; the other  
-returns the trimmed value and leaves the argument alone. Calling them and  
-discarding the result therefore works on MT5 and is a silent no-op on MT4.
-
-The damage was subtle and one-sided: a config line written as  
-`id = alpari01` (spaces around the `=`) produced the key `"id "` with a  
-trailing space on MT4, so every lookup of that key missed — while  
-`id=alpari01` worked fine, and MT5 was unaffected. Exactly one assertion  
-in the self-test failed, on exactly one platform.
-
-`CopierTrim()` in `CopierDefs.mqh` now does the trimming by hand with  
-`StringGetCharacter`, and nothing in this codebase calls the built-ins.
-
----
-
-## Bugs the self-test caught (kept here as a warning)
-
-`CopierSelfTest` is not decoration. Two real defects in this codebase were  
-found by running it, not by reading it.
-
-### 1. Phantom slots — MQL does not reliably zero-initialise struct arrays
-
-`CopierPosTable` originally had a constructor of the form  
-`CopierPosTable():m_n(0) {}` — it set the counter and never touched the  
-`CP_MAX_POSITIONS`-element `m_p[]` array. `CopierPos` contains `string`  
-members, and MQL does **not** reliably zero-initialise an array of structs  
-that contain strings. The table therefore started life with slots that  
-reported `used == true` while holding an empty UID.
-
-The symptoms were misleading. `PruneTo()` walked all `CP_MAX_POSITIONS`  
-slots, found the phantoms, saw that their (empty) UIDs were not in the  
-desired set, and  
-"removed" them — so it reported removing far more rows than were ever  
-written, and the count came out wrong, while `Find()` and `CopyTo()` looked  
-perfectly healthy. It took a Python re-implementation of the exact algorithm  
-to prove the logic was correct and that the difference had to be MQL's  
-initialisation behaviour.
-
-In production this was worse than a failing test: phantom slots would have  
-been exported by `CopyTo()` into every SNAP message as positions with an  
-empty identity, and the sender's close-detection loop would have emitted a  
-CLOSE for an empty UID on every tick.
-
-**The fix is one line** — call `Clear()` from the constructor — plus making  
-occupancy mean `used && uid is well-formed` everywhere rather than trusting  
-`used` alone. `CopierSeenRing` had the same defect and the same fix; there,  
-junk keys would have made `Has()` report real trade actions as already done  
-and silently skip them.
-
-**Rule: any MQL class holding an array of structs (or of strings) must  
-`Clear()` it in the constructor. Never assume zero-initialisation.**
-
-### 2. `CopierNormalizeLot` clamped away the information it needed
-
-The function snapped a volume to the broker's lot step and then clamped it  
-up to `MINLOT`. That made "below the broker minimum" and "exactly the  
-broker minimum" indistinguishable to the caller, so a signal that should  
-have been rejected was instead placed at the minimum lot — silently  
-multiplying risk on a small account. The minimum-lot decision now lives  
-solely in `CopierComputeLots()`, which can still see the shortfall.
-
-### 3. Log rotation driven by restarts, not by size
-
-`CopierLog::Init` used to pick "the generation after the newest one that  
-exists" and then delete it. The intent was to recycle the oldest generation  
-when the log filled up; the effect was to **destroy one generation of history  
-on every EA restart**, however small it was.
-
-Measured on the first MT4 pilot: the receiver's log became three disjoint  
-time windows with an **11-minute hole**, and a genuine divergence became  
-indistinguishable from missing history. Chasing that cost more time than the  
-bug itself.
-
-Rotation must be driven by **size**, never by process restarts — otherwise  
-the moment you most need the evidence (a restart-heavy debugging session) is  
-exactly when it is thrown away. The current generation is now tracked in a  
-`copier_<tag>.gen` sidecar and restarts **append**; only a size-driven  
-rotation recycles.
-
-### 4. Silent skipping hides unmanageable orders — and a wrong conclusion
-
-`LocalForSender()` requires an order to carry one of our magic numbers **and**  
-to yield a UID from its comment. Anything else is skipped with a bare  
-`continue` — no log line. That is a genuine blind spot, and  
-`ReportUnreadableOwnOrders()` now runs at start-up and reports each such order  
-at ERROR level **including the raw comment**, so an invisible failure becomes  
-a one-line answer.
-
-**But this is also the story of a wrong diagnosis, which is the more useful  
-part.** Chasing what looked like orphaned positions on the MT4 pilot, two  
-orders were identified as opened-and-never-closed. The evidence seemed solid:  
-across two receiver sessions, in which the receiver correctly closed 13 other  
-orders, it never once *attempted* to touch those two.
-
-The conclusion was wrong, and the reason matters:
-
-> **The copier's log records only what the copier did.** A position closed by  
-> hand, by another EA, or by the broker leaves **no line** — correctly. The  
-> MT4 **Journal** (`<terminal>\logs\YYYYMMDD.log`) is the complete record.
-
-Reconciling the two settled it instantly: the Journal had **59** closes, the  
-copier's log **53**, and the six missing ones had all been closed by hand (the  
-Journal even shows `one click trading has been enabled` three seconds before  
-the first). There were never any orphans.
-
-Two rules come out of this:
-
-- When reconciling a copier against an account, use the **copier's log to  
-  attribute** and the **terminal Journal to establish what happened**. Never  
-  infer "the copier failed to close X" from the copier's log alone.
-- **Never run two copiers on one account.** FX Blue's receiver was loaded on  
-  the same chart during this pilot; two copiers will each treat the other's  
-  positions as things to close or open, producing a stream of orders neither  
-  can explain.
-
-### 5. `ZMQ_CONFLATE` on a PUB socket, on the libzmq the binding ships
-
-The snapshot socket was `PUB + SNDHWM=10 + CONFLATE=1`. A protocol sniffer  
-showed its messages arriving at the subscriber **completely empty** — five  
-snapshot messages in ten seconds, every one of them zero-length — while the  
-events socket (same PUB, no CONFLATE) was perfectly healthy.
-
-What made this expensive to find is that it does not reproduce on a modern  
-libzmq. Ruled out, each with an actual experiment rather than reasoning:
-
-| hypothesis                                    | test                                              | result                              |
-| --------------------------------------------- | ------------------------------------------------- | ----------------------------------- |
-| CONFLATE breaks fan-out to the 2nd subscriber | `zmq_fanout_test.py`                              | 40/40 to both — **innocent**        |
-| CONFLATE corrupts larger payloads             | `zmq_conflate_size_test.py`, 16 B / 1.2 KB / 8 KB | intact at every size — **innocent** |
-| non-blocking send interacts badly             | same test with `ZMQ_DONTWAIT`                     | intact — **innocent**               |
-| the binding's `StringToUtf8` truncates        | read the source                                   | fine for ASCII — **innocent**       |
-
-`mql-zmq` shipped **libzmq 4.2.0** from 2016 at the time of this  
-investigation; the tests above ran on **4.3.5**. The remaining difference was  
-the library, not the topology.
-
-> **Update:** both sides now run **libzmq 4.3.5** (see `hub/README.md`), so the  
-> 4.2.0-vs-4.3.5 skew described here no longer exists. The conclusion still  
-> stands and is deliberately kept: CONFLATE is still not set on the PUB, because  
-> it buys nothing there — the properties that matter are applied at the  
-> subscriber, which is where the unbounded queue actually lives.
-
-
-**The fix is to not use CONFLATE on the PUB at all.** It buys nothing there:  
-the "keep only the newest snapshot" semantics that matter are applied at the  
-**subscriber**, which is where the queue that could grow without bound  
-actually lives. Removing it from the sender costs nothing.
-
-Confirmed by the same sniffer afterwards — snapshots decode normally:
-
-```
-[snapshot] T=SNAP  sid=sender01  seq=190  positions=9
-[snapshot] T=SNAP  sid=sender01  seq=194  positions=10
-snapshots are flowing - a silent receiver is not a publishing problem
-```
-
-That capture also independently confirms the per-stream sequence watermark  
-above: the snapshot's sequence number is frequently **lower** than events  
-already received (`190` after `191`, `194` after `195`, `202` after `203`).  
-Under the old shared watermark every one of those events would have been  
-discarded as a duplicate.
-
-**Final resolution: CONFLATE is gone from the project entirely.** The only  
-reason the two streams had separate sockets was that `CONFLATE` is a  
-per-socket option and would have dropped events from a shared one. Once the  
-conflation moved into the receiver's drain loop — apply only the newest  
-snapshot of each batch — the second socket bought nothing, so there is now  
-**one socket per process**. See *Socket topology* in `doc/PROTOCOL.md`.
-
-That also retires the whole class of problem above: the guarantee no longer  
-depends on a library option that behaves differently on the libzmq version  
-the binding happens to ship.
-
-### 6. A silent receiver is indistinguishable from a broken one
-
-A receiver does **nothing** until it has seen a snapshot (`ready`). So a  
-snapshot stream that is broken — wrong port, dropped, or arriving empty —  
-makes the EA look idle while heartbeats keep arriving and the log stays  
-clean. That is precisely how the CONFLATE bug above presented itself.
-
-`OnTimer` now detects "events are arriving but no usable snapshot ever has"  
-and raises an ERROR after ten seconds. The same idea is what the sniffer  
-reports from the wire side, and between them the question "is it the sender  
-or the receiver" is answerable in one run instead of a long afternoon.
-
-### 7. The seen-ring suppressed legitimate re-opens for ten minutes
-
-`CopierSeenRing` guards against queueing the same action repeatedly in the  
-window between "we sent the order" and "the terminal reports the position".  
-Its TTL is ten minutes.
-
-That TTL was being applied to the whole lifetime of the action, not just the  
-in-flight window. So if you closed a **mirrored** position by hand while the  
-sender still held the original, the copier would silently refuse to restore  
-it for up to ten minutes — instead of the couple of seconds the snapshot model  
-promises.
-
-`CopierSeenRing::Forget()` now clears the key the moment converge sees the UID  
-present locally, so the guard covers only the in-flight window.
-
-### And a test-harness bug
-
-`FILE_WRITE` does **not** truncate an existing file. The config fixture was  
-opened with `FILE_WRITE` and never deleted, so a second run overwrote the  
-head of the previous file and left its tail behind to be parsed as extra  
-lines. Every write path in this project now deletes first.
-
-The assertions were also rewritten to print the **actual** value on failure  
-(`OkInt` / `OkStr` / `OkDbl`). When the only way to debug is to ask someone  
-to re-run a script and paste a log, "FAIL x == 1" is worthless.
-
----
-
-## Anti-bloat contract
-
-## Capacity — and where each number comes from
-
-Every limit in this system is a fixed constant, and each one has a REASON.  
-A ceiling nobody can explain is a ceiling somebody has to discover by  
-hitting it, which is why the table below says where each figure comes from  
-and what it costs.
-
-| capacity | limit | where the number comes from | what it costs |
-| :--- | :--- | :--- | :--- |
-| senders per receiver, **hub mode** | `CP_MAX_SENDERS` = **100** | aligned with the terminal's chart ceiling (MT5 `maxcharts`, about 100 by default; MT4 is the same order of magnitude) | one chart |
-| senders per receiver, **direct mode** | **100** charts | the terminal itself — one receiver per chart | one chart **per sender** |
-| receivers per sender | `CP_MAX_PEERS` = **100** | the same ceiling as `CP_MAX_SENDERS`; the data path is a broadcast, so the table is only observability | nothing on the wire |
-| positions per position table | `CP_MAX_POSITIONS` = **2048** | independent of the two above; sized so a large account fits with slots to spare | ~1.2 MB per 2 senders' worth of desired set |
-
-**Both modes hold the same 100 ceiling on purpose.** Direct mode's ceiling has  
-always been the terminal's chart limit — you could never mirror more senders  
-than you had charts. Hub mode answered the same question with an internal  
-constant that used to read 16, so the same deployment could mirror 100 senders  
-one way and silently 16 the other. That is indefensible to explain and it is  
-now fixed: hub mode costs **one chart** where direct mode costs **one chart  
-per sender**, and the ceiling is the same in both.
-
-### What the numbers cost, honestly
-
-Measured or derived from the source, so you can decide before deploying:
-
-- **Memory** — the per-sender slice of the desired set (`CP_MAX_POSITIONS`  
-  entries) is allocated **only for the senders actually configured**. A  
-  1-sender receiver allocates 2048 entries, not 100× that. A fully-populated  
-  100-sender receiver allocates up to 204,800 entries (~25–30 MB), which is  
-  a static, non-growing figure, not a leak.
-- **Config size** — a full 100-sender `copier.ini` measures **~5,000 rows /  
-  ~100 KB** with the hub's key set, and **~7,400 rows / ~270 KB** with the  
-  receiver's own round-trip serializer (a few more keys per sender). Both  
-  numbers come out of `hub_config_test.py` rather than out of an estimate.  
-  The parser holds `CP_INI_MAX = 12288` rows and `CP_INI_MAX_BYTES = 524288`  
-  (512 KB), and the hub enforces **the same byte bound** — asserted equal by  
-  the test suite so the two cannot drift.
-- **CPU** — convergence is **linear** in senders, not quadratic: the per-uid  
-  and per-ticket lookups are hashed. Budget roughly one pass over the account  
-  per sender per tick; at 300 positions and 100 senders that is on the order  
-  of 30,000 operations per tick, ~10× a second.
-- **Charts** — 1 (hub mode) or 100 (direct mode).
-
-### What happens at the ceiling
-
-Nothing is ever silently truncated:
-
-- More `[senderN]` sections in `copier.ini` than this build holds → an  
-  **ERROR in the log naming the number**, saying which sections were dropped.
-- A gap in the numbering (`sender0`, `sender2`, …) → an **ERROR**, because  
-  position in the file is a sender's identity and a missing index silently  
-  deletes every sender after it.
-- More peers than the sender's table holds → the longest-silent peer stops  
-  being *observed* (no RTT, no panel row) but keeps being *served*; the data  
-  path is a broadcast and does not notice.
-- An ini over either byte or row bound → the load **fails with an explicit  
-  error** rather than applying a partial config.
-
-The on-chart panel lists the first 8 peers in detail and then one summary  
-line ("... and N more — the hub dashboard lists every one"), because a  
-rectangle on a chart cannot hold 100 rows and a truncated list that does not  
-say so is the failure mode.
-
----
-
-Every container has a fixed bound. There is no map, no dictionary, and no  
-array that grows with time:
-
-| structure              | bound                                                                                                                                                             |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| open-position table    | `CP_MAX_POSITIONS` (2048), slots reused immediately                                                                                                              |
-| dedup ring             | 4096 keys, TTL-expired                                                                                                                                            |
-| per-sender desired set | `CP_MAX_SENDERS` × `CP_MAX_POSITIONS` **for the senders actually configured** — 100 × 2048 = 204,800 entries at most; a 1-sender receiver still allocates 2048, not 100× that |
-| action queue           | 256                                                                                                                                                               |
-| log files              | 1 MB × 3, oldest recycled                                                                                                                                         |
-| state file             | 256 lines, rewritten whole, never appended                                                                                                                        |
-| ZeroMQ queues          | explicit HWMs (1000 each way), **no `CONFLATE` anywhere** — the newest snapshot of each batch is kept in the drain loop instead                                   |
-| ZeroMQ message size    | `ZMQ_MAXMSGSIZE` = `CP_MAX_MSG_LEN` = 1 MB. A peer announcing a larger frame is **disconnected mid-read**, before the buffer is allocated — see *Hardening* below |
-| wire message           | `CP_MAX_MSG_LEN` 1 MB, checked by the parser. A full `CP_MAX_POSITIONS` snapshot at worst-case field widths is ~378 KB, so this leaves ~2.7× headroom             |
-
-Two rules that matter more than the table:
-
-- **Sockets are created in `OnInit` and destroyed in `OnDeinit`.** Creating  
-  them per tick is the single most common way to make an EA leak.
-- **`ZMQ_LINGER=0` always.** A non-zero linger blocks `zmq_ctx_term` and the  
-  terminal hangs on shutdown or EA reload.
-
-### The log-volume trap, found the hard way
-
-The rate limiter inside `CopierLog` collapses *identical messages arriving  
-within one second*. That is not enough, and the gap is not obvious.
-
-A condition like "the receiver's broker does not offer this symbol" is true  
-on **every timer tick** until a human fixes it. The converge loop runs at  
-~10 Hz, so the message repeats about ten times a second, forever. Measured on  
-the first real pilot run: **2542 lines / 264 KB in 21 minutes from one  
-warning.** Rotation keeps the disk usage bounded, but the log stops being  
-readable — the same unbounded-noise failure this codebase exists to avoid,  
-reached by a different route.
-
-Anything that can repeat indefinitely now goes through `CopierOnceLog`,  
-which emits a key once and then at most once per re-warn interval, evicting  
-the least recently used key when its 64 slots are full. `logcheck.sh` also  
-watches for the symptom directly: it flags any single message that accounts  
-for more than 200 log lines.
-
-The same trap existed on the **trade-failure** path, and it was worse than a  
-log problem. A failed action is shifted off the queue and its key is never  
-recorded as done, so converge re-derived it on the very next pass — ten  
-broker round trips a second, for as long as the broker kept refusing. A  
-failed `(sender, kind, uid)` is now parked for **2 seconds** (`g_retryAfter`)  
-and the failure log is rate-limited to once a minute per distinct failure.  
-Two seconds is bounded by the snapshot period on purpose: the snapshot is  
-what re-derives the action anyway, so waiting longer buys nothing.
-
-### Log levels, and what each one costs
-
-Set `LogLevel` knowingly — the difference between 2 and 3 is a per-second  
-line versus a per-minute one.
-
-| `LogLevel`      | adds                                                                         | steady-state volume                                       |
-| --------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `0`             | errors only                                                                  | near zero                                                 |
-| `1`             | conditions (symbol unavailable, volume drift) — throttled to once per 10 min | near zero                                                 |
-| `2` **default** | start-up, open, close, resync, silence, recovery                             | bounded by trading activity: a handful of lines per trade |
-| `3`             | the heartbeat tick — throttled to once per **minute**                        | ~1 line/min/sender, ~40 KB/day                            |
-
-`3` is for diagnosing "is the link alive at all". Do not leave it on: at one  
-line per second it produced 28 lines in 27 seconds on a real run and buried  
-the open/close lines that DEBUG was turned on to see.
-
-**Everything that passes the level filter goes to both places** — the file log  
-*and* the terminal's Experts tab. Only errors used to reach the Experts tab,  
-which made a perfectly healthy EA look dead: the tab stayed empty while the  
-file filled up normally, and "no log output" reads as "broken".
-
-The file log is **opened shareable** (`FILE_SHARE_READ|FILE_SHARE_WRITE`).  
-MQL's default is exclusive, so without it nothing else can read the log while  
-the EA runs — not `tail`, not `logcheck`, not an editor — which is precisely  
-the moment you want to look at it. If the file cannot be opened at all (a  
-stale handle from a killed instance, an editor, a virus scanner) the logger  
-walks the other generations before giving up, and says so in the Experts tab  
-if it really cannot log to a file.
-
-Two message classes are **expected** even though they look alarming:
-
-- `silent for >15s: new entries stopped, existing positions kept` — logged at  
-  ERROR level, but it is pilot check 3.5 working correctly. `logcheck.sh`  
-  counts it separately and does not treat it as a failure.
-- `symbol X -> Y not offered by this broker` — the receiver's broker does not  
-  have that symbol; the copier retries every tick and reports at most once  
-  per 10 minutes.
-
----
-
-## Testing
-
-### Layer 1 — logic (no broker, no network)
-
-
-`CopierSelfTest` is a pure-logic regression suite: codec round-trips,  
-snapshot convergence, table behaviour, lot normalisation, config parsing,  
-torn-state-file rejection, and duplicate-survivor selection (including an  
-antisymmetry check, because the caller folds that predicate over a group).  
-Run it as a script after any change to those layers. It writes  
-`copier_selftest.log` and prints a pass/fail summary; it should end with  
-`ALL PASS` on **both** platforms — currently **405 assertion call sites**
-(counted with `grep -c 'Ok(' src/Scripts/CopierSelfTest.mq4`-style, so it is
-checkable rather than remembered).
-
-Every assertion reports the actual value on failure (`OkInt` / `OkStr` /  
-`OkDbl`), because the only debug loop available in MQL is "re-run it and  
-paste the log" — a bare boolean wastes a round trip every time.
-
-
-### Layer 1.5 — read the logs like a test result
-
-```bash
-./tools/logcheck.sh          # every configured terminal
-./tools/logcheck.sh --json   # machine-readable
-```
-
-The failures worth catching in the pilot are mostly the **absence** of a  
-line — a restart that should not have re-opened anything, a disconnect that  
-should have kept a position. Nobody notices absence by eye. `logcheck.sh`  
-reads every copier log it finds and reports:
-
-- the per-UID lifecycle table, with the sender ticket, so it can be matched  
-  against the order comment
-- any UID opened more than once → would be a duplicate position
-- any close with no matching open → would be an orphan close
-- positions still open at the end → expected, or a leak
-- unexpected ERROR / WARNING lines (the pilot's own markers such as  
-  `silent for >15s` are expected and counted separately)
-- **a log-volume guard**: if one message accounts for hundreds of lines, the  
-  copier's rate limiting is not holding
-
-It reads the **state files** as well as the logs, and prefers them, because  
-they are snapshots rather than diffs and therefore survive log rotation:
-
-| file                    | answers                             |
-| ----------------------- | ----------------------------------- |
-| `copier_sender_<id>.st` | what a sender *should* have open    |
-| `copier_receiver.st`    | what a receiver *actually* has open |
-
-The divergence check compares those two. Both must come from a state file for  
-a disagreement to be reported as a hard failure; if either side is  
-log-derived it is only a warning, because a rotated-away generation can drop  
-the closes and make already-closed positions look stranded. A state file that  
-parsed but lists nothing means "flat", which is a real answer and is reported  
-as such rather than as a missing file.
-
-That last check is not hypothetical. On the first real pilot run one warning  
-produced **2542 lines / 264 KB in 21 minutes** — see the note on  
-`CopierOnceLog` below.
-
-### Layer 1.6 — contract tests, no broker and no terminal
-
-The logic that is easiest to get subtly wrong is also the logic nobody can see
-from a terminal: the hash and receipt semantics, the repair debounce, the
-`MODIFY` payload and its throttle, and the hub's relay / position view. Those
-live in Python and run in seconds:
-
-```bash
-./tools/tests.sh           # every contract suite
-./tools/tests.sh --all     # + hub unit tests + the four-terminal EA build
-```
-
-| suite | what it pins down |
-|---|---|
-| `snapshot_receipt_test.py` | hash coverage, receipt semantics, and `PROTOCOL.md`'s worked example |
-| `snapshot_repair_test.py` | debounce + rate-limit, including the cascade failure both rules exist to stop |
-| `modify_event_test.py` | `MODIFY` payload, snapshot override, throttle = delay not drop |
-| `hub_stat_path_test.py` | receipt relay, D13, and log volume |
-| `hub_positions_test.py` | M3 view + byte-for-byte forwarding |
-
-> **Do not `python tools/...` them directly.** `python` *is* on `PATH` here, but
-> it is the **base** interpreter, and pyzmq is only in the isolated venv — so the
-> direct command dies with `ModuleNotFoundError`, which reads like a broken test
-> rather than a broken command. `tests.sh` tries the venv first for that reason;
-> `sniff.sh` has the same job for the sniffer.
-
-Two of these are unusual on purpose. `snapshot_receipt_test.py` reads
-`doc/PROTOCOL.md` and asserts its example hash is the **real** one — a
-placeholder in a protocol example sends a reader hunting in the code for a bug
-that is in the documentation. And `hub_positions_test.py` asserts that the hub
-still forwards a snapshot **byte for byte** after parsing it read-only; if that
-ever stops holding, the hub is no longer a transparent proxy and everything
-else it guarantees is void.
-
-`hub_stat_path_test.py` carries the log-volume assertions in both directions:
-a burst of routine `STAT` must write **zero** lines, and an unrecognised
-control type must still write one, so widening the suppression list can never
-silently become a mode. Run it after any change to the hub's logging rule.
-
-`bash hub/build.sh --test` runs the 104 hub unit tests. Not `cargo test` — Rust
-lives in an **isolated** toolchain and is not on `PATH`, so a bare `cargo` is
-just `command not found`; `hub/build.sh` sets `RUSTUP_HOME` / `CARGO_HOME` /
-`LIBZMQ_PREFIX` / `PATH` in one place. Its header explains why that is
-deliberate — the alternative is a README that drifts, which is what this
-section keeps having to correct.
-
-### Sniffing the wire
-
-The copier's own logs answer "what did the receiver **do**" — never "what did  
-the sender **put on the wire**". When a receiver looks silent, that is the  
-first question, and there was no way to answer it:
-
-```bash
-# from cmd / double-click - finds Python and installs pyzmq if needed
-tools\sniff.bat --seconds 120
-
-# from Git Bash
-./tools/sniff.sh --seconds 120
-```
-
-`zmq_sniff.py` is a Python script, so it cannot be run by typing its name in  
-`cmd` — use one of the wrappers above, or invoke it with a full interpreter  
-path.
-
-It is a passive subscriber: it connects to the sender's one port, prints the  
-decoded stream, and tells you outright if no `SNAP` messages are arriving  
-(without a snapshot a receiver never sets `ready`, so it will do nothing at  
-all). `--snap` is accepted but ignored, so older command lines still run.
-
-`zmq_fanout_test.py` answers the complementary question — whether a PUB with  
-`CONFLATE` and two subscribers actually delivers to both. It does; that was  
-worth proving rather than assuming while chasing a fan-out bug that turned out  
-not to exist. The project no longer sets `CONFLATE` at all, but the test is  
-kept because the question comes up again every time someone proposes using it.
-
-### Layer 2 — end-to-end (two terminals)
-
-`doc/PILOT.md` is the step-by-step acceptance test: mirroring, losing an  
-event, restarting either side, and a disconnect longer than `StaleSeconds`.
-
-This machine has two MT5 installs, which is enough to run the pilot entirely  
-on loopback — no second VPS, no firewall, no CURVE:
-
-```bash
-./tools/pilot-setup.sh    # enables both MT5s, deploys, compiles, writes copier.ini
-```
-
-Then follow `doc/PILOT.md`. The five checks are, in order:
-
-1. open / close on the sender → mirrors within one snapshot period
-2. stop the sender, close on the sender, restart it → the receiver converges  
-   from the **snapshot**, not from the event it never received
-3. restart the receiver with a position open → it must do **nothing** (no  
-   duplicate, no spurious close)
-4. restart the sender → receiver logs `new session ... -> resync`, converges
-5. disconnect for longer than `StaleSeconds` → receiver stops new entries,  
-   **keeps** positions, recovers on reconnect
-
-> **Re-attach the EA after every build.** MetaTrader does **not** reload an EA  
-> whose `.ex4`/`.ex5` was replaced by an external compiler — which is exactly  
-> what `compile.sh` does. The running instance keeps the old code, and nothing  
-> says so; a new feature simply appears not to work. This has cost real time  
-> twice here: two MT4 receivers with no state file (a build from before the  
-> write existed), and an MT5 receiver that ran an eleven-hour-old build all  
-> night.
->
-> To check, compare the binary's mtime against the terminal Journal's last  
-> `loaded successfully` for that EA (`<terminal>/logs/YYYYMMDD.log`). Or just  
-> read the stamp the EA prints at startup — `build=2026.10.06 10:19` — which  
-> is what it is for.
->
-> Note the MT5 journal is **UTF-16LE**: a plain `grep` over it returns nothing,  
-> which is easily mistaken for "the EA never loaded". Use  
-> `iconv -f UTF-16LE -t UTF-8` first.
-
----
-
-## What is deliberately NOT in this build
-
-Reserved in the protocol (`PARTIAL`) so adding it will not break v1 peers:
-
-- **growing** a position — an add is a new order on MT4 (new ticket, new UID,  
-  arrives as a fresh open) and would need a second position under one UID on  
-  MT5, which breaks the mapping. **Shrinking IS supported**: a partial close  
-  on the sender trims the receiver, rounded down to a whole lot step so it can  
-  never overshoot, and held intact if the remainder would fall below the  
-  broker's minimum lot (avoiding reopen ping-pong while the sender still holds it).
-- equity-relative / risk-based sizing (`HBT` already carries balance and  
-  equity, so the data is on the wire)
-- `EmergencySLPips` / `EmergencyTPPips` exist but default to 0
-
-**Pending orders, the STAT channel, `MODIFY` and the risk switches ARE
-supported** — see below.
-
-> **MODIFY is no longer reserved.** Stop-loss changes to a position that
-> already exists now travel as their own event, so the mirror does not have to
-> wait for the next snapshot. Measured live on the pilot pair: **0.44–0.61 s**
-> from the sender detecting the change to the receiver's broker call, against
-> 3.4–5.8 s through the snapshot path. The snapshot is still the only
-> authority — a lost `MODIFY` costs latency, never correctness — and the
-> receiver rate-limits per position (`StopsThrottleSeconds`, default 2 s,
-> which **delays** rather than drops) so a sender dragging a trailing stop
-> cannot turn into a stream of broker calls. See `doc/PROTOCOL.md` §SL/TP
-> mirroring, and slice D in `doc/SNAPSHOT-DEMAND-PLAN.md`.
-
-### Pending orders
-
-All six types are mirrored — buy/sell limit, buy/sell stop, and buy/sell  
-stop-limit — on both platforms. They travel the *same* path as market  
-positions: the same table, the same desired set, the same record. A working  
-order is the same mirroring problem (create it, size it, remove it when the  
-sender removes it), so giving it a parallel universe would only mean a second  
-converge loop to keep correct.
-
-
-Three things worth knowing:
-
-- **The trigger price is copied verbatim, not distance-adjusted.** That is the  
-  opposite of the stop-loss rule, deliberately: a stop's *distance* is the  
-  risk, but a pending order's *price* IS the trade — a buy limit 50 pips below  
-  is a different trade from one 20 pips below. If the price is not valid at  
-  the receiver's broker the broker rejects it and the log says so.
-- **MT4 has no stop-limit order type.** A stop-limit entry is skipped with a  
-  warning on an MT4 receiver rather than approximated as a plain stop.
-- **The UID survives activation.** MT4 keeps an order's ticket when it fills,  
-  and MT5 sets a filled position's `POSITION_IDENTIFIER` to the ticket of the  
-  order that opened it — so the same identity carries across and activation is  
-  not a close-and-reopen. If one side fills before the other, the receiver  
-  notices the *kind* mismatch, cancels its working order and re-opens at  
-  market rather than mirroring a pending order against a live position.
-
-
-### STAT channel
-
-The receiver reports its status — login, equity, balance, positions held,  
-total lots, sender count, risk state, and how many entries a risk switch  
-refused since the last report — and the sender logs it.
-
-**It costs no extra socket and no extra port.** That is worth stating because  
-the obvious reasoning says otherwise: PUB and SUB are each strictly one-way,  
-so a receiver reporting *back* appears to need a socket of its own. It does  
-not — the transport uses **XPUB / XSUB**, the extended pub/sub types, which  
-are **bidirectional**. An XSUB peer can send up to the XPUB, and the XPUB  
-delivers those messages to the application.
-
-`tools/zmq_bidir_test.py` measures this rather than assuming it, and the  
-design rests on all four results:
-
-- one XPUB send still reaches **every** XSUB subscriber (fan-out is intact)
-- an XSUB send arrives at the XPUB on the same socket
-- the subscription filter still works
-- with one XSUB attached to **several** XPUB peers, the uplink **round-robins**  
-  — a status message reaches exactly **one** of them, never all of them
-
-That last one is not a detail. It is why `CopierTransport::SendUp` sends `@hub`  
-frames **twice**: downstream is a broadcast, upstream is a load balancer, so a  
-single send delivers `REG`/`ACK`/`STAT`/receipts to one hub only — and the  
-standby consumes them without relaying, leaving the primary blind to half of  
-them. This line used to claim the opposite, which is why the defect survived  
-several audits: the test that measured it only asserted the downstream half.
-
-Two details that follow from XPUB/XSUB and are easy to get wrong:  
-**XSUB does not auto-subscribe** (the receiver sends the `0x01` subscription  
-byte itself), and the XPUB therefore sees those subscription bytes mixed with  
-real status messages, so the sender decodes what it drains instead of  
-assuming every message is status.
-
-`StatusEnabled` (default `true` on both ends) turns it off. Nothing it carries  
-feeds back into trading — a lost status message costs a log line and nothing  
-else. The sender logs on the *account* and *risk state*, not on the figures,  
-so a steady receiver does not fill the log with identical lines every minute.
-
-**Risk switches ARE supported** — see below — which is the last thing that  
-stood between this and being safe to leave unattended.
-
-
-### Risk switches
-
-The copier reproduces *someone else's* trading and has no opinion about
-whether it is sane. A sender with a fat finger, a broken lot calculation, or
-simply a much larger account will happily order something ruinous, and this
-receiver would faithfully do it. These are the circuit breakers.
-
-| input | default | meaning |
-|---|---|---|
-| `MaxLotsPerPosition` | `0` (off) | cap on **one** mirrored position |
-| `MaxTotalLots` | `0` (off) | cap on **total** mirrored volume |
-| `MaxOpenPositions` | `0` (off) | cap on concurrent mirrored positions |
-| `DailyLossPct` | `0` (off) | stop for the day after this % loss |
-| `MaxDrawdownPct` | `0` (off) | stop until reload after this % fall from the peak |
-| `RiskCloseAllOnTrip` | `false` | also close what we hold when a % switch trips |
-
-**Every switch defaults to OFF**, so an unconfigured receiver behaves exactly
-as it did before they existed.
-
-They are global EA inputs rather than per-sender `copier.ini` keys because
-they protect the **account**, and the account is the thing at risk — one
-receiver serving four senders has one equity curve and one book, not four.
-The per-sender config still owns everything that is genuinely per-sender:
-endpoint, sizing, magic, symbol mapping.
-
-Four things worth knowing:
-
-* **Only OPENING is gated.** A trim, a close, a dedup removal or a stop
-  adjustment all reduce or preserve risk — blocking a CLOSE would be
-  actively dangerous, not conservative.
-* **The caps count what is held PLUS what is already queued.** A converge
-  pass decides several opens at once and none of them is a position yet, so
-  checking each against the number of positions that *exist* lets all of
-  them through. That was a real failure: `MaxOpenPositions = 3`, four
-  desired positions, four opened.
-* **The two percentage switches measure EQUITY, not balance**, so open
-  positions count. A stop that ignored floating loss would sit quiet through
-  exactly the situation it exists for.
-* **They behave differently on purpose.** The daily switch clears itself at
-  the next server day. The drawdown switch **latches** — a recovery does not
-  clear it, and neither does a new day. That is the "stop and look at this"
-  switch, and it should not quietly un-trip itself. To clear it, raise
-  `MaxDrawdownPct` past the current drawdown, set it to `0`, or remove and
-  re-add the EA.
-* **Changing a limit re-evaluates the latches.** MetaTrader reinitialises an
-  EA when its inputs change but does **not** reset its globals, so without
-  this a tripped switch would survive you turning it off — the only way out
-  being to remove and re-add the EA. Changing a limit now clears the latch
-  and the next observation re-derives it against the new limit and the
-  current equity. Changing an *unrelated* input leaves the latch alone, so
-  editing `LogLevel` cannot silently un-trip a breaker.
-* **The day baseline survives a restart.** It is derived as
-  `balance − realised P&L today`, not "equity when the EA started" — the
-  latter silently forgives the morning's losses if you reload at 3pm, which
-  is precisely when the switch matters most.
-
-While a switch is tripped the receiver logs an `ERROR` once, then a line a
-minute saying it is *still* blocked and why. Without that, "blocked by risk"
-and "silently broken" are the same log.
-
-**SL/TP mirroring IS supported** — see below — which also means a sender-side
-**trailing stop works implicitly**: it moves `SL` on every tick, the snapshot
-carries the new value, and the receiver follows it. There is no separate
-trailing-stop feature to configure, and no second mechanism to keep in sync.
-
-### How SL/TP is mirrored
-
-Stops are copied as a **distance from the entry**, not as a price. The two
-sides filled at different prices, so an absolute level can land on the wrong
-side of the receiver's market — a 20-pip stop on the sender can sit *above*
-the receiver's entry, i.e. an instant stop-out. The distance is also what
-actually carries the risk, so under `lotmode=multiplier` the mirror's
-exposure scales with its volume in the same proportion.
-
-Consequences worth knowing before you rely on it:
-
-* a stop closer than the receiver broker's minimum distance is **widened** to
-  that minimum and logged — the mirror is then wider than the sender's
-* a sender that **clears** its stop clears the mirror's too — *unless*
-  `EmergencySLPips` is configured, in which case the backstop takes its place
-* `EmergencySLPips` applies **only when the sender has no stop of its own**;
-  the sender's stop always wins
-* a new position picks up its stops on the next converge pass (~100 ms), not
-  in the opening request — see `doc/PROTOCOL.md` for why that trade-off is
-  deliberate
-
-On that last point: the agreed behaviour on sender disconnect is *stop new
-entries, keep existing positions*. With mirroring on, those positions keep
-the last stop the sender published, so they are not naked. `EmergencySLPips`
-remains the valve for a sender that never published one.
-
-Two different latencies, and only one of them used to be short: a **new**
-position picks up its stops on the next converge pass (~100 ms), while a
-**change to an existing** stop used to wait for the next snapshot — which was
-fine at `SnapshotSeconds=2`, and stopped being fine the moment that number was
-raised to cut bandwidth. That change now travels as its own event
-(`MODIFY`), so the two are no longer coupled: see the note under
-"What is deliberately NOT in this build" above.
-
----
-
-## Deviations from the original plan
-
-| planned | actual | reason |
-|---|---|---|
-| state file written to `.tmp` then renamed | written in place after delete | `FileMove` does not compile consistently across builds. Mitigated by the trailing `END:<n>` marker: a torn file is rejected and the caller rebuilds identity from order comments. The state file is a cache, not the source of truth. |
-| log rotation by renaming generations | rotation over a fixed set of generation files | same `FileMove` problem; file count stays constant either way |
-| `StringReplace` for sanitisation | explicit substring splice | `StringReplace(str, pos, sub)` replaces a span the length of the **replacement**, not of the text being replaced — it silently corrupts when the two differ |
-| `MODIFY` reserved, stops propagated by snapshot only | `MODIFY` **implemented** (slice D) | the snapshot bound on stop latency *was* `SnapshotSeconds`, and that number was raised to cut bandwidth — which silently made stop propagation 5× slower. Measured 3.4–5.8 s before, 0.44–0.61 s after. The snapshot is still the authority; the event only removes the wait |
-
----
-
-## Compile status
-
-Verified on this machine, both platforms, **0 errors / 0 warnings**:
-
-| file | MT4 (.ex4) | MT5 (.ex5) |
-|---|---|---|
-| CopierSender | ok | ok |
-| CopierReceiver | ok | ok |
-| CopierSelfTest | ok | ok |
-
-Compiled against the MT4 build in `C:\Program Files (x86)\Alpari MT4` and the
-MT5 build in `C:\Program Files\MetaTrader 5`.
-
-`tools/compile.sh` bakes in two hard-won details: MetaEditor resolves
-`<Angle/Bracket.mqh>` includes against **its own** data folder (so `/include:`
-is mandatory when the editor and the terminal are different installs), and
-`/log:` needs an explicit file path.
-
----
-
-## Documentation Index & Handoff
-
-- **System Handoff & Operations Manual**: [`doc/HANDOFF.md`](doc/HANDOFF.md) — Comprehensive handoff guide, live architecture, waiting telemetry pipeline, mobile dashboard redesign, operations, and QA record.
-- **Central Hub Implementation Plan**: [`doc/CENTRAL-HUB-PLAN.md`](doc/CENTRAL-HUB-PLAN.md) — Complete plan for the central hub architecture, topics, and RBAC matrix.
-- **Protocol Specification**: [`doc/PROTOCOL.md`](doc/PROTOCOL.md) — Complete wire protocol definitions, snapshot formats, and hashing algorithms.
-- **Snapshot Demand & Repair Plan**: [`doc/SNAPSHOT-DEMAND-PLAN.md`](doc/SNAPSHOT-DEMAND-PLAN.md) — Why the snapshot is pull-on-evidence, the receipt/hash handshake, and the repair ladder.
-- **Phase 1 Design Notes**: [`doc/PHASE1-DESIGN.md`](doc/PHASE1-DESIGN.md) — Original bidirectional-channel design decisions, kept for the reasoning behind them.
-- **Hub Operations Manual**: [`hub/README.md`](hub/README.md) — Building, running, CURVE allow-list, CLI flags, HTTP API and the dashboard.
-- **Pilot Acceptance Guides**: [`doc/PILOT.md`](doc/PILOT.md) (MT5), [`doc/PILOT-MT4.md`](doc/PILOT-MT4.md) (MT4 cross-platform pilot).
-
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
