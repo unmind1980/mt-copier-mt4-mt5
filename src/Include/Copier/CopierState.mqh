@@ -1302,7 +1302,15 @@ public:
       ArrayResize(openLots,0);
       int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI
                      |FILE_SHARE_READ|FILE_SHARE_WRITE);
-      if(h==INVALID_HANDLE) return false;
+      if(h==INVALID_HANDLE)
+        {
+         // A86-07: If main state file is missing/unopenable, fall back to .tmp successor if available
+         if(StringFind(path,".tmp")<0 && FileIsExist(path+".tmp"))
+           {
+            return Load(path+".tmp",header,pos,count,openLots);
+           }
+         return false;
+        }
 
       int expected=-1;
       int got=0;

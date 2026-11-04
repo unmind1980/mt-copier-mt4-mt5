@@ -1709,6 +1709,28 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 通知模块在遇到 3xx 重定向时明确提示由于 SSRF 策略被拦截，引导使用直连 HTTPS；
      - `CopierReceiver.mq4` 在持仓数量回落时主动置空 `g_posCache` 尾部空出槽位的字符串句柄。
 
+### 九十九次演进：魔术数哈希校验、保本止损对齐、积压出队验证与第 86 轮全栈审计核销 (2026-11-04 11:00；全部闭环)
+
+- **技术落地项**：
+  1. **A86-01（MagicToSender 负缓存 64 位 Tag 校验杜绝桶碰撞）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中为 `g_magicLookup` 增加并行的 `g_magicLookupTag` 数组；
+     - 无论是命中正缓存还是负缓存（-1），均严格比对完整的 64 位 magic，杜绝因低 8 位取模碰撞导致真实仓位被误判为非自身订单，彻底解决 `closeall` 与风控全平漏单风险；
+  2. **A86-02（保本/锁盈侧移动止损完整镜像）**：
+     - 在 `src/Include/Copier/CopierDefs.mqh` 的 `CopierMirrorStop` 中重构止损逻辑，支持当发送端将止损推进到入场价（保本）或盈利侧（锁盈）时，以有符号偏移量（Signed Offset）精准重锚到本地开仓价；
+     - 彻底消除此前将保本/锁盈误判定为非法返回 0、导致接收端反向清空自身本地已有止损的致命缺陷；在 `CopierSelfTest.mq4` 增加保本与锁盈断言覆盖；
+  3. **A86-03（积压 OPEN 出队前复核发送端在线与最新持仓）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `ExecuteQueue` 中，出队执行 OPEN 前先校验发送端 `g_ready` 与 `!g_stale`，并遍历 `g_desired` 复核该 UID 是否依然处于最新持仓列表中；若发送端在暂停/排队期间已平仓或失联，安全丢弃该积压 OPEN，防止开出孤儿仓；
+  4. **A86-04（配置增量同步两阶段提交落盘保护）**：
+     - 在 `hub/src/config.rs` 中重构 `apply_delta_lines`：先在局部暂存，通过 `inner.append_many(&to_append)?` 确保完整落盘后，才提交至内存 `inner.current`；若磁盘写入失败，内存保持未被污染，Standby 在下一轮中能够正确重试补齐；
+  5. **A86-05 & A86-06（--commands none 内存模式恢复与 load 错误透传）**：
+     - 在 `hub/src/commands.rs` 的 `append_many` 中识别 `!self.enabled`（纯内存模式），放行计数递增与命令入队，恢复 `--commands none` 正常可用性；
+     - `commands::load` 仅将 `NotFound` 视为干净空表，真实读取与权限错误向上透传；`replace_all` 重新打开文件失败显式返回 Err；
+  6. **A86-07（状态文件 tmp 丢失主文件后继回退恢复）**：
+     - 在 `src/Include/Copier/CopierState.mqh` 的 `Load` 中，若主文件不存在或无法打开，自动回退尝试读取校验 `.tmp` 后继文件；
+  7. **A86-08 & A86-09（HA 状态同步全面错误感知与全局命令前端可视化）**：
+     - 在 `hub/src/cluster.rs` 中全面用 `?` 检查 users、notifications、curve_clients 文件的创建、写入与刷盘错误，有任何失败即标记 `file_sync_err`，杜绝文件损坏谎报 `synced`；
+     - 在 `hub/src/assets/dashboard.html` 中优化全局操作反馈展示：当存在部分节点下发失败时显示醒目红色告警，并详细列出失败节点与错误信息。
+
 ---
 
 ## 9. 最终交付状态确认
@@ -1732,7 +1754,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
     - `i18n_check.py`：435 / 435 键在 6 种语言环境中全量 PASS (ALL GREEN)
     - `dash_check.py`：252 个前端元素与 138 个函数完全校验匹配。
 - **源码与文档自洽**：
-  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护与时钟门禁 Fail-Safe）与业务代码实现 100% 吻合。
+  - 全量文档中描述的通信协议（1MB 宽限解压、双端双发、距离重锚、ECN/MT5 10016 平价降级、原生 SSL/TLS、On-Demand 隐形按需监听、多 Sender 双栏排版、按需持仓遥测、极速平仓、双向全功能列头排序、WeChat 虾推啥微信通知、全渠道独立通知语言选择、全界面响应式字号缩放、命令日志两维序对齐、状态文件掉电后继保护、定向 GC 门禁、备机两阶段同步屏障、Epoch 溢出防护、时钟门禁 Fail-Safe、Magic 完整标签防碰撞与移动保本止损对齐）与业务代码实现 100% 吻合。
 
 ---
 

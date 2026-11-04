@@ -1246,6 +1246,10 @@ bool CopierPreferSurvivor(const CopierPos &a,const CopierPos &b,const double wan
 //
 // The result is NOT rounded - the caller owns the symbol's digits.
 //=====================================================================
+// A86-02: Support break-even and trailing profit stops where SL is on entry or profit side of senderOpen.
+// Preserves the sender's actual stop distance relative to entry:
+// For BUY, when senderStop < senderOpen (loss side), local SL is below localOpen.
+// When senderStop >= senderOpen (break-even/profit lock), local SL is placed at localOpen + (senderStop - senderOpen).
 double CopierMirrorStop(const double senderStop,const double senderOpen,
                         const double localOpen,const int side,const bool isSl)
   {
@@ -1253,23 +1257,38 @@ double CopierMirrorStop(const double senderStop,const double senderOpen,
    if(senderOpen<=0.0) return 0.0;
    if(localOpen<=0.0)  return 0.0;
 
-   //--- a stop-loss sits against the trade, a take-profit with it
-   bool below=(isSl ? (side==CP_SIDE_BUY) : (side==CP_SIDE_SELL));
-
-   double dist=0.0;
-   if(below)
+   if(isSl)
      {
-      if(senderStop>=senderOpen) return 0.0;   // wrong side of its own entry
-      dist=senderOpen-senderStop;
+      // A86-02: For Stop Loss, compute signed offset from sender's entry
+      if(side==CP_SIDE_BUY)
+        {
+         double offset=senderStop-senderOpen;
+         return localOpen+offset;
+        }
+      else
+        {
+         double offset=senderOpen-senderStop;
+         return localOpen-offset;
+        }
      }
    else
      {
-      if(senderStop<=senderOpen) return 0.0;   // wrong side of its own entry
-      dist=senderStop-senderOpen;
+      // Take Profit sits with trade direction
+      bool above=(side==CP_SIDE_BUY);
+      double dist=0.0;
+      if(above)
+        {
+         if(senderStop<=senderOpen) return 0.0; // wrong side of entry for TP
+         dist=senderStop-senderOpen;
+        }
+      else
+        {
+         if(senderStop>=senderOpen) return 0.0; // wrong side of entry for TP
+         dist=senderOpen-senderStop;
+        }
+      if(dist<=0.0) return 0.0;
+      return (above ? (localOpen+dist) : (localOpen-dist));
      }
-   if(dist<=0.0) return 0.0;
-
-   return (below ? (localOpen-dist) : (localOpen+dist));
   }
 
 //+------------------------------------------------------------------+

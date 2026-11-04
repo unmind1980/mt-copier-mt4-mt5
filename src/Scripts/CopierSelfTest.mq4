@@ -1077,17 +1077,24 @@ void TestMirrorStop()
    OkDbl("mirror: unknown local entry is refused",
          CopierMirrorStop(1.09800,1.10000,0.0,CP_SIDE_BUY,true),0.0,0.0000001);
 
-   //--- A stop on the WRONG SIDE of the sender's own entry is REFUSED
-   //--- rather than guessed at: mirroring it would place a stop that is
-   //--- already breached, and a wrong stop is worse than no stop.
-   OkDbl("mirror: buy sl above its own entry is refused",
-         CopierMirrorStop(1.10100,1.10000,1.10300,CP_SIDE_BUY,true),0.0,0.0000001);
-   OkDbl("mirror: sell sl below its own entry is refused",
-         CopierMirrorStop(1.09900,1.10000,1.09700,CP_SIDE_SELL,true),0.0,0.0000001);
+   //--- A86-02: Break-even and trailing profit stops:
+   //--- BUY SL at entry or above entry (profit lock) is preserved and re-anchored on localOpen
+   OkDbl("mirror: buy sl at entry (break-even)",
+         CopierMirrorStop(1.10000,1.10000,1.10300,CP_SIDE_BUY,true),1.10300,0.0000001);
+   OkDbl("mirror: buy sl above entry (profit lock +10 pips)",
+         CopierMirrorStop(1.10100,1.10000,1.10300,CP_SIDE_BUY,true),1.10400,0.0000001);
+
+   //--- SELL SL at entry or below entry (profit lock) is preserved and re-anchored on localOpen
+   OkDbl("mirror: sell sl at entry (break-even)",
+         CopierMirrorStop(1.10000,1.10000,1.09700,CP_SIDE_SELL,true),1.09700,0.0000001);
+   OkDbl("mirror: sell sl below entry (profit lock +10 pips)",
+         CopierMirrorStop(1.09900,1.10000,1.09700,CP_SIDE_SELL,true),1.09600,0.0000001);
+
+   //--- TP on the wrong side of entry is still refused
    OkDbl("mirror: buy tp below its own entry is refused",
          CopierMirrorStop(1.09900,1.10000,1.10300,CP_SIDE_BUY,false),0.0,0.0000001);
-   OkDbl("mirror: sl exactly at the entry is refused",
-         CopierMirrorStop(1.10000,1.10000,1.10300,CP_SIDE_BUY,true),0.0,0.0000001);
+   OkDbl("mirror: sell tp above its own entry is refused",
+         CopierMirrorStop(1.10100,1.10000,1.09700,CP_SIDE_SELL,false),0.0,0.0000001);
   }
 
 //=====================================================================

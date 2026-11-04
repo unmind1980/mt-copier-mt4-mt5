@@ -183,6 +183,7 @@ pub struct Command {
 
 struct Inner {
     file: Option<File>,
+    enabled: bool,
     /// id -> the command, at its LATEST state. Rebuilt last-wins from the
     /// file, so there is no separate "current state" record to fall out of
     /// step with the history.
@@ -213,7 +214,7 @@ impl CommandStore {
         //--- Load BEFORE opening the append handle: the journal may be
         //--- compacted below, and rewriting a file that is open for append
         //--- would leave the handle writing into the old inode.
-        let (mut commands, seq, torn, line_count, max_seq) = load(path);
+        let (mut commands, seq, torn, line_count, max_seq) = load(path)?;
 
         //--- Retention. A command is never deleted while it is pending - those
         //--- are the ones still owed an answer - but a terminal one (acked,
@@ -223,6 +224,7 @@ impl CommandStore {
         let now = unix_secs();
         let mut inner = Inner {
             file: None,
+            enabled: true,
             commands: HashMap::new(),
             in_flight: HashSet::new(),
             seq,
@@ -285,6 +287,7 @@ impl CommandStore {
         CommandStore {
             inner: Mutex::new(Inner {
                 file: None,
+                enabled: false,
                 commands: HashMap::new(),
                 in_flight: HashSet::new(),
                 seq: HashMap::new(),
@@ -483,16 +486,14 @@ impl CommandStore {
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
         let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
-        // BUG-85-02: Ensure file handle is reopened regardless of replace success/failure
-        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        // BUG-85-02 & A86-06: Ensure file handle is reopened and report error if reopen fails
+        let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
         {
             let mut inner = self.inner.lock_or_recover();
-            if let Ok(file) = reopen_res {
-                inner.file = Some(file);
-            }
+            inner.file = Some(file);
         }
         replace_res?;
-        let (mut commands, seq, torn, line_count, max_seq) = load(&self.path);
+        let (mut commands, seq, torn, line_count, max_seq) = load(&self.path)?;
         let now = unix_secs();
         let mut inner = self.inner.lock_or_recover();
         inner.commands = std::mem::take(&mut commands);
@@ -932,7 +933,15 @@ impl Inner {
         let f = match self.file.as_mut() {
             Some(f) => f,
             None => {
-                // BUG-85-02: If file handle is missing on an enabled store, fail-closed rather than pretending success
+                // A86-05: If store is intentionally disabled (memory-only mode), append is a no-op that updates memory counters.
+                if !self.enabled {
+                    self.line_count += cs.len();
+                    for c in cs {
+                        self.max_seq = self.max_seq.max(c.seq);
+                    }
+                    return Ok(());
+                }
+                // When enabled but file handle is unexpectedly None, fail-closed
                 return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
             }
         };
@@ -1051,7 +1060,7 @@ fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io:
     Ok(commands.len())
 }
 
-fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, usize, u64) {
+fn load(path: &Path) -> io::Result<(HashMap<String, Command>, HashMap<String, u64>, u64, usize, u64)> {
     let mut commands: HashMap<String, Command> = HashMap::new();
     let mut seq: HashMap<String, u64> = HashMap::new();
     let mut torn = 0u64;
@@ -1059,7 +1068,9 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
     let mut max_seq = 0u64;
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(_) => return (commands, seq, torn, line_count, max_seq),
+        // A86-06: Propagate read/permission errors; only treat NotFound as clean empty journal
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((commands, seq, torn, line_count, max_seq)),
+        Err(e) => return Err(e),
     };
     let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
@@ -1134,7 +1145,7 @@ fn load(path: &Path) -> (HashMap<String, Command>, HashMap<String, u64>, u64, us
             commands.insert(id.to_string(), cmd);
         }
     }
-    (commands, seq, torn, line_count, max_seq)
+    Ok((commands, seq, torn, line_count, max_seq))
 }
 
 fn unix_secs() -> u64 {
@@ -1461,6 +1472,13 @@ mod tests {
         assert!(c1.id.starts_with("receiver-1-"));
         assert!(c1.id.ends_with("-pause-1"));
         assert!(!s1.salt.is_empty());
+        // A86-05: disabled store should correctly track state in memory rather than failing with 500
+        assert_eq!(c1.state, STATE_PENDING);
+        assert!(c1.err.is_empty());
+        assert_eq!(s1.stats().1, 1);
+        assert!(s1.command(&c1.id).is_some());
+        assert!(s1.ack(&c1.id, true, 0, ""));
+        assert_eq!(s1.stats().1, 0);
     }
 
     #[test]

@@ -251,6 +251,7 @@ impl ConfigStore {
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
         let mut to_append = Vec::new();
+        let mut staged_current: HashMap<String, Revision> = HashMap::new();
         for line in raw_lines {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
                 let node = v["node"].as_str().unwrap_or("").to_string();
@@ -268,12 +269,12 @@ impl ConfigStore {
                     kind: v["kind"].as_str().unwrap_or("").to_string(),
                     from_rev: v["from_rev"].as_u64().unwrap_or(0),
                 };
-                let should_advance = match inner.current.get(&node) {
+                let should_advance = match staged_current.get(&node).or_else(|| inner.current.get(&node)) {
                     Some(cur) => r.rev > cur.rev,
                     None => true,
                 };
                 if should_advance {
-                    inner.current.insert(node, r.clone());
+                    staged_current.insert(node, r.clone());
                     // P0-03, N70-05 & N74-04: Collect replicated line for single batch flush.
                     // Only append new revisions so Standby journal line count does not inflate
                     // beyond Primary on redundant replay batches (preventing infinite full resync oscillation).
@@ -282,8 +283,13 @@ impl ConfigStore {
                 }
             }
         }
+        // A86-04: Persist to disk FIRST before updating in-memory current map.
+        // If append_many fails, inner.current remains unchanged, allowing future sync attempts to re-apply.
         if !to_append.is_empty() {
             inner.append_many(&to_append)?;
+        }
+        for (node, r) in staged_current {
+            inner.current.insert(node, r);
         }
         Ok(applied)
     }
@@ -308,13 +314,11 @@ impl ConfigStore {
             inner.file = None; // Drop file handle so Windows allows replacing the file
         }
         let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
-        // BUG-85-02: Ensure file handle is reopened regardless of replace success/failure so inner.file never stays None
-        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        // BUG-85-02 & A86-06: Ensure file handle is reopened and report error if reopen fails
+        let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
         {
             let mut inner = self.inner.lock_or_recover();
-            if let Ok(file) = reopen_res {
-                inner.file = Some(file);
-            }
+            inner.file = Some(file);
         }
         replace_res?;
         // N73-03: Propagate load error instead of unwrap_or_default() wiping in-memory state

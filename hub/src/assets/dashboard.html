@@ -6825,10 +6825,18 @@ function sendGlobal(op){
       msgEl.textContent = res.j.error + (res.j.detail ? " — " + res.j.detail : "");
       return;
     }
-    var ids = (res.j.issued || []).map(function(x){ return x.command_id; }).join(", ");
-    msgEl.className = "opmsg ok";
-    msgEl.textContent = "global " + op + ": " + (res.j.count || 0) + " command(s) issued"
-      + (ids ? " — " + ids : "");
+    var okItems = (res.j.issued || []).filter(function(x){ return !x.failed; });
+    var failItems = (res.j.issued || []).filter(function(x){ return x.failed; });
+    if(failItems.length > 0){
+      msgEl.className = "opmsg bad";
+      msgEl.textContent = "global " + op + ": " + failItems.length + " failed ("
+        + failItems.map(function(x){ return x.node + ": " + x.error; }).join("; ") + ")";
+    } else {
+      var ids = okItems.map(function(x){ return x.command_id; }).join(", ");
+      msgEl.className = "opmsg ok";
+      msgEl.textContent = "global " + op + ": " + (res.j.count || 0) + " command(s) issued"
+        + (ids ? " — " + ids : "");
+    }
   }).catch(function(e){
     if(msgEl){ msgEl.className = "opmsg bad"; msgEl.textContent = "request failed: " + e.message; }
     else console.error("[sendCommand] request failed:", e);

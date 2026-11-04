@@ -538,25 +538,36 @@ int     g_nSenders=0;
 //--- scan instead of returning a wrong sender.
 #define CP_MAGIC_LOOKUP 256
 int     g_magicLookup[CP_MAGIC_LOOKUP];
+long    g_magicLookupTag[CP_MAGIC_LOOKUP];
 
 int MagicToSender(const long magic)
   {
    int h=(int)(magic&(CP_MAGIC_LOOKUP-1));
    if(h<0 || h>=CP_MAGIC_LOOKUP) h=0;
-   int c=g_magicLookup[h];
-   if(c>0 && c<=g_nSenders && g_magic[c-1]==magic) return c-1;
-   if(c<0) return -1;                     // cached miss
+   // A86-01: Verify full 64-bit magic tag on lookup cache hit to prevent hash bucket collision
+   if(g_magicLookupTag[h]==magic)
+     {
+      int c=g_magicLookup[h];
+      if(c>0 && c<=g_nSenders && g_magic[c-1]==magic) return c-1;
+      if(c<0) return -1;                     // verified cached miss for this exact magic
+     }
    for(int k=0;k<g_nSenders;k++)
      {
       if(g_magic[k]!=magic) continue;
       g_magicLookup[h]=k+1;
+      g_magicLookupTag[h]=magic;
       return k;
      }
    g_magicLookup[h]=-1;
+   g_magicLookupTag[h]=magic;
    return -1;
   }
 
-void MagicLookupClear() { ArrayInitialize(g_magicLookup,0); }
+void MagicLookupClear()
+  {
+   ArrayInitialize(g_magicLookup,0);
+   ArrayInitialize(g_magicLookupTag,0);
+  }
 
 
 struct CopierWaitItem
@@ -3003,6 +3014,39 @@ void ExecuteQueue()
       //--- allows the entry through the normal path.
       if(a.kind==CP_ACT_OPEN)
         {
+         // A86-03: Freshness & desire verification before draining queued OPEN.
+         // If sender is unready, silent/stale, or has already closed/cancelled the trade, drop stale OPEN.
+         int asi=a.senderIdx;
+         if(asi>=0 && asi<g_nSenders)
+           {
+            if(!g_ready[asi] || g_stale[asi])
+              {
+               if(g_once.ShouldEmit("drainstale|"+g_sid[asi]+"|"+a.uid))
+                  g_log.Warn("queued open "+a.uid+" "+a.sym+" dropped: sender "+g_sid[asi]
+                             +" is not ready or stale. Next snapshot will re-derive if still desired.");
+               ShiftQueue();
+               continue;
+              }
+            int base=asi*CP_MAX_POSITIONS;
+            bool stillDesired=false;
+            for(int d=0; d<g_desiredCount[asi]; d++)
+              {
+               if(g_desired[base+d].uid==a.uid)
+                 {
+                  stillDesired=true;
+                  break;
+                 }
+              }
+            if(!stillDesired)
+              {
+               if(g_once.ShouldEmit("drainundesired|"+g_sid[asi]+"|"+a.uid))
+                  g_log.Info("queued open "+a.uid+" "+a.sym+" dropped: sender "+g_sid[asi]
+                             +" no longer holds it (closed/cancelled while open was queued).");
+               ShiftQueue();
+               continue;
+              }
+           }
+
          // R47-05: Defend against unpopulated account positions before initial scan completes
          if(!g_acctScanned)
            {

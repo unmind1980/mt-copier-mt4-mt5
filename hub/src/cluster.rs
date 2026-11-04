@@ -773,63 +773,93 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     }
                                 }
 
-                                // Apply full users content if updated
+                                // Apply full users content if updated (A86-08: propagate all errors)
                                 let mut reload_users = false;
                                 if let Some(u_content) = data.users_content {
                                     let tmp = users_path.with_extension("json.tmp");
-                                    if let Ok(mut f) = File::create(&tmp) {
-                                        let _ = f.write_all(u_content.as_bytes());
-                                        let _ = f.sync_all();
-                                        drop(f);
-                                        //--- DEF-61-05: safe replacement with Windows lock fallback
-                                        if let Err(e) = atomic_replace_file(&tmp, &users_path) {
-                                            let msg = format!("users file replace failed: {}", e);
+                                    match File::create(&tmp).and_then(|mut f| {
+                                        f.write_all(u_content.as_bytes())?;
+                                        f.sync_all()
+                                    }) {
+                                        Ok(()) => {
+                                            if let Err(e) = atomic_replace_file(&tmp, &users_path) {
+                                                let msg = format!("users file replace failed: {}", e);
+                                                eprintln!("[hub] cluster sync: {}", msg);
+                                                file_sync_err = Some(msg);
+                                            } else {
+                                                reload_users = true;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("users file write failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
-                                        } else {
-                                            reload_users = true;
                                         }
                                     }
                                 }
 
-                                // Apply full notification channels if updated
+                                // Apply full notification channels if updated (A86-08: propagate all errors)
                                 if let Some(n_content) = data.notif_content {
                                     let p = notif_store.lock_or_recover().path().to_path_buf();
                                     let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
-                                    if let Ok(mut f) = File::create(&tmp_path) {
-                                        let _ = f.write_all(n_content.as_bytes());
-                                        let _ = f.sync_all();
-                                        drop(f);
-                                        if let Err(e) = atomic_replace_file(&tmp_path, &p) {
-                                            let msg = format!("notifications file replace failed: {}", e);
+                                    match File::create(&tmp_path).and_then(|mut f| {
+                                        f.write_all(n_content.as_bytes())?;
+                                        f.sync_all()
+                                    }) {
+                                        Ok(()) => {
+                                            if let Err(e) = atomic_replace_file(&tmp_path, &p) {
+                                                let msg = format!("notifications file replace failed: {}", e);
+                                                eprintln!("[hub] cluster sync: {}", msg);
+                                                file_sync_err = Some(msg);
+                                            } else if let Err(e) = notif_store.lock_or_recover().load() {
+                                                let msg = format!("notifications reload failed: {}", e);
+                                                eprintln!("[hub] cluster sync: {}", msg);
+                                                file_sync_err = Some(msg);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("notifications file write failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
-                                        } else {
-                                            let _ = notif_store.lock_or_recover().load();
                                         }
                                     }
                                 }
 
-                                // P1-6: Apply curve clients content via atomic file overwrite
+                                // P1-6 & A86-08: Apply curve clients content via atomic file overwrite with error propagation
                                 if let Some(c_content) = data.curve_clients_content {
                                     let tmp = format!("{}.tmp.{}", curve_clients_path.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
-                                    if let Ok(mut f) = File::create(&tmp_path) {
-                                        let _ = f.write_all(c_content.as_bytes());
-                                        let _ = f.sync_all();
-                                        drop(f);
-                                        if let Err(e) = atomic_replace_file(&tmp_path, &curve_clients_path) {
-                                            let msg = format!("curve clients file replace failed: {}", e);
+                                    match File::create(&tmp_path).and_then(|mut f| {
+                                        f.write_all(c_content.as_bytes())?;
+                                        f.sync_all()
+                                    }) {
+                                        Ok(()) => {
+                                            if let Err(e) = atomic_replace_file(&tmp_path, &curve_clients_path) {
+                                                let msg = format!("curve clients file replace failed: {}", e);
+                                                eprintln!("[hub] cluster sync: {}", msg);
+                                                file_sync_err = Some(msg);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("curve clients file write failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
                                         }
                                     }
                                 }
 
-                                // N72-03: Pre-load users outside SharedState lock to eliminate disk read & parse under lock
+                                // N72-03 & A86-08: Pre-load users outside SharedState lock; report error if parse fails
                                 let loaded_users = if reload_users {
-                                    crate::users::UserStore::load_at(&users_path).ok().map(|u| u.into_users())
+                                    match crate::users::UserStore::load_at(&users_path) {
+                                        Ok(u) => Some(u.into_users()),
+                                        Err(e) => {
+                                            let msg = format!("users file parse failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                            None
+                                        }
+                                    }
                                 } else {
                                     None
                                 };
