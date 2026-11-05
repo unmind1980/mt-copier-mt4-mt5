@@ -1903,7 +1903,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - 在 `hub/src/registry.rs` 中，当接收端汇报 `HELD=0` 且 `ORPHAN=0` 时，仅过滤清除受控单（`managed: true`），完整保留未受控手工单，杜绝在 60s POS 上报间隔内手工单每 59 秒闪烁清空；
      - 在 `hub/src/cluster.rs` 中，当 Standby 接收到增量日志但在本地追加 0 行且行数仍落后于 Primary 时，自动触发 `full_cfg_resync`/`full_cmd_resync` 进行整文件对齐，彻底消除历史重复过滤导致的 1Hz 同步死循环；
   9. **服务启动诊断、WS 快速会话复核与删除错误细化（M1, M2, M3）**：
-     - `hub/src/api.rs` 启动时若 TLS 证书损坏明确输出 WARN 告警；WebSocket 连接增加 5 秒独立会话复核定时器；`notifications_delete` 明确区分 500 I/O 错误与 404 未找到。
+     - `hub/src/api.rs` 启动时若 TLS 证书损坏明确输出 WARN 告警；WebSocket 连接增加 5 秒独立会话复核定时器；`notifications_delete` 明确区分 500 I/O 错误与 404 未找到；
+  10. **PruneTo 无害化受限优化（O1）**：
+     - 在 `src/Include/Copier/CopierState.mqh` 的 `PruneTo` 中实现双短路与触碰槽位追踪：本地空仓（`m_n<=0`）直接返回 0；远端空仓（`desiredCount<=0`）直接标记清空；建表时通过静态数组记录实际占用的 `touchedSlots`，退出前仅重置用过的槽位，彻底消除了每次 4096 次 `ArrayInitialize` 与全表清理循环；并在 `removed==0` 的稳态下跳过 `UsedCount()` 扫描，兼具极速执行与 M12 权威派生保障。
 
 ---
 

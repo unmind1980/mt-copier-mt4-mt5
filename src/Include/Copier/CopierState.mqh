@@ -490,10 +490,30 @@ public:
    //--- snapshot prunes the table back down (bounded growth guarantee).
    int               PruneTo(const CopierPos &desired[],const int desiredCount)
      {
+      // O1: Fast path: when local table is already empty, nothing to prune
+      if(m_n<=0) return 0;
+
       int removed=0;
+
+      // O1: Fast path: when desired is empty, drop all active slots directly without hashing
+      if(desiredCount<=0)
+        {
+         for(int i=0;i<CP_MAX_POSITIONS && m_n>0;i++)
+           {
+            if(!SlotValid(i)) continue;
+            m_p[i].used=false;
+            m_p[i].uid="";
+            removed++;
+            m_tkValid=false;
+           }
+         m_n=0;
+         return removed;
+        }
+
       static uint desHash[CP_UIDIDX_SLOTS];
       static string desUid[CP_UIDIDX_SLOTS];
-      ArrayInitialize(desHash,0);
+      static int touchedSlots[CP_MAX_POSITIONS];
+      int touchedCount=0;
 
       int mask=CP_UIDIDX_SLOTS-1;
       for(int k=0;k<desiredCount;k++)
@@ -506,7 +526,13 @@ public:
          for(int p=0;p<CP_UIDIDX_SLOTS;p++)
            {
             int b=(s+p)&mask;
-            if(desHash[b]==0) { desHash[b]=hf; desUid[b]=desired[k].uid; break; }
+            if(desHash[b]==0)
+              {
+               desHash[b]=hf;
+               desUid[b]=desired[k].uid;
+               if(touchedCount<CP_MAX_POSITIONS) touchedSlots[touchedCount++]=b;
+               break;
+              }
             if(desHash[b]==hf && desUid[b]==desired[k].uid) break;
            }
         }
@@ -533,12 +559,28 @@ public:
             m_tkValid=false;
            }
         }
-      //--- M12 fix: clear static desUid references so no strings linger across calls
-      for(int k=0;k<CP_UIDIDX_SLOTS;k++)
+
+      //--- M12 fix & O1: clear static desUid references so no strings linger across calls.
+      //--- Only clear touched slots (O(desiredCount) instead of O(4096)).
+      //--- If touchedCount saturated CP_MAX_POSITIONS, fallback to full sweep as failsafe.
+      if(touchedCount<CP_MAX_POSITIONS)
         {
-         if(desHash[k]!=0) { desHash[k]=0; desUid[k]=""; }
+         for(int t=0;t<touchedCount;t++)
+           {
+            int b=touchedSlots[t];
+            desHash[b]=0;
+            desUid[b]="";
+           }
         }
-      m_n=UsedCount();          // derived, so Count() can never disagree
+      else
+        {
+         for(int k=0;k<CP_UIDIDX_SLOTS;k++)
+           {
+            if(desHash[k]!=0) { desHash[k]=0; desUid[k]=""; }
+           }
+        }
+
+      if(removed>0) m_n=UsedCount(); // derived when rows removed, so Count() can never disagree
       return removed;
      }
   };
