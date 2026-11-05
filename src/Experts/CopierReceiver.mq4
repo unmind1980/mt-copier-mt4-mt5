@@ -888,22 +888,11 @@ int               g_uidPeakLotsCount=0;
 #define CP_PEAK_LOOKUP 4096
 int g_peakLookup[CP_PEAK_LOOKUP];
 
-uint PeakUidHash(const string uid)
-  {
-   uint h=2166136261;                           // FNV-1a
-   int  n=StringLen(uid);
-   for(int i=0;i<n;i++)
-     {
-      h^=(uint)StringGetCharacter(uid,i);
-      h*=16777619;
-     }
-   return h;
-  }
-
+// MQL-10: Uniformly use CopierHash32 for peak lookup hash slots
 int PeakFind(const string uid)
   {
    if(StringLen(uid)==0) return -1;
-   int h=(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1));
+   int h=(int)(CopierHash32(uid)&(CP_PEAK_LOOKUP-1));
    int c=g_peakLookup[h];
    if(c>0 && c<=g_uidPeakLotsCount && g_uidPeakLots[c-1].uid==uid) return c-1;
    for(int i=0;i<g_uidPeakLotsCount;i++)
@@ -977,7 +966,7 @@ double GetOrUpdateSenderPeakLots(const string uid,const double curLots)
       int n=g_uidPeakLotsCount++;
       g_uidPeakLots[n].uid=uid;
       g_uidPeakLots[n].peakLots=curLots;
-      g_peakLookup[(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1))]=n+1;
+      g_peakLookup[(int)(CopierHash32(uid)&(CP_PEAK_LOOKUP-1))]=n+1;
       return curLots;
      }
    return curLots;
@@ -995,9 +984,9 @@ void ForgetSenderPeakLots(const string uid)
    g_uidPeakLotsCount--;
    //--- both the forgotten uid and the one that moved into its slot have a
    //--- cached index that is now wrong
-   g_peakLookup[(int)(PeakUidHash(uid)&(CP_PEAK_LOOKUP-1))]=0;
+   g_peakLookup[(int)(CopierHash32(uid)&(CP_PEAK_LOOKUP-1))]=0;
    if(StringLen(moved)>0)
-      g_peakLookup[(int)(PeakUidHash(moved)&(CP_PEAK_LOOKUP-1))]=0;
+      g_peakLookup[(int)(CopierHash32(moved)&(CP_PEAK_LOOKUP-1))]=0;
   }
 
 CopierSeenRing  g_mktClosed;
@@ -3319,36 +3308,40 @@ void ExecuteQueue()
            }
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
            {
-            if(a.ordKind==CP_ORD_MARKET)
+            // MQL-07: In asyncMode (OrderSendAsync), broker execution is unconfirmed; do NOT deduct risk counters in this tick
+            if(!asyncMode)
               {
-               if(a.senderIdx>=0)
+               if(a.ordKind==CP_ORD_MARKET)
                  {
-                  if(g_ourPositions>0) g_ourPositions--;
-                  if(g_ourCount>0) g_ourCount--;
-                  g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+                  if(a.senderIdx>=0)
+                    {
+                     if(g_ourPositions>0) g_ourPositions--;
+                     if(g_ourCount>0) g_ourCount--;
+                     g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+                    }
+                  if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+                    {
+                     //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
+                     //--- position is closed before an open lands in the same tick, these may become negative;
+                     //--- they are safely floored at 0 via MathMax at the risk gate (line 2809).
+                     sAddedCount[a.senderIdx]--;
+                     sAddedLots[a.senderIdx]-=a.lots;
+                    }
                  }
-               if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+               else if(a.ordKind==CP_ORD_PENDING)
                  {
-                  //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
-                  //--- position is closed before an open lands in the same tick, these may become negative;
-                  //--- they are safely floored at 0 via MathMax at the risk gate (line 2809).
-                  sAddedCount[a.senderIdx]--;
-                  sAddedLots[a.senderIdx]-=a.lots;
-                 }
-              }
-            else if(a.ordKind==CP_ORD_PENDING)
-              {
-               // N49-10: Pending order deletion reduces pending count and total count/lots
-               if(a.senderIdx>=0)
-                 {
-                  if(g_ourPending>0) g_ourPending--;
-                  if(g_ourCount>0) g_ourCount--;
-                  g_ourLots=MathMax(0.0,g_ourLots-a.lots);
-                 }
-               if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
-                 {
-                  sAddedCount[a.senderIdx]--;
-                  sAddedLots[a.senderIdx]-=a.lots;
+                  // N49-10: Pending order deletion reduces pending count and total count/lots
+                  if(a.senderIdx>=0)
+                    {
+                     if(g_ourPending>0) g_ourPending--;
+                     if(g_ourCount>0) g_ourCount--;
+                     g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+                    }
+                  if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
+                    {
+                     sAddedCount[a.senderIdx]--;
+                     sAddedLots[a.senderIdx]-=a.lots;
+                    }
                  }
               }
            }

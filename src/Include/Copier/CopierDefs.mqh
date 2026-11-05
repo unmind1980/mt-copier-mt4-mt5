@@ -1350,11 +1350,13 @@ double CopierMirrorStopInverted(const double senderStop,
    if(senderOpen<=0.0) return 0.0;
    if(localOpen<=0.0)  return 0.0;
 
-   // BUG-06: Maintain signed offset from sender entry to correctly mirror break-even and trailing profit stops
-   double offset=senderStop-senderOpen;
-   if(MathAbs(offset)<=0.0) return localOpen;
+   // MQL-01: Measure distance purely as magnitude and place on the correct side
+   // (SL is always on loss side, TP is always on profit side for our local trade direction)
+   double dist=MathAbs(senderStop-senderOpen);
+   if(dist<=0.0) return localOpen;
 
-   return localOpen+offset;
+   bool below=(isSl ? (side==CP_SIDE_BUY) : (side==CP_SIDE_SELL));
+   return (below ? (localOpen-dist) : (localOpen+dist));
   }
 
 //=====================================================================

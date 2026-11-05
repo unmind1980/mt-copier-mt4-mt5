@@ -665,16 +665,28 @@ bool CopierIniReadAll(const string path,string &out)
      }
    FileClose(h);
    out=sb.Result();
-   // MQL-BUG-05 & BUG-05: If primary file exists but was truncated/corrupted by crash or power failure,
-   // verify whether .tmp exists and has valid content to recover from
+   // MQL-BUG-05, BUG-05 & MQL-05: If primary file exists but was truncated/corrupted by crash or power failure,
+   // verify whether .tmp exists and has valid content to recover from.
+   // Notice: For state files (copier_cfg.rev, copier_cmd*.st), there are no '[' section headers, only key=value.
    if(actualPath==path && FileIsExist(path+".tmp"))
      {
-      // BUG-06: A valid INI must contain at least one section '[' and at least one assignment '='
-      bool isCorrupt=(StringLen(out)==0 || StringFind(out,"[")<0 || StringFind(out,"=")<0);
+      bool isStateFile=(StringFind(path,".rev")>=0 || StringFind(path,".st")>=0);
+      bool isCorrupt=false;
+      if(isStateFile)
+         isCorrupt=(StringLen(out)==0 || StringFind(out,"=")<0);
+      else
+         isCorrupt=(StringLen(out)==0 || StringFind(out,"[")<0 || StringFind(out,"=")<0);
+
       if(isCorrupt)
         {
          string tmpOut="";
-         if(CopierIniReadAll(path+".tmp",tmpOut) && StringLen(tmpOut)>0 && StringFind(tmpOut,"[")>=0 && StringFind(tmpOut,"=")>0)
+         bool tmpValid=false;
+         if(CopierIniReadAll(path+".tmp",tmpOut) && StringLen(tmpOut)>0)
+           {
+            if(isStateFile) tmpValid=(StringFind(tmpOut,"=")>0);
+            else            tmpValid=(StringFind(tmpOut,"[")>=0 && StringFind(tmpOut,"=")>0);
+           }
+         if(tmpValid)
            {
             out=tmpOut;
             // Restore main file from valid .tmp successor

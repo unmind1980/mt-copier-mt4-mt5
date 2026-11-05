@@ -511,8 +511,8 @@ impl Registry {
             }
             if let Some(hi) = held_items {
                 e.held_items = Arc::new(hi);
-            } else if e.held == Some(0) && e.orphaned.unwrap_or(0) == 0 {
-                // BUG-13: Receiver confirmed 0 held and 0 orphan positions, immediately clear stale details
+            } else if (e.held == Some(0) && e.orphaned.unwrap_or(0) == 0) || (role == "sender" && e.held_lots == 0.0) {
+                // BUG-13 & HUB-02: Receiver confirmed 0 held/orphan, or sender confirmed 0 held/lots, clear stale details
                 e.held_items = Arc::new(Vec::new());
             }
             if let Some(wi) = wait_items {

@@ -201,6 +201,8 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
    p.pprice=0.0;
    p.pstop=0.0;
    p.pexpire=0;
+   p.profit=0.0;
+   p.swap=0.0;
    if(f>=15)
      {
       p.kind   =(int)CopierParseLongRange(rec,st[10],en[10]);
@@ -700,6 +702,8 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    if(p.pprice<0.0 || p.pstop<0.0) return false;
    p.cmt     ="";
    p.used    =true;
+   p.profit  =0.0;
+   p.swap    =0.0;
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
    if(p.lots<=0.0) return false;
    //--- same refusal as the record decoder: never mirror a pending type we

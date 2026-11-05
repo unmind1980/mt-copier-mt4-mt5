@@ -666,6 +666,9 @@ public:
    void              Close()
      {
       m_connectedHubs=0;
+      // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
+      m_nSubPrefixes=0;
+      for(int i=0;i<CP_MAX_XSUB_SUBS;i++) m_subPrefixes[i]="";
       if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       if(CheckPointer(m_ctx)!=POINTER_INVALID) { delete m_ctx; m_ctx=NULL; }

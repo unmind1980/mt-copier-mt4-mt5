@@ -3919,16 +3919,27 @@ struct TlsSelfSignedBody {
 }
 
 async fn tls_status(
+    axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
+    // HUB-03: Require operator role or higher to query TLS status and probe public IP
+    if sess.role < UserRole::Operator {
+        return deny(&st, &sess, "operator");
+    }
     let cfg = {
         let s = st.lock_or_recover();
         let c = s.tls.config.lock_or_recover().clone();
         c
     };
-    let client = reqwest::Client::new();
-    let detected_ip = crate::tls::detect_public_ip(&client).await;
+    static IP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = IP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_millis(1500))
+            .build()
+            .unwrap_or_default()
+    });
+    let detected_ip = crate::tls::detect_public_ip(client).await;
     let sslip_domain = detected_ip.as_deref().map(crate::tls::format_sslip_domain);
 
     Json(json!({

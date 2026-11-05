@@ -5479,14 +5479,24 @@ function openPositionsModal(focusKey){
 //--- account is a valid answer, not a missing one.
 var _autoPosAt = {};
 function maybeAutoRequestPositions(n){
-  if(!n) return;
-  // BUG-01: Standby Hub is read-only; positions replicate automatically via cluster sync
+  if(!n || !s.writes || s.role === "viewer") return;
   if(s.data && s.data.cluster && s.data.cluster.role === "standby") return;
-  var held = (n.positions && n.positions.count) || (n.held !== undefined && n.held !== null ? n.held : 0);
-  var rows = (n.positions_detail || []).length + (n.waiting_detail || []).length;
-  if(held <= 0) return;
-  // BUG-02: Only skip reqpos if rows matches current held count; re-request telemetry when count changes
-  if(rows > 0 && rows === held) return;
+  // UI-01: Correctly calculate expected opened rows and waiting rows for Receiver and Sender
+  if(n.role === "receiver"){
+    var held = (n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : (n.held || 0);
+    var orphan = (n.positions && typeof n.positions.orphaned === "number") ? n.positions.orphaned : (n.orphaned || 0);
+    var expectedOpened = held + orphan;
+    var actualOpened = (n.positions_detail || []).length;
+    var expectedWait = (n.waiting && n.waiting.total !== undefined) ? Number(n.waiting.total) : 0;
+    var actualWait = (n.waiting_detail || []).length;
+    if(expectedOpened <= 0 && expectedWait <= 0) return;
+    if(actualOpened === expectedOpened && actualWait === expectedWait) return;
+  } else {
+    var p = findPosBySender(n.key, n.acc);
+    var sCount = p ? Number(p.count) : ((n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : (n.held || 0));
+    var sDetail = (n.positions_detail || []).length;
+    if(sCount <= 0 || sDetail === sCount) return;
+  }
   var now = Date.now();
   if(now - (_autoPosAt[n.key] || 0) < 30000) return;
   _autoPosAt[n.key] = now;

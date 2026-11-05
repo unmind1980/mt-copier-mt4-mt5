@@ -427,10 +427,16 @@ pub fn spawn_zap_handler(
         let shared = std::sync::Arc::clone(&shared);
         let path = clients_path.clone();
         std::thread::spawn(move || {
-            let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            // HUB-05: Check (mtime, len) and check crate::EXIT for graceful shutdown
+            let stamp = |p: &std::path::Path| {
+                std::fs::metadata(p).map(|m| (m.modified().ok(), m.len())).ok()
+            };
             let mut last = stamp(&path);
             loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
+                if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
                 let cur = stamp(&path);
                 if cur == last || cur.is_none() {
                     continue;

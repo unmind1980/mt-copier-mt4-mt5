@@ -772,6 +772,26 @@ int OnInit()
    if(g_magicFilter.StrayBangs()>0)
       g_log.Warn("IncludeMagicNumbers: '!' on individual item was stripped. A leading '!' excludes the whole list.");
 
+   // MQL-03: On parameter re-initialization, reset snapshot and peer tracking so modified filters/lots rebuild cleanly
+   g_snapPayload="";
+   g_snapHash="";
+   g_latestSnapPayload="";
+   g_latestSnapHash="";
+   g_snapDirty=true;
+   g_peers.Clear();
+   g_snapStaleCount=0;
+   for(int rsh=0;rsh<CP_RECENT_HASH_COUNT;rsh++)
+     {
+      g_recentSnapHashes[rsh]="";
+      g_recentSnapHashTime[rsh]=0;
+     }
+   g_recentSnapHashHead=0;
+   g_lastSnapMs=0;
+   g_lastHbtMs=0;
+   g_lastPingMs=0;
+   g_lastHubPingMs=0;
+   g_lastHbt2Ms=0;
+
    g_hubOn=false;
    g_prev.Clear();
    ArrayInitialize(g_openLots,0.0);
@@ -1888,10 +1908,14 @@ string EncodeSenderPositions(const int count)
    for(int i=0;i<count;i++)
      {
       if(written>0) sb.Add(CP_SEP_REC);
+      int slot=g_prev.Find(g_curScratch[i].uid);
+      double initLots=(slot>=0)?g_openLots[slot]:g_curScratch[i].lots;
+      // MQL-06: Broadcast scaled lots consistently across SNAP and STAT
+      double scaledLots=BroadcastLots(g_curScratch[i].lots,initLots);
       string rec=(string)g_curScratch[i].ticket+CP_SEP_ITEM
                  +CopierSanitizeSymbol(g_curScratch[i].sym)+CP_SEP_ITEM
                  +(string)g_curScratch[i].side+CP_SEP_ITEM
-                 +CopierFmtDouble(g_curScratch[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
+                 +CopierFmtDouble(scaledLots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].openPx,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].sl,5)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].tp,5)+CP_SEP_ITEM
@@ -1914,13 +1938,18 @@ void SendSenderStatusReport(const int count)
    double bal=CopierAccountBalance();
    double eq=CopierAccountEquity();
    double lotsSum=0.0;
-   for(int i=0;i<count;i++) lotsSum+=g_curScratch[i].lots;
+   for(int i=0;i<count;i++)
+     {
+      int slot=g_prev.Find(g_curScratch[i].uid);
+      double initLots=(slot>=0)?g_openLots[slot]:g_curScratch[i].lots;
+      lotsSum+=BroadcastLots(g_curScratch[i].lots,initLots);
+     }
 
    string st="LOGIN="+(string)CopierAccountLogin()
             +CP_SEP_KV+"ROLE=sender"
             +CP_SEP_KV+"SID="+(string)g_nid
             +CP_SEP_KV+"HELD="+(string)count
-            +CP_SEP_KV+"LOTS="+DoubleToString(lotsSum,2)
+            +CP_SEP_KV+"LOTS="+CopierFmtDouble(lotsSum,CP_DIGITS_LOTS)
             +CP_SEP_KV+"EQ="+DoubleToString(eq,2)
             +CP_SEP_KV+"BL="+DoubleToString(bal,2);
 
@@ -2208,15 +2237,17 @@ void OnTimer()
    static long s_lastSnapRebuildMs=0;
    static long s_lastStateSaveMs=0;
 
-   //--- R59-02 & BUG-07: In on-demand mode (SnapshotSeconds<=0), broadcast immediately after 250ms debounce
-   //--- so g_snapPayload/g_snapHash advance without waiting for a periodic clock. In periodic mode, rebuild debounced.
-   if(dueSnap || (SnapshotSeconds<=0 && g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
+   //--- R59-02 & MQL-02: In periodic mode (SnapshotSeconds>0), broadcast when dueSnap.
+   //--- In on-demand mode (SnapshotSeconds<=0), periodic broadcast is disabled.
+   //--- When g_snapDirty, rebuild debounced (at most every 250ms) to update in-memory g_snapPayload/g_snapHash
+   //--- without flooding the network at 4Hz. Actual broadcasts occur only on fill (dueSnap) or targeted repair.
+   if(dueSnap)
      {
       g_snapDirty=false;
       s_lastSnapRebuildMs=now;
       BroadcastSnapshot(now);
      }
-   else if(g_snapDirty && g_fillSnapshotDueMs==0 && !dueSnap)
+   else if(g_snapDirty && g_fillSnapshotDueMs==0)
      {
       if(now-s_lastSnapRebuildMs>=250)
         {

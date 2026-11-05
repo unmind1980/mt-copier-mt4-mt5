@@ -71,10 +71,16 @@ bool CopierInTradingSession(const string sym)
    if(StringLen(sym)==0) return true;
 
    long now=CopierServerTime();
+   int foundIdx=-1;
    for(int i=0;i<CP_SESS_CACHE;i++)
      {
-      // NM-13: 1-second window matching CopierSymbolQuoteAgeMs
-      if(g_sessKey[i]==sym && now-g_sessAt[i]<1) return g_sessVal[i];
+      // NM-13 & MQL-08: 1-second window matching CopierSymbolQuoteAgeMs with foundIdx tracking
+      if(g_sessKey[i]==sym)
+        {
+         foundIdx=i;
+         if(now>=g_sessAt[i] && now-g_sessAt[i]<1) return g_sessVal[i];
+         break;
+        }
      }
 
    //--- R48-07: Use TimeToStruct to obtain local broker day-of-week and seconds from midnight,
@@ -126,11 +132,16 @@ bool CopierInTradingSession(const string sym)
       result=!brokerHasWeeklySessions;
      }
 
-   g_sessKey[g_sessHead]=sym;
-   g_sessAt[g_sessHead]=now;
-   g_sessVal[g_sessHead]=result;
-   g_sessHead++;
-   if(g_sessHead>=CP_SESS_CACHE) g_sessHead=0;
+   // MQL-08: If symbol already exists in cache, update slot in-place instead of creating duplicate slots
+   int targetSlot = (foundIdx>=0) ? foundIdx : g_sessHead;
+   g_sessKey[targetSlot]=sym;
+   g_sessAt[targetSlot]=now;
+   g_sessVal[targetSlot]=result;
+   if(foundIdx<0)
+     {
+      g_sessHead++;
+      if(g_sessHead>=CP_SESS_CACHE) g_sessHead=0;
+     }
 
    return result;
   }
@@ -226,9 +237,15 @@ long CopierSymbolQuoteAgeMs(const string sym)
    if(StringLen(sym)==0) return 0;
 
    long now=CopierNowMs();
+   int foundSfc=-1;
    for(int i=0;i<CP_SYMFRESH_CACHE;i++)
      {
-      if(g_sfcKey[i]==sym && now-g_sfcAt[i]<1000) return g_sfcAge[i];
+      if(g_sfcKey[i]==sym)
+        {
+         foundSfc=i;
+         if(now>=g_sfcAt[i] && now-g_sfcAt[i]<1000) return g_sfcAge[i];
+         break;
+        }
      }
 
    int slot=-1;
@@ -282,11 +299,16 @@ long CopierSymbolQuoteAgeMs(const string sym)
    long clockAge=CopierClockAgeMs(qt,CopierServerTime());
    if(clockAge>age) age=clockAge;
 
-   g_sfcKey[g_sfcHead]=sym;
-   g_sfcAt[g_sfcHead]=now;
-   g_sfcAge[g_sfcHead]=age;
-   g_sfcHead++;
-   if(g_sfcHead>=CP_SYMFRESH_CACHE) g_sfcHead=0;
+   // MQL-08: In-place slot update if sym already exists in cache
+   int targetSfc = (foundSfc>=0) ? foundSfc : g_sfcHead;
+   g_sfcKey[targetSfc]=sym;
+   g_sfcAt[targetSfc]=now;
+   g_sfcAge[targetSfc]=age;
+   if(foundSfc<0)
+     {
+      g_sfcHead++;
+      if(g_sfcHead>=CP_SYMFRESH_CACHE) g_sfcHead=0;
+     }
 
    return age;
   }

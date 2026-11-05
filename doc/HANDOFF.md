@@ -1838,6 +1838,30 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
+### 一百零五次演进：反向止损绝对距离修正、按需快照防抖降频、HA水位行数精确推进与全栈复审核销 (2026-11-05 06:15；全部闭环)
+
+- **技术落地项**：
+  1. **反向跟单移动止损绝对距离与方向修正（MQL-01）**：
+     - 在 `src/Include/Copier/CopierDefs.mqh` 的 `CopierMirrorStopInverted` 中，修正公式为 `MathAbs(senderStop - senderOpen)` 结合目标方向：买入止损在开仓价下方、止盈在上方；卖出止损在开仓价上方、止盈在下方；彻底通过 `CopierSelfTest.mq4` 全部断言，杜绝 Sender 锁盈时反向单被误算到亏损侧引发提前平仓；
+  2. **按需快照防抖降频与热重载生命周期重置（MQL-02, MQL-03, MQL-04）**：
+     - 在 `src/Experts/CopierSender.mq4` 中，当 `SnapshotSeconds <= 0` 且 `g_snapDirty` 时，仅在内存中重新计算 `g_snapPayload` 与 `g_snapHash`，绝不以 4Hz 高频向网络滥发广播，彻底恢复按需快照轻量设计的初衷；
+     - 在 `CopierSender::OnInit` 中热重载参数时，清空 `g_snapPayload`、`g_snapHash`、`g_peers` 与最近哈希缓存，避免修改手数或过滤条件后发送旧快照；
+     - 在 `src/Include/Copier/CopierTransport.mqh` 的 `Close()` 中，显式清空 `m_nSubPrefixes = 0`，防止热重载或重连时订阅前缀累积溢出；
+  3. **HA 主备水位线解析行数推进与同步死循环消除（HUB-01）**：
+     - 在 `hub/src/commands.rs` 与 `hub/src/config.rs` 的 `apply_delta_lines` 中，即使接收到的行是已存在的等价或较低 rank 历史行而未追加到新状态中，Standby 本地的 `line_count` 与 `count` 也严格按解析出的合法行数推进，消除主备行数差 1 导致的 1Hz 无限同步死循环，确保零延迟自动回切顺利通过；
+  4. **WebUI 驾驶舱自动探测与 Sender 空仓明细清理（UI-01, HUB-02, MQL-06）**：
+     - 在 `hub/src/assets/dashboard.html` 中优化 `maybeAutoRequestPositions`，计入孤儿单（`orphan`）与等待单，仅在行数不等于持仓数时发起探测，且在只读角色下自动静默；支持 Sender 视图自动触发 `reqpos`；
+     - 在 `src/Experts/CopierSender.mq4` 与 `hub/src/registry.rs` 中，统一使用 `BroadcastLots` 格式化手数，并在 Sender 平光持仓时清空 `held_items`；
+  5. **无 Section 状态文件恢复与风控计数时机修复（MQL-05, MQL-07, MQL-08）**：
+     - 在 `src/Include/Copier/CopierConfig.mqh` 中，针对无 `[` 节头的 `copier_cfg.rev` 与 `copier_cmd*.st` 允许基于 `key=val` 正确从 `.tmp` 备份自愈恢复；
+     - 在 `src/Experts/CopierReceiver.mq4` 中，MQL5 异步平仓（`asyncMode=true`）发单成功后不再提前在当前 Tick 扣减持仓计数，等待经纪商成交扫描确认后再释放风控额度，杜绝同一 Tick 突破开仓风控上限；
+     - 在 `src/Include/Copier/CopierSymbol.mqh` 中修复 1 秒缓存环在过期时不断占用新槽位的问题，改为原地更新已有槽位；
+  6. **安全加固、文件监控与工具链完善（HUB-03, HUB-05, MQL-09, MQL-10, TEST-01）**：
+     - `tls_status` 增加 Operator 权限校验并复用全局 `reqwest::Client`；`curve.rs` 白名单监控线程增加 `EXIT` 退出判断与 `(mtime, len)` 变更感知；
+     - 补齐 `CopierPos` 的 `profit`/`swap` 字段初始化与更新；消除 `PeakUidHash` 重复实现；`tools/logcheck.py` 区分部分平仓与完全平仓。
+
+---
+
 ## 9. 最终交付状态确认
 
 - **全平台编译矩阵**：

@@ -185,6 +185,8 @@ public:
          m_p[i].pprice=0.0;
          m_p[i].pstop=0.0;
          m_p[i].pexpire=0;
+         m_p[i].profit=0.0;
+         m_p[i].swap=0.0;
         }
       m_n=0;
       m_hint=0;
@@ -402,6 +404,8 @@ public:
       m_p[i].side    =cur.side;
       m_p[i].magic   =cur.magic;
       m_p[i].openTime=cur.openTime;
+      m_p[i].profit  =cur.profit;
+      m_p[i].swap    =cur.swap;
       if(ticketChanged) m_tkValid=false;
       return true;
      }
