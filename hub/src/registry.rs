@@ -512,8 +512,15 @@ impl Registry {
             if let Some(hi) = held_items {
                 e.held_items = Arc::new(hi);
             } else if (e.held == Some(0) && e.orphaned.unwrap_or(0) == 0) || (role == "sender" && e.held_lots == 0.0) {
-                // BUG-13 & HUB-02: Receiver confirmed 0 held/orphan, or sender confirmed 0 held/lots, clear stale details
-                e.held_items = Arc::new(Vec::new());
+                // BUG-13, HUB-02 & M6: Receiver confirmed 0 held/orphan, or sender confirmed 0 held/lots.
+                // For receiver, only filter out managed mirrors, preserving manual/unmanaged positions
+                // so they are not wiped from the cockpit for up to 59s between 60s POS= updates.
+                if role == "receiver" && e.held_items.iter().any(|item| !item.managed) {
+                    let unmanaged: Vec<_> = e.held_items.iter().filter(|item| !item.managed).cloned().collect();
+                    e.held_items = Arc::new(unmanaged);
+                } else {
+                    e.held_items = Arc::new(Vec::new());
+                }
             }
             if let Some(wi) = wait_items {
                 e.wait_items = Arc::new(wi);

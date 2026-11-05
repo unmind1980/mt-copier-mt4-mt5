@@ -1882,6 +1882,29 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   9. **前端安全转义与对账工具修正（UI-01, TOOL-01, D1~D4）**：
      - 在 `dashboard.html` 中对 `confirmDialog` 全部动态参数执行 `esc()` 转义杜绝 DOM XSS，单笔平仓按钮区分 `nodeKey:ticket` 命名空间；`tools/logcheck.py` 修正 `copier_receiver*.st` 识别与 Hub 模式正则；修正 `README` 文档中的 `HubEndpoint` 与参数漂移。
 
+### 一百零六次演进：HA 数据面双发对齐、部分平仓即时广播、队列守卫放行 TRIM、负数滑点防御、会话密码指纹吊销与集群自愈 (2026-11-05 21:45；全部闭环)
+
+- **技术落地项**：
+  1. **HA 数据面双发对齐（H1）**：
+     - 在 `src/Include/Copier/CopierTransport.mqh` 的 `SendUp` 中，在 `m_connectedHubs > 1` 时将所有控制与数据业务帧统一恢复为双发（`copies = 2`），彻底消除 ZeroMQ XSUB 轮询分流将单调序列号（SEQ）劈开导致接收端静默丢单的隐患，完美契合 ADR-02 双活同时转发与 `CopierSeenRing`（`g_seen`）幂等去重设计；
+  2. **部分平仓（TRIM）即时广播收敛（H2）**：
+     - 在 `src/Experts/CopierSender.mq4` 中，消除周期快照模式下对 `dueSnap` 的排他限制，只要发生实质持仓变动（`g_snapDirty=true`），在 250ms 防抖后无条件调用 `BroadcastSnapshot(now)`，彻底消除了周期模式下部分平仓最长 15 秒的同步延迟；
+  3. **队列出队守卫放行 TRIM 减仓动作（H3）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `ExecuteQueue` 出队守卫中，将 `a.kind == CP_ACT_TRIM` 纳入放行名单（与 `CLOSE`/`DEDUP` 一致），避免配置热重载移除 Sender 时在途减仓动作被误判为越界而丢弃；
+  4. **负数 `deviationPoints` 下溢防御（N1）**：
+     - 在 `src/Include/Copier/CopierModel.mqh` 的 `CopierPlacePending`、`CopierClosePosition`、`CopierClosePartial`（MT5/MT4）及 `CopierReceiver.mq4` 配置加载入口处，统一引入 `MathMax(0, deviationPoints)` 严格钳位，彻底根治负数滑点无符号强制转型导致的 10013 拒单与能开不能平故障，并补充了单测断言；
+  5. **快照重建零 ArrayResize 与面板上界提升（N2, N4）**：
+     - 在 `src/Include/Copier/CopierState.mqh` 的 `CopyToWithSlots` 中移除尾部多余的 `ArrayResize` 收缩逻辑，保持高水位容量“只扩不缩”，杜绝每 250ms 快照重建的内存反复 realloc；在 `src/Include/Copier/CopierPanel.mqh` 中将 `CP_PANEL_MAX_ROWS` 从 24 提升至 28，彻底消除孤儿单展开时最坏 26 行布局下的底部行截断；
+  6. **混合拓扑收据隔离与强制单端点支持（N3, M4）**：
+     - 在 `src/Experts/CopierSender.mq4` 中按通道为收据键增加 `@hub`/`@dir` 区分，消除 direct 与 central hub 同时在线时的收据状态覆盖与单播/广播抖动；在 `CopierReceiver.mq4` 和 `CopierSender.mq4` 中支持以 `!` 前缀强制指定单端点并自动清除历史拓扑缓存；限制 `g_announceCount` 溢出；
+  7. **会话密码指纹比对与改密即时注销（H4）**：
+     - 在 `hub/src/users.rs` 的 `Session` 结构体中记录登录时的 `pass_hash` 指纹，在 `apply_loaded_users`（备机同步）与 `session()` 验证中强校验密码一致性，密码变更立即吊销旧会话；测试环境对 `MTC_ADMIN_PASSWORD` 采用确定性 salt 保证主备初始哈希一致；
+  8. **未受控手工持仓保护与集群增量行数自愈（M6, H5）**：
+     - 在 `hub/src/registry.rs` 中，当接收端汇报 `HELD=0` 且 `ORPHAN=0` 时，仅过滤清除受控单（`managed: true`），完整保留未受控手工单，杜绝在 60s POS 上报间隔内手工单每 59 秒闪烁清空；
+     - 在 `hub/src/cluster.rs` 中，当 Standby 接收到增量日志但在本地追加 0 行且行数仍落后于 Primary 时，自动触发 `full_cfg_resync`/`full_cmd_resync` 进行整文件对齐，彻底消除历史重复过滤导致的 1Hz 同步死循环；
+  9. **服务启动诊断、WS 快速会话复核与删除错误细化（M1, M2, M3）**：
+     - `hub/src/api.rs` 启动时若 TLS 证书损坏明确输出 WARN 告警；WebSocket 连接增加 5 秒独立会话复核定时器；`notifications_delete` 明确区分 500 I/O 错误与 404 未找到。
+
 ---
 
 ## 9. 最终交付状态确认

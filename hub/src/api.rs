@@ -802,6 +802,9 @@ async fn handle_socket(
     let mut rx = tx.subscribe();
     let mut beat = tokio::time::interval(std::time::Duration::from_secs(WS_HEARTBEAT_SECS));
     beat.tick().await; // the first tick fires immediately; consume it
+    // M2: Check session validity every 5 seconds to promptly revoke compromised/modified sessions
+    let mut auth_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    auth_tick.tick().await;
 
     loop {
         tokio::select! {
@@ -834,8 +837,8 @@ async fn handle_socket(
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-            _ = beat.tick() => {
-                // M4: Re-verify session validity periodically during WebSocket lifecycle
+            _ = auth_tick.tick() => {
+                // M2: Re-verify session validity every 5s during WebSocket lifecycle to immediately terminate revoked/expired sessions
                 if !token.is_empty() {
                     let valid = st.lock_or_recover().users.session(&token, unix_secs()).is_some();
                     if !valid {
@@ -846,6 +849,8 @@ async fn handle_socket(
                         break;
                     }
                 }
+            }
+            _ = beat.tick() => {
                 // N49-09: Send lightweight WebSocket Ping keepalive instead of heavy full snapshot re-serialization
                 if socket.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
@@ -1041,6 +1046,7 @@ async fn require_session(
                 user_id: "cluster".to_string(),
                 role: UserRole::Admin,
                 seen: unix_secs(),
+                pass_hash: String::new(),
             });
             req.extensions_mut().insert(Token(cluster_token));
             return next.run(req).await;
@@ -1063,6 +1069,7 @@ async fn require_session(
             user_id: "anonymous".to_string(),
             role: UserRole::Viewer,
             seen: unix_secs(),
+            pass_hash: String::new(),
         });
         req.extensions_mut().insert(Token(String::new()));
         return next.run(req).await;
@@ -1918,7 +1925,12 @@ pub fn spawn(
                 crate::cluster::spawn_cluster_worker(st.clone(), std::time::Duration::from_millis(1000));
 
                 let tls_mgr = Arc::clone(&st.lock_or_recover().tls);
-                let _ = tls_mgr.reload_from_disk();
+                if let Err(e) = tls_mgr.reload_from_disk() {
+                    let c = tls_mgr.config.lock_or_recover();
+                    if c.enabled {
+                        eprintln!("[hub] TLS WARN: TLS is enabled in configuration, but loading certificate from disk failed: {}", e);
+                    }
+                }
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
                 {
                     let mut s = st.lock_or_recover();
@@ -1938,10 +1950,15 @@ pub fn spawn(
                         return;
                     }
                 };
-                let is_tls = {
+                let (is_tls, tls_misconfigured) = {
                     let c = tls_mgr.config.lock_or_recover();
-                    c.enabled && c.https_port == current_port && tls_mgr.acceptor.read_or_recover().is_some()
+                    let port_matches = c.enabled && c.https_port == current_port;
+                    let has_acceptor = tls_mgr.acceptor.read_or_recover().is_some();
+                    (port_matches && has_acceptor, port_matches && !has_acceptor)
                 };
+                if tls_misconfigured {
+                    eprintln!("[hub] TLS WARN: HTTPS configured on port {} but certificate is missing/unusable; connections will be refused (fail-closed) until valid certificate is configured.", current_port);
+                }
                 println!(
                     "[hub] dashboard + REST on {}://{}",
                     if is_tls { "https" } else { "http" },
@@ -3196,34 +3213,45 @@ async fn notifications_delete(
         s.notif_store.clone()
     };
 
-    // N73-05: Call store.remove (which fsyncs to disk) outside the SharedState mutex
-    let removed = {
+    // N73-05 & M3: Call store.remove outside SharedState mutex, and distinguish I/O errors from 404 Not Found
+    let remove_res = {
         let mut store = notif_store.lock_or_recover();
-        store.remove(&id).unwrap_or(false)
+        store.remove(&id)
     };
 
-    if removed {
-        let audit = {
-            let s = st.lock_or_recover();
-            Arc::clone(&s.audit)
-        };
-        //--- Out of the lock: `record` fsyncs.
-        audit.record(
-            &sess.user_id,
-            "",
-            "notification.delete",
-            &id,
-            None,
-            None,
-            "ok",
-        );
-        Json(json!({ "ok": true, "id": id })).into_response()
-    } else {
-        (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(json!({ "error": "channel not found", "id": id })),
-        )
-            .into_response()
+    match remove_res {
+        Ok(true) => {
+            let audit = {
+                let s = st.lock_or_recover();
+                Arc::clone(&s.audit)
+            };
+            //--- Out of the lock: `record` fsyncs.
+            audit.record(
+                &sess.user_id,
+                "",
+                "notification.delete",
+                &id,
+                None,
+                None,
+                "ok",
+            );
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Ok(false) => {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(json!({ "error": "channel not found", "id": id })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            eprintln!("[hub] failed to delete notification channel {}: {}", id, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to delete channel: {}", e), "id": id })),
+            )
+                .into_response()
+        }
     }
 }
 

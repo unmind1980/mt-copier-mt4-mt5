@@ -480,8 +480,9 @@ public:
          slots[n]=i;
          n++;
         }
-      if(ArrayIsDynamic(out) && ArraySize(out)!=n) ArrayResize(out,n);
-      if(ArrayIsDynamic(slots) && ArraySize(slots)!=n) ArrayResize(slots,n);
+      // N2: Do NOT shrink out/slots back to n via ArrayResize. The returned count n
+      // is the sole valid length; retaining capacity eliminates repeated reallocations
+      // across debounced snapshot rebuilds while preserving zero-allocation guarantees.
       return n;
      }
 

@@ -503,10 +503,14 @@ public:
       //--- high-water mark). Data frames stay single-send: the standby forwards
       //--- them, so they are not lost either way, and duplicating them would
       //--- only add traffic.
-      //--- R60-18: Send 2 copies only when connected to multiple hubs (HA cluster),
-      //--- avoiding duplicate traffic on single-hub links while ensuring both Primary and
-      //--- Standby receive control frames when dual endpoints are active.
-      int copies=(m_connectedHubs>1 && StringLen(topic)>0 && StringSubstr(topic,0,1)=="@") ? 2 : 1;
+      //--- R60-18 & ADR-02 / H1: Send 2 copies whenever connected to multiple hubs (HA cluster),
+      //--- ensuring BOTH Primary and Standby receive every control AND data frame.
+      //--- ZeroMQ XSUB uses round-robin across connected pipes for single sends, which splits
+      //--- sequential frames (seq 1 -> Primary, seq 2 -> Standby, seq 3 -> Primary). A tiny jitter
+      //--- on one pipe would cause Receiver to observe seq 3 before seq 2, permanently discarding
+      //--- seq 2 as an expired sequence! Dual-send guarantees true active-active zero-loss replication,
+      //--- with Receiver's CopierSeenRing (g_seen) and AcceptSeq handling microsecond-level deduplication.
+      int copies=(m_connectedHubs>1) ? 2 : 1;
       int sent=0;
       for(int i=0;i<copies;i++)
         {

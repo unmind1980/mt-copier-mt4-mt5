@@ -1573,7 +1573,12 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                 Ok(p) if !p.is_empty() => (p, true),
                 _ => (crate::users::random_password(), false),
             };
-            let salt = crate::users::random_token()[..16].to_string();
+            let salt = if from_env {
+                let digest = crate::users::sha256(format!("mtc_admin_salt:{}", pw).as_bytes());
+                digest.iter().take(8).map(|b| format!("{:02x}", b)).collect::<String>()
+            } else {
+                crate::users::random_token()[..16].to_string()
+            };
             let u = crate::users::User {
                 id: "admin".to_string(),
                 pass: crate::users::hash_password(&pw, &salt),

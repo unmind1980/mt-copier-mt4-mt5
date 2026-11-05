@@ -685,13 +685,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         );
                     }
 
-                    let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines;
+                    static FORCE_FULL_CFG_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    static FORCE_FULL_CMD_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+                    let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
+                        || FORCE_FULL_CFG_RESYNC.swap(false, std::sync::atomic::Ordering::SeqCst);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
-                    // BUG-05: If command line count is equal but remote sequence is ahead,
-                    // request from line 0 and replace_all to resolve out-of-sync sequence watermark.
+                    // BUG-05 & H5: If command line count is equal but remote sequence is ahead,
+                    // or if delta sync stalled on filtered lines, request from line 0 and replace_all to resolve deadlock.
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
-                        || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq > local_max_cmd_seq);
+                        || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq > local_max_cmd_seq)
+                        || FORCE_FULL_CMD_RESYNC.swap(false, std::sync::atomic::Ordering::SeqCst);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
                     let sync_req = ClusterSyncRequest {
@@ -743,10 +748,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         file_sync_err = Some(msg);
                                     }
                                 } else if !data.cfg_delta_lines.is_empty() {
-                                    if let Err(e) = cfg.apply_delta_lines(&data.cfg_delta_lines) {
-                                        let msg = format!("cfg apply_delta_lines failed: {}", e);
-                                        eprintln!("[hub] cluster sync: {}", msg);
-                                        file_sync_err = Some(msg);
+                                    match cfg.apply_delta_lines(&data.cfg_delta_lines) {
+                                        Ok(applied) => {
+                                            if applied == 0 && cfg_lines_count < remote_st.cfg_lines {
+                                                eprintln!("[hub] cluster sync: cfg delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cfg_delta_lines.len());
+                                                FORCE_FULL_CFG_RESYNC.store(true, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("cfg apply_delta_lines failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        }
                                     }
                                 }
 
@@ -766,10 +779,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     }
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     // F-01: Check and propagate apply_delta_lines failure to prevent false synced status
-                                    if let Err(e) = cmds.apply_delta_lines(&data.cmd_delta_lines) {
-                                        let msg = format!("cmds apply_delta_lines failed: {}", e);
-                                        eprintln!("[hub] cluster sync: {}", msg);
-                                        file_sync_err = Some(msg);
+                                    match cmds.apply_delta_lines(&data.cmd_delta_lines) {
+                                        Ok(applied) => {
+                                            if applied == 0 && cmd_lines_count < remote_st.cmd_lines {
+                                                eprintln!("[hub] cluster sync: cmd delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cmd_delta_lines.len());
+                                                FORCE_FULL_CMD_RESYNC.store(true, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("cmds apply_delta_lines failed: {}", e);
+                                            eprintln!("[hub] cluster sync: {}", msg);
+                                            file_sync_err = Some(msg);
+                                        }
                                     }
                                 }
 

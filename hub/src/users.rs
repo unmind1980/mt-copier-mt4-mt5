@@ -91,6 +91,8 @@ pub struct Session {
     pub user_id: String,
     pub role: Role,
     pub seen: u64,
+    /// H4: Password hash fingerprint when session was minted, allowing instant revocation on password change
+    pub pass_hash: String,
 }
 
 /// The store: users (persisted) + sessions (in-memory, by design).
@@ -324,10 +326,10 @@ impl UserStore {
     /// N72-03: Apply pre-loaded users in memory without disk I/O while holding locks.
     pub fn apply_loaded_users(&mut self, users: Vec<User>) {
         self.users = users;
-        // R60-14: Purge sessions whose user was deleted, disabled, or had their role changed
+        // R60-14 & H4: Purge sessions whose user was deleted, disabled, had role changed, or password changed
         self.sessions.retain(|_, s| {
             if let Some(u) = self.users.iter().find(|u| u.id == s.user_id) {
-                !u.disabled && u.role == s.role
+                !u.disabled && u.role == s.role && (s.pass_hash.is_empty() || s.pass_hash == u.pass)
             } else {
                 false
             }
@@ -413,13 +415,13 @@ impl UserStore {
     /// the hashing) and refuses when the user is gone or now disabled - a
     /// session is never minted for someone who may no longer have one.
     pub fn mint_session(&mut self, id: &str, now: u64) -> Result<(String, Session), String> {
-        let (user_id, role) = {
+        let (user_id, role, pass_hash) = {
             let u = self
                 .users
                 .iter()
                 .find(|u| u.id == id && !u.disabled)
                 .ok_or_else(|| "invalid credentials".to_string())?;
-            (u.id.clone(), u.role)
+            (u.id.clone(), u.role, u.pass.clone())
         };
         // R47-13: Enforce session sweep and LRU capacity cap on both legacy and challenge-response logins
         self.sweep_and_enforce_session_cap(now);
@@ -428,6 +430,7 @@ impl UserStore {
             user_id,
             role,
             seen: now,
+            pass_hash,
         };
         self.sessions.insert(token.clone(), s.clone());
         Ok((token, s))
@@ -441,6 +444,13 @@ impl UserStore {
         let before = self.sessions.len();
         self.sessions
             .retain(|tok, s| s.user_id != id || Some(tok.as_str()) == keep);
+        if let Some(keep_tok) = keep {
+            if let Some(s) = self.sessions.get_mut(keep_tok) {
+                if let Some(u) = self.users.iter().find(|u| u.id == id) {
+                    s.pass_hash = u.pass.clone();
+                }
+            }
+        }
         before - self.sessions.len()
     }
 
@@ -542,6 +552,7 @@ impl UserStore {
             user_id: u.id.clone(),
             role: u.role,
             seen: now,
+            pass_hash: u.pass.clone(),
         };
         self.sessions.insert(token.clone(), s.clone());
         Ok((token, s))
@@ -714,12 +725,19 @@ impl UserStore {
     /// tokens are dropped rather than merely ignored, so the table does not
     /// grow with abandoned logins.
     pub fn session(&mut self, token: &str, now: u64) -> Option<Session> {
-        let expired = self
-            .sessions
-            .get(token)
-            .map(|s| now.saturating_sub(s.seen) >= SESSION_IDLE_SECS)
-            .unwrap_or(true);
-        if expired {
+        let (expired, pass_mismatch) = {
+            if let Some(s) = self.sessions.get(token) {
+                let is_exp = now.saturating_sub(s.seen) >= SESSION_IDLE_SECS;
+                let is_mismatch = match self.users.iter().find(|u| u.id == s.user_id) {
+                    Some(u) => u.disabled || u.role != s.role || (!s.pass_hash.is_empty() && s.pass_hash != u.pass),
+                    None => true,
+                };
+                (is_exp, is_mismatch)
+            } else {
+                (true, false)
+            }
+        };
+        if expired || pass_mismatch {
             self.sessions.remove(token);
             return None;
         }

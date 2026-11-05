@@ -21,7 +21,9 @@
 
 #include <Copier/CopierDefs.mqh>
 
-#define CP_PANEL_MAX_ROWS 24
+// N4: Raised to 28 so worst-case receiver layout (9 base + 1 risk + 8 peers + 1 more + 7 orphans = 26)
+// never silently truncates summary rows or bottom spacer.
+#define CP_PANEL_MAX_ROWS 28
 
 //--- How many orphaned positions are listed by name before the panel
 //--- collapses the rest into "and N more". The count itself is always

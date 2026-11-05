@@ -1325,7 +1325,7 @@ void ApplyCommonConfig(const CopierIni &ini)
    int oldPollMs   = PollMs;
 
    if(ini.Has("common","deviationpoints"))
-      DeviationPoints = ini.GetInt("common","deviationpoints",DeviationPoints);
+      DeviationPoints = MathMax(0, ini.GetInt("common","deviationpoints",DeviationPoints));
    if(ini.Has("common","emergencyslpips"))
       EmergencySLPips = ini.GetDouble("common","emergencyslpips",EmergencySLPips);
    if(ini.Has("common","emergencytppips"))
@@ -1452,7 +1452,7 @@ void InitSenderSettings(const int si, const CopierIni &ini, const string sec)
   {
    if(si < 0 || si >= CP_MAX_SENDERS) return;
 
-   g_senderCfg[si].deviationPoints                  = ini.GetInt(sec, "deviationpoints", DeviationPoints);
+   g_senderCfg[si].deviationPoints                  = MathMax(0, ini.GetInt(sec, "deviationpoints", DeviationPoints));
    g_senderCfg[si].emergencySLPips                  = ini.GetDouble(sec, "emergencyslpips", EmergencySLPips);
    g_senderCfg[si].emergencyTPPips                  = ini.GetDouble(sec, "emergencytppips", EmergencyTPPips);
    g_senderCfg[si].reopenclosedmirrors              = ini.GetBool(sec, "reopenclosedmirrors", ReopenClosedMirrors);
@@ -1691,9 +1691,16 @@ bool LoadConfigForHub()
    InvalidateIniHash();
    g_hubOn=true;
    g_nid=CopierNid(CopierAccountLogin());
+   bool forceSingle=(StringLen(HubEndpoint)>0 && StringSubstr(HubEndpoint,0,1)=="!");
+   string effectiveEp=forceSingle ? StringSubstr(HubEndpoint,1) : HubEndpoint;
+   if(forceSingle)
+     {
+      FileDelete(CP_CLUSTER_STATE_FILE);
+      g_log.Info("central channel: force single endpoint requested ('!'), cleared cluster cache "+CP_CLUSTER_STATE_FILE);
+     }
    string eps[CP_MAX_CLUSTER_HUBS];
-   int nEp=CopierParseEndpoints(HubEndpoint,eps,CP_MAX_CLUSTER_HUBS);
-   if(nEp==1)
+   int nEp=CopierParseEndpoints(effectiveEp,eps,CP_MAX_CLUSTER_HUBS);
+   if(nEp==1 && !forceSingle)
      {
       CopierClusterState cs;
       if(CopierClusterCache::Load(cs))
@@ -2993,10 +3000,10 @@ void ExecuteQueue()
 
       if(a.senderIdx<0 || a.senderIdx>=g_nSenders)
         {
-         // MQL-01: Allow single close/dedup on manual/orphan positions (si == -1) from WebUI
-         if(a.senderIdx==-1 && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
+         // MQL-01 & H3: Allow risk-reducing exit actions (CLOSE/TRIM/DEDUP) on orphaned/removed senders (si == -1)
+         if(a.senderIdx==-1 && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP))
            {
-            // Allowed: manual/orphan single close action from WebUI
+            // Allowed: manual/orphan single close action from WebUI, or preserved trim from reloaded sender
            }
          else
            {

@@ -910,9 +910,16 @@ int OnInit()
    //--- block. The hub is the CURVE server on its side, so the roles are the
    //--- opposite of the direct channel's.
    g_nid=CopierNid(CopierAccountLogin());
+   bool forceSingle=(StringLen(HubEndpoint)>0 && StringSubstr(HubEndpoint,0,1)=="!");
+   string effectiveEp=forceSingle ? StringSubstr(HubEndpoint,1) : HubEndpoint;
+   if(forceSingle)
+     {
+      FileDelete(CP_CLUSTER_STATE_FILE);
+      g_log.Info("central channel: force single endpoint requested ('!'), cleared cluster cache "+CP_CLUSTER_STATE_FILE);
+     }
    string eps[CP_MAX_CLUSTER_HUBS];
-   int nEp=CopierParseEndpoints(HubEndpoint,eps,CP_MAX_CLUSTER_HUBS);
-   if(nEp==1)
+   int nEp=CopierParseEndpoints(effectiveEp,eps,CP_MAX_CLUSTER_HUBS);
+   if(nEp==1 && !forceSingle)
      {
       CopierClusterState cs;
       if(CopierClusterCache::Load(cs))
@@ -1165,6 +1172,7 @@ void CheckPeers()
       g_lastHbt2Ms=now;
       HubAnnounce(g_announceCount<CP_REG_REPEATS);
       g_announceCount++;
+      if(g_announceCount>CP_REG_REPEATS) g_announceCount=CP_REG_REPEATS;
      }
 
    for(int i=0;i<CP_MAX_PEERS;i++)
@@ -1259,7 +1267,9 @@ void SnapTrack(const string who,const string reported,const bool isFromHub=false
    if(StringLen(who)==0) return;
 
    long now=CopierNowMs();
-   int idx=SnapStaleIndex(who);
+   // N3: Track receipt states in dedicated slots per channel to prevent direct vs central hub flag flapping
+   string trackKey=who+(isFromHub?"@hub":"@dir");
+   int idx=SnapStaleIndex(trackKey);
    g_snapIsHub[idx]=isFromHub;
 
    //--- cadence, measured from the receipts themselves. Smoothed by halving
@@ -1362,10 +1372,14 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
    g_snapStaleN[idx]=0;                          // fresh evidence for the next one
    g_snapStaleMs[idx]=now;
 
+   string baseWho=who;
+   int atPos=StringFind(who,"@");
+   if(atPos>0) baseWho=StringSubstr(who,0,atPos);
+
    bool toHub=(g_hubOn && g_snapIsHub[idx]);
    if(toHub)
      {
-      long rnid=CopierNid(CopierParseLong(who));
+      long rnid=CopierNid(CopierParseLong(baseWho));
       //--- R59-01: a brand-new node gets the LATEST snapshot, not the last one
       //--- broadcast.
       //---
@@ -1395,10 +1409,10 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
       // to this single receiver. Other receivers on the hub have not received this frame.
       if(isBootstrap)
-         g_log.Info("bootstrapped the LATEST snapshot to new receiver "+who+" (NID "
+         g_log.Info("bootstrapped the LATEST snapshot to new receiver "+baseWho+" (NID "
                     +IntegerToString(rnid)+") on first contact");
       else
-         g_log.Warn("re-sent the snapshot to receiver "+who+" (NID "
+         g_log.Warn("re-sent the snapshot to receiver "+baseWho+" (NID "
                     +IntegerToString(rnid)+") - it had been behind for "
                     +IntegerToString(staleFor)+"ms");
      }
@@ -1419,9 +1433,9 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       static long s_lastDirectSnapMs=0;
       s_lastDirectSnapMs=now;
       if(isBootstrap)
-         g_log.Info("bootstrapped snapshot for new receiver "+who+" (direct channel)");
+         g_log.Info("bootstrapped snapshot for new receiver "+baseWho+" (direct channel)");
       else
-         g_log.Warn("re-sent the snapshot for "+who+" (behind for "
+         g_log.Warn("re-sent the snapshot for "+baseWho+" (behind for "
                     +IntegerToString(staleFor)+"ms) - broadcast, because the"
                     +" direct channel cannot address a single receiver");
      }
@@ -2231,24 +2245,15 @@ void OnTimer()
    static long s_lastSnapRebuildMs=0;
    static long s_lastStateSaveMs=0;
 
-   //--- R59-02, MQL-02 & H1: In periodic mode (SnapshotSeconds>0), broadcast when dueSnap.
-   //--- In on-demand mode (SnapshotSeconds<=0), periodic broadcast is disabled, but whenever
-   //--- actual positions change (g_snapDirty=true), broadcast debounced (250ms) to advance
-   //--- g_snapPayload/g_snapHash and synchronize all subscribers (e.g. partial closes/TRIMs).
-   if(dueSnap || (SnapshotSeconds<=0 && g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
+   //--- R59-02, MQL-02, H1 & H2: Broadcast snapshot when periodic clock is due (dueSnap),
+   //--- OR whenever actual positions change (g_snapDirty=true) after a 250ms debounce window.
+   //--- This guarantees that partial closes (TRIMs) and stop modifications synchronize to all
+   //--- subscribers within 250ms regardless of SnapshotSeconds (eliminating 15s trim lag in periodic mode).
+   if(dueSnap || (g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
      {
       g_snapDirty=false;
       s_lastSnapRebuildMs=now;
       BroadcastSnapshot(now);
-     }
-   else if(g_snapDirty && g_fillSnapshotDueMs==0)
-     {
-      if(now-s_lastSnapRebuildMs>=250)
-        {
-         s_lastSnapRebuildMs=now;
-         g_snapDirty=false;
-         RebuildSnapshotPayload();
-        }
      }
 
    //--- 7) heartbeat with account state (needed for equity-relative sizing)

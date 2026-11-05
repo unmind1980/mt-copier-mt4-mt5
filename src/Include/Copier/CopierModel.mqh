@@ -398,7 +398,7 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
       req.price       =px;
       req.sl          =sl;
       req.tp          =tp;
-      req.deviation   =(ulong)deviationPoints;
+      req.deviation   =(ulong)MathMax(0,deviationPoints);
       req.magic       =(ulong)magic;
       req.comment     =cmt;
       req.type_filling=candidates[attempt];
@@ -979,7 +979,7 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
       return false;
      }
    CTrade trade;
-   trade.SetDeviationInPoints((ulong)deviationPoints);
+   trade.SetDeviationInPoints((ulong)MathMax(0,deviationPoints));
    trade.SetAsyncMode(asyncMode);
    bool ok=trade.PositionClose((ulong)ticket);
    if(!ok) outErr=(int)trade.ResultRetcode();
@@ -1001,7 +1001,7 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
       closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
      }
    double lots=OrderLots();
-   bool ok=OrderClose((int)ticket,lots,closePx,deviationPoints,clrNONE);
+   bool ok=OrderClose((int)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
    if(!ok) outErr=GetLastError();
    return ok;
 #endif
@@ -1273,7 +1273,7 @@ bool CopierClosePartial(const long identifier,const double lots,
       req.volume       =lots;
       req.type         =(side==CP_SIDE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY;
       req.price        =(side==CP_SIDE_BUY)?tick.bid:tick.ask;
-      req.deviation    =(ulong)deviationPoints;
+      req.deviation    =(ulong)MathMax(0,deviationPoints);
       req.magic        =(ulong)magic;
       req.comment      =comment;   // <- the whole point of doing this by hand
       req.type_filling =candidates[attempt];
@@ -1306,7 +1306,7 @@ bool CopierClosePartial(const long identifier,const double lots,
    int type=(int)OrderType();
    double px=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID)
                            :MarketInfo(OrderSymbol(),MODE_ASK);
-   bool ok=OrderClose((int)ticket,lots,px,deviationPoints,clrNONE);
+   bool ok=OrderClose((int)ticket,lots,px,MathMax(0,deviationPoints),clrNONE);
    if(!ok) outErr=GetLastError();
    return ok;
 #endif

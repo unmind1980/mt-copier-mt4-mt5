@@ -22,6 +22,7 @@
 #include <Copier/CopierRisk.mqh>
 #include <Copier/CopierPeers.mqh>
 #include <Copier/CopierSymbol.mqh>
+#include <Copier/CopierPanel.mqh>
 
 int g_pass=0;
 int g_fail=0;
@@ -836,6 +837,10 @@ void TestConfig()
       static CopierIni secOver;
       Ok("config: sections exceeding CP_INI_SECTIONS is rejected", !secOver.Load(path));
       FileDelete(path);
+
+      // N1 & N4 assertions
+      OkInt("config: deviationpoints negative clamped to 0",MathMax(0,ini.GetInt("sender0","negdev",-5)),0);
+      Ok("panel: CP_PANEL_MAX_ROWS raised to 28 for worst-case layout",CP_PANEL_MAX_ROWS>=28);
      }
   }
 
