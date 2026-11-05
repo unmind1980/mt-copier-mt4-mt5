@@ -671,7 +671,8 @@ pub fn format_utc_timestamp(ts: u64) -> String {
     days += 719468;
     let era = if days >= 0 { days } else { days - 146096 } / 146097;
     let doe = (days - era * 146097) as u32;
-    let yoe = (doe - doe / 1020 + doe / 1461 - doe / 146096) / 365;
+    // HUB-01: Howard Hinnant algorithm constants: 1460 (4yr) and 36524 (100yr)
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = (yoe as i64) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
@@ -1707,6 +1708,13 @@ mod tests {
     #[test]
     fn format_utc_timestamp_test() {
         assert_eq!(format_utc_timestamp(0), "1970-01-01 00:00:00 UTC");
+        // Leap year and late-February edge cases (HUB-01 prevention)
+        assert_eq!(format_utc_timestamp(1709164799), "2024-02-28 23:59:59 UTC");
+        assert_eq!(format_utc_timestamp(1709208000), "2024-02-29 12:00:00 UTC");
+        assert_eq!(format_utc_timestamp(1772107200), "2026-02-26 12:00:00 UTC");
+        assert_eq!(format_utc_timestamp(1772193600), "2026-02-27 12:00:00 UTC");
+        assert_eq!(format_utc_timestamp(1772280000), "2026-02-28 12:00:00 UTC");
+        assert_eq!(format_utc_timestamp(1772323200), "2026-03-01 00:00:00 UTC");
         // 2026-10-16 00:00:00 UTC = 1792108800 (or similar)
         let s = format_utc_timestamp(1792083200);
         assert!(s.contains("2026"));

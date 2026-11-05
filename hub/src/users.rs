@@ -136,13 +136,17 @@ const FAIL_DELAY_STEP_MS: u64 = 250;
 const FAIL_DELAY_MAX_MS: u64 = 4000;
 const FAILS_GLOBAL_MAX: u32 = 40;
 const GLOBAL_BLOCK_SECS: u64 = 10;
+const MAX_TRACKED_NAMES: usize = 1024;
+const FAILS_LIGHT_GLOBAL_MAX: u32 = 300;
 
 #[derive(Default)]
 struct LoginGuard {
     /// user id -> (failures in the current window, window start)
     per_name: HashMap<String, (u32, u64)>,
-    /// (failures in the current window, window start)
+    /// (heavy failures in the current window, window start)
     global: (u32, u64),
+    /// (light failures in the current window, window start)
+    global_light: (u32, u64),
     /// Set while the global window is over budget.
     blocked_until: u64,
 }
@@ -158,8 +162,8 @@ impl LoginGuard {
 
     /// Record a failure and return how long the caller should wait before
     /// answering. The wait is applied OUTSIDE any lock (it is an async sleep).
-    /// N49-03: `is_hash_heavy` protects against CPU hash flooding without allowing
-    /// cheap proof failures to trigger global lockout.
+    /// N49-03 & HUB-02: `is_hash_heavy` protects against CPU hash flooding, while
+    /// `global_light` bounds proof/challenge failure flooding.
     fn note_failure(&mut self, id: &str, now: u64, is_hash_heavy: bool) -> u64 {
         if is_hash_heavy {
             if now.saturating_sub(self.global.1) > FAIL_WINDOW_SECS {
@@ -169,6 +173,22 @@ impl LoginGuard {
             if self.global.0 >= FAILS_GLOBAL_MAX {
                 self.blocked_until = now + GLOBAL_BLOCK_SECS;
                 self.global = (0, now);
+            }
+        } else {
+            if now.saturating_sub(self.global_light.1) > FAIL_WINDOW_SECS {
+                self.global_light = (0, now);
+            }
+            self.global_light.0 = self.global_light.0.saturating_add(1);
+            if self.global_light.0 >= FAILS_LIGHT_GLOBAL_MAX {
+                self.blocked_until = now + GLOBAL_BLOCK_SECS;
+                self.global_light = (0, now);
+            }
+        }
+
+        if !self.per_name.contains_key(id) && self.per_name.len() >= MAX_TRACKED_NAMES {
+            self.prune(now);
+            if self.per_name.len() >= MAX_TRACKED_NAMES {
+                return FAIL_DELAY_MAX_MS;
             }
         }
 
@@ -449,9 +469,10 @@ impl UserStore {
             //--- reason must not sign everybody out.
             let id = slot.id.clone();
             let role_changed = slot.role != u.role;
+            let pass_changed = slot.pass != u.pass;
             let was_enabled = !slot.disabled;
             *slot = u;
-            if role_changed || (slot.disabled && was_enabled) {
+            if role_changed || (slot.disabled && was_enabled) || pass_changed {
                 self.sessions.retain(|_, s| s.user_id != id);
             }
         } else {

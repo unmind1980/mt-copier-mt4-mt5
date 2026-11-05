@@ -586,12 +586,55 @@ struct CopierWaitItem
 CopierWaitItem g_waitItems[CP_MAX_WAIT_ITEMS];
 int            g_waitItemsCount=0;
 
+// MQL-02: Per-sender wait telemetry buckets to prevent fast-track clearing of other senders' telemetry
+int            g_senderWaitHeld[CP_MAX_SENDERS];
+double         g_senderWaitLots[CP_MAX_SENDERS];
+int            g_senderMktHeld[CP_MAX_SENDERS];
+double         g_senderMktHeldLots[CP_MAX_SENDERS];
+
+// MQL-01: Safe sender label accessor preventing negative array index out of bounds
+string SenderLabel(const int si)
+  {
+   if(si>=0 && si<CP_MAX_SENDERS && si<g_nSenders && StringLen(g_sid[si])>0)
+      return g_sid[si];
+   return "manual";
+  }
+
 //--- Pre-allocated scratch buffer for LocalForSender / ConvergeSender (zero ArrayResize)
 CopierPos      g_locScratch[CP_MAX_POSITIONS];
 
-void ClearWaitItems()
+void ClearWaitItems(const int si=-1)
   {
-   g_waitItemsCount=0;
+   if(si<0)
+     {
+      g_waitItemsCount=0;
+      return;
+     }
+   if(si>=g_nSenders) return;
+   long targetMagic=g_magic[si];
+   int w=0;
+   for(int i=0;i<g_waitItemsCount;i++)
+     {
+      if(g_waitItems[i].magic==targetMagic) continue; // remove only this sender's items
+      if(w!=i) g_waitItems[w]=g_waitItems[i];
+      w++;
+     }
+   g_waitItemsCount=w;
+  }
+
+void RecomputeWaitTotals()
+  {
+   g_waitHeld=0;
+   g_waitLots=0.0;
+   g_mktHeld=0;
+   g_mktHeldLots=0.0;
+   for(int s=0;s<g_nSenders;s++)
+     {
+      g_waitHeld+=g_senderWaitHeld[s];
+      g_waitLots+=g_senderWaitLots[s];
+      g_mktHeld+=g_senderMktHeld[s];
+      g_mktHeldLots+=g_senderMktHeldLots[s];
+     }
   }
 
 void AddWaitItem(const string uid,const string sym,const int side,const double lots,const double openPx,const long magic,const string stage,const string reason)
@@ -2650,7 +2693,7 @@ void ReportEntryGates()
 //=====================================================================
 bool ActionQueued(const int si,const int kind,const string uid,const string keyExtra="")
   {
-   string expectedKey=(StringLen(keyExtra)>0)?(g_sid[si]+":"+(string)kind+":"+uid+keyExtra):"";
+   string expectedKey=(StringLen(keyExtra)>0)?(SenderLabel(si)+":"+(string)kind+":"+uid+keyExtra):"";
    for(int i=0;i<g_qn;i++)
      {
       if(g_q[g_qHead+i].senderIdx==si && g_q[g_qHead+i].kind==kind
@@ -2824,6 +2867,30 @@ void ClearQueueExceptRiskReducing()
    if(g_qn<=0) g_qHead=0;
   }
 
+// M2: Remap preserved queue actions' senderIdx from old configuration to new indices
+void RemapQueueSenders(const string &beforeSid[],const int beforeN)
+  {
+   for(int i=0;i<g_qn;i++)
+     {
+      int idx=g_qHead+i;
+      int oldSi=g_q[idx].senderIdx;
+      if(oldSi>=0 && oldSi<beforeN)
+        {
+         string oldSid=beforeSid[oldSi];
+         int newSi=-1;
+         for(int j=0;j<g_nSenders;j++)
+           {
+            if(g_sid[j]==oldSid) { newSi=j; break; }
+           }
+         g_q[idx].senderIdx=newSi;
+        }
+      else if(oldSi>=beforeN)
+        {
+         g_q[idx].senderIdx=-1;
+        }
+     }
+  }
+
 // OPT-01: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer()
 void CopierWaitMs(const int waitMs)
   {
@@ -2926,9 +2993,17 @@ void ExecuteQueue()
 
       if(a.senderIdx<0 || a.senderIdx>=g_nSenders)
         {
-         g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
-         ShiftQueue();
-         continue;
+         // MQL-01: Allow single close/dedup on manual/orphan positions (si == -1) from WebUI
+         if(a.senderIdx==-1 && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
+           {
+            // Allowed: manual/orphan single close action from WebUI
+           }
+         else
+           {
+            g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
+            ShiftQueue();
+            continue;
+           }
         }
 
       //--- P1-01 & N74-03: During a global quote stall, hold OPEN actions while permitting
@@ -3404,7 +3479,8 @@ void ExecuteQueue()
                    +" trigger="+DoubleToString(a.pprice,dg)
                    +" lots="+DoubleToString(a.lots,2);
            }
-         g_log.Info(verb+g_sid[a.senderIdx]+" "+a.uid+ref+" "+a.sym
+         string sname=SenderLabel(a.senderIdx);
+         g_log.Info(verb+sname+" "+a.uid+ref+" "+a.sym
                     +" "+detail);
         }
       else
@@ -3602,9 +3678,10 @@ void ExecuteQueue()
                               +" backoff ladder is deliberately NOT climbed:"
                               +" switch AutoTrading on and the mirror opens"
                               +" within a couple of seconds)";
-         if(g_onceFail.ShouldEmit("fail|"+g_sid[a.senderIdx]+"|"
+         string sname=SenderLabel(a.senderIdx);
+         if(g_onceFail.ShouldEmit("fail|"+sname+"|"
                                   +(string)a.kind+"|"+a.uid+"|"+(string)err))
-            g_log.Warn("trade failed sender="+g_sid[a.senderIdx]+" uid="+a.uid
+            g_log.Warn("trade failed sender="+sname+" uid="+a.uid
                        +" sym="+a.sym+" kind="+(string)a.kind
                        +" err="+e2
                        +" (retrying in "+(string)(CP_RETRY_BACKOFF_MS/1000)
@@ -4084,6 +4161,25 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      {
       wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clampedSl);
       wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clampedTp);
+      // MQL-04: In inverted mode with entry price disparity, avoid clamping stops onto live market price
+      // which would trigger premature accidental closure; let sender's exit signal close the trade
+      if(actualInverted)
+        {
+         double mktPx=0.0;
+         if(CopierGetClosePrice(local.sym,local.side,mktPx) && mktPx>0.0)
+           {
+            if(clampedTp && ((local.side==CP_SIDE_BUY && wantTp<=mktPx+si2.stopLevel) || (local.side==CP_SIDE_SELL && wantTp>=mktPx-si2.stopLevel)))
+              {
+               wantTp=local.tp;
+               clampedTp=false;
+              }
+            if(clampedSl && ((local.side==CP_SIDE_BUY && wantSl>=mktPx-si2.stopLevel) || (local.side==CP_SIDE_SELL && wantSl<=mktPx+si2.stopLevel)))
+              {
+               wantSl=local.sl;
+               clampedSl=false;
+              }
+           }
+        }
       if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
          g_log.Warn("stop for "+local.uid+" "+local.sym+" was inside this"
                     +" broker's minimum distance and has been widened; the"
@@ -5055,6 +5151,17 @@ void ConvergeSender(const int si)
   {
    if(!g_ready[si]) return;    // no snapshot yet -> do nothing at all
 
+   // MQL-02: Safely reset this sender's wait metrics without affecting other senders
+   g_waitHeld-=g_senderWaitHeld[si];
+   g_waitLots=MathMax(0.0,g_waitLots-g_senderWaitLots[si]);
+   g_mktHeld-=g_senderMktHeld[si];
+   g_mktHeldLots=MathMax(0.0,g_mktHeldLots-g_senderMktHeldLots[si]);
+   g_senderWaitHeld[si]=0;
+   g_senderWaitLots[si]=0.0;
+   g_senderMktHeld[si]=0;
+   g_senderMktHeldLots[si]=0.0;
+   ClearWaitItems(si);
+
    //--- A stale sender (no SNAPSHOT within StaleSeconds) stops NEW entries,
    //--- and NOTHING ELSE. The gate used to return here, which also skipped
    //--- the close half: the mirror then held the sender's old positions for
@@ -5401,6 +5508,8 @@ void ConvergeSender(const int si)
                        +" clock is not advancing, so the market is closed or"
                        +" the feed is down. Holding new entries; nothing can"
                        +" be priced from a stale clock.");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Server clock halted / feed stall");
@@ -5415,6 +5524,8 @@ void ConvergeSender(const int si)
                        +" its market is shut or its feed has stopped. Holding"
                        +" new entries for it; they go through as soon as it"
                        +" quotes again.");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Symbol feed stale");
@@ -5426,6 +5537,8 @@ void ConvergeSender(const int si)
          if(g_once.ShouldEmit("sess|"+rsym))
             g_log.Info(rsym+" is outside its trading hours - holding new"
                        +" entries for it until the session opens");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside trading hours");
@@ -5437,6 +5550,8 @@ void ConvergeSender(const int si)
          if(g_once.ShouldEmit("mktclosed|"+rsym))
             g_log.Info("market for "+rsym+" is closed - holding new entries"
                        +" for it; they will go through when it reopens");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Market closed");
@@ -5451,6 +5566,8 @@ void ConvergeSender(const int si)
                        +") - new entries are held back. Existing mirrors are"
                        +" still managed and still close when the sender"
                        +" closes them.");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
          AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside sender trading window");
@@ -5507,6 +5624,8 @@ void ConvergeSender(const int si)
                               +CopierSecText(ageSec)+" ago and the configured wait"
                               +" is "+CopierSecText(waitSec)+", so it will enter in"
                               +" "+CopierSecText(waitSec-ageSec));
+                g_senderWaitHeld[si]++;
+                g_senderWaitLots[si]+=lots;
                 g_waitHeld++;
                 g_waitLots+=lots;
                 AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Wait open delay ("+CopierSecText(waitSec-ageSec)+")");
@@ -5517,6 +5636,8 @@ void ConvergeSender(const int si)
             {
              // BUG-85-01: Fail-safe: waitSec was configured > 0, but clock offset is not yet calibrated (openedOurs <= 0).
              // Do NOT enter immediately! Hold until clock offset is calibrated.
+             g_senderWaitHeld[si]++;
+             g_senderWaitLots[si]+=lots;
              g_waitHeld++;
              g_waitLots+=lots;
              AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Holding: waiting for clock offset calibration");
@@ -5538,6 +5659,8 @@ void ConvergeSender(const int si)
                              +(string)g_senderCfg[si].waitforminutesbar+" M1 bar(s) and "
                              +(string)bars+" have formed since the sender opened"
                              +" it");
+               g_senderWaitHeld[si]++;
+               g_senderWaitLots[si]+=lots;
                g_waitHeld++;
                g_waitLots+=lots;
                AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for M1 bars ("+(string)bars+"/"+(string)g_senderCfg[si].waitforminutesbar+")");
@@ -5547,6 +5670,8 @@ void ConvergeSender(const int si)
          else
            {
             // BUG-85-01: Fail-safe: waitforminutesbar was configured > 0, hold until clock is calibrated
+            g_senderWaitHeld[si]++;
+            g_senderWaitLots[si]+=lots;
             g_waitHeld++;
             g_waitLots+=lots;
             AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Holding: waiting for clock offset calibration for bars");
@@ -5582,6 +5707,8 @@ void ConvergeSender(const int si)
                                 +" waiting for it to reach "
                                 +CopierFmtDouble(g_senderCfg[si].waitforprofitpips,1)
                                 +" pips before entering");
+                  g_senderWaitHeld[si]++;
+                  g_senderWaitLots[si]+=lots;
                   g_waitHeld++;
                   g_waitLots+=lots;
                   AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"gate_delayed","Waiting for profit pullback ("+CopierFmtDouble(profitPips,1)+"/"+CopierFmtDouble(g_senderCfg[si].waitforprofitpips,1)+" pips)");
@@ -5812,6 +5939,7 @@ void ConvergeSender(const int si)
         }
       if(gcChanged) CmdStateSave(); // N83-02: Synchronize disk state when manual closed entries are GC'd
      }
+   RecomputeWaitTotals();
   }
 
 //=====================================================================
@@ -6318,6 +6446,7 @@ void HandleCfg(const CopierEnv &e)
 
    int added=ResubscribeSenders(beforeSid,beforeN);
    ClearQueueExceptRiskReducing();
+   RemapQueueSenders(beforeSid,beforeN);
 
    //--- Warnings, counted the way §10 asks: a magic change orphans positions.
    int warnings=0;
@@ -6614,6 +6743,7 @@ void HandleCmd(const CopierEnv &e)
       int added=ResubscribeSenders(beforeSid,beforeN);
       //--- F-03: preserve risk-reducing actions (CLOSE/TRIM) across reload
       ClearQueueExceptRiskReducing();
+      RemapQueueSenders(beforeSid,beforeN);
 
       int warnings=0;
       for(int i=0;i<g_nSenders;i++)
@@ -8141,16 +8271,10 @@ void OnTimer()
         }
 
       //--- Fast-Track: If any trade event arrived, converge active senders and execute immediately!
-      //--- N49-08: Only converge senders that actually received trade events in this batch (avoids 100x amplification)
+      //--- N49-08 & MQL-02: Only converge senders that actually received trade events in this batch.
+      //--- Per-sender wait buckets are updated in ConvergeSender(i) without clearing other senders' telemetry.
       if(hasFastAction)
         {
-         // P2-26 fix: reset wait held tallies and items before fast-track converge to prevent duplicate line accumulation
-         g_waitHeld=0;
-         g_waitLots=0.0;
-         g_mktHeld=0;
-         g_mktHeldLots=0.0;
-         ClearWaitItems();
-
          g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
          RefreshRisk();    // R47-06: Update account position risk counts before fast-track converge & execute
          for(int i=0;i<g_nSenders;i++)
@@ -8379,7 +8503,11 @@ void OnTimer()
    g_waitLots=0.0;
    g_mktHeld=0;
    g_mktHeldLots=0.0;
-   ClearWaitItems();
+   ArrayInitialize(g_senderWaitHeld,0);
+   ArrayInitialize(g_senderWaitLots,0.0);
+   ArrayInitialize(g_senderMktHeld,0);
+   ArrayInitialize(g_senderMktHeldLots,0.0);
+   ClearWaitItems(-1);
 
    //--- feed liveness, measured on the clock that ALWAYS moves. See the note
    //--- on g_srvChangedMs: the server clock stopping is the signal, and
@@ -8565,10 +8693,10 @@ void OnTimer()
             double waitLots=qLots+g_waitLots+g_mktHeldLots;
 
             st+=CP_SEP_KV+"HELD="+(string)g_ourCount
-               +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
+               +CP_SEP_KV+"LOTS="+CopierFmtDouble(g_ourLots,CP_DIGITS_LOTS)
                +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
                +CP_SEP_KV+"WAIT="+(string)waitTotal
-               +CP_SEP_KV+"WLOTS="+DoubleToString(waitLots,2)
+               +CP_SEP_KV+"WLOTS="+CopierFmtDouble(waitLots,CP_DIGITS_LOTS)
                +CP_SEP_KV+"WQUEUED="+(string)qOpen
                +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
                +CP_SEP_KV+"WMKT="+(string)g_mktHeld
@@ -8613,10 +8741,10 @@ void OnTimer()
          double waitLots=qLots+g_waitLots+g_mktHeldLots;
 
          st+=CP_SEP_KV+"HELD="+(string)g_ourCount
-            +CP_SEP_KV+"LOTS="+DoubleToString(g_ourLots,2)
+            +CP_SEP_KV+"LOTS="+CopierFmtDouble(g_ourLots,CP_DIGITS_LOTS)
             +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
             +CP_SEP_KV+"WAIT="+(string)waitTotal
-            +CP_SEP_KV+"WLOTS="+DoubleToString(waitLots,2)
+            +CP_SEP_KV+"WLOTS="+CopierFmtDouble(waitLots,CP_DIGITS_LOTS)
             +CP_SEP_KV+"WQUEUED="+(string)qOpen
             +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
             +CP_SEP_KV+"WMKT="+(string)g_mktHeld

@@ -698,25 +698,37 @@ bool CopierIniReadAll(const string path,string &out)
    return true;
   }
 
-// N84-03: Atomic successor write-and-replace to protect critical state across crashes/power loss
+// N84-03 & M3: Atomic successor write-and-replace to protect critical state across crashes/power loss
 bool CopierIniWriteAll(const string path,const string text)
   {
+   uint expectedLen=(uint)StringLen(text);
    string tmp=path+".tmp";
    FileDelete(tmp);
    int th=FileOpen(tmp,FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(th==INVALID_HANDLE) return false;
-   FileWriteString(th,text);
+   uint writtenTmp=FileWriteString(th,text);
    FileFlush(th);
    FileClose(th);
+   if(writtenTmp<expectedLen)
+     {
+      FileDelete(tmp);
+      return false;
+     }
 
    FileDelete(path);
    int h=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(h==INVALID_HANDLE) return false; // tmp is kept, CopierIniReadAll will fall back to it
    //--- FileWriteString, NOT FileWrite: FileWrite appends a newline of its
    //--- own, and the ini already has them.
-   FileWriteString(h,text);
+   uint writtenMain=FileWriteString(h,text);
    FileFlush(h);
    FileClose(h);
+   if(writtenMain<expectedLen)
+     {
+      // Main write truncated/failed: delete corrupt main file, keep .tmp intact for fallback
+      FileDelete(path);
+      return false;
+     }
    FileDelete(tmp);
    return true;
   }

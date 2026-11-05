@@ -64,7 +64,8 @@ RE_TRADE_FAIL = re.compile(r"^trade failed sender=(\S+) uid=([0-9A-Z]{8})")
 RE_LOT_REJECT = re.compile(r"^lot sizing rejected ([0-9A-Z]{8}) (\S+)")
 RE_SYM_SKIP = re.compile(r"symbol (\S+) -> (\S+) not offered by this broker")
 RE_UNKNOWN_SYM = re.compile(r"^unknown symbol (\S+), dropping ([0-9A-Z]{8})$")
-RE_LISTEN = re.compile(r"^sender (\S+) listening (?:events=(\d+) snap=(\d+)|on port \d+.*?) ssid=(\S+)")
+RE_LISTEN = re.compile(
+    r"^sender (\S+) (?:listening (?:events=(\d+) snap=(\d+)|on port \d+.*?)|connected to hub \S+) ssid=(\S+)")
 RE_RECV_UP = re.compile(r"^receiver up, (\d+) sender\(s\)")
 RE_RESTORED = re.compile(r"^restored (\d+) position\(s\) from state$")
 RE_NOCONF = re.compile(r"^cannot read (\S+) from MQL")
@@ -659,11 +660,13 @@ def main(argv):
     #--- open on the receiving side, the RECEIVER's file says what actually
     #--- IS. Using the receiver's LOG for that second question is what made
     #--- a rotated-away close look like a stranded position.
-    st_paths = [p for p in paths if p.endswith(".st")]
+    # TOOL-01: Exclude manual-closed record files which are not position state files
+    st_paths = [p for p in paths if p.endswith(".st") and not os.path.basename(p).startswith("copier_receiver_manual_closed")]
     log_paths = [p for p in paths if not p.endswith(".st")]
 
     def is_receiver_state(p):
-        return p.replace("\\", "/").rsplit("/", 1)[-1] == "copier_receiver.st"
+        fname = os.path.basename(p)
+        return fname.startswith("copier_receiver") and fname.endswith(".st")
 
     sender_state, st_files = read_state([p for p in st_paths
                                          if not is_receiver_state(p)])

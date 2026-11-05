@@ -1385,20 +1385,13 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- g_snapHash is deliberately NOT touched here: it names the broadcast
       //--- bytes, and IsRecentSnapHash() already accepts g_latestSnapHash too, so
       //--- the new node's ACK of the newer frame is recognised as current.
-      string snapPayload=g_snapPayload;
-      if(isBootstrap && StringLen(g_latestSnapPayload)>0)
-         snapPayload=g_latestSnapPayload;
+      //--- H1: Always send the latest snapshot payload during repair and note hash in history
+      string snapPayload=(StringLen(g_latestSnapPayload)>0)?g_latestSnapPayload:g_snapPayload;
       EmitToNode(rnid,CP_T_SNAP,snapPayload);
-      if(!isBootstrap)
-        {
-         g_snapHash=CopierSnapshotHash(g_snapPayload);
-         NoteRecentSnapHash(g_snapHash);
-        }
-      else
-        {
-         // BUG-85-04: Note the bootstrap snapshot hash in recent history so receiver's first ACK is recognized
-         NoteRecentSnapHash(CopierSnapshotHash(snapPayload));
-        }
+      string sentHash=CopierSnapshotHash(snapPayload);
+      NoteRecentSnapHash(sentHash);
+      g_snapPayload=snapPayload;
+      g_snapHash=sentHash;
       // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
       // to this single receiver. Other receivers on the hub have not received this frame.
       if(isBootstrap)
@@ -1417,9 +1410,10 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
       // P2-25 fix: direct mode repair transmits only on direct channel, do not spam central hub
-      Emit(CP_T_SNAP,g_snapPayload,true,false);
-      // L-06: Keep g_snapHash aligned with the actual cached payload re-emitted
-      g_snapHash=CopierSnapshotHash(g_snapPayload);
+      string snapPayload=(StringLen(g_latestSnapPayload)>0)?g_latestSnapPayload:g_snapPayload;
+      Emit(CP_T_SNAP,snapPayload,true,false);
+      g_snapPayload=snapPayload;
+      g_snapHash=CopierSnapshotHash(snapPayload);
       NoteRecentSnapHash(g_snapHash);
       // BUG-07: Do not overwrite global g_lastSnapMs to prevent delaying Central Hub periodic broadcasts
       static long s_lastDirectSnapMs=0;
@@ -2237,11 +2231,11 @@ void OnTimer()
    static long s_lastSnapRebuildMs=0;
    static long s_lastStateSaveMs=0;
 
-   //--- R59-02 & MQL-02: In periodic mode (SnapshotSeconds>0), broadcast when dueSnap.
-   //--- In on-demand mode (SnapshotSeconds<=0), periodic broadcast is disabled.
-   //--- When g_snapDirty, rebuild debounced (at most every 250ms) to update in-memory g_snapPayload/g_snapHash
-   //--- without flooding the network at 4Hz. Actual broadcasts occur only on fill (dueSnap) or targeted repair.
-   if(dueSnap)
+   //--- R59-02, MQL-02 & H1: In periodic mode (SnapshotSeconds>0), broadcast when dueSnap.
+   //--- In on-demand mode (SnapshotSeconds<=0), periodic broadcast is disabled, but whenever
+   //--- actual positions change (g_snapDirty=true), broadcast debounced (250ms) to advance
+   //--- g_snapPayload/g_snapHash and synchronize all subscribers (e.g. partial closes/TRIMs).
+   if(dueSnap || (SnapshotSeconds<=0 && g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
      {
       g_snapDirty=false;
       s_lastSnapRebuildMs=now;

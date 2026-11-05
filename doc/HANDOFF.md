@@ -1860,6 +1860,28 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
      - `tls_status` 增加 Operator 权限校验并复用全局 `reqwest::Client`；`curve.rs` 白名单监控线程增加 `EXIT` 退出判断与 `(mtime, len)` 变更感知；
      - 补齐 `CopierPos` 的 `profit`/`swap` 字段初始化与更新；消除 `PeakUidHash` 重复实现；`tools/logcheck.py` 区分部分平仓与完全平仓。
 
+### 一百零五次演进：孤儿单平仓放行、快车道遥测保护、按需快照推进、历法常数纠偏、登录防护与工具链全栈强化 (2026-11-05 18:20；全部闭环)
+
+- **技术落地项**：
+  1. **孤儿单/手动单平仓放行与越界根除（MQL-01）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中，`ExecuteQueue` 守卫放行操作员手动/孤儿单平仓动作（`a.senderIdx == -1 && (a.kind == CP_ACT_CLOSE || a.kind == CP_ACT_DEDUP)`）；引入 `SenderLabel(si)` 安全访问器，消灭所有 `g_sid[si]` 负数下标越界风险；
+  2. **多 Sender 快车道等待队列遥测保护（MQL-02）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中引入按 Sender 隔离的等待指标分桶 `g_senderWaitHeld[]` 等，快车道中仅清理并重算当前触发事件的 fastSender 分桶，彻底杜绝抹零其他在线 Sender 的等待队列遥测；
+  3. **按需快照模式推进与精准修复（MQL-03, H1）**：
+     - 在 `src/Experts/CopierSender.mq4` 中，`SnapshotSeconds <= 0` 模式下有持仓真实变更（`g_snapDirty`）时，防抖 250ms 后广播快照推进 `g_snapPayload` / `g_snapHash`；`SnapRepairMaybe` 统一重传 `g_latestSnapPayload` 并记入历史环，解决部分平仓（TRIM）收敛丢失；
+  4. **反向跟单入场偏差止损防贴脸平仓（MQL-04）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `MaybeModifyStops` 中，反向跟单下若止盈/止损被钳制且原始目标已越过市价，跳过修改等待发送端平仓信号，杜绝贴脸市价触发乌龙平仓；
+  5. **原子配置写入与订阅前缀重置（M3, MQL-06）**：
+     - 在 `src/Include/Copier/CopierConfig.mqh` 的 `CopierIniWriteAll` 中严格核对 `FileWriteString` 写入长度，写入失败保留 `.tmp` 并安全回滚；在 `CopierTransport.mqh` 的 `ConnectHub` 中重置 `m_nSubPrefixes = 0`；
+  6. **重载保留动作 Sender 映射与微手数统计（M2, MQL-05）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中引入 `RemapQueueSenders`，重载配置后将保留动作的 `senderIdx` 精准重映射为新 Sender 集合的真实下标；STAT 状态报文的手数统一使用 `CopierFmtDouble(..., CP_DIGITS_LOTS)`；
+  7. **历法常数纠偏与登录限流防护（HUB-01, HUB-02）**：
+     - 在 `hub/src/notifications.rs` 的 `format_utc_timestamp` 中纠正常数为 `1460` 与 `36524`，消灭每年 2 月底的 `u32` 算术下溢崩溃并增加单测覆盖；在 `hub/src/users.rs` 的 `LoginGuard` 中增加 `per_name` 1024 上限与轻量请求频控，并在高频失败下跳过同步 `fsync` 消除 I/O DoS；
+  8. **HTTPS 故障关闭与 10 位账号查询支持（H2, H3, M4, M5）**：
+     - 在 `hub/src/api.rs` 中，HTTPS 端口缺少 acceptor 时 Fail-Closed 拒绝连接，绝不静默回退明文 HTTP；`positions.rs` 的 `view_for` 支持 10 位以上账号按 `acc % 1e9` 自动回退查询；WebSocket 心跳周期定期复核 Session 状态；配置下发与回滚接口检查命令持久化状态；
+  9. **前端安全转义与对账工具修正（UI-01, TOOL-01, D1~D4）**：
+     - 在 `dashboard.html` 中对 `confirmDialog` 全部动态参数执行 `esc()` 转义杜绝 DOM XSS，单笔平仓按钮区分 `nodeKey:ticket` 命名空间；`tools/logcheck.py` 修正 `copier_receiver*.st` 识别与 Hub 模式正则；修正 `README` 文档中的 `HubEndpoint` 与参数漂移。
+
 ---
 
 ## 9. 最终交付状态确认

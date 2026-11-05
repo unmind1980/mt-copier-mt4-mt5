@@ -453,16 +453,6 @@ impl CommandStore {
         if !to_append.is_empty() {
             inner.append_many(&to_append)?;
         }
-        // HUB-01: Advance line_count by the number of received valid lines if append didn't advance it
-        // (e.g. all received lines were already applied or equal/lower rank duplicates), keeping watermarks strictly aligned with Primary.
-        let parsed_valid_lines = raw_lines.iter().filter(|l| {
-            serde_json::from_str::<Value>(l).map(|v| {
-                !v["id"].as_str().unwrap_or("").is_empty() && !v["node"].as_str().unwrap_or("").is_empty()
-            }).unwrap_or(false)
-        }).count();
-        if parsed_valid_lines > to_append.len() {
-            inner.line_count += parsed_valid_lines - to_append.len();
-        }
         for (node, seq) in staged_seq {
             let cur = inner.seq.get(&node).copied().unwrap_or(0);
             inner.seq.insert(node, cur.max(seq));

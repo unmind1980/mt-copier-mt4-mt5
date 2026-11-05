@@ -186,9 +186,9 @@ Right-click `install_services.bat` and select **Run as Administrator** to instal
 ### Step 3: Attach EAs to Your Terminals
 1. Open your MetaTrader terminal, ensure **Allow DLL imports** and **AutoTrading** are checked in terminal settings.
 2. **On the Sender terminal**: Attach `CopierSender` to any single chart (e.g., EURUSD H1).
-   - Set `CentralHubEndpoint` = `tcp://127.0.0.1:6000`
+   - Set `HubEndpoint` = `tcp://127.0.0.1:6000`
 3. **On the Receiver terminal**: Attach `CopierReceiver` to any single chart.
-   - Set `CentralHubEndpoint` = `tcp://127.0.0.1:6000`
+   - Set `HubEndpoint` = `tcp://127.0.0.1:6000`
    - Specify the Sender ID under `[sender0]` in `copier.ini` or configure via Web UI.
 
 ### Step 4: Access the Central Web Cockpit
@@ -197,7 +197,7 @@ Open your web browser and navigate to:
 http://127.0.0.1:6010
 ```
 - Default user: `admin`
-- Enter the admin password displayed in the terminal console on first run (or set via `MTC_ADMIN_PASSWORD`).
+- Enter the admin password stored in `.admin_bootstrap_password` printed on first run (or set via `MTC_ADMIN_PASSWORD`).
 - Switch themes, inspect node heartbeats, customize lot multipliers, view live floating PnL & Swap, or trigger fleet-wide emergency operations.
 
 ---

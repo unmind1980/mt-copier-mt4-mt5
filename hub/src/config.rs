@@ -288,15 +288,6 @@ impl ConfigStore {
         if !to_append.is_empty() {
             inner.append_many(&to_append)?;
         }
-        // HUB-01: Advance count by valid received lines if append didn't advance it, keeping watermarks aligned
-        let parsed_valid_lines = raw_lines.iter().filter(|l| {
-            serde_json::from_str::<Value>(l).map(|v| {
-                !v["node"].as_str().unwrap_or("").is_empty() && v["rev"].as_u64().unwrap_or(0) > 0
-            }).unwrap_or(false)
-        }).count();
-        if parsed_valid_lines > to_append.len() {
-            inner.count += (parsed_valid_lines - to_append.len()) as u64;
-        }
         for (node, r) in staged_current {
             inner.current.insert(node, r);
         }

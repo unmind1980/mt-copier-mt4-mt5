@@ -186,9 +186,9 @@ bash tools/compile.sh
 ### 第三步：在终端中挂载 EA
 1. 打开 MetaTrader 终端，在菜单 `工具 -> 选项 -> 智能交易系统` 中勾选 **允许导入动态链接库 (DLL)** 和 **允许实时自动交易**；
 2. **在发送端（Sender）终端**：将 `CopierSender` 拖放到任意单个图表（如 EURUSD H1）；
-   - 设置参数 `CentralHubEndpoint` = `tcp://127.0.0.1:6000`；
+   - 设置参数 `HubEndpoint` = `tcp://127.0.0.1:6000`；
 3. **在接收端（Receiver）终端**：将 `CopierReceiver` 拖放到任意单个图表；
-   - 设置参数 `CentralHubEndpoint` = `tcp://127.0.0.1:6000`；
+   - 设置参数 `HubEndpoint` = `tcp://127.0.0.1:6000`；
    - 在 `copier.ini` 中填入对应发送端账号，或直接在 Web 驾驶舱中在线可视化配置。
 
 ### 第四步：进入中央 Web 交易驾驶舱
@@ -197,7 +197,7 @@ bash tools/compile.sh
 http://127.0.0.1:6010
 ```
 - 默认登录账户：`admin`
-- 首次启动时，终端控制台会自动输出随机生成的管理员密码（或通过环境变量 `MTC_ADMIN_PASSWORD` 预先设定）；
+- 首次启动时，终端会打印并在 `.admin_bootstrap_password` 文件中保存随机生成的管理员密码（或通过环境变量 `MTC_ADMIN_PASSWORD` 预先设定）；
 - 登录后即可自由切换语言与主题，实时监控各终端网络心跳，按需配置手数倍率，实时查看浮动盈亏与隔夜利息，或执行全局单笔平仓与紧急风控全平。
 
 ---

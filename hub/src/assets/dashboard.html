@@ -4999,7 +4999,8 @@ function renderPosNodeDetail(){
           var swSign = swVal > 0 ? "+" : "";
           var profitHtml = '<span class="' + pClass + '" style="font-weight:700;font-family:var(--mono)">' + pSign + pVal.toFixed(2) + '</span>';
           var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
-          var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[p.ticket]);
+          var qKey = n.key + ":" + p.ticket;
+          var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[qKey]);
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
           var btnText = isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close");
           var btnTitle = isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket));
@@ -5506,7 +5507,7 @@ function maybeAutoRequestPositions(n){
 function confirmCloseAllNode(k){
   confirmDialog({
     title: t("nodes.confirm_close_all_title"),
-    desc: t("nodes.confirm_close_all_desc", { key: k }),
+    desc: t("nodes.confirm_close_all_desc", { key: esc(k) }),
     detail: t("nodes.confirm_close_all_detail"),
     danger: true,
     confirmText: t("nodes.btn_close_all")
@@ -5579,11 +5580,11 @@ function onCloseSinglePosition(nodeKey, ticket, symbol, side, lots, profit){
 
   var profitText = (profit > 0 ? "+" : "") + Number(profit).toFixed(2);
   var descHtml = t("cockpit.confirm_close_desc", {
-    ticket: ticket,
-    symbol: symbol,
-    side: side,
-    lots: lots,
-    profit: profitText
+    ticket: esc(ticket),
+    symbol: esc(symbol),
+    side: esc(side),
+    lots: esc(lots),
+    profit: esc(profitText)
   });
 
   confirmDialog({
@@ -5640,7 +5641,8 @@ function executeCloseSingle(nodeKey, ticket){
     var isAlreadyQueued = (j && typeof j === "object" && j.err && j.err.indexOf("already_queued") >= 0);
     if(isMktClosed || isAlreadyQueued){
       if(!s.queuedCloseTickets) s.queuedCloseTickets = {};
-      s.queuedCloseTickets[ticket] = true;
+      var qKey = nodeKey + ":" + ticket;
+      s.queuedCloseTickets[qKey] = true;
     }
     resetBtn(isMktClosed || isAlreadyQueued);
     if(ok){
@@ -7147,7 +7149,7 @@ function userAction(act, id, ev){
   if(act === "del"){
     confirmDialog({
       title: t("users.confirm_delete_title"),
-      desc: t("users.confirm_delete_desc", { id: id }),
+      desc: t("users.confirm_delete_desc", { id: esc(id) }),
       detail: t("users.confirm_delete_detail"),
       danger: true,
       confirmText: t("users.confirm_delete_btn")
@@ -7571,7 +7573,11 @@ function collectNotifFormConfig(type){
   } else if(type === "wechat"){
     var tok = $("notif_wx_token").value.trim();
     if(!tok) throw new Error("Xtuis Token is required");
-    cfg.token = tok;
+    if(tok.startsWith("http://") || tok.startsWith("https://")){
+      cfg.webhook_url = tok;
+    } else {
+      cfg.token = tok;
+    }
   } else if(type === "webhook"){
     cfg.url = $("notif_hook_url").value.trim();
     var hRaw = $("notif_hook_headers").value.trim();
@@ -7712,8 +7718,8 @@ $("notifbody").addEventListener("click", function(ev){
   if(act === "del"){
     confirmDialog({
       title: t("notif.confirm_delete_title"),
-      desc: t("notif.confirm_delete_desc", { name: ch.name }),
-      detail: t("notif.confirm_delete_detail", { type: ch.channel_type }),
+      desc: t("notif.confirm_delete_desc", { name: esc(ch.name) }),
+      detail: t("notif.confirm_delete_detail", { type: esc(ch.channel_type) }),
       danger: true,
       confirmText: t("notif.confirm_delete_btn")
     }).then(function(ok){

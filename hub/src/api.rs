@@ -782,14 +782,16 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<SharedState>,
     axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::broadcast::Sender<std::sync::Arc<String>>>,
+    axum::extract::Extension(tok): axum::extract::Extension<Token>,
 ) -> impl axum::response::IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, st, tx))
+    ws.on_upgrade(move |socket| handle_socket(socket, st, tx, tok.0))
 }
 
 async fn handle_socket(
     mut socket: WebSocket,
     st: SharedState,
     tx: tokio::sync::broadcast::Sender<std::sync::Arc<String>>,
+    token: String,
 ) {
     // Everything the page needs on arrival, so it can render before it has
     // made a single HTTP call of its own.
@@ -833,6 +835,17 @@ async fn handle_socket(
                 }
             }
             _ = beat.tick() => {
+                // M4: Re-verify session validity periodically during WebSocket lifecycle
+                if !token.is_empty() {
+                    let valid = st.lock_or_recover().users.session(&token, unix_secs()).is_some();
+                    if !valid {
+                        let _ = socket.send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                            code: axum::extract::ws::close_code::NORMAL,
+                            reason: "Session revoked or expired".into(),
+                        }))).await;
+                        break;
+                    }
+                }
                 // N49-09: Send lightweight WebSocket Ping keepalive instead of heavy full snapshot re-serialization
                 if socket.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
@@ -1329,10 +1342,13 @@ async fn login(
                 let d = s.users.note_login_failure(&b.id, now, is_heavy);
                 (d, Arc::clone(&s.audit))
             };
-            audit.record(
-                &b.id, "", "auth.login", &b.id, None,
-                Some(json!({ "why": "invalid credentials" })), "rejected",
-            );
+            // HUB-02: Prevent disk I/O DoS. Skip synchronous fsync audit write under heavy flood
+            if delay_ms <= 1000 {
+                audit.record(
+                    &b.id, "", "auth.login", &b.id, None,
+                    Some(json!({ "why": "invalid credentials" })), "rejected",
+                );
+            }
             //--- The delay is applied OUTSIDE the lock and OUTSIDE the
             //--- router thread: `tokio::time::sleep` yields to the runtime,
             //--- so it costs the attacker wall-clock time and costs the hub
@@ -1957,6 +1973,10 @@ pub fn spawn(
                                 }
                                 Err(_) => {}
                             }
+                        } else if is_https_on_main {
+                            // H2: Fail-closed: If HTTPS is configured and active on this port but acceptor is missing,
+                            // do NOT fall back to plaintext HTTP (prevent credential exposure). Drop the connection.
+                            eprintln!("[hub] TLS ERR: Rejecting connection on https port {} because certificate acceptor is not ready", current_port);
                         } else {
                             crate::tls::serve_stream_with_router(tcp_stream, app).await;
                         }
@@ -2257,6 +2277,24 @@ async fn put_node_config(
     };
 
     let cmd = cmds.issue_cfg(&id, rev.rev, &actor, "");
+    if cmd.state == crate::commands::STATE_UNKNOWN {
+        audit.record(
+            &actor,
+            "",
+            "config.changed",
+            &id,
+            None,
+            Some(json!({
+                "rev": rev.rev, "id": cmd.id, "error": cmd.err,
+            })),
+            "failed",
+        );
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": cmd.err, "node": id })),
+        )
+            .into_response();
+    }
     audit.record(
         &actor,
         "",
@@ -2366,6 +2404,22 @@ async fn rollback_node_config(
         }
     };
     let cmd = cmds.issue_cfg(&id, r.rev, &actor, "");
+    if cmd.state == crate::commands::STATE_UNKNOWN {
+        audit.record(
+            &actor,
+            "",
+            "config.rolled_back",
+            &id,
+            Some(json!({ "to_rev": to_rev })),
+            Some(json!({ "rev": r.rev, "id": cmd.id, "error": cmd.err })),
+            "failed",
+        );
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": cmd.err, "node": id })),
+        )
+            .into_response();
+    }
     audit.record(
         &actor,
         "",
@@ -3224,11 +3278,14 @@ async fn notifications_test(
             .into_response();
     };
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .unwrap_or_default();
+    static TEST_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = TEST_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .unwrap_or_default()
+    });
 
     let test_alert = crate::alerts::Alert {
         ts: unix_secs(),

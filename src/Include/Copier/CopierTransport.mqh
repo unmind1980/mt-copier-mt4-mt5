@@ -381,6 +381,9 @@ public:
       if(nEp<=0) return false;
 
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
+      // MQL-06: Reset cached subscription prefixes upon ConnectHub to avoid stale replay
+      m_nSubPrefixes=0;
+      for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) m_subPrefixes[sp]="";
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);

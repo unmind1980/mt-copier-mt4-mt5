@@ -159,7 +159,19 @@ impl Positions {
     }
 
     pub fn view_for(&self, sid: &str) -> Option<&SenderView> {
-        self.by_sender.get(sid)
+        if let Some(v) = self.by_sender.get(sid) {
+            return Some(v);
+        }
+        // H3: If account has 10+ digits, MQL CopierNid truncates via account % 1e9
+        if let Ok(acc) = sid.parse::<u64>() {
+            if acc >= 1_000_000_000 {
+                let nid = (acc % 1_000_000_000).to_string();
+                if let Some(v) = self.by_sender.get(&nid) {
+                    return Some(v);
+                }
+            }
+        }
+        None
     }
 
     pub fn touch(&mut self, sid: &str, now: Instant) {
@@ -240,10 +252,9 @@ impl Positions {
     }
 }
 
-/// Lots with the trailing zeros trimmed, so a line of them stays readable and
-/// two runs that mean the same thing render the same way.
+/// Lots with the trailing zeros trimmed, supporting up to 8 decimal places for micro-lots.
 pub fn lots_str(l: f64) -> String {
-    let s = format!("{:.4}", l);
+    let s = format!("{:.8}", l);
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
