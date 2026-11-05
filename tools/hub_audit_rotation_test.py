@@ -13,8 +13,10 @@ Verifies:
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,28 +59,14 @@ def main():
         print(f"hub binary not found: {HUB}")
         return 2
 
+    test_dir = tempfile.mkdtemp(prefix="mtc_audit_rot_test_")
     os.environ["MTC_ADMIN_PASSWORD"] = "rot-test-pass"
-    audit_file = os.path.join(HERE, "_test_audit.jsonl")
-    users_file = os.path.join(HERE, "_test_audit_users.json")
-    cmds_file = os.path.join(HERE, "_test_audit_cmds.jsonl")
-    notif_file = os.path.join(HERE, "_test_audit_notif.json")
-    curve_keys = os.path.join(HERE, "_test_audit_curve.keys")
-    curve_clients = os.path.join(HERE, "_test_audit_curve_clients.txt")
-
-    # Clean previous artifacts
-    for f in [audit_file, users_file, cmds_file, notif_file, curve_keys, curve_clients]:
-        if os.path.exists(f):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-    for idx in range(1, 20):
-        arc = f"{audit_file}.{idx}.gz"
-        if os.path.exists(arc):
-            try:
-                os.remove(arc)
-            except Exception:
-                pass
+    audit_file = os.path.join(test_dir, "_test_audit.jsonl")
+    users_file = os.path.join(test_dir, "_test_audit_users.json")
+    cmds_file = os.path.join(test_dir, "_test_audit_cmds.jsonl")
+    notif_file = os.path.join(test_dir, "_test_audit_notif.json")
+    curve_keys = os.path.join(test_dir, "_test_audit_curve.keys")
+    curve_clients = os.path.join(test_dir, "_test_audit_curve_clients.txt")
 
     proc = subprocess.Popen(
         [
@@ -93,6 +81,7 @@ def main():
             "--stats-every", "0",
             "--duration", "60",
         ],
+        cwd=test_dir,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.STDOUT,
     )
@@ -140,20 +129,7 @@ def main():
         except Exception:
             proc.kill()
 
-        # Clean artifacts
-        for f in [audit_file, users_file, cmds_file, notif_file, curve_keys, curve_clients]:
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
-        for idx in range(1, 20):
-            arc = f"{audit_file}.{idx}.gz"
-            if os.path.exists(arc):
-                try:
-                    os.remove(arc)
-                except Exception:
-                    pass
+        shutil.rmtree(test_dir, ignore_errors=True)
 
     passed = sum(1 for _, ok, _ in CHECKS if ok)
     total = len(CHECKS)

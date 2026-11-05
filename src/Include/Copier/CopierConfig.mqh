@@ -108,7 +108,13 @@ public:
    bool              Load(const string path)
      {
       m_n=0;
-      int h=FileOpen(path,FILE_READ|FILE_TXT|FILE_ANSI);
+      string actualPath=path;
+      // BUG-06: If main file is missing (e.g. crash during write), fall back to .tmp
+      if(!FileIsExist(actualPath) && FileIsExist(path+".tmp"))
+        {
+         actualPath=path+".tmp";
+        }
+      int h=FileOpen(actualPath,FILE_READ|FILE_TXT|FILE_ANSI);
       if(h==INVALID_HANDLE) return false;
 
       string section="";
@@ -138,7 +144,7 @@ public:
             if(e>1) section=Trim(StringSubstr(line,1,e-1));
             else
               {
-               Print("CopierIni: ERROR - malformed section header '",line,"' in ",path);
+               Print("CopierIni: ERROR - malformed section header '",line,"' in ",actualPath);
                FileClose(h);
                return false;
               }
@@ -160,12 +166,32 @@ public:
       FileClose(h);
       if(overflow)
         {
-         Print("CopierIni: ERROR - ",path," exceeded CP_INI_MAX (",CP_INI_MAX," lines)! Config truncated.");
+         Print("CopierIni: ERROR - ",actualPath," exceeded CP_INI_MAX (",CP_INI_MAX," lines)! Config truncated.");
          return false;
         }
+
+      // BUG-06: If primary file produced 0 valid keys but .tmp exists and has valid content, recover from .tmp
+      if(m_n==0 && actualPath==path && FileIsExist(path+".tmp"))
+        {
+         if(Load(path+".tmp") && m_n>0)
+           {
+            string recovered="";
+            if(CopierIniReadAll(path+".tmp",recovered) && StringLen(recovered)>0)
+               CopierIniWriteAll(path,recovered);
+            return true;
+           }
+        }
+      else if(actualPath!=path && m_n>0)
+        {
+         // We loaded from .tmp because path did not exist; restore path
+         string recovered="";
+         if(CopierIniReadAll(actualPath,recovered) && StringLen(recovered)>0)
+            CopierIniWriteAll(path,recovered);
+        }
+
       if(!BuildSections())
         {
-         Print("CopierIni: ERROR - ",path," exceeded CP_INI_SECTIONS (",CP_INI_SECTIONS," blocks)! Config rejected.");
+         Print("CopierIni: ERROR - ",actualPath," exceeded CP_INI_SECTIONS (",CP_INI_SECTIONS," blocks)! Config rejected.");
          return false;
         }
       return true;
@@ -643,11 +669,12 @@ bool CopierIniReadAll(const string path,string &out)
    // verify whether .tmp exists and has valid content to recover from
    if(actualPath==path && FileIsExist(path+".tmp"))
      {
-      bool isCorrupt=(StringLen(out)==0 || (StringFind(out,"[")<0 && StringFind(out,"=")<0));
+      // BUG-06: A valid INI must contain at least one section '[' and at least one assignment '='
+      bool isCorrupt=(StringLen(out)==0 || StringFind(out,"[")<0 || StringFind(out,"=")<0);
       if(isCorrupt)
         {
          string tmpOut="";
-         if(CopierIniReadAll(path+".tmp",tmpOut) && StringLen(tmpOut)>0)
+         if(CopierIniReadAll(path+".tmp",tmpOut) && StringLen(tmpOut)>0 && StringFind(tmpOut,"[")>=0 && StringFind(tmpOut,"=")>0)
            {
             out=tmpOut;
             // Restore main file from valid .tmp successor

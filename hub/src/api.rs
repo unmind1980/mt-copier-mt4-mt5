@@ -234,7 +234,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
         n.wait_total.map(|w| {
             json!({
                 "total": w,
-                "lots": (n.wait_lots * 100.0).round() / 100.0,
+                "lots": (n.wait_lots * 1e8).round() / 1e8,
                 "queued": n.wait_queued.unwrap_or(0),
                 "delayed": n.wait_delayed.unwrap_or(0),
                 "mkt_closed": n.wait_mkt.unwrap_or(0),
@@ -328,12 +328,15 @@ fn symbols_json(v: &SenderView) -> Value {
     )
 }
 
-/// 0.5 not 0.5000000000001. JSON numbers are fine but a page showing
-/// `0.5000000000000001` next to a page showing `0.50` for the same position
-/// looks like a bug in the copier.
+/// BUG-10: Support up to 8 decimal places for crypto / micro-lots (CP_DIGITS_LOTS=8)
 fn trim_lots(l: f64) -> String {
-    let s = format!("{:.2}", l);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
+    let s = format!("{:.8}", (l * 1e8).round() / 1e8);
+    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// EVERY node as JSON, ordered by account.
@@ -369,7 +372,7 @@ fn nodes_json_list_from_nodes(nodes: &[Node], pos: &Positions, now: Instant) -> 
                 n.held.map(|count| {
                     json!({
                         "count": count,
-                        "lots": (n.held_lots * 100.0).round() / 100.0,
+                        "lots": (n.held_lots * 1e8).round() / 1e8,
                         "receipt": Value::Null,
                         "orphaned": n.orphaned,
                     })
@@ -1978,12 +1981,19 @@ pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
     if !tls_enabled || https_port == 0 || https_port == current_port {
         return;
     }
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let mut active_port = tls_mgr.active_https_port.lock_or_recover();
-        if *active_port == Some(https_port) {
-            return; // Already listening on this port
+        let mut active = tls_mgr.active_https_shutdown.lock_or_recover();
+        if let Some((old_port, old_tx)) = active.take() {
+            if old_port == https_port {
+                // Already listening on this port, keep existing shutdown sender
+                *active = Some((old_port, old_tx));
+                return;
+            }
+            // Shut down existing listener on different port
+            let _ = old_tx.send(());
         }
-        *active_port = Some(https_port);
+        *active = Some((https_port, shutdown_tx));
     }
 
     let st_https = st.clone();
@@ -1999,25 +2009,37 @@ pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
             Ok(l) => {
                 println!("[hub] TLS: Dedicated HTTPS listener active on https://0.0.0.0:{}", https_port);
                 loop {
-                    let (tcp_stream, _) = match l.accept().await {
-                        Ok(conn) => conn,
-                        Err(_) => continue,
-                    };
-                    let acceptor_opt = tls_mgr_https.acceptor.read_or_recover().clone();
-                    let app = app_base_https.clone();
-                    tokio::spawn(async move {
-                        if let Some(acceptor) = acceptor_opt {
-                            if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
-                                crate::tls::serve_stream_with_router(tls_stream, app).await;
-                            }
+                    tokio::select! {
+                        conn_res = l.accept() => {
+                            let (tcp_stream, _) = match conn_res {
+                                Ok(conn) => conn,
+                                Err(_) => continue,
+                            };
+                            let acceptor_opt = tls_mgr_https.acceptor.read_or_recover().clone();
+                            let app = app_base_https.clone();
+                            tokio::spawn(async move {
+                                if let Some(acceptor) = acceptor_opt {
+                                    if let Ok(tls_stream) = acceptor.accept(tcp_stream).await {
+                                        crate::tls::serve_stream_with_router(tls_stream, app).await;
+                                    }
+                                }
+                            });
                         }
-                    });
+                        _ = &mut shutdown_rx => {
+                            println!("[hub] TLS: Dedicated HTTPS listener on port {} shutting down", https_port);
+                            break;
+                        }
+                    }
                 }
             }
             Err(e) => {
                 eprintln!("[hub] TLS: cannot bind dedicated HTTPS listener on {}: {}", bind_addr, e);
-                let mut active_port = tls_mgr_https.active_https_port.lock_or_recover();
-                *active_port = None;
+                let mut active = tls_mgr_https.active_https_shutdown.lock_or_recover();
+                if let Some((p, _)) = active.as_ref() {
+                    if *p == https_port {
+                        *active = None;
+                    }
+                }
             }
         }
     });
@@ -3172,21 +3194,12 @@ async fn notifications_test(
             let s = st.lock_or_recover();
             let store = s.notif_store.lock_or_recover();
             if let Some(existing) = store.get(&ch.id) {
-                // HUB-04: If url was masked (e.g. contains '***') or identical, merge secret credentials from existing channel.
-                let orig_url = existing.config.get("url").or_else(|| existing.config.get("webhook_url"));
-                let new_url = ch.config.get("url").or_else(|| ch.config.get("webhook_url"));
-                let is_unmodified = match (&orig_url, &new_url) {
-                    (Some(orig), Some(new)) => orig == new || new.as_str().map(|s| s.contains("***")).unwrap_or(false),
-                    (None, None) | (_, None) => true,
-                    _ => false,
-                };
-                if is_unmodified {
-                    crate::notifications::merge_unmasked_config(
-                        &mut ch.config,
-                        &existing.config,
-                        &existing.channel_type,
-                    );
-                }
+                // BUG-11: Merge unmasked credentials field-by-field from existing channel
+                crate::notifications::merge_unmasked_config(
+                    &mut ch.config,
+                    &existing.config,
+                    &existing.channel_type,
+                );
             }
         }
         ch
@@ -4166,8 +4179,11 @@ async fn tls_disable(
         let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
     }
     {
-        let mut active_port = tls_mgr.active_https_port.lock_or_recover();
-        *active_port = None;
+        // BUG-08: Signal dedicated HTTPS listener task to shut down and unbind port
+        let mut active = tls_mgr.active_https_shutdown.lock_or_recover();
+        if let Some((_, shutdown_tx)) = active.take() {
+            let _ = shutdown_tx.send(());
+        }
     }
     audit.record(&sess.user_id, "", "tls.disable", "", None, None, "ok");
 
@@ -4220,21 +4236,29 @@ async fn tls_renew(
 
     let mgr_bg = Arc::clone(&tls_mgr);
     let domain_bg = domain.clone();
+    let st_bg = st.clone();
     tokio::spawn(async move {
-        let dir_url = if staging {
-            crate::tls::LETS_ENCRYPT_STAGING_DIR
+        // BUG-15: Support custom MTC_ACME_DIR_URL during renew and re-arm dedicated listener upon success
+        let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
+            custom
+        } else if staging {
+            crate::tls::LETS_ENCRYPT_STAGING_DIR.to_string()
         } else {
-            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR
+            crate::tls::LETS_ENCRYPT_PRODUCTION_DIR.to_string()
         };
-        let acme = crate::tls::AcmeClient::new(dir_url.to_string());
-        // N83-01 & N84-11: Handle enrollment failure in background task to log error and reset in_progress state
-        if let Err(e) = acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await {
-            eprintln!("[hub] TLS ERR: Renewal failed for {}: {}", domain_bg, e);
-            let mut c = mgr_bg.config.lock_or_recover();
-            c.status.in_progress = false;
-            c.status.progress_step = "failed".to_string();
-            c.status.last_error = Some(e);
-            let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+        let acme = crate::tls::AcmeClient::new(dir_url);
+        match acme.enroll_certificate(&mgr_bg, &domain_bg, email.as_deref()).await {
+            Ok(()) => {
+                ensure_dedicated_https_listener(&st_bg);
+            }
+            Err(e) => {
+                eprintln!("[hub] TLS ERR: Renewal failed for {}: {}", domain_bg, e);
+                let mut c = mgr_bg.config.lock_or_recover();
+                c.status.in_progress = false;
+                c.status.progress_step = "failed".to_string();
+                c.status.last_error = Some(e);
+                let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
+            }
         }
     });
 

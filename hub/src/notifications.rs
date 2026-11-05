@@ -366,7 +366,7 @@ impl NotificationStore {
         if data.trim().is_empty() {
             return Ok(());
         }
-        let list: Vec<NotificationChannel> = serde_json::from_str(&data)
+        let list: Vec<NotificationChannel> = serde_json::from_str(data.trim_start_matches('\u{feff}'))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.channels.clear();
         for ch in list {
@@ -546,7 +546,8 @@ pub fn merge_unmasked_config(new_cfg: &mut Value, old_cfg: &Value, channel_type:
             || is_url_key_name(k)
             || (channel_type == "webhook" && !is_webhook_plain_key(k))
     };
-    let is_masked = |s: &str| s.contains("***") || s.is_empty();
+    // BUG-11: Only strings containing '***' are masked secrets; empty strings indicate intentional clearing
+    let is_masked = |s: &str| s.contains("***");
 
     let (new_obj, old_obj) = match (new_cfg.as_object_mut(), old_cfg.as_object()) {
         (Some(n), Some(o)) => (n, o),

@@ -238,7 +238,7 @@ impl UserStore {
                     });
                 }
                 let users: Vec<User> =
-                    serde_json::from_str(&text).map_err(|e| format!("{}: {}", path.display(), e))?;
+                    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{}: {}", path.display(), e))?;
                 Ok(UserStore {
                     users,
                     sessions: HashMap::new(),

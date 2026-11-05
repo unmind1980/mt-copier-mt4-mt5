@@ -153,17 +153,16 @@ pub async fn detect_public_ip(client: &reqwest::Client) -> Option<String> {
         }
     }
 
+    // OPT-01: Query fast high-availability endpoints with 750ms timeout to cap worst-case offline delay under 1.5s
     let endpoints = [
         "https://api.ipify.org",
         "https://icanhazip.com",
-        "https://ifconfig.me/ip",
-        "https://checkip.amazonaws.com",
     ];
     let mut detected = None;
     for ep in endpoints {
         if let Ok(res) = client
             .get(ep)
-            .timeout(Duration::from_millis(1500))
+            .timeout(Duration::from_millis(750))
             .send()
             .await
         {
@@ -190,7 +189,8 @@ pub fn load_config(path: &Path) -> TlsConfig {
     if let Ok(mut f) = File::open(path) {
         let mut buf = String::new();
         if f.read_to_string(&mut buf).is_ok() {
-            if let Ok(cfg) = serde_json::from_str::<TlsConfig>(&buf) {
+            // TEST-02: Strip UTF-8 BOM if present
+            if let Ok(cfg) = serde_json::from_str::<TlsConfig>(buf.trim_start_matches('\u{feff}')) {
                 return cfg;
             }
         }
@@ -407,6 +407,26 @@ fn ymd_to_unix(year: u64, month: u64, day: u64, hour: u64, min: u64, sec: u64) -
     (days as u64) * 86400 + hour * 3600 + min * 60 + sec
 }
 
+/// Convert unix timestamp to ASN.1 UTCTime bytes (YYMMDDHHMMSSZ).
+fn unix_to_utctime_bytes(ts: u64) -> Vec<u8> {
+    let sec = (ts % 60) as u32;
+    let min = ((ts / 60) % 60) as u32;
+    let hour = ((ts / 3600) % 24) as u32;
+    let mut days = (ts / 86400) as i64;
+    days += 719468;
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = (days - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let mut y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    if m <= 2 { y += 1; }
+    let yy = (y % 100) as u32;
+    format!("{:02}{:02}{:02}{:02}{:02}{:02}Z", yy, m, d, hour, min, sec).into_bytes()
+}
+
 /// Convert PEM certificate chain and PEM private key into standard PKCS#12 (PFX) bytes.
 pub fn pem_to_pkcs12(cert_pem: &str, key_pem: &str, password: &str) -> Result<Vec<u8>, String> {
     let cert_blocks = extract_pem_blocks(cert_pem, "CERTIFICATE");
@@ -478,6 +498,11 @@ pub fn generate_self_signed(domain: &str) -> Result<(String, String), String> {
     );
 
     // 3. Construct TBSCertificate
+    let now = unix_now();
+    let nb_bytes = unix_to_utctime_bytes(now);
+    let na_bytes = unix_to_utctime_bytes(now + 365 * 86400); // BUG-14: 365 days compliant with modern browsers (<398 days)
+    let ip_addr: Option<std::net::IpAddr> = domain.parse().ok();
+
     let tbs_der = yasna::construct_der(|w| {
         w.write_sequence(|w| {
             // Version [0] EXPLICIT INTEGER 2 (v3)
@@ -485,7 +510,7 @@ pub fn generate_self_signed(domain: &str) -> Result<(String, String), String> {
                 w.write_u8(2);
             });
             // Serial Number
-            w.next().write_u64(unix_now());
+            w.next().write_u64(now);
             // Signature Algorithm: ecdsa-with-SHA256 (1.2.840.10045.4.3.2)
             w.next().write_sequence(|w| {
                 w.next().write_oid(&ObjectIdentifier::from_slice(&[1, 2, 840, 10045, 4, 3, 2]));
@@ -502,10 +527,10 @@ pub fn generate_self_signed(domain: &str) -> Result<(String, String), String> {
             // Validity
             w.next().write_sequence(|w| {
                 w.next().write_tagged_implicit(TAG_UTCTIME, |w| {
-                    w.write_bytes(b"240101000000Z");
+                    w.write_bytes(&nb_bytes);
                 });
                 w.next().write_tagged_implicit(TAG_UTCTIME, |w| {
-                    w.write_bytes(b"350101000000Z");
+                    w.write_bytes(&na_bytes);
                 });
             });
             // Subject Name
@@ -537,6 +562,12 @@ pub fn generate_self_signed(domain: &str) -> Result<(String, String), String> {
                                 w.next().write_tagged_implicit(yasna::Tag::context(2), |w| {
                                     w.write_ia5_string(domain);
                                 });
+                                // BUG-14: context [7] iPAddress if domain is IPv4
+                                if let Some(std::net::IpAddr::V4(v4)) = ip_addr {
+                                    w.next().write_tagged_implicit(yasna::Tag::context(7), |w| {
+                                        w.write_bytes(&v4.octets());
+                                    });
+                                }
                             });
                         });
                         w.next().write_bytes(&san_ext);
@@ -580,8 +611,8 @@ pub struct TlsManager {
     pub acceptor: Arc<RwLock<Option<tokio_native_tls::TlsAcceptor>>>,
     /// In-memory ACME challenge tokens: token -> key_authorization
     pub acme_tokens: Arc<RwLock<HashMap<String, String>>>,
-    /// HUB-02: Currently active dedicated HTTPS listener port
-    pub active_https_port: Arc<Mutex<Option<u16>>>,
+    /// BUG-08: Dedicated HTTPS listener shutdown sender and port
+    pub active_https_shutdown: Arc<Mutex<Option<(u16, tokio::sync::oneshot::Sender<()>)>>>,
 }
 
 impl TlsManager {
@@ -602,7 +633,7 @@ impl TlsManager {
             cert_paths,
             acceptor: Arc::new(RwLock::new(None)),
             acme_tokens: Arc::new(RwLock::new(HashMap::new())),
-            active_https_port: Arc::new(Mutex::new(None)),
+            active_https_shutdown: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -731,9 +762,15 @@ impl TlsManager {
             c.status.cert_valid = true;
             c.status.issuer = "Self-Signed".to_string();
             c.status.subject = domain.to_string();
-            c.status.issued_at = unix_now();
-            c.status.expires_at = unix_now() + 365 * 86400;
-            c.status.days_remaining = 365;
+            let now = unix_now();
+            if let Some((nb, na)) = parse_pem_validity(&cert_pem) {
+                c.status.issued_at = nb;
+                c.status.expires_at = na;
+            } else {
+                c.status.issued_at = now;
+                c.status.expires_at = now + 365 * 86400;
+            }
+            c.status.days_remaining = ((c.status.expires_at as i64) - (now as i64)) / 86400;
             c.status.last_error = None;
             let _ = save_config(&self.config_path, &c);
         }
@@ -1190,6 +1227,12 @@ impl AcmeClient {
             .await?;
         nonce = next_nonce;
 
+        if !acc_res.status().is_success() {
+            let status = acc_res.status();
+            let err_body = acc_res.text().await.unwrap_or_default();
+            return Err(format!("ACME newAccount returned HTTP {}: {}", status, err_body));
+        }
+
         let account_url = acc_res
             .headers()
             .get("location")
@@ -1221,6 +1264,12 @@ impl AcmeClient {
             )
             .await?;
         nonce = next_nonce;
+
+        if !order_res.status().is_success() {
+            let status = order_res.status();
+            let err_body = order_res.text().await.unwrap_or_default();
+            return Err(format!("ACME newOrder returned HTTP {}: {}", status, err_body));
+        }
 
         // HUB-01: Capture Order Location URL for RFC 8555 status polling
         let order_location_url = order_res
@@ -1370,6 +1419,12 @@ impl AcmeClient {
             .await?;
         nonce = next_nonce;
 
+        if !finalize_res.status().is_success() {
+            let status = finalize_res.status();
+            let err_body = finalize_res.text().await.unwrap_or_default();
+            return Err(format!("ACME finalize returned HTTP {}: {}", status, err_body));
+        }
+
         let fin_loc = finalize_res
             .headers()
             .get("location")
@@ -1391,6 +1446,10 @@ impl AcmeClient {
         for _ in 0..15 {
             if order_obj["status"].as_str() == Some("valid") {
                 break;
+            }
+            if order_obj["status"].as_str() == Some("invalid") {
+                let err_detail = order_obj["error"]["detail"].as_str().unwrap_or("order marked invalid");
+                return Err(format!("ACME order invalid: {}", err_detail));
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
             if nonce.is_empty() {
@@ -1421,10 +1480,21 @@ impl AcmeClient {
             .post_signed(cert_url, &account_key, serde_json::json!(account_url), &nonce, None)
             .await?;
 
+        if !cert_resp.status().is_success() {
+            let status = cert_resp.status();
+            let err_body = cert_resp.text().await.unwrap_or_default();
+            return Err(format!("ACME certificate download failed with HTTP {}: {}", status, err_body));
+        }
+
         let cert_pem = cert_resp
             .text()
             .await
             .map_err(|e| format!("Failed to read certificate PEM from {}: {}", cert_url, e))?;
+
+        // BUG-09: Validate downloaded PEM contains valid certificate block before overwriting files
+        if extract_pem_blocks(&cert_pem, "CERTIFICATE").is_empty() {
+            return Err("Downloaded ACME certificate payload contains no valid CERTIFICATE blocks".to_string());
+        }
 
         let site_pkcs8 = site_key.to_pkcs8_der().map_err(|e| e.to_string())?;
         let site_b64 = base64::engine::general_purpose::STANDARD.encode(site_pkcs8.to_bytes());
@@ -1432,6 +1502,10 @@ impl AcmeClient {
             "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
             site_b64.chars().collect::<Vec<_>>().chunks(64).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
         );
+
+        // Pre-validate PKCS#12 payload creation before writing to disk
+        let pfx_test = pem_to_pkcs12(&cert_pem, &site_key_pem, "mtc_tls_pass")?;
+        let _ = create_tls_acceptor(&pfx_test, "mtc_tls_pass")?;
 
         // HUB-05: Atomically save certificate files with 0o600 permissions
         tls_mgr.cert_paths.ensure_dir().map_err(|e| e.to_string())?;

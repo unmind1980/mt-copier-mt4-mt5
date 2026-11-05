@@ -3505,11 +3505,8 @@ void ExecuteQueue()
          //--- back on. Park it at the base rate and leave the ladder alone.
          if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
            {
-            int sh=(int)(a.ticket&(CP_STOPSIG_SLOTS-1));
-            if(sh>=0 && sh<CP_STOPSIG_SLOTS && g_stopSig[sh].ticket==a.ticket)
-              {
-               g_stopSig[sh].ticket=0; // Invalidate signature cache so next tick can re-evaluate
-              }
+            // BUG-01: Invalidate signature using exact 4-step probe hash to prevent freezing
+            StopSigInvalidate(a.ticket);
            }
          int fails;
          if(CopierIsTradeDisabled(err))
@@ -3910,6 +3907,21 @@ int StopSigFindSlot(const long ticket)
    return base;
   }
 
+// BUG-01: Invalidate stop signature cache across all probed hash slots
+void StopSigInvalidate(const long ticket)
+  {
+   if(ticket<=0) return;
+   int base=(int)(((ulong)ticket^((ulong)ticket>>11))&(CP_STOPSIG_SLOTS-1));
+   for(int step=0;step<4;step++)
+     {
+      int sh=(base+step)&(CP_STOPSIG_SLOTS-1);
+      if(g_stopSig[sh].ticket==ticket)
+        {
+         g_stopSig[sh].ticket=0;
+        }
+     }
+  }
+
 //=====================================================================
 void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                          const CopierPos &local)
@@ -3984,24 +3996,29 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double feedSl,feedTp;
    CopierMapInvertedStops(actualInverted,dSl,dTp,feedSl,feedTp);
 
+   //--- BUG-05: For pending orders, anchor calculations to the pending order's updated trigger price (dPPrice)
+   double effectiveLocalOpen=(local.kind==CP_ORD_PENDING)
+                            ? ((dPPrice>0.0)?dPPrice:((local.pprice>0.0)?local.pprice:local.openPx))
+                            : local.openPx;
+
    double wantSl,wantTp;
    if(actualInverted)
      {
       wantSl=CopierMirrorStopInverted(feedSl,dOpn,
-                                      local.openPx,local.side,true);
+                                      effectiveLocalOpen,local.side,true);
       wantTp=CopierMirrorStopInverted(feedTp,dOpn,
-                                      local.openPx,local.side,false);
+                                      effectiveLocalOpen,local.side,false);
      }
    else
      {
       wantSl=CopierMirrorStop(feedSl,dOpn,
-                              local.openPx,local.side,true);
+                              effectiveLocalOpen,local.side,true);
       wantTp=CopierMirrorStop(feedTp,dOpn,
-                              local.openPx,local.side,false);
+                              effectiveLocalOpen,local.side,false);
      }
 
    double anchorPx=(local.kind==CP_ORD_PENDING)
-                   ? ((local.pstop>0.0)?local.pstop:((local.pprice>0.0)?local.pprice:local.openPx))
+                   ? ((local.pstop>0.0)?local.pstop:effectiveLocalOpen)
                    : local.openPx;
 
    //--- the sender has no stop of its own, so the local backstop applies
@@ -4688,7 +4705,7 @@ string EncodeReceiverPositions()
         }
       if(count>0) sb.Add(CP_SEP_REC);
       string rec=(string)g_acctAllPos[i].ticket+CP_SEP_ITEM
-                 +g_acctAllPos[i].sym+CP_SEP_ITEM
+                 +CopierSanitizeSymbol(g_acctAllPos[i].sym)+CP_SEP_ITEM
                  +(string)g_acctAllPos[i].side+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_acctAllPos[i].openPx,5)+CP_SEP_ITEM
@@ -4723,9 +4740,9 @@ string EncodeReceiverWaitList()
       // MQL-03: Use sender openPx for market orders, fallback to pprice for pending orders
       double qPx=(g_q[g_qHead+i].openPx>0.0)?g_q[g_qHead+i].openPx:g_q[g_qHead+i].pprice;
       string rec=g_q[g_qHead+i].uid+CP_SEP_ITEM
-                 +g_q[g_qHead+i].sym+CP_SEP_ITEM
+                 +CopierSanitizeSymbol(g_q[g_qHead+i].sym)+CP_SEP_ITEM
                  +(string)g_q[g_qHead+i].side+CP_SEP_ITEM
-                 +CopierFmtDouble(g_q[g_qHead+i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_q[g_qHead+i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(MathMax(0.0,qPx),5)+CP_SEP_ITEM
                  +"queued"+CP_SEP_ITEM
                  +"Queued in broker dispatch";
@@ -4738,9 +4755,9 @@ string EncodeReceiverWaitList()
       if(count>=CP_MAX_POSITIONS) break;
       if(count>0) sb.Add(CP_SEP_REC);
       string rec=g_waitItems[i].uid+CP_SEP_ITEM
-                 +g_waitItems[i].sym+CP_SEP_ITEM
+                 +CopierSanitizeSymbol(g_waitItems[i].sym)+CP_SEP_ITEM
                  +(string)g_waitItems[i].side+CP_SEP_ITEM
-                 +CopierFmtDouble(g_waitItems[i].lots,2)+CP_SEP_ITEM
+                 +CopierFmtDouble(g_waitItems[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_waitItems[i].openPx,5)+CP_SEP_ITEM
                  +g_waitItems[i].stage+CP_SEP_ITEM
                  +CopierSanitize(g_waitItems[i].reason,48);
@@ -4975,7 +4992,8 @@ void RiskCloseEverything()
   {
    int failed=0, total=0;
    CloseAllOurs("RiskCloseAllOnTrip is on",failed,total);
-   if(failed>0) g_riskCloseAllPending=true;
+   // BUG-03: Set pending flag whenever there are positions to close, keeping retry and emergency slippage active
+   if(total>0) g_riskCloseAllPending=true;
   }
 
 //--- Convert a timestamp the SENDER reported into our own timebase.
@@ -5120,6 +5138,18 @@ void ConvergeSender(const int si)
       int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
         {
+         // BUG-04: If operator manually closed this UID from WebUI/CMD, retry closing it until gone
+         if(g_manualClosed.Has(d.uid))
+           {
+            if(!CopierSymbolFeedStale(g_locScratch[li].sym,CP_SYM_STALL_MS))
+              {
+               PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                          g_locScratch[li].lots,g_locScratch[li].ticket,
+                          0,"",0.0,0.0,g_locScratch[li].kind);
+              }
+            continue;
+           }
+
          //--- Clear seen keys only when there is NO in-flight close/trim queued,
          //--- and for TRIM only when volume has actually converged to the desired level.
          //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
@@ -6443,19 +6473,28 @@ void HandleCmd(const CopierEnv &e)
       int failed=0, total=0;
       int n=CloseAllOurs("CMD "+id+": CLOSEALL from the hub",failed,total);
       g_cmdId=id;
-      if(failed==0)
+      if(total>0)
         {
-         g_cmdCloseAllActive=false;
-         g_cmdCloseAllId="";
-         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
-         g_log.Warn("CMD "+id+": closeall queued "+(string)n+" close(s); receiver paused. RESUME re-enables opening.");
+         // BUG-03: Keep g_cmdCloseAllActive true until all matching positions are confirmed closed
+         g_cmdCloseAllActive=true;
+         g_cmdCloseAllId=id;
+         if(failed==0)
+           {
+            g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev;
+            g_log.Warn("CMD "+id+": closeall queued "+(string)n+" close(s); receiver paused. RESUME re-enables opening.");
+           }
+         else
+           {
+            g_cmdAck="ID="+id+";OK=0;REASON=queue_full_queued_"+(string)n+"_of_"+(string)total+";REV="+(string)g_cfgRev;
+            g_log.Error("CMD "+id+": closeall queued "+(string)n+" of "+(string)total+" ("+(string)failed+" queue full) - continuing background retry");
+           }
         }
       else
         {
-         g_cmdCloseAllActive=true;
-         g_cmdCloseAllId=id;
-         g_cmdAck="ID="+id+";OK=0;REASON=queue_full_queued_"+(string)n+"_of_"+(string)total+";REV="+(string)g_cfgRev;
-         g_log.Error("CMD "+id+": closeall queued "+(string)n+" of "+(string)total+" ("+(string)failed+" queue full) - continuing background retry");
+         g_cmdCloseAllActive=false;
+         g_cmdCloseAllId="";
+         g_cmdAck="ID="+id+";OK=1;REV="+(string)g_cfgRev+";NOTE=no_positions_held";
+         g_log.Info("CMD "+id+": closeall called but receiver holds 0 positions.");
         }
       SendCfgAck(g_cmdAck);
       return;
@@ -8145,7 +8184,9 @@ void OnTimer()
       s_lastCloseAllRetryMs=now;
       int closeFailed=0, closeTotal=0;
       int cn=CloseAllOurs("",closeFailed,closeTotal);
-      if(closeTotal==0 || (closeFailed==0 && cn==closeTotal))
+      ExecuteQueue();
+      // BUG-03: Deactivate closeall/risk-close ONLY when all matching positions are verified closed on the account
+      if(closeTotal==0 && g_ourCount==0)
         {
          if(g_cmdCloseAllActive && StringLen(g_cmdCloseAllId)>0)
            {
@@ -8155,7 +8196,6 @@ void OnTimer()
          g_cmdCloseAllActive=false;
          g_riskCloseAllPending=false;
         }
-      ExecuteQueue();
      }
 
    //=================================================================
@@ -8511,6 +8551,8 @@ void OnTimer()
       //--- immediately (43 rows), which is what ruled out parsing and transport
       //--- and pointed here. Including dueDetail makes the gate match the block
       //--- it guards, and costs one extra summary frame per minute.
+      // BUG-13 & MQL-01: Re-scan live account positions BEFORE assembling summary HELD/LOTS and POS detail
+      if(g_forcePosReport) RefreshRisk();
       bool putPositionSummary=(dueSummary || dueStatus || dueDetail || g_forcePosReport);
       bool putFigures=dueStatus;
       for(int i=0;i<g_nSenders;i++)
@@ -8549,8 +8591,6 @@ void OnTimer()
             //--- or on-demand when requested by WebUI (g_forcePosReport) in Hub mode
             if(dueDetail && g_hubOn)
               {
-               // MQL-01: Re-scan live account positions if forced report was requested (e.g. after CMD close)
-               if(g_forcePosReport) RefreshRisk();
                string posEnc=EncodeReceiverPositions();
                string waitEnc=EncodeReceiverWaitList();
                st+=CP_SEP_KV+"POS="+posEnc

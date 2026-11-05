@@ -1807,28 +1807,34 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-### 一百零三次演进：X.509 遍历短路修复、HA 主备水位强校验、MT5 挂单填充轮换、锁毒化彻底根除与全栈深度核销 (2026-11-04 23:30；全部闭环)
+### 一百零四次演进：改单哈希失效对齐、挂单改价锚点修正、平仓漏单闭环、全栈微手精度与第七轮全栈审计核销 (2026-11-05 00:30；全部闭环)
 
 - **技术落地项**：
-  1. **X.509 DER 证书有效期解析短路修复（BUG-01）**：
-     - 在 `hub/src/tls.rs` 的 `parse_x509_der_validity` 中，将 `?` 改为 `if let Some((len, len_bytes)) = parse_asn1_len(&der[i + 1..])` 条件分支，杜绝证书内遇到非 SEQUENCE 字符串或内部 0x30 字节时错误提前退出，保证证书有效期正确解析；
-  2. **HA 主机状态真实对齐与防伪同步（BUG-02）**：
-     - 在 `hub/src/cluster.rs` 中，Primary 收到 Standby 探针 200 响应后，对比 `remote_st` 与本地 `cmd_lines`、`max_cmd_seq`、`cfg_lines` 水位；当备机落后时置为 `"lagging"` 并记录滞后详情，水位追平后才置为 `"synced"`，杜绝备机日志落后时主控面板谎报已同步；
-  3. **MT5 挂单 filling 与 10030 错误轮换重试（BUG-03）**：
-     - 在 `src/Include/Copier/CopierModel.mqh` 中，MT5 挂单（`TRADE_ACTION_PENDING`）首选设为 `ORDER_FILLING_RETURN`，并在收到券商 `10030 (TRADE_RETCODE_INVALID_FILL)` 时执行 RETURN -> FOK -> IOC 候选轮换重试，杜绝 ECN 券商拒单；
-  4. **全栈锁毒化彻底消除（BUG-04）**：
-     - 在 `hub/src/api.rs`（第 1293 行与第 4233 行）与 `hub/src/service.rs` 中全面移除裸 `.lock().unwrap()`，统一接入 `LockExt` 与 `RwLockExt` 的 `lock_or_recover()`，彻底防范锁毒化导致 Web API 崩溃；
-  5. **掉电断电配置残卷自动备份恢复（BUG-05）**：
-     - 在 `src/Include/Copier/CopierConfig.mqh` 的 `CopierIniReadAll` 中，当主文件截断、损坏或无合法 section 且存在有效 `.tmp` 备份时，自动回退读取 `.tmp` 并修复覆盖回主文件；
-  6. **反向跟单移动止损穿透入场价方向对齐（BUG-06）**：
-     - 在 `src/Include/Copier/CopierDefs.mqh` 的 `CopierMirrorStopInverted` 中，移除单向绝对值 `MathAbs`，采用有符号位偏移 `localOpen + (senderStop - senderOpen)`，支持发送端移动止损锁盈时接收端反向平仓线准确跟随；新增单测断言；
-  7. **流控延迟、摘要尾部锚定与 SCM StopPending 优化（OPT-01, OPT-02, OPT-03）**：
-     - 在 `src/Experts/CopierReceiver.mq4` 中引入微秒级精度的 `CopierWaitMs`，取代在 `OnTimer` 中被 MT 系统静默忽略的 `Sleep`，实现真实的券商流控延时保护；
-     - 在 `src/Include/Copier/CopierCodec.mqh` 中将 `H=` 摘要字段严格锚定在 payload 末尾进行 $O(1)$ 截断校验；
-     - 在 `hub/src/service.rs` 中收到 SCM Stop 事件时立即报告 `ServiceState::StopPending`（10s wait hint），避免服务停止被系统强杀；
-  8. **测试套件跨平台兼容与轻量模式（TOOL-01, TOOL-02）**：
-     - 在全套 15 个 Python 脚本中引入 `copier-hub.exe if win32 else copier-hub` 自动跨平台二进制探测；
-     - 在 `tools/tests.sh` 中增加无 pyzmq 时的轻量级静态检查回退机制。
+  1. **改单失败哈希失效对齐（BUG-01）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中实现 `StopSigInvalidate`，与 `StopSigFindSlot` 的黄金分割折叠加 4 步线性探测完全对称；改单失败时准确清零目标槽位，彻底消除改单失败一次后 SL/TP 被永久冻结的缺陷；
+  2. **Sender 视图实时快照与平仓清仓同步（BUG-02, BUG-13）**：
+     - 在 `hub/src/assets/dashboard.html` 中优化 Sender 视图：以实时 `T=SNAP` (`p.items`) 为基准渲染明细表，并由 `reqpos` 合并 profit/swap；当 `count === 0` 时确保明细清空，并在持仓变化时允许重新拉取 telemetry；
+     - 在 `hub/src/main.rs` 与 `hub/src/registry.rs` 中，当 Sender 快照记录为 0 或 Receiver 摘要上报 `held=0/wait=0` 时，立即清空内存中的 `held_items` / `wait_items`，消除最长 60s 的幽灵订单残留；在 Receiver `SendStatusIfDue` 中将 `RefreshRisk()` 提到摘要拼装之前；
+  3. **全平与风控平仓漏单防御（BUG-03, BUG-04）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中，`CMD closeall` 与 `RiskCloseAllOnTrip` 只要存在匹配持仓即激活 `g_cmdCloseAllActive` / `g_riskCloseAllPending`，使平仓全程享受 100 点紧急滑点缓冲并在拒单时由 1 秒后台循环持续重试，直至 `closeTotal == 0 && g_ourCount == 0`；
+     - 在 `ConvergeSender` 的 `li >= 0` 分支增加 `g_manualClosed.Has(d.uid)` 检查，单笔平仓若首次被拒持续重推平仓，且绝不反向修改止损；
+  4. **挂单改价 SL/TP 锚点修正与配置恢复（BUG-05, BUG-06）**：
+     - 在 `QueueModifyIfNeeded` 中，挂单改价时统一使用新触发价 `dPPrice` 作为基准计算 `wantSl` / `wantTp` 与 `anchorPx`，杜绝移价时触发 `ERR_INVALID_STOPS` (130/10016)；
+     - 在 `src/Include/Copier/CopierConfig.mqh` 中，`CopierIni::Load` 支持 `.tmp` 备份自动回退与恢复写回；`CopierIniReadAll` 完善残卷判定；
+  5. **按需快照推进与 Direct 计时器隔离（BUG-07）**：
+     - 在 `src/Experts/CopierSender.mq4` 中，`SnapshotSeconds<=0` 模式下仓位变动在 250ms 防抖后调用 `BroadcastSnapshot` 推进 `g_snapPayload` / `g_snapHash`；Direct 模式修复不再覆盖全局 `g_lastSnapMs`，消除对 Central Hub 广播时钟的干扰；
+  6. **独立 HTTPS 优雅下线与 ACME 状态码校验（BUG-08, BUG-09, BUG-14, BUG-15, OPT-01）**：
+     - 在 `hub/src/api.rs` 中为独立 HTTPS 监听器接入 `oneshot` 关闭信号通道，在 disable 或切端口时彻底释放旧端口，杜绝 `EADDRINUSE` 冲突；
+     - 在 `hub/src/tls.rs` 的 ACME 签发流程中全量校验 HTTP 状态码，并在落盘前验证 PKCS#12 构造，杜绝错误响应覆盖有效证书；
+     - 自签名证书使用当前时间及 365 天有效期（符合现代浏览器 <398 天规范），增加 IPv4 SAN；`detect_public_ip` 缩短超时至 1.5s；`tls_renew` 支持 `MTC_ACME_DIR_URL`；
+  7. **8 位微手跨栈精度对齐与通知合并修复（BUG-10, BUG-11, BUG-12）**：
+     - Hub `trim_lots` 与 `node_json` 升级为 8 位小数微手精度，消除 `< 0.005` 手仓位显示为 0 的问题；
+     - `merge_unmasked_config` 仅将包含 `***` 的字符串视为掩码，允许清空可选密钥；`notifications_test` 移除阻碍合并的 url 比较门禁；
+     - HA Primary 判定 Standby lagging 时增加通知、CURVE 和用户哈希比对，且在 `--commands none` 模式下跳过行数检查；
+  8. **运维脚本 BOM 兼容与临时文件清理（OPT-02, TEST-01, TEST-02）**：
+     - 配置文件加载统一剥离 UTF-8 BOM，`tools/reset_ssl.bat` 同步重置 `in_progress` 并使用无 BOM 编码写入；
+     - `tools/hub_audit_rotation_test.py` 迁移到临时目录运行，测试完彻底清理，仓库零残留；
+     - `EncodeSenderPositions` / `EncodeReceiverPositions` / `EncodeReceiverWaitList` 统一调用 `CopierSanitizeSymbol`。
 
 ---
 

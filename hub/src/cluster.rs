@@ -173,7 +173,7 @@ impl ClusterManager {
         let mut state: ClusterStateFile = if state_path.exists() {
             let data = fs::read_to_string(state_path)
                 .map_err(|e| format!("cannot read {}: {}", state_path.display(), e))?;
-            let s: ClusterStateFile = serde_json::from_str(&data)
+            let s: ClusterStateFile = serde_json::from_str(data.trim_start_matches('\u{feff}'))
                 .map_err(|e| format!("cannot parse {}: {}", state_path.display(), e))?;
             // F-02: Reject corrupted or exhausted epoch values
             if s.epoch == u64::MAX {

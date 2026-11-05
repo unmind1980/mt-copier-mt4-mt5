@@ -1637,6 +1637,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         let mut s = snap_shared.lock_or_recover();
                         let before = s.pos.mismatched;
                         s.pos.on_snap(&sid, view, pos_now);
+                        // BUG-02: If sender snapshot carries 0 records, immediately clear held_items in registry to keep WebUI in sync
+                        if carried == 0 {
+                            s.reg.clear_held_items("sender", &sid);
+                        }
                         s.pos.mismatched - before
                     };
                     if mismatched_now > 0 {

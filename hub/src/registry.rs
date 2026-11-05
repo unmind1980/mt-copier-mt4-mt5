@@ -511,10 +511,23 @@ impl Registry {
             }
             if let Some(hi) = held_items {
                 e.held_items = Arc::new(hi);
+            } else if e.held == Some(0) && e.orphaned.unwrap_or(0) == 0 {
+                // BUG-13: Receiver confirmed 0 held and 0 orphan positions, immediately clear stale details
+                e.held_items = Arc::new(Vec::new());
             }
             if let Some(wi) = wait_items {
                 e.wait_items = Arc::new(wi);
+            } else if e.wait_total == Some(0) {
+                // BUG-13: Receiver confirmed 0 waiting orders, immediately clear stale wait details
+                e.wait_items = Arc::new(Vec::new());
             }
+        }
+    }
+
+    /// BUG-02: Clear held items when node has no open positions
+    pub fn clear_held_items(&mut self, role: &str, acc: &str) {
+        if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
+            e.held_items = Arc::new(Vec::new());
         }
     }
 

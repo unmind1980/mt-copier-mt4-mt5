@@ -5197,7 +5197,28 @@ function renderPosNodeDetail(){
       var snaps = (p && p.snaps) ? p.snaps : "-";
 
       // 1. First: Line-by-Line Itemized Positions Table (Elevated to top per user request)
-      var sItems = ((n.positions_detail && n.positions_detail.length > 0) ? n.positions_detail : ((p && p.items) ? p.items : [])).slice();
+      // BUG-02: Synchronize live items from real-time SNAP (p.items) and merge profit/swap from positions_detail
+      var sItems = [];
+      if(count > 0){
+        if(p && p.items && p.items.length > 0){
+          var pDetailMap = {};
+          if(n.positions_detail){
+            for(var di=0; di<n.positions_detail.length; di++){
+              pDetailMap[n.positions_detail[di].ticket] = n.positions_detail[di];
+            }
+          }
+          for(var pi=0; pi<p.items.length; pi++){
+            var itm = Object.assign({}, p.items[pi]);
+            if(pDetailMap[itm.ticket]){
+              itm.profit = pDetailMap[itm.ticket].profit;
+              itm.swap = pDetailMap[itm.ticket].swap;
+            }
+            sItems.push(itm);
+          }
+        } else if(n.positions_detail && n.positions_detail.length > 0){
+          sItems = n.positions_detail.slice();
+        }
+      }
 
       // Apply active column sorting
       if(s.posSortCol && s.posSortDir !== "none"){
@@ -5464,7 +5485,8 @@ function maybeAutoRequestPositions(n){
   var held = (n.positions && n.positions.count) || (n.held !== undefined && n.held !== null ? n.held : 0);
   var rows = (n.positions_detail || []).length + (n.waiting_detail || []).length;
   if(held <= 0) return;
-  if(rows > 0) return;
+  // BUG-02: Only skip reqpos if rows matches current held count; re-request telemetry when count changes
+  if(rows > 0 && rows === held) return;
   var now = Date.now();
   if(now - (_autoPosAt[n.key] || 0) < 30000) return;
   _autoPosAt[n.key] = now;

@@ -1401,7 +1401,9 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       // L-06: Keep g_snapHash aligned with the actual cached payload re-emitted
       g_snapHash=CopierSnapshotHash(g_snapPayload);
       NoteRecentSnapHash(g_snapHash);
-      g_lastSnapMs=now;
+      // BUG-07: Do not overwrite global g_lastSnapMs to prevent delaying Central Hub periodic broadcasts
+      static long s_lastDirectSnapMs=0;
+      s_lastDirectSnapMs=now;
       if(isBootstrap)
          g_log.Info("bootstrapped snapshot for new receiver "+who+" (direct channel)");
       else
@@ -1887,7 +1889,7 @@ string EncodeSenderPositions(const int count)
      {
       if(written>0) sb.Add(CP_SEP_REC);
       string rec=(string)g_curScratch[i].ticket+CP_SEP_ITEM
-                 +g_curScratch[i].sym+CP_SEP_ITEM
+                 +CopierSanitizeSymbol(g_curScratch[i].sym)+CP_SEP_ITEM
                  +(string)g_curScratch[i].side+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].lots,CP_DIGITS_LOTS)+CP_SEP_ITEM
                  +CopierFmtDouble(g_curScratch[i].openPx,5)+CP_SEP_ITEM
@@ -2206,9 +2208,15 @@ void OnTimer()
    static long s_lastSnapRebuildMs=0;
    static long s_lastStateSaveMs=0;
 
-   //--- R59-02: Debounce snapshot rebuild to at most once per 250ms during dirty bursts
-   //--- (e.g. trailing-stop updates on 5ms ticks). Avoids 200x per second zlib/Z85 encoding.
-   if(g_snapDirty && g_fillSnapshotDueMs==0 && !dueSnap)
+   //--- R59-02 & BUG-07: In on-demand mode (SnapshotSeconds<=0), broadcast immediately after 250ms debounce
+   //--- so g_snapPayload/g_snapHash advance without waiting for a periodic clock. In periodic mode, rebuild debounced.
+   if(dueSnap || (SnapshotSeconds<=0 && g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
+     {
+      g_snapDirty=false;
+      s_lastSnapRebuildMs=now;
+      BroadcastSnapshot(now);
+     }
+   else if(g_snapDirty && g_fillSnapshotDueMs==0 && !dueSnap)
      {
       if(now-s_lastSnapRebuildMs>=250)
         {
@@ -2216,13 +2224,6 @@ void OnTimer()
          g_snapDirty=false;
          RebuildSnapshotPayload();
         }
-     }
-
-   if(dueSnap)
-     {
-      g_snapDirty=false;
-      s_lastSnapRebuildMs=now;
-      BroadcastSnapshot(now);
      }
 
    //--- 7) heartbeat with account state (needed for equity-relative sizing)
