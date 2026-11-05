@@ -5480,7 +5480,7 @@ function openPositionsModal(focusKey){
 //--- account is a valid answer, not a missing one.
 var _autoPosAt = {};
 function maybeAutoRequestPositions(n){
-  if(!n || !s.writes || s.role === "viewer") return;
+  if(!n || !s.writes || s.userRole === "viewer" || s.role === "viewer") return;
   if(s.data && s.data.cluster && s.data.cluster.role === "standby") return;
   // UI-01: Correctly calculate expected opened rows and waiting rows for Receiver and Sender
   if(n.role === "receiver"){
@@ -5687,6 +5687,7 @@ function startPosAutoPoll(){
     if(curTab !== "cockpit" || document.hidden){
       return;
     }
+    if(!s.writes || s.userRole === "viewer" || s.role === "viewer") return;
     var k = s.selectedPosNode || ($("pos_node_select") ? $("pos_node_select").value : "");
     if(k && (!s.data || !s.data.cluster || s.data.cluster.role !== "standby")){
       sendCommand(k, "reqpos", null, { force: false });
@@ -7301,6 +7302,7 @@ $("hubkey_copybtn").addEventListener("click", function(){
 //--- visibility lived in two places, which is how it drifts.
 function setRole(user, role){
   s.userRole = role;
+  s.role = role;
   $("who").textContent = user + " · " + role;
   //--- Admin-only chrome. The server is the gate (every /users endpoint 403s
   //--- a non-admin); this just stops a viewer or operator looking at controls
@@ -8227,7 +8229,7 @@ function renderSenderCards(senders){
              '</div>' +
              '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin-top:6px">' +
              '<div class="cfgfield-check"><input type="checkbox" class="inp-s-mirrorstops"' + (isChk(s.mirrorstops, isChk(c.mirrorstops, true)) ? ' checked' : '') + ' data-init="' + esc(s.mirrorstops !== undefined ? s.mirrorstops : '') + '" data-def="' + (isChk(c.mirrorstops, true) ? '1' : '0') + '"><label>Mirror Stops (Follow sender SL / TP)</label></div>' +
-             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, false) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="0"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-inverttrades"' + (isChk(s.inverttrades, isChk(c.inverttrades, false)) ? ' checked' : '') + ' data-init="' + esc(s.inverttrades !== undefined ? s.inverttrades : '') + '" data-def="' + (isChk(c.inverttrades, false) ? '1' : '0') + '"><label>Invert Trades (BUY &harr; SELL)</label></div>' +
              '<div class="cfgfield-check"><input type="checkbox" class="inp-s-reopenclosedmirrors"' + (isChk(s.reopenclosedmirrors, isChk(c.reopenclosedmirrors, true)) ? ' checked' : '') + ' data-init="' + esc(s.reopenclosedmirrors !== undefined ? s.reopenclosedmirrors : '') + '" data-def="' + (isChk(c.reopenclosedmirrors, true) ? '1' : '0') + '"><label>Reopen Vanished Mirrors (Restore if still open)</label></div>' +
              '<div class="cfgfield-check"><input type="checkbox" class="inp-s-dedupduplicates"' + (isChk(s.dedupduplicates, isChk(c.dedupduplicates, true)) ? ' checked' : '') + ' data-init="' + esc(s.dedupduplicates !== undefined ? s.dedupduplicates : '') + '" data-def="' + (isChk(c.dedupduplicates, true) ? '1' : '0') + '"><label>Dedup Duplicates (Prune duplicate mirrors)</label></div>' +
              '</div></div>' +
@@ -8243,10 +8245,10 @@ function renderSenderCards(senders){
              '<div class="cfgfield" style="grid-column:1/-1"><label>Ignore Specific UIDs</label><input type="text" class="inp-s-ignoreuids" placeholder="e.g. a1b2c3d4,e5f6g7h8" value="' + esc(s.ignoreuids || '') + '"><span class="hint">Exempt these UIDs from convergence</span></div>' +
              '</div>' +
              '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-top:6px">' +
-             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, false) ? ' checked' : '') + ' data-init="' + esc(s.nobuy !== undefined ? s.nobuy : '') + '" data-def="0"><label>Block Buy (NoBuy)</label></div>' +
-             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, false) ? ' checked' : '') + ' data-init="' + esc(s.nosell !== undefined ? s.nosell : '') + '" data-def="0"><label>Block Sell (NoSell)</label></div>' +
-             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignorenewentrysignals !== undefined ? s.ignorenewentrysignals : '') + '" data-def="0"><label>Ignore New Entry Signals (Close only)</label></div>' +
-             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, false) ? ' checked' : '') + ' data-init="' + esc(s.ignoreallexitsignals !== undefined ? s.ignoreallexitsignals : '') + '" data-def="0"><label>Ignore All Exit Signals (Open only)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nobuy"' + (isChk(s.nobuy, isChk(c.nobuy, false)) ? ' checked' : '') + ' data-init="' + esc(s.nobuy !== undefined ? s.nobuy : '') + '" data-def="' + (isChk(c.nobuy, false) ? '1' : '0') + '"><label>Block Buy (NoBuy)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-nosell"' + (isChk(s.nosell, isChk(c.nosell, false)) ? ' checked' : '') + ' data-init="' + esc(s.nosell !== undefined ? s.nosell : '') + '" data-def="' + (isChk(c.nosell, false) ? '1' : '0') + '"><label>Block Sell (NoSell)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignorenewentrysignals"' + (isChk(s.ignorenewentrysignals, isChk(c.ignorenewentrysignals, false)) ? ' checked' : '') + ' data-init="' + esc(s.ignorenewentrysignals !== undefined ? s.ignorenewentrysignals : '') + '" data-def="' + (isChk(c.ignorenewentrysignals, false) ? '1' : '0') + '"><label>Ignore New Entry Signals (Close only)</label></div>' +
+             '<div class="cfgfield-check"><input type="checkbox" class="inp-s-ignoreallexitsignals"' + (isChk(s.ignoreallexitsignals, isChk(c.ignoreallexitsignals, false)) ? ' checked' : '') + ' data-init="' + esc(s.ignoreallexitsignals !== undefined ? s.ignoreallexitsignals : '') + '" data-def="' + (isChk(c.ignoreallexitsignals, false) ? '1' : '0') + '"><label>Ignore All Exit Signals (Open only)</label></div>' +
              '</div></div>' +
 
              // Panel: Gates

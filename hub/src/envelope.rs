@@ -155,9 +155,7 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                         let mut buf = Vec::new();
                         let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);
                         if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
-                            if let Ok(s) = String::from_utf8(buf.clone()) {
-                                return s;
-                            }
+                            return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                         }
                     }
                 }

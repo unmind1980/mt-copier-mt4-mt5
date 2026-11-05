@@ -322,13 +322,24 @@ public:
       //--- An explicit closed day (e.g. "Tue=" where m_daySet[dow] is true and m_dN[dow]==0)
       //--- is respected and prevents spillover into today.
       int prevDow=(dow+6)%7;
-      if(m_daySet[prevDow] && (!m_daySet[dow] || m_dN[dow]>0))
+      if(!m_daySet[dow] || m_dN[dow]>0)
         {
-         int pn=m_dN[prevDow];
-         int pBase=prevDow*CP_TT_MAX;
-         for(int j=0;j<pn;j++)
+         if(m_daySet[prevDow])
            {
-            if(m_dFrom[pBase+j]>m_dTo[pBase+j] && sec<=m_dTo[pBase+j]) return true;
+            int pn=m_dN[prevDow];
+            int pBase=prevDow*CP_TT_MAX;
+            for(int j=0;j<pn;j++)
+              {
+               if(m_dFrom[pBase+j]>m_dTo[pBase+j] && sec<=m_dTo[pBase+j]) return true;
+              }
+           }
+         else
+           {
+            // MQL-05: Previous day unconfigured falls back to blanket IncludeTradingTimes list
+            for(int j=0;j<m_n;j++)
+              {
+               if(m_from[j]>m_to[j] && sec<=m_to[j]) return true;
+              }
            }
         }
 

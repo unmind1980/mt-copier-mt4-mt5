@@ -437,7 +437,7 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
      }
    int cmd=(int)pt;
    int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
-   int ticket=OrderSend(sym,cmd,p.lots,px,deviationPoints,sl,tp,cmt,
+   int ticket=OrderSend(sym,cmd,p.lots,px,MathMax(0,deviationPoints),sl,tp,cmt,
                         safeMagic,(datetime)p.pexpire,clrNONE);
    if(ticket<0)
      {
@@ -869,7 +869,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    if(!CopierGetPrice(sym,side,px)) { outErr=-2; return false; }
    int cmd=(side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
    int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
-   int ticket=OrderSend(sym,cmd,lots,px,deviationPoints,sl,tp,comment,safeMagic,0,clrNONE);
+   int ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),sl,tp,comment,safeMagic,0,clrNONE);
    if(ticket<0)
      {
       outErr=GetLastError();
@@ -881,7 +881,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          RefreshRates();
          if(CopierGetPrice(sym,side,px))
            {
-            ticket=OrderSend(sym,cmd,lots,px,deviationPoints,0.0,0.0,comment,safeMagic,0,clrNONE);
+            ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),0.0,0.0,comment,safeMagic,0,clrNONE);
             if(ticket>=0)
               {
                outErr=0;
@@ -1337,17 +1337,25 @@ bool CopierIsTicketClosedInHistory(const long ticket)
   {
    if(ticket<=0) return false;
 #ifdef __MQL5__
+   // MQL-03: If position is still actively open in terminal position list, it is definitely not closed!
+   if(PositionSelectByTicket((ulong)ticket)) return false;
+
    if(HistorySelectByPosition((ulong)ticket))
      {
       int deals=HistoryDealsTotal();
-      for(int i=deals-1; i>=0; i--)
+      double inVol=0.0, outVol=0.0;
+      for(int i=0; i<deals; i++)
         {
          ulong dt=HistoryDealGetTicket(i);
          if(dt==0) continue;
          long entry=HistoryDealGetInteger(dt,DEAL_ENTRY);
-         if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_INOUT || entry==DEAL_ENTRY_OUT_BY)
-            return true;
+         double vol=HistoryDealGetDouble(dt,DEAL_VOLUME);
+         if(entry==DEAL_ENTRY_IN) inVol+=vol;
+         else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_INOUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }
+      // Only considered fully closed when total exit volume matches or exceeds total entry volume
+      if(inVol>0.0 && outVol>=inVol-0.0000001)
+         return true;
      }
    if(HistoryOrderSelect((ulong)ticket))
      {

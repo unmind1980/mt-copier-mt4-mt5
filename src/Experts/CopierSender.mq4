@@ -1404,8 +1404,9 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       EmitToNode(rnid,CP_T_SNAP,snapPayload);
       string sentHash=CopierSnapshotHash(snapPayload);
       NoteRecentSnapHash(sentHash);
-      g_snapPayload=snapPayload;
-      g_snapHash=sentHash;
+      // C2: Do NOT mutate global g_snapPayload or g_snapHash on unicast repair!
+      // Other receivers have not received this unicast frame; overwriting global broadcast hash
+      // causes all other receivers to be falsely flagged as BEHIND, triggering cascading repair storms.
       // MQL-03: Do NOT reset global g_lastSnapMs here because EmitToNode is a UNICAST repair
       // to this single receiver. Other receivers on the hub have not received this frame.
       if(isBootstrap)
@@ -2055,12 +2056,6 @@ void OnTimer()
    //--- 1) scan and reconcile against what we saw last tick (zero ArrayResize)
    int n=BuildCurrent();
 
-   if(g_forcePosReport && g_hubOn)
-     {
-      g_forcePosReport=false;
-      SendSenderStatusReport(n);
-     }
-
    //--- New generation: the two stamp arrays are NOT cleared - a slot or row
    //--- that nothing writes this tick simply keeps an older generation and
    //--- therefore reads as "not seen" / "unchanged".
@@ -2177,10 +2172,12 @@ void OnTimer()
       if(!g_prev.At(k,q)) continue;
       g_slotMissCount[k]++;
       if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
-      // R47-03 & P2-7: Instant 0ms close when confirmed in history on initial miss;
-      // Rate-limit history scan to avoid 400 redundant queries under PollMs=5 during 2000ms debounce
-      bool closedInHist = (g_slotMissCount[k]<=1 || (now-g_slotMissMs[k]>=2000)) && CopierIsTicketClosedInHistory(q.ticket);
-      if(!closedInHist && (now-g_slotMissMs[k]<2000)) continue;
+      // R47-03 & P1: Instant 0ms close when confirmed in history on initial miss;
+      // Micro-stepped probe (0ms, 50ms..300ms step, 2000ms debounce) captures asynchronous broker fills in 50-100ms
+      long elapsedMiss=now-g_slotMissMs[k];
+      bool shouldProbe=(g_slotMissCount[k]<=1) || (elapsedMiss>=2000) || (elapsedMiss>=50 && elapsedMiss<=300 && (g_slotMissCount[k]%5==0));
+      bool closedInHist = shouldProbe && CopierIsTicketClosedInHistory(q.ticket);
+      if(!closedInHist && (elapsedMiss<2000)) continue;
       g_slotMissCount[k]=0;
       g_slotMissMs[k]=0;
       EmitClose(q,k);
@@ -2220,6 +2217,13 @@ void OnTimer()
                        +" Reported at most once per 10 min.");
            }
         }
+     }
+
+   // MQL-08: Send sender status report AFTER step 5 so new position records and UIDs in g_prev are synchronized
+   if(g_forcePosReport && g_hubOn)
+     {
+      g_forcePosReport=false;
+      SendSenderStatusReport(n);
      }
 
    //--- 6) snapshot

@@ -1907,6 +1907,46 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   10. **PruneTo 无害化受限优化（O1）**：
      - 在 `src/Include/Copier/CopierState.mqh` 的 `PruneTo` 中实现双短路与触碰槽位追踪：本地空仓（`m_n<=0`）直接返回 0；远端空仓（`desiredCount<=0`）直接标记清空；建表时通过静态数组记录实际占用的 `touchedSlots`，退出前仅重置用过的槽位，彻底消除了每次 4096 次 `ArrayInitialize` 与全表清理循环；并在 `removed==0` 的稳态下跳过 `UsedCount()` 扫描，兼具极速执行与 M12 权威派生保障。
 
+### 一百零七次演进：反向止损穿透修正、孤儿 TRIM 越界根除、MT5 部分平仓历史重构、宽限期死循环阻断、10位账号 NID 统一与回切强校验 (2026-11-06 00:30；全部闭环)
+
+- **技术落地项**：
+  1. **反向跟单止损越界回退与签名锁死根治（MQL-01）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `QueueModifyIfNeeded` 中，使用 `rawWantSl` / `rawWantTp` 判定原始目标是否越过市价，仅在真正越过市价时才回退至本地止损，且置位 `invertedCrossed` 阻止写入 `g_stopSig` 签名缓存，彻底解决反向跟单仓位永久失去 SL/TP 保护的致命隐患；
+  2. **孤儿 TRIM 数组越界崩溃彻底消除（MQL-02）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `ExecuteQueue` 中，将第 3531 行与第 3548 行直接索引 `g_sid[a.senderIdx]` 替换为安全的 `SenderLabel(a.senderIdx)`，消灭 `a.senderIdx == -1` 时触发的 MQL `array out of range (4002)` 致命运行时异常；
+  3. **MT5 分批平仓历史成交重构（MQL-03）**：
+     - 在 `src/Include/Copier/CopierModel.mqh` 的 `CopierIsTicketClosedInHistory` 中，优先检查 `PositionSelectByTicket`，活跃持仓立即判定未关闭；在 `HistorySelectByPosition` 中累计出场与入场手数，仅当出场手数达到或超过总入场手数时才判定关闭，彻底消除因历史残留 `DEAL_ENTRY_OUT` 引发的 0ms 误平仓与重复开仓；
+  4. **挂单成交宽限期 1.5s 震荡死循环阻断（C1）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 中移除超时撤单处的 `g_fillGraceRing.Forget(graceKey)`，防止券商确认撤单前的后续 tick 重新将键初始化为 0 并反复重启 1.5 秒宽限期；
+  5. **单播修复全局哈希污染阻断（C2）**：
+     - 在 `src/Experts/CopierSender.mq4` 的 `SnapRepairMaybe` 中，移除单播补发时对全局广播 `g_snapHash` 与 `g_snapPayload` 的错误赋值，严格捍卫 `doc/PROTOCOL.md` 修复与广播职责隔离不变量，彻底消除全网连锁重传风暴；
+  6. **孤儿平仓出队计数同步（C3）**：
+     - 在 `src/Experts/CopierReceiver.mq4` 的 `ExecuteQueue` 平仓成功分支中，支持 `a.senderIdx == -1` 时同步扣减 `g_orphanCount` 与账户级持仓计数，保证当 tick 计数绝对一致；
+  7. **跨午夜交易时段截断修复（MQL-05）**：
+     - 在 `src/Include/Copier/CopierFilter.mqh` 中，当前一天未在 `DayTradingTimes` 显式配置时，安全回退检查全局 `m_from` / `m_to` 中的跨午夜延续窗口，彻底消除周一全局时段在周二零点被截断的缺陷；
+  8. **MT4 开仓挂单滑点非负钳制与全局滑点保护（MQL-06）**：
+     - 在 `src/Include/Copier/CopierModel.mqh`（MT4 `CopierPlacePending` 与 `CopierOpenMarket`）及 `CopierReceiver.mq4` 输入初始化处统一补齐 `MathMax(0, deviationPoints)` 保护；
+  9. **配置崩溃自愈防误删临时备份（MQL-07）**：
+     - 在 `src/Include/Copier/CopierConfig.mqh` 的 `CopierIni::Load` 恢复分支中，直接写出并校验完整性，写出成功后才删除 `.tmp`，避免误删唯一备份；
+  10. **发送端持仓明细后置与平仓微阶梯探测（MQL-08, P1, P4）**：
+     - 在 `src/Experts/CopierSender.mq4` 中，将 `SendSenderStatusReport` 移至 Step 5（`g_prev` 同步）之后执行，消除新开仓首轮 open_time 为 0；平仓检测引入前密后疏微阶梯探测（0ms, 50~300ms, 2000ms），将异步平仓发现延迟从 2000ms 压缩至 50~100ms；
+  11. **自检脚本大数组局部栈溢出消除（MQL-09）**：
+     - 在 `src/Scripts/CopierSelfTest.mq4` 的 `TestR47R48Regressions` 中复用全局 `g_tFresh`，消除局部栈分配 400KB 大数组风险；
+  12. **10位账号 NID 统一寻址与校验（HUB-01）**：
+     - 在 `hub/src/main.rs` 与 `positions.rs` 中引入对齐 MQL 的 `copier_nid`，控制帧（`CFG`/`CMD`/`TOPOLOGY`）以 `@<copier_nid>` 发布，订阅可达性与 `STAT` 收据校验同时支持 raw acc 与 9 位 NID；
+  13. **集群手动回切同步强校验与提代时机修正（HUB-02）**：
+     - 在 `hub/src/cluster.rs` 中移除同步前的抢跑提代逻辑，在 `api.rs` 的 `cluster_failback_now` 中强校验 `sync_status == "synced"`，彻底杜绝数据回退与脑裂；
+  14. **INI 语法校验规则对齐（HUB-03）**：
+     - 在 `hub/src/config.rs` 的 `validate_ini` 中增加 `has_section` 状态机，拒绝首个节前的 `key=value` 并拦截空白节名，消灭两端规则不一致导致的死循环推配置；
+  15. **解压缩零拷贝与 Latin-1 容错（HUB-04）**：
+     - 在 `hub/src/envelope.rs` 的 `decompress_field` PKZIP 分支移除 4MB 缓冲克隆并接入 `latin1` 兜底，防止非 UTF-8 字符解压穿透报错；
+  16. **X.509 DER 扫描器下溢防御（HUB-05）**：
+     - 在 `hub/src/tls.rs` 的 `parse_one_time` 中增加严格的日期范围检查，防止负/零日期引发 `u64` 算术下溢崩溃；
+  17. **快照哈希尾部切片 O(1) 优化（HUB-06）**：
+     - 在 `hub/src/positions.rs` 的 `extract_receipt` 中优先扫描末尾 32 字节，常数时间提取哈希，消除大快照从头线性扫描；
+  18. **前端驾驶舱访客权限与配置继承（WEB-01, WEB-02）**：
+     - 在 `dashboard.html` 中修复 `s.userRole` 判断与定时器门禁，消除只读访客的 403 弹窗；可视化配置器使 `[senderN]` 的 5 个布尔复选框正确继承 `[common]` 默认值。
+
 ---
 
 ## 9. 最终交付状态确认

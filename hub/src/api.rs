@@ -3779,6 +3779,14 @@ async fn cluster_failback_now(
             )
                 .into_response();
         }
+        // HUB-02: Prevent handover when Standby has not fully synchronized with Primary
+        if s.cluster.sync_status != "synced" {
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({ "error": format!("Cannot failback: node is not synced with Primary (current status: {}).", s.cluster.sync_status) })),
+            )
+                .into_response();
+        }
         if s.cluster.peer_url.is_empty() {
             return (
                 axum::http::StatusCode::BAD_REQUEST,

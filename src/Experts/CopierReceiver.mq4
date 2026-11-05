@@ -1271,7 +1271,7 @@ void ResetRuntimeInputsFromInputs()
       Magic = CopierParseLong(mStr);
      }
 
-   DeviationPoints                  = InpDeviationPoints;
+   DeviationPoints                  = MathMax(0, InpDeviationPoints);
    EmergencySLPips                  = InpEmergencySLPips;
    EmergencyTPPips                  = InpEmergencyTPPips;
    ReopenClosedMirrors              = InpReopenClosedMirrors;
@@ -3401,6 +3401,12 @@ void ExecuteQueue()
                      if(g_ourCount>0) g_ourCount--;
                      g_ourLots=MathMax(0.0,g_ourLots-a.lots);
                     }
+                  else
+                    {
+                     // C3: Immediate deduction for manual/orphan position closed via WebUI
+                     if(g_orphanCount>0) g_orphanCount--;
+                    }
+                  if(g_acctPositions>0) g_acctPositions--;
                   if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                     {
                      //--- Note: sAddedCount/sAddedLots are per-tick net delta adjustments. If an existing
@@ -3419,6 +3425,11 @@ void ExecuteQueue()
                      if(g_ourCount>0) g_ourCount--;
                      g_ourLots=MathMax(0.0,g_ourLots-a.lots);
                     }
+                  else
+                    {
+                     if(g_orphanCount>0) g_orphanCount--;
+                    }
+                  if(g_acctOrders>0) g_acctOrders--;
                   if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                     {
                      sAddedCount[a.senderIdx]--;
@@ -3528,7 +3539,7 @@ void ExecuteQueue()
          if(err==-4 && a.kind==CP_ACT_OPEN)
            {
             g_unsupported.Add(a.key);
-            if(g_onceFail.ShouldEmit("unsupported|"+g_sid[a.senderIdx]+"|"+a.uid))
+            if(g_onceFail.ShouldEmit("unsupported|"+SenderLabel(a.senderIdx)+"|"+a.uid))
                g_log.Warn("cannot place "+a.uid+" "+a.sym+" as a "
                           +((a.ordKind==CP_ORD_PENDING)?"pending":"market")
                           +" order - this platform has no such order type."
@@ -3541,11 +3552,11 @@ void ExecuteQueue()
             continue;
            }
 
-         // R48-01: Pending order volume modification is unsupported by broker API (err=-5).
-         // Shift queue without putting into g_unsupported 15-minute lock.
+         // R48-01 & MQL-02: Pending order volume modification is unsupported by broker API (err=-5).
+         // Shift queue without putting into g_unsupported 15-minute lock. Safe SenderLabel() prevents array index -1 out of range.
          if(err==-5)
            {
-            if(g_onceFail.ShouldEmit("pending_trim|"+g_sid[a.senderIdx]+"|"+a.uid))
+            if(g_onceFail.ShouldEmit("pending_trim|"+SenderLabel(a.senderIdx)+"|"+a.uid))
                g_log.Warn("cannot partial close pending order for uid "+a.uid+" ticket "+(string)a.ticket
                           +" - broker API does not support partial close of pending orders");
             ShiftQueue();
@@ -4156,6 +4167,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- every single tick and queue a modify forever.
    //--- For pending orders, clamp against the order's trigger/limit price, NOT live market Bid/Ask!
    bool clampedSl=false, clampedTp=false;
+   bool invertedCrossed=false;
    if(local.kind==CP_ORD_PENDING)
      {
       wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clampedSl);
@@ -4166,24 +4178,28 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      }
    else
      {
+      double rawWantSl=wantSl;
+      double rawWantTp=wantTp;
       wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clampedSl);
       wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clampedTp);
-      // MQL-04: In inverted mode with entry price disparity, avoid clamping stops onto live market price
-      // which would trigger premature accidental closure; let sender's exit signal close the trade
+      // MQL-01: In inverted mode with entry price disparity, avoid clamping stops onto live market price
+      // if the RAW un-clamped stop already crossed market price; retain local stop and do not cache in g_stopSig
       if(actualInverted)
         {
          double mktPx=0.0;
          if(CopierGetClosePrice(local.sym,local.side,mktPx) && mktPx>0.0)
            {
-            if(clampedTp && ((local.side==CP_SIDE_BUY && wantTp<=mktPx+si2.stopLevel) || (local.side==CP_SIDE_SELL && wantTp>=mktPx-si2.stopLevel)))
+            if(rawWantTp>0.0 && ((local.side==CP_SIDE_BUY && rawWantTp<=mktPx) || (local.side==CP_SIDE_SELL && rawWantTp>=mktPx)))
               {
                wantTp=local.tp;
                clampedTp=false;
+               invertedCrossed=true;
               }
-            if(clampedSl && ((local.side==CP_SIDE_BUY && wantSl>=mktPx-si2.stopLevel) || (local.side==CP_SIDE_SELL && wantSl<=mktPx+si2.stopLevel)))
+            if(rawWantSl>0.0 && ((local.side==CP_SIDE_BUY && rawWantSl>=mktPx) || (local.side==CP_SIDE_SELL && rawWantSl<=mktPx)))
               {
                wantSl=local.sl;
                clampedSl=false;
+               invertedCrossed=true;
               }
            }
         }
@@ -4209,11 +4225,10 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
      {
       //--- Nothing to change: record signature so next tick can skip immediately
-      //--- MQL-01: When stop was clamped, do NOT cache in g_stopSig so when price moves away,
-      //--- the mirror automatically converges to the true un-clamped stop level.
+      //--- MQL-01: When stop was clamped or deferred by inverted crossing, do NOT cache in g_stopSig
       if(local.ticket!=0)
         {
-         if(!clamped && !emergencyMissing)
+         if(!clamped && !emergencyMissing && !invertedCrossed)
            {
             g_stopSig[sh].ticket=local.ticket;
             g_stopSig[sh].epoch=g_stOvEpoch;
@@ -5308,10 +5323,13 @@ void ConvergeSender(const int si)
                     {
                      continue; // still within grace window; let broker fill it naturally
                     }
-                  // Grace period expired without filling naturally
-                  g_fillGraceRing.Forget(graceKey);
-                  g_log.Warn("uid "+d.uid+" "+d.sym+" fill grace expired ("
-                             +DoubleToString(graceSec,1)+"s) - cancelling pending mirror and re-opening as market");
+                  // C1: Grace period expired without filling naturally.
+                  // Do NOT Forget(graceKey) here! Retain graceKey so subsequent ticks before broker
+                  // confirms deletion do NOT re-initialize a fresh 1.5s grace cycle.
+                  // It will be cleaned up on line 5332 once kinds match, or when the pending order disappears.
+                  if(g_once.ShouldEmit("fillgraceexp|"+d.uid))
+                     g_log.Warn("uid "+d.uid+" "+d.sym+" fill grace expired ("
+                                +DoubleToString(graceSec,1)+"s) - cancelling pending mirror and re-opening as market");
                  }
               }
 

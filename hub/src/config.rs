@@ -910,6 +910,7 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
     }
     let mut sections = 0usize;
     let mut line_count = 0usize;
+    let mut has_section = false;
     for (n, raw) in ini.lines().enumerate() {
         line_count = n + 1;
         let line = raw.trim();
@@ -917,11 +918,15 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
             continue;
         }
         if line.starts_with('[') {
-            if !line.ends_with(']') || line.len() < 3 {
-                return Err(format!("line {}: malformed section header {:?}", n + 1, line));
+            if !line.ends_with(']') || line[1..line.len() - 1].trim().is_empty() {
+                return Err(format!("line {}: malformed or empty section header {:?}", n + 1, line));
             }
             sections += 1;
+            has_section = true;
             continue;
+        }
+        if !has_section {
+            return Err(format!("line {}: key=value before any [section]: {:?}", n + 1, line));
         }
         // `key=value`. The VALUE may contain '=' - the split is on the FIRST
         // one - which is why this is not `split('=').count() == 2`.

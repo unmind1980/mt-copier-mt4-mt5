@@ -2429,6 +2429,12 @@ void TestTradingTimes()
    //--- closed day does NOT allow morning spillover from global wrapping range (H-05)
    t.Set("22:00-02:00","Sun=");
    Ok("hours: closed Sun= prevents 01:00 morning wrap on Monday",!t.Allows(monMidnight+1*3600));
+
+   // MQL-05: Global wrapping range 22:00-02:00 extends into Tuesday morning when Mon has no DayTradingTimes entry
+   datetime tueMidnight=(datetime)(86400*5);
+   t.Set("22:00-02:00","Tue=08:00-17:00");
+   Ok("hours: global wrapping range 22:00-02:00 allows Tue 01:00 morning even if Tue has day schedule",
+      t.Allows(tueMidnight+1*3600));
   }
 
 void TestCopierList()
@@ -2723,15 +2729,15 @@ void TestR47R48Regressions()
    Ok("modify: parse legacy payload without PPRICE succeeds", CopierPayloadModifyParse(legacyMod, pModLegacy));
    OkDbl("modify: legacy parsed pprice defaults to 0.0", pModLegacy.pprice, 0.0, 0.00001);
 
-   // M12: PosTable PruneTo cleans up properly
-   CopierPosTable pt;
+   // M12 & MQL-09: PosTable PruneTo cleans up properly (re-use global g_tFresh to avoid 400KB local stack allocation)
+   g_tFresh.Clear();
    CopierPos pSample;
    pSample.uid = "PRUNTEST";
    pSample.ticket = 99999;
-   pt.InsertEmpty(pSample);
+   g_tFresh.InsertEmpty(pSample);
    CopierPos desEmpty[];
-   pt.PruneTo(desEmpty, 0);
-   Ok("table: PruneTo empty desired array cleans up all rows", pt.Count() == 0);
+   g_tFresh.PruneTo(desEmpty, 0);
+   Ok("table: PruneTo empty desired array cleans up all rows", g_tFresh.Count() == 0);
 
    // N80-01: Verify pending volume change recalculation
    double oldLots=1.00, newTarget=0.50, symStep=0.01;

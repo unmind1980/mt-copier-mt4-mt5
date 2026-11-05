@@ -170,23 +170,41 @@ public:
          return false;
         }
 
-      // BUG-06: If primary file produced 0 valid keys but .tmp exists and has valid content, recover from .tmp
+      // BUG-06 & MQL-07: If primary file produced 0 valid keys but .tmp exists and has valid content, recover from .tmp
       if(m_n==0 && actualPath==path && FileIsExist(path+".tmp"))
         {
          if(Load(path+".tmp") && m_n>0)
            {
             string recovered="";
             if(CopierIniReadAll(path+".tmp",recovered) && StringLen(recovered)>0)
-               CopierIniWriteAll(path,recovered);
+              {
+               int rh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+               if(rh!=INVALID_HANDLE)
+                 {
+                  uint wr=FileWriteString(rh,recovered);
+                  FileFlush(rh);
+                  FileClose(rh);
+                  if(wr>=(uint)StringLen(recovered)) FileDelete(path+".tmp");
+                 }
+              }
             return true;
            }
         }
       else if(actualPath!=path && m_n>0)
         {
-         // We loaded from .tmp because path did not exist; restore path
+         // We loaded from .tmp because path did not exist; restore path safely
          string recovered="";
          if(CopierIniReadAll(actualPath,recovered) && StringLen(recovered)>0)
-            CopierIniWriteAll(path,recovered);
+           {
+            int rh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
+            if(rh!=INVALID_HANDLE)
+              {
+               uint wr=FileWriteString(rh,recovered);
+               FileFlush(rh);
+               FileClose(rh);
+               if(wr>=(uint)StringLen(recovered)) FileDelete(actualPath);
+              }
+           }
         }
 
       if(!BuildSections())

@@ -162,10 +162,11 @@ impl Positions {
         if let Some(v) = self.by_sender.get(sid) {
             return Some(v);
         }
-        // H3: If account has 10+ digits, MQL CopierNid truncates via account % 1e9
+        // H3 & HUB-01: If account has 10+ digits, MQL CopierNid truncates via account % 1e9 (with 0 mapped to 999999999)
         if let Ok(acc) = sid.parse::<u64>() {
             if acc >= 1_000_000_000 {
-                let nid = (acc % 1_000_000_000).to_string();
+                let rem = acc % 1_000_000_000;
+                let nid = (if rem == 0 { 999999999 } else { rem }).to_string();
                 if let Some(v) = self.by_sender.get(&nid) {
                     return Some(v);
                 }
@@ -260,6 +261,17 @@ pub fn lots_str(l: f64) -> String {
 
 /// Extract only the receipt hash (H=) without decompressing or parsing the body.
 pub fn extract_receipt(payload: &[u8]) -> String {
+    // HUB-06: ;H=<8 hex> is anchored at the very end of SNAP payload (CopierCodec.mqh:308).
+    // Fast O(1) tail slice lookup avoids traversing multi-kilobyte compressed records.
+    let tail_start = payload.len().saturating_sub(32);
+    if let Some(pos) = payload[tail_start..].windows(3).rposition(|w| w == b";H=" || w == b"|H=") {
+        let val_start = tail_start + pos + 3;
+        let val_end = payload[val_start..].iter().position(|&b| b == b';' || b == b'|').map(|p| val_start + p).unwrap_or(payload.len());
+        let h = &payload[val_start..val_end];
+        if !h.is_empty() && h.len() <= 16 {
+            return latin1(h);
+        }
+    }
     if let Some((s, e)) = value_span(payload, b"H") {
         latin1(&payload[s..e])
     } else {

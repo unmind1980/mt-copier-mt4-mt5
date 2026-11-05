@@ -704,6 +704,26 @@ fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> z
     )
 }
 
+/// HUB-01: Aligned with MQL CopierNid: maps raw 64-bit MT login to 9-digit NID topic.
+pub fn copier_nid(acc: &str) -> String {
+    if let Ok(n) = acc.parse::<u64>() {
+        if n == 0 {
+            "999999998".to_string()
+        } else if n < 1_000_000_000 {
+            n.to_string()
+        } else {
+            let rem = n % 1_000_000_000;
+            if rem == 0 {
+                "999999999".to_string()
+            } else {
+                rem.to_string()
+            }
+        }
+    } else {
+        acc.to_string()
+    }
+}
+
 /// Send cluster topology (T=TOPOLOGY) to a node on its `@<nid>` control topic.
 fn send_topology(
     sock: &zmq::Socket,
@@ -726,8 +746,9 @@ fn send_topology(
         epoch,
         active_role
     );
+    let target_nid = copier_nid(nid);
     sock.send_multipart(
-        vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
+        vec![format!("@{}", target_nid).into_bytes(), env.into_bytes()],
         zmq::DONTWAIT,
     )
 }
@@ -758,9 +779,9 @@ fn send_cfg(
     ini: &str,
 ) -> zmq::Result<()> {
     state.seq += 1;
-    // The node key is `ROLE:ACC`; the topic is the ACC alone, which is the same
-    // `nid` the node subscribes to and the same value its ini calls `id=`.
-    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
+    // The node key is `ROLE:ACC`; the topic is the NID alone, matching the node's @<nid> subscription
+    let acc = node.split_once(':').map(|(_, a)| a).unwrap_or(node);
+    let nid = copier_nid(acc);
     let env = format!(
         "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CFG|P=ID={};REV={};TO={};INI={}",
         HUB_SSID,
@@ -769,7 +790,7 @@ fn send_cfg(
         unix_millis() % 2147483647,
         id,
         rev,
-        nid,
+        acc,
         config::escape_ini(ini)
     );
     sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
@@ -789,8 +810,9 @@ fn send_cmd(
     args: &str,
 ) -> zmq::Result<()> {
     state.seq += 1;
-    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
-    let mut p = format!("ID={};OP={};TO={}", id, op, nid);
+    let acc = node.split_once(':').map(|(_, a)| a).unwrap_or(node);
+    let nid = copier_nid(acc);
+    let mut p = format!("ID={};OP={};TO={}", id, op, acc);
     if !args.is_empty() {
         p.push_str(&format!(";ARGS={}", args));
     }
@@ -2519,8 +2541,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                         let warm = started.elapsed() < Duration::from_secs(60);
                                         let skey = format!("sender:{}", sid);
                                         let rkey = format!("receiver:{}", login);
-                                        let sid_is_sender = s.reg.get(&skey).is_some();
-                                        let login_is_receiver = s.reg.get(&rkey).is_some();
+                                        // HUB-01: Support both raw login acc and 9-digit copier_nid matching for 10-digit accounts
+                                        let sid_is_sender = s.reg.get(&skey).is_some() || s.reg.nodes().iter().any(|n| n.role == registry::Role::Sender && copier_nid(&n.acc) == sid);
+                                        let login_is_receiver = s.reg.get(&rkey).is_some() || s.reg.nodes().iter().any(|n| n.role == registry::Role::Receiver && copier_nid(&n.acc) == login);
                                         // DEF-61-11: Short-circuit evaluate role count only when sender/receiver is unknown
                                         sender_valid = sid_is_sender || warm || s.reg.count_by_role(registry::Role::Sender) == 0;
                                         receiver_valid = login_is_receiver || warm || s.reg.count_by_role(registry::Role::Receiver) == 0;
@@ -3000,10 +3023,11 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if offline_nodes.contains(node) {
                         return false;
                     }
-                    let nid = node.split_once(':').map(|(_, acc)| acc).unwrap_or(node);
-                    let target_sub = format!("@{}", nid);
-                    // O-01: Direct subscription match or active registry record (avoid @all prefix false positive)
-                    st.subs.contains_key(&target_sub) || online_nodes.contains(node)
+                    let acc = node.split_once(':').map(|(_, a)| a).unwrap_or(node);
+                    let target_sub1 = format!("@{}", acc);
+                    let target_sub2 = format!("@{}", copier_nid(acc));
+                    // O-01 & HUB-01: Direct subscription match (raw acc or 9-digit nid) or active registry record
+                    st.subs.contains_key(&target_sub1) || st.subs.contains_key(&target_sub2) || online_nodes.contains(node)
                 };
                 for c in cmds.due_gated(Instant::now(), effective_writes, is_reachable) {
                     if c.state == commands::STATE_UNKNOWN {

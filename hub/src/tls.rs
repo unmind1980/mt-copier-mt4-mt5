@@ -379,6 +379,10 @@ fn parse_one_time(bytes: &[u8]) -> Option<(u64, &[u8])> {
         let h: u64 = s[6..8].parse().ok()?;
         let min: u64 = s[8..10].parse().ok()?;
         let sec: u64 = s[10..12].parse().ok()?;
+        // HUB-05: Bound check date/time components to avoid u64 arithmetic underflow in ymd_to_unix
+        if !(1970..=2099).contains(&year) || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || sec > 60 {
+            return None;
+        }
         return Some((ymd_to_unix(year, m, d, h, min, sec), rem));
     } else if tag == 0x18 && s.len() >= 14 {
         // GeneralizedTime: YYYYMMDDHHMMSSZ
@@ -388,6 +392,9 @@ fn parse_one_time(bytes: &[u8]) -> Option<(u64, &[u8])> {
         let h: u64 = s[8..10].parse().ok()?;
         let min: u64 = s[10..12].parse().ok()?;
         let sec: u64 = s[12..14].parse().ok()?;
+        if !(1970..=2099).contains(&year) || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || min > 59 || sec > 60 {
+            return None;
+        }
         return Some((ymd_to_unix(year, m, d, h, min, sec), rem));
     }
     None

@@ -609,19 +609,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             }
 
             if current_role == "standby" {
-                // P1-7: Adopt higher epoch from Primary even if no file diffs
-                if remote_st.role == "primary" && remote_st.epoch > epoch {
-                    let save_info = {
-                        let mut s = st.lock_or_recover();
-                        s.cluster.state.epoch = remote_st.epoch;
-                        s.cluster.save_info()
-                    };
-                    if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
-                        eprintln!("[hub] CLUSTER ERR: failed to save state after adopting higher epoch: {}", e);
-                        let mut s = st.lock_or_recover();
-                        s.cluster.last_sync_err = format!("adopt epoch save failed: {}", e);
-                    }
-                }
+                // HUB-02: Do NOT prematurely adopt higher epoch before /cluster/sync succeeds!
+                // Epoch is safely updated in post-sync handler only when file_sync_err is None,
+                // preventing unsynced Standby from claiming equal epoch and causing split-brain/data-loss on handover.
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
                 let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_path, notif_path, curve_path) = {
