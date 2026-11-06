@@ -6,7 +6,16 @@
 //| to the codec / state / sizing layers - those are where a silent   |
 //| bug costs real money.                                             |
 //|                                                                   |
-//| Output goes to the Experts log (and to copier_selftest.log).      |
+//| Output goes to the Experts log AND to copier_selftest.log under   |
+//| MQL4|MQL5\Files. The last line must read                          |
+//|                                                                   |
+//|   =========== ALL PASS  pass=N fail=0 ===========                 |
+//|                                                                   |
+//| This is a RELEASE GATE, not a suggestion. A single FAIL means the |
+//| change is not finished, however green every other suite is. Six   |
+//| assertions sat red for three weeks (2026-10-17..11-07) because    |
+//| nobody read this log; five of them had never passed at all. See   |
+//| doc/HANDOFF.md 4.6.                                               |
 //+------------------------------------------------------------------+
 #property strict
 #property script_show_inputs

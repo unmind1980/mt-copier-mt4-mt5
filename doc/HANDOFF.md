@@ -265,18 +265,18 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 1. **前端静态与 DOM 语法校验**：
    ```bash
    python tools/dash_check.py
-   # 结果：dashboard OK: {'brace': 0, 'paren': 0, 'bracket': 0} | 191 ids referenced, all present; 97 functions, no duplicates
+   # 结果：dashboard OK: {'brace': 0, 'paren': 0, 'bracket': 0} | 252 ids referenced, all present; 138 functions, no duplicates
    ```
 2. **Rust 单元测试套件**：
    ```bash
    bash hub/build.sh --test
-   # 结果：test result: ok. 142 passed; 0 failed; 0 ignored; finished in 1.39s
+   # 结果：test result: ok. 171 passed; 0 failed; 0 ignored; finished in 1.39s
    ```
 3. **Python 端到端契约与黑盒测试套件**：
    ```bash
    ./tools/tests.sh
    # 结果：ALL PYTHON SUITES GREEN
-   # 涵盖: 21 个测试套件（含 ha_probe_test, hub_cluster_test, ha_chaos_test 等全部通过）
+   # 涵盖: 24 个测试套件（含 ha_probe_test, hub_cluster_test, ha_chaos_test 等全部通过）
    ```
 4. **MQL4 / MQL5 跨平台多终端编译**：
    ```bash
@@ -287,7 +287,29 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
    ```bash
    bash hub/build.sh --release      # 需先停掉运行中的 Hub，Windows 会锁住该文件
    ```
-   `copier-hub.exe` 重建后用新二进制跑完全部 21 项测试套件，**全部 0 fail**。
+   `copier-hub.exe` 重建后用新二进制跑完全部 24 项测试套件，**全部 0 fail**。
+
+6. **MQL 自检 —— 手动执行，但属于交付定义**：
+
+   MQL 脚本只能在终端里跑，进不了 `tools/tests.sh`，所以这一步是**人工**的。但人工
+   不等于可选：
+
+   - 任何改动 `src/**/*.mq4` 或 `src/**/*.mqh` 之后，必须在任一终端把
+     `CopierSelfTest` 拖到图表上跑一次（几秒，不联网、不下单、不改状态）；
+   - 日志：`<终端数据目录>\MQL4|MQL5\Files\copier_selftest.log`，专家日志里同样有；
+   - 判定：最后一行必须是
+     `=========== ALL PASS  pass=N fail=0 ===========`。
+     **只要有一行 FAIL，就是没交付完**，不管其它套件多绿。
+
+   **为什么单独列这一条**：2026-11-07 核对日志时发现自检里有 6 条断言是红的，其中
+   **5 条从写下的那天起就没通过过**（`sender0`/`sender1` 笔误、漏 `!`、夹具与断言
+   不匹配、浮点精确比较），第 6 条是 A86-02 刻意改了行为而测试没跟上。整整三周，
+   自检的结果没有人看过。
+
+   结论：**自检本身没有过期**（54 次提交、706 条断言、今天仍在增补），缺的是"必须
+   跑"这条约束。所以这里写死它，而不是在 `tests.sh` 里读一个过期日志假装检查 ——
+   那是自我安慰。真正自动化的唯一做法见 §6：独立 portable 终端 + `[StartUp] Script=`
+   无头运行。
 
 ---
 
@@ -344,6 +366,25 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 ---
 
 ## 6. 后续演进建议与待办事项 (Next Steps & Recommendations)
+
+0. **【当前唯一未闭环项 · 2026-11-07】MQL 自检的无头运行器**：
+   §4.6 把"跑自检"写成了交付门禁，但它仍然是人工步骤。要真正做到"写了就一定会跑"，
+   需要一个独立实例：
+
+   ```
+   terminal64.exe /portable /config:selftest.ini
+       [StartUp]
+       Script=CopierSelfTest
+   ```
+
+   - **独立数据目录 + 独立终端副本**，绝不与正在跑实盘的四个终端共用（否则会抢
+     `Files\` 与 `MQL\Files\` 下的状态文件）；
+   - 跑完读 `MQL5\Files\copier_selftest.log`，断言末行 `fail=0`，然后终止该实例；
+   - 需要处理"无券商登录启动"（脚本不碰券商，只跑纯逻辑，可行，但要验证
+     `SymbolInfoTick` 在无连接下不会卡住）；
+   - 落地后即可接入 `tools/tests.sh`，从此不再依赖人记得跑。
+
+   工作量约半天，且与这台机器的终端布局绑定 —— 换机器要重做，所以没有默认开启。
 
 1. **生产环境守护进程化 (Daemon / Service)**：
    - 当前 Hub 由控制台或批处理脚本启动。生产环境可考虑使用 Windows 计划任务或 NSSM (Non-Sucking Service Manager) 将 `copier-hub.exe` 注册为系统自启动服务，并配置异常闪退自动重启。
