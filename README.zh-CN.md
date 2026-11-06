@@ -154,7 +154,8 @@ mt-copier/
 │   └── ...                       # 其他架构设计文档
 └── tools/                        # 部署、运维与自动化测试工具集
     ├── deploy.sh / compile.sh    # 多终端自动部署与一键 MQL 矩阵编译脚本
-    ├── tests.sh / tests.bat      # 22 个 Python 集成回归与契约测试套件
+    ├── tests.sh / tests.bat      # 24 个 Python 集成回归与契约测试套件
+    ├── selftest_run.sh           # MQL 自检无头门禁（专用 portable MT5）
     ├── start_primary.bat         # 启动 Primary 主机 (ZMQ 6000 / Web 6010)
     ├── start_standby.bat         # 启动 Standby 备机 (ZMQ 6001 / Web 6011)
     └── install_services.bat      # Windows 后台服务一键安装脚本
@@ -217,8 +218,8 @@ http://127.0.0.1:6010
 
 在本地执行全量测试与静态检查命令：
 ```bash
-bash tools/tests.sh
-bash hub/build.sh --test
+bash tools/tests.sh --all      # Python 套件 + hub 编译/单测 + EA 编译 + MQL 自检
+bash tools/selftest_run.sh     # 只跑 MQL 自检（约 12 秒，退出码即结论）
 python tools/dash_check.py
 python tools/i18n_check.py
 ```

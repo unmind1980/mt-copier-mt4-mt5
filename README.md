@@ -154,7 +154,8 @@ mt-copier/
 │   └── ...                       # Architecture & design documents
 └── tools/                        # Deployment, testing & verification toolchain
     ├── deploy.sh / compile.sh    # Multi-terminal deployment & automated compilation
-    ├── tests.sh / tests.bat      # 22 Python integration & contract test suites
+    ├── tests.sh / tests.bat      # 24 Python integration & contract test suites
+    ├── selftest_run.sh           # headless MQL self-test gate (portable MT5)
     ├── start_primary.bat         # Launch Primary Hub (Port 6000 / Web 6010)
     ├── start_standby.bat         # Launch Standby Hub (Port 6001 / Web 6011)
     └── install_services.bat      # Install as background Windows Services
@@ -211,14 +212,15 @@ Every release is validated against an exhaustive multi-layered regression test s
 | Test Suite | Scope | Passing Threshold |
 | :--- | :--- | :--- |
 | **MQL Matrix Build** | 4 Terminals (MT4 & MT5, 32-bit & 64-bit), 16 target binaries | **16 / 16 ALL GREEN (0 errors, 0 warnings)** |
-| **Rust Hub Unit Tests** | Protocol codec, HA election, journal recovery, SSRF, TLS | **161 / 161 Passed (0 failed)** |
-| **Python Contract Suites** | 22 comprehensive test suites (E2E protocol, chaos, failover) | **445+ Assertions ALL GREEN** |
+| **Rust Hub Unit Tests** | Protocol codec, HA election, journal recovery, SSRF, TLS | **172 / 172 Passed (0 failed)** |
+| **Python Contract Suites** | 24 comprehensive test suites (E2E protocol, chaos, failover) | **445+ Assertions ALL GREEN** |
+| **MQL Self-Test** | `CopierSelfTest` in a headless portable MT5, automated | **712 / 712 Passed (0 failed)** |
 | **Static Linter & i18n** | `dash_check.py` (252 DOM IDs, 138 JS functions), `i18n_check.py` | **100% ID Match & 435 Keys per Locale Validated** |
 
 To execute the full verification suite locally:
 ```bash
-bash tools/tests.sh
-bash hub/build.sh --test
+bash tools/tests.sh --all      # Python suites + hub build/tests + EA build + MQL self-test
+bash tools/selftest_run.sh     # the MQL self-test alone (~12 s, exit code is the verdict)
 python tools/dash_check.py
 python tools/i18n_check.py
 ```

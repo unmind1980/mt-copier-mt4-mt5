@@ -2500,31 +2500,61 @@ void TestSymbolFreshnessCost()
    int nsym=ArraySize(syms);
    if(nsym<=0) return;
 
+   //--- ADAPTIVE, not a fixed call count.
+   //---
+   //--- The first version ran exactly 30000 calls and asserted that the elapsed
+   //--- time was above zero. On a terminal where the memo hits every time that
+   //--- is ~15 ms on MT4 but can be UNDER ONE TICK on MT5 - measured 0 ms - so
+   //--- the assertion failed on a machine that was simply fast, and said
+   //--- nothing about the code. A fixed iteration count measures the timer, not
+   //--- the function.
+   //---
+   //--- So: run in batches until at least CP_BENCH_MIN_MS has elapsed. The
+   //--- number of calls then varies by machine, which is the point - the ratio
+   //--- is what gets reported. MAX_BATCHES is a stop so a pathological machine
+   //--- cannot turn a self-test into a hang.
    const int ITER=30000;
+   const int CP_BENCH_MIN_MS=20;
+   const int MAX_BATCHES=200;
    long sink=0;
 
    //--- miss-dominated: every call lands on a different symbol
    CopierSymbolQuoteReset();
    long t0=GetTickCount();
-   for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[i%nsym]);
+   int missBatches=0;
+   do
+     {
+      for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[i%nsym]);
+      missBatches++;
+     }
+   while((long)(GetTickCount()-t0)<CP_BENCH_MIN_MS && missBatches<MAX_BATCHES);
    long missMs=(long)(GetTickCount()-t0);
+   int missCalls=missBatches*ITER;
 
    //--- hit-dominated: one symbol, memo warm after the first call
    CopierSymbolQuoteReset();
    sink+=CopierSymbolQuoteAgeMs(syms[0]);
    t0=GetTickCount();
-   for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[0]);
+   int hitBatches=0;
+   do
+     {
+      for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[0]);
+      hitBatches++;
+     }
+   while((long)(GetTickCount()-t0)<CP_BENCH_MIN_MS && hitBatches<MAX_BATCHES);
    long hitMs=(long)(GetTickCount()-t0);
+   int hitCalls=hitBatches*ITER;
 
-   double missUs=(missMs*1000.0)/ITER;
-   double hitUs =(hitMs *1000.0)/ITER;
+   double missUs=(missMs*1000.0)/missCalls;
+   double hitUs =(hitMs *1000.0)/hitCalls;
 
    Note("symfresh-cost: "+((string)nsym)+" symbols ("+((string)real)+" real, "
-        +((string)(nsym-real))+" padded), "+((string)ITER)+" calls per run");
+        +((string)(nsym-real))+" padded), adaptive run of "
+        +((string)CP_BENCH_MIN_MS)+" ms per pass");
    Note("symfresh-cost: memo MISS ~"+DoubleToString(missUs,3)+" us/call  ("
-        +((string)missMs)+" ms / "+((string)ITER)+")");
+        +((string)missMs)+" ms / "+((string)missCalls)+" calls)");
    Note("symfresh-cost: memo HIT  ~"+DoubleToString(hitUs,3)+" us/call  ("
-        +((string)hitMs)+" ms / "+((string)ITER)+")");
+        +((string)hitMs)+" ms / "+((string)hitCalls)+" calls)");
 
    //--- what that means at the rate a receiver actually calls it
    double callsPerSec=(double)nsym*200.0;          // 200 ticks/s (PollMs=5), all held
@@ -2534,10 +2564,15 @@ void TestSymbolFreshnessCost()
         +DoubleToString(missPct,2)+"% of one core with the memo thrashed, ~"
         +DoubleToString(hitPct,2)+"% with it warm");
 
-   //--- The measurement is only meaningful if it ran long enough to beat the
-   //--- ~15 ms tick granularity; 30000 calls always will, so this is a guard
-   //--- against the loop being optimised away rather than a flaky assertion.
-   Ok("symfresh-cost: the benchmark measured something",missMs>0 && sink!=0);
+   //--- Now true BY CONSTRUCTION on any machine: the loop cannot exit before
+   //--- CP_BENCH_MIN_MS has elapsed unless it hit MAX_BATCHES, and either way it
+   //--- ran a positive number of calls. That is what this assertion is for - it
+   //--- catches "the loop did not run", not "the machine was slow enough".
+   //--- `sink` is an accumulating lvalue that keeps the calls observable; its
+   //--- VALUE is not asserted, because a terminal with no quotes legitimately
+   //--- returns 0 for every symbol and that is not a failure.
+   Ok("symfresh-cost: the benchmark measured something",
+      missCalls>0 && missMs>0 && hitCalls>0 && hitMs>0);
    CopierSymbolQuoteReset();
   }
 
@@ -3147,6 +3182,30 @@ void TestR47R48Regressions()
   }
 
 //+------------------------------------------------------------------+
+//--- N-08 / N-04: two invariants that are cheap to assert and expensive to
+//--- notice in the field.
+void TestAuditRound110()
+  {
+   //--- N-08: the ini size cap must count UTF-8 BYTES, because that is what the
+   //--- hub's `validate_ini` counts. StringLen counts UTF-16 code units, which
+   //--- agreed only while every config was ASCII.
+   OkInt("utf8len: ascii counts one per character",CopierUtf8Bytes("abc"),3);
+   //--- U+4E2D (CJK) is THREE bytes in UTF-8 and ONE code unit in MQL.
+   //--- Built with ShortToString so this file stays pure ASCII.
+   string cjk=ShortToString(0x4E2D);
+   OkInt("utf8len: one CJK character is three bytes",CopierUtf8Bytes(cjk),3);
+   OkInt("utf8len: two CJK characters are six bytes",CopierUtf8Bytes(cjk+cjk),6);
+
+   //--- N-04 (the stop-override table covering every position) cannot be
+   //--- asserted here: CP_MAX_STOPS_OV is defined in CopierReceiver.mq4, not in
+   //--- an include, so a script cannot see it. The receiver's own compile and
+   //--- the capacity arithmetic in that #define are the check.
+
+   //--- N-11: the "we opened this once" ring has to outlive a weekend, or
+   //--- ReopenClosedMirrors=false stops meaning "leave it closed".
+   Ok("everopened: TTL covers at least a week",CP_EVEROPENED_TTL_MS>=7*24*60*60*1000);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3209,6 +3268,7 @@ void OnStart()
    TestProfitTarget();
    TestTradingTimes();
    TestR47R48Regressions();
+   TestAuditRound110();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

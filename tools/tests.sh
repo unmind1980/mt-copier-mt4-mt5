@@ -3,7 +3,8 @@
 # tests.sh - run every contract test that needs no broker and no terminal.
 #
 #   ./tools/tests.sh           # the Python suites (fast, ~20 s)
-#   ./tools/tests.sh --all     # + hub unit tests + the four-terminal EA build
+#   ./tools/tests.sh --all     # + hub unit tests, the four-terminal EA build,
+#                              #   and the headless MQL self-test
 #
 # WHY THIS EXISTS
 # ================
@@ -177,6 +178,35 @@ if [[ $res -ne 0 ]] || echo "$ea_build_out" | grep -Eq "[1-9][0-9]* (file\(s\) w
   echo "$ea_build_out"
   echo "EA build FAILED ($res)"
   rc=1
+fi
+
+# --- 4. the MQL self-test --------------------------------------------
+#
+# CopierSelfTest is the only suite that exercises the real MQL code; every
+# other test here is Python against a re-implementation. It needs a terminal,
+# so it runs against the DISPOSABLE portable MT5 (tools/selftest_run.sh starts
+# it, drives it, kills it) rather than against anything an operator is using.
+#
+# It belongs in the slow half and AFTER the EA build, because it consumes the
+# .ex5 that build just produced - and its freshness gate fails loudly if that
+# binary is older than src/, which is the whole point.
+echo
+echo "== MQL self-test (headless portable MT5) =="
+ST_TARGET="${MTC_SELFTEST_TARGET:-/e/MT5-Portable-Test}"
+if [[ ! -f "$ST_TARGET/terminal64.exe" ]]; then
+  echo "  skipped: no portable terminal at $ST_TARGET"
+  echo "  (set MTC_SELFTEST_TARGET, or see doc/HANDOFF.md 4.6)"
+elif [[ ! -f "$ST_TARGET/MQL5/Scripts/CopierSelfTest.ex5" ]]; then
+  echo "  skipped: CopierSelfTest.ex5 is not deployed there"
+else
+  st_out=$(bash "$HERE/selftest_run.sh" --target "$ST_TARGET" 2>&1)
+  res=$?
+  echo "$st_out" | grep -E "^===========|^selftest: OK" || true
+  if [[ $res -ne 0 ]]; then
+    echo "$st_out"
+    echo "MQL self-test FAILED ($res)"
+    rc=1
+  fi
 fi
 
 echo

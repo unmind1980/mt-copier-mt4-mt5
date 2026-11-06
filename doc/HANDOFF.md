@@ -289,29 +289,56 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
    ```
    `copier-hub.exe` 重建后用新二进制跑完全部 24 项测试套件，**全部 0 fail**。
 
-6. **MQL 自检 —— 手动执行，但属于交付定义**：
+6. **MQL 自检 —— 已自动化，属于交付定义**：
 
-   MQL 脚本只能在终端里跑，进不了 `tools/tests.sh`，所以这一步是**人工**的。但人工
-   不等于可选：
+   ```bash
+   ./tools/selftest_run.sh          # 约 12 秒，退出码即结论
+   ./tools/selftest_run.sh --verbose --keep     # 调试用：显示进度、跑完不杀进程
+   ./tools/tests.sh --all           # 最后一步会自动跑它
+   ```
 
-   - 任何改动 `src/**/*.mq4` 或 `src/**/*.mqh` 之后，必须在任一终端把
-     `CopierSelfTest` 拖到图表上跑一次（几秒，不联网、不下单、不改状态）；
-   - 日志：`<终端数据目录>\MQL4|MQL5\Files\copier_selftest.log`，专家日志里同样有；
-   - 判定：最后一行必须是
-     `=========== ALL PASS  pass=N fail=0 ===========`。
-     **只要有一行 FAIL，就是没交付完**，不管其它套件多绿。
-   - 当前基线（2026-11-07 01:43，MT4 build 1470）：**`pass=708 fail=0`**。
-     条数只会增不会减；如果某次跑出来比这个少，说明有断言被删掉了，要说明理由。
+   任何改动 `src/**/*.mq4` 或 `src/**/*.mqh` 之后都要跑；`tests.sh --all` 已经把它
+   接在 EA 编译之后，所以正常流程里**不需要人记得**。
 
-   **为什么单独列这一条**：2026-11-07 核对日志时发现自检里有 6 条断言是红的，其中
+   **它做什么**（`tools/selftest_run.sh`）：
+
+   1. **新鲜度门禁** —— 部署的 `.ex5` 必须比 `src/` 下每个 `.mq4`/`.mqh` 都新，否则
+      直接拒绝（退出码 2）。陈旧的 `.ex5` 会拿上一版的结果报绿，这是最容易骗过自己的
+      一种"通过"。
+   2. **隔离检查** —— 该终端已有进程在跑就拒绝：第二次启动会附着到已有实例上、忽略
+      `/config:`，然后什么都不做。
+   3. 生成 `Config/selftest.ini`，启动 `terminal64.exe /portable /config:...`。
+   4. **点掉 Login 对话框**并隐藏窗口（见下）。
+   5. 轮询 `MQL5\Files\copier_selftest.log` 的末行，解析 `pass=` / `fail=`，杀掉终端。
+   6. 退出码：`0` 全绿；`1` 有 FAIL 或条数低于基线；`2` 环境问题；`3` 超时。
+
+   **基线**：MT5 **712**（`selftest_run.sh` 里的 `BASELINE`），MT4 **708**（两者相差的
+   几条是 `#ifdef __MQL5__` 分支）。条数只增不减 —— 删掉一条红断言也能变绿，所以脚本
+   会拒绝低于基线的通过。加断言时**故意**把基线调上去。
+
+   **三个必须知道的坑**（都是实测踩出来的，不是推理）：
+
+   - **`DLL loading is not allowed`**：`CopierCodec` 依赖 `<Zmq/Z85.mqh>`，而它
+     `#import "libzmq.dll"`。终端默认禁止 DLL 导入，脚本不会"失败一条断言"，而是
+     **根本不启动**，日志里只有 `initializing ... failed with code 0`。启动配置里的
+     `[Experts] AllowDllImport=1` 是必需的。
+   - **Login 对话框会阻塞脚本**：它弹出时终端主窗口是 `enabled=False`，脚本会
+     "loaded successfully" 然后一条语句都不执行。**必须点 OK，不能点 Cancel** ——
+     Cancel 会中止启动路径，脚本同样不跑（用两行的探针脚本验证过）。`tools/win_hide.py`
+     负责点 OK 并隐藏窗口。
+   - **每次会多开一个图表窗口**：`[StartUp] Symbol=` 会开图，MT5 把图存进当前 profile，
+     跑二十次就堆二十个。`[Charts] ProfileLast=` 在 `/config:` 里**不生效**（实测即使
+     预先建好目录也仍写 Default），所以脚本改为从 `Config/common.ini` 读出当前 profile、
+     启动前清掉其中的 `chart*.chr`/`order.wnd`：一次进、一次出。
+
+   **前置条件**：一台专用的 portable MT5，当前是 `E://MT5-Portable-Test`（在
+   `tools/targets.conf` 里以绝对路径登记，位置必须排在 MQL5 构建宿主之后 —— 它只接收
+   宿主编译好的二进制）。没有这台终端时 `tests.sh --all` 会打印 "skipped" 而不是失败。
+
+   **为什么非要自动化**：2026-11-07 核对日志时发现自检里有 6 条断言是红的，其中
    **5 条从写下的那天起就没通过过**（`sender0`/`sender1` 笔误、漏 `!`、夹具与断言
    不匹配、浮点精确比较），第 6 条是 A86-02 刻意改了行为而测试没跟上。整整三周，
-   自检的结果没有人看过。
-
-   结论：**自检本身没有过期**（54 次提交、706 条断言、今天仍在增补），缺的是"必须
-   跑"这条约束。所以这里写死它，而不是在 `tests.sh` 里读一个过期日志假装检查 ——
-   那是自我安慰。真正自动化的唯一做法见 §6：独立 portable 终端 + `[StartUp] Script=`
-   无头运行。
+   自检的结果没有人看过。**"必须跑"这条约束靠人守了三周就失守了，所以改成机器守。**
 
 ---
 
@@ -369,24 +396,25 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ## 6. 后续演进建议与待办事项 (Next Steps & Recommendations)
 
-0. **【当前唯一未闭环项 · 2026-11-07】MQL 自检的无头运行器**：
-   §4.6 把"跑自检"写成了交付门禁，但它仍然是人工步骤。要真正做到"写了就一定会跑"，
-   需要一个独立实例：
+0. **【已闭环 · 2026-11-07】MQL 自检的无头运行器** —— 见 §4.6。
 
-   ```
-   terminal64.exe /portable /config:selftest.ini
-       [StartUp]
-       Script=CopierSelfTest
-   ```
+   `tools/selftest_run.sh` 用 `E://MT5-Portable-Test` 这个专用 portable 实例跑
+   `CopierSelfTest`，`tools/tests.sh --all` 末尾自动调用。**12 秒，退出码即结论。**
 
-   - **独立数据目录 + 独立终端副本**，绝不与正在跑实盘的四个终端共用（否则会抢
-     `Files\` 与 `MQL\Files\` 下的状态文件）；
-   - 跑完读 `MQL5\Files\copier_selftest.log`，断言末行 `fail=0`，然后终止该实例；
-   - 需要处理"无券商登录启动"（脚本不碰券商，只跑纯逻辑，可行，但要验证
-     `SymbolInfoTick` 在无连接下不会卡住）；
-   - 落地后即可接入 `tools/tests.sh`，从此不再依赖人记得跑。
+   当初列的四个未知项，实际答案与预判不同，记下来免得下次重走：
 
-   工作量约半天，且与这台机器的终端布局绑定 —— 换机器要重做，所以没有默认开启。
+   - "无券商登录启动会不会卡住 `SymbolInfoTick`" —— **不是问题**。真正的阻塞是
+     **Login 对话框本身**：它一弹出，终端主窗口 `enabled=False`，脚本
+     "loaded successfully" 之后一条语句都不执行。而且**点 Cancel 也不行**，必须点
+     OK（Cancel 会中止启动路径）。见 §4.6。
+   - "独立数据目录" —— 是，`/portable` 天然如此；`tools/targets.conf` 用绝对路径
+     登记，位置必须排在 MQL5 构建宿主之后。
+   - "跑完断言末行 `fail=0`" —— 顺带加了**条数基线**（MT5 712），因为删掉一条红断言
+     同样能让 `fail=0`。
+   - "接入 `tests.sh`" —— 已接在 EA 编译之后。
+
+   与机器布局绑定的部分只剩一个路径：换机器时把 `MTC_SELFTEST_TARGET` 指到新的
+   portable 实例即可，其余不用改。
 
 1. **生产环境守护进程化 (Daemon / Service)**：
    - 当前 Hub 由控制台或批处理脚本启动。生产环境可考虑使用 Windows 计划任务或 NSSM (Non-Sucking Service Manager) 将 `copier-hub.exe` 注册为系统自启动服务，并配置异常闪退自动重启。
@@ -2158,5 +2186,30 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - **每趟判定缓存（按用户要求本轮一并做）**：`CopierSymVerdictCache`（`CopierSymbol.mqh`，8 槽、无 TTL、pass 顶部 `Reset()`）。`CopierSymbolFeedStale` 与 `CopierInTradingSession` 都是 `(symbol, now)` 的纯函数，网格场景下同一品种在一个 pass 里会被问上百遍。缓存键包含 **selector（阈值）**，所以不同阈值不会读到彼此的结论；未命中就落到原谓词，**最坏情况与不加缓存完全相同**。两个热循环（`ConvergeSender` / `ExecuteQueue`）各用自己的实例。
   - **未做**：`CopierSymbolQuoteAgeMs` 的 `now` 参数化（P3 之前评估的 P3b）—— 节拍降到 4Hz 后残余已是噪声，再改签名不值得。
   - **验证**：16 个 MQL 目标 0 错 0 警；自检新增 `TestSymVerdictCache()`（7 条：空缓存未命中、各自保留、阈值隔离、淘汰后不误报、Reset）与 `TestConvergeCadence()`（6 条：dirty 优先、0ms 旧行为、窗口边界、首 tick 必跑）；24 个 Python 套件全绿。
+
+---
+
+### 一百一十次演进：订阅引用计数、Standby 只读命令、止损覆盖容量与日志刷新（2026-11-07；已修 9 项，2 项按风险留待确认）
+
+- **来源**：独立只读审计 `outputs/mt-copier-fullstack-audit-2026-11-07.md`（12 项，N-01..N-12）。本轮把其中 9 项落地，2 项因改动面/无法回归而留给用户决策，1 项改为文档+断言。
+
+- **已修**：
+  1. **N-01 订阅引用计数（中）**：`CopierTransport::Subscribe` 改为**幂等**（同一 socket 上已发过 `0x01` 就不再发），并用 `m_subSent[]` 记录每个前缀实际发出的帧数，`Unsubscribe` 按该数量补 `0x00`。此前 `HubAnnounce` 每 5 秒无条件重订阅，XPUB 的 `(pipe,prefix)` 引用计数单调增长到数千，**一次 0x00 永远减不到 0**——从 copier.ini 删掉的 sender 仍持续收到数据，Hub 的 `subs` 视图也随之失真。`ConnectExtraHub` 的重放同样计数，保证退订时收支平衡。
+  2. **N-02 Standby 只读命令空转（中）**：F-14 只放开了 `commands_global` 的只读 op，但派发器 `due_gated` 只在 Primary 运行，于是 Standby 上 `reqpos` 返回 202、写进本地 journal、**永不发送、也不会变 unknown**，下一次全量同步再把它抹掉；而每节点端点仍 409（两端不一致）。现在**两端一致 409**，响应里带 `primary` 提示地址。真正的「转发到 Primary」需要新增 cluster-token 端点（standby 的 session token 在没有 `MTC_SYNC_USERS` 时对 Primary 无效），属独立改动。
+  3. **N-04 止损覆盖表容量（中）**：`CP_MAX_STOPS_OV` 512 → `CP_MAX_POSITIONS`（2048）。带 override 的活 UID 不会被 `StopsPrune` 回收，所以 512 是「能收到实时止损事件的持仓数」的硬上限，超出后 MODIFY 被直接丢弃、只能等快照（≤15 s）。同时给 `CopierUidIndex` 增加 `InsertString()`，把「每插一行重建整表」的 O(n²) 换成单次探测（2048 行时约省 200 万次探测）。
+  4. **N-05 收据中继的 receiver 判定（中低）**：`receiver_valid` 里 `n_receivers == 0` 的**无时限**放行改为只在前 60 s warm 窗口内有效，与 F-21 修好的 sender 侧完全同构。
+  5. **N-06 双 Hub 控制帧丢失（中低）**：`SendUp` 的双发只保证「至少一帧发出」，一个 pipe 不可写时两份都会落到同一 Hub，而 `g_announceCount` 已饱和 → 另一个 Hub 只能等自己的 60 s WHO sweep。两端 `CheckPeers` 增加 `CP_REG_REFRESH_HBTS = 12`（约每分钟一次维护性 REG，~120 B），把恢复时间从「sweep」降到「心跳节拍」。
+  6. **N-08 INI 大小上限口径（低中）**：Hub 用 UTF-8 字节数、节点用字符数，含中文注释时两端判定不同。新增 `CopierUtf8Bytes()`，`CopierIniValidate` 改按字节比较，与 `config.rs::validate_ini` 真正同构。
+  7. **N-09 ACK 先改内存后写盘（低）**：`CommandStore::ack` 改为**先 append 再提交内存**，写失败返回 false 并保留 pending，让阶梯继续；调用方的 WARN 文案补上「journal append failed」这一种情况。
+  8. **N-10 close 的 ACK 一律报 queue_full（低）**：`PushAction` 增加 `g_pushReject`（七个拒绝路径各自命名），`HandleCmd` 的 close 分支按真实原因回 `ERR=`，不再把重复点击/1 秒退避说成队列满。
+  9. **N-11 / N-12（低）**：`g_everOpened` TTL 12 小时 → 7 天（跨周末手工平仓不再被当成首次开仓）；日志改为**每 tick 一次 flush**（ERROR 仍立即 flush），74 单突发的 74 次 flush 降到 1 次。
+
+- **未修与原因**：
+  - **N-03 峰值手数表容量（中）**：`g_uidPeakLots` 是全局 2048 行，多 sender 合计超过 2048 个 UID 后 FIXED 模式的按比例减仓会静默退化为不缩放。真正的修法是把 `initLots` 落到 `g_desired` 行里（或按 sender 分片），牵动 `HandleSnapshot` 热路径 + `ComputeTargetLotsForMirror` + 状态文件，且本机无法运行 MQL 自检来验证——按「大改先确认」的约定留给用户决定。
+  - **N-07 配置序列化块内 O(n²)（低中）**：`SerializeCurrentConfigToIni` 每个 sender 块仍是 ~74 次 `out +=`（满配约 9 MB 复制）。输出必须与 Hub 的 `IH=` 逐字节一致，90 行机械改写虽可编译，但无法在本机跑 MQL 自检验证字节等价；收益只在满配且 CFG 推送时可见，风险不成比例。
+  - **N-08 的字节口径只修了节点侧**：Hub 侧本来就是字节，本轮让两端一致；`hub_config_test.py` 里「含非 ASCII 的大配置」用例仍未补（建议下一轮补）。
+
+- **验证**：MT4 / MT5 × Sender / Receiver / SelfTest 共 6 个目标 **0 错误 0 警告**（临时 staging 目录编译，未触碰终端里正在运行的 EA）；Rust 单测 **172/172**（新增 `test_ack_propagates_journal_error_and_keeps_the_command_pending`）；`hub_cluster_test.py` 新增两条 Standby 只读 409 断言（**未执行**：本机 6000/6001/6010/6011 正被在线的双 Hub 占用，不能起测试实例）。
+- **部署提醒**：本轮只改了源码与自检；**线上的两个 Hub 与四个终端仍在跑旧二进制**，需按 `tools/deploy.sh` → `tools/compile.sh` → 重挂 EA / 重启服务 的顺序上线，并核对启动日志里的 `build=`。
 
 ---
