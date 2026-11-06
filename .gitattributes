@@ -16,3 +16,10 @@
 *.gif   binary
 *.ico   binary
 *.bmp   binary
+
+# Windows batch files MUST keep CRLF. cmd.exe tolerates LF for simple lines but
+# `goto :label` and multi-line if(...) blocks are not guaranteed, and these
+# scripts install/start/stop services - a mis-parse there is an operator-facing
+# failure, not a cosmetic one.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
