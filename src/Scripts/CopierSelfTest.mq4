@@ -1335,11 +1335,48 @@ void TestRiskDailyAndDrawdown()
    Ok("risk: a new day clears the daily switch",!rk.DailyTripped());
    Ok("risk: an open is allowed again",rk.AllowOpen(0.01,0,0.0,0,0.0,why));
 
-   // P2-12: An account blown out on launch (equity <= 0.0 before arming) trips immediately
+   // V2: An account blown out (equity <= 0.0) trips, but only after the
+   // consecutive-confirmation window - one transient zero (account switch,
+   // reconnected terminal) is not a blowout.
    CopierRisk rkBlown;
    rkBlown.Configure(rl);
    rkBlown.ObserveAt(0.0,100,0.0);
-   Ok("risk: zero equity trips immediately even before arming",rkBlown.DailyTripped());
+   Ok("risk: a single zero-equity sample does not trip",!rkBlown.DailyTripped());
+   rkBlown.ObserveAt(0.0,100,0.0);
+   Ok("risk: consecutive zero equity trips the daily switch",rkBlown.DailyTripped());
+
+   // V2: with NO percentage limit configured the blowout path must stay inert -
+   // "0 = switch off, everywhere" - otherwise an account with no daily/drawdown
+   // guard would silently stop opening trades.
+   CopierRiskLimits noPct;
+   noPct.maxLotsPerPosition=0.0;
+   noPct.maxTotalLots      =0.0;
+   noPct.maxOpenPositions  =0;
+   noPct.dailyLossPct      =0.0;
+   noPct.maxDrawdownPct    =0.0;
+   CopierRisk rkNoPct;
+   rkNoPct.Configure(noPct);
+   for(int zi=0;zi<5;zi++) rkNoPct.ObserveAt(0.0,100,0.0);
+   Ok("risk: zero equity with no percentage limit does not trip",!rkNoPct.AnyTripped());
+   Ok("risk: ...and an open is still allowed",
+      rkNoPct.AllowOpen(0.01,0,0.0,0,0.0,why));
+
+   // V2: the zero-equity latch must release when healthy equity comes back
+   // (a genuinely blown-out account never does), instead of requiring an EA reload.
+   CopierRisk rkRecover;
+   CopierRiskLimits ddl;
+   ddl.maxLotsPerPosition=0.0;
+   ddl.maxTotalLots      =0.0;
+   ddl.maxOpenPositions  =0;
+   ddl.dailyLossPct      =0.0;
+   ddl.maxDrawdownPct    =5.0;
+   rkRecover.Configure(ddl);
+   rkRecover.ObserveAt(0.0,300,0.0);
+   rkRecover.ObserveAt(0.0,300,0.0);
+   Ok("risk: transient zero latch trips the drawdown switch",rkRecover.DrawdownTripped());
+   for(int ri=0;ri<25;ri++) rkRecover.ObserveAt(10000.0,300,10000.0);
+   Ok("risk: sustained healthy equity releases the zero latch",
+      !rkRecover.DrawdownTripped());
 
    //--- the DRAWDOWN switch, which must LATCH
    CopierRiskLimits dl;

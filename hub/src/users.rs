@@ -956,13 +956,23 @@ pub fn random_token() -> String {
 /// A one-time bootstrap password: 12 chars from a URL-safe alphabet via CSPRNG.
 pub fn random_password() -> String {
     const ALPHA: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-    let mut rand_bytes = [0u8; 12];
+    //--- C6: rejection sampling instead of `% len`. 256 is not a multiple of 56,
+    //--- so a plain modulo gave the first 32 symbols a ~14% higher chance than
+    //--- the rest. Rejecting the incomplete tail (256 - 56*4 = 32 values) makes
+    //--- the draw uniform; the loop is bounded because each byte is independent.
+    const LIMIT: u8 = 255 - (255 % 56);
+    let mut rand_bytes = [0u8; 24];
     if os_random_bytes(&mut rand_bytes) {
         let mut out = String::new();
         for &b in &rand_bytes {
+            if b >= LIMIT {
+                continue;
+            }
             out.push(ALPHA[(b as usize) % ALPHA.len()] as char);
+            if out.len() == 12 {
+                return out;
+            }
         }
-        return out;
     }
     let mut h = RandomState::new().build_hasher();
     h.write_u64(

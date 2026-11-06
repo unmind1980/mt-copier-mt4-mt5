@@ -1337,8 +1337,19 @@ bool CopierIsTicketClosedInHistory(const long ticket)
   {
    if(ticket<=0) return false;
 #ifdef __MQL5__
-   // MQL-03: If position is still actively open in terminal position list, it is definitely not closed!
-   if(PositionSelectByTicket((ulong)ticket)) return false;
+   //--- L3: `ticket` here is POSITION_IDENTIFIER (see CopierScanPositions), NOT
+   //--- POSITION_TICKET. PositionSelectByTicket(identifier) therefore returns
+   //--- false for any position whose ticket has changed - which happens on a
+   //--- partial close and on overnight rollover. That false negative made a LIVE
+   //--- position look closed the moment it had been trimmed once, so a single
+   //--- scan hiccup emitted CLOSE (and the next scan re-opened it as a new UID).
+   //--- Walk the position list and compare identifiers instead.
+   for(int pi=PositionsTotal()-1;pi>=0;pi--)
+     {
+      ulong ptk=PositionGetTicket(pi);
+      if(ptk==0) continue;
+      if((long)PositionGetInteger(POSITION_IDENTIFIER)==ticket) return false;
+     }
 
    if(HistorySelectByPosition((ulong)ticket))
      {
@@ -1350,8 +1361,13 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          if(dt==0) continue;
          long entry=HistoryDealGetInteger(dt,DEAL_ENTRY);
          double vol=HistoryDealGetDouble(dt,DEAL_VOLUME);
-         if(entry==DEAL_ENTRY_IN) inVol+=vol;
-         else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_INOUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
+         //--- L3: a netting reversal (DEAL_ENTRY_INOUT) closes the old volume AND
+         //--- opens the new one. Counting it only as an exit left inVol at 0, so
+         //--- the closure test below could never become true for a position that
+         //--- was born from a reversal.
+         if(entry==DEAL_ENTRY_IN)          inVol+=vol;
+         else if(entry==DEAL_ENTRY_INOUT) { inVol+=vol; outVol+=vol; }
+         else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }
       // Only considered fully closed when total exit volume matches or exceeds total entry volume
       if(inVol>0.0 && outVol>=inVol-0.0000001)

@@ -652,14 +652,29 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 }
 
+                //--- B1: an EMPTY hash means "this side does not have that feature
+                //--- enabled" (file_sha256 returns "" when the path is empty or the
+                //--- file does not exist - `--notifications none` sets path to "").
+                //--- Comparing "" against a real hash made the two sides permanently
+                //--- unequal: the Standby asked for a sync every second forever, the
+                //--- write to the empty path failed, sync_status stuck at sync_err,
+                //--- and ADR-10 auto-failback could never satisfy its "synced" gate.
+                //--- Only compare a hash both sides can actually produce.
+                let notif_diff = remote_st.notif_hash != notif_h
+                    && !remote_st.notif_hash.is_empty()
+                    && !notif_h.is_empty();
+                let curve_diff = remote_st.curve_clients_hash != curve_h
+                    && !remote_st.curve_clients_hash.is_empty()
+                    && !curve_h.is_empty();
+
                 let needs_sync = remote_st.cfg_lines > cfg_lines_count
                     || remote_st.cmd_lines > cmd_lines_count
                     || remote_st.max_cmd_seq > local_max_cmd_seq
                     || remote_st.cmd_lines < cmd_lines_count
                     || remote_st.cfg_lines < cfg_lines_count
-                    || (users_sync_enabled && remote_st.users_hash != users_h)
-                    || remote_st.notif_hash != notif_h
-                    || remote_st.curve_clients_hash != curve_h;
+                    || (users_sync_enabled && remote_st.users_hash != users_h && !remote_st.users_hash.is_empty() && !users_h.is_empty())
+                    || notif_diff
+                    || curve_diff;
 
                 if needs_sync {
                     let was_syncing = {
@@ -812,6 +827,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 // Apply full notification channels if updated (A86-08: propagate all errors)
                                 if let Some(n_content) = data.notif_content {
                                     let p = notif_store.lock_or_recover().path().to_path_buf();
+                                    if p.as_os_str().is_empty() {
+                                        //--- B1: this side runs with `--notifications none`.
+                                        //--- Previously the write targeted the literal path
+                                        //--- ".tmp.<pid>" in the working directory and the
+                                        //--- replace of "" always failed, so a deliberate
+                                        //--- configuration choice permanently pinned
+                                        //--- sync_status to sync_err and littered the cwd.
+                                        //--- Nothing to do: skipping is the correct outcome,
+                                        //--- and it is NOT a sync error.
+                                        eprintln!("[hub] cluster sync: local notifications are disabled (--notifications none); channel content not applied");
+                                    } else {
                                     let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
                                     match File::create(&tmp_path).and_then(|mut f| {
@@ -835,10 +861,14 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                             file_sync_err = Some(msg);
                                         }
                                     }
+                                    }
                                 }
 
                                 // P1-6 & A86-08: Apply curve clients content via atomic file overwrite with error propagation
                                 if let Some(c_content) = data.curve_clients_content {
+                                    if curve_clients_path.as_os_str().is_empty() {
+                                        eprintln!("[hub] cluster sync: local curve allow-list path is empty; content not applied");
+                                    } else {
                                     let tmp = format!("{}.tmp.{}", curve_clients_path.display(), std::process::id());
                                     let tmp_path = PathBuf::from(&tmp);
                                     match File::create(&tmp_path).and_then(|mut f| {
@@ -857,6 +887,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
                                         }
+                                    }
                                     }
                                 }
 

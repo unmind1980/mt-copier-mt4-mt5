@@ -374,7 +374,10 @@ impl CommandStore {
         }
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
-        let mut to_append = Vec::new();
+        //--- V1: every valid replicated line is mirrored to disk verbatim; only the
+        //--- rows that ADVANCE state are applied to the in-memory map.
+        let mut raw_valid: Vec<String> = Vec::new();
+        let mut batch_max_seq = 0u64;
         let mut staged_commands: HashMap<String, Command> = HashMap::new();
         let mut staged_seq: HashMap<String, u64> = HashMap::new();
 
@@ -385,7 +388,12 @@ impl CommandStore {
                 if id.is_empty() || node.is_empty() {
                     continue;
                 }
+                //--- same predicate load() uses, so both sides agree on "a line"
+                raw_valid.push(line.clone());
                 let seq = v["seq"].as_u64().unwrap_or(0);
+                if seq > batch_max_seq {
+                    batch_max_seq = seq;
+                }
                 if seq > 0 {
                     let cur_seq = staged_seq
                         .get(&node)
@@ -440,18 +448,15 @@ impl CommandStore {
                     None => true,
                 };
                 if should_insert {
-                    staged_commands.insert(id, cmd.clone());
-                    // P0-03 & N75-01: Append valid replicated lines so Standby's journal matches Primary's
-                    // line count without inflating on duplicate/stale lines (matching config.rs N74-04).
-                    to_append.push(cmd);
+                    staged_commands.insert(id, cmd);
                     applied += 1;
                 }
             }
         }
         // F-01: Persist to journal file BEFORE modifying in-memory commands, in_flight, or seq.
         // If append fails, return Err(e) without altering memory state, allowing Standby to report sync_err.
-        if !to_append.is_empty() {
-            inner.append_many(&to_append)?;
+        if !raw_valid.is_empty() {
+            inner.append_raw(&raw_valid, batch_max_seq)?;
         }
         for (node, seq) in staged_seq {
             let cur = inner.seq.get(&node).copied().unwrap_or(0);
@@ -603,32 +608,46 @@ impl CommandStore {
                 }
                 return c.clone();
             }
+            let prev_last = c.ts.max(c.ack_at);
             if c.state == STATE_REJECTED {
-                // If the node rejected this revision, do NOT endlessly retry it
-                // unless an operator explicitly initiates a new revision or change.
-                return c.clone();
-            }
-            //--- A command that has ENDED - `unknown` after the ladder - is revived here,
-            //--- because the whole point of this call is "this node needs this revision". A node
-            //--- that restarts with a stale ini, or one that was simply offline for the whole ladder,
-            //--- would otherwise be stuck on the old config forever.
-            //---
-            //--- BUT NOT ON EVERY HEARTBEAT. This is called from the REG/HBT2
-            //--- comparison, which fires every 5 s - so an unconditional
-            //--- revival turns a node that keeps REJECTING a bad config into a
-            //--- push every 5 seconds, forever, with a log line each time.
-            //--- The cooldown makes the self-heal a retry every minute instead:
-            //--- fast enough to recover a node that came back, slow enough that
-            //--- a refusal is not amplified into a flood.
-            let last = c.ts.max(c.ack_at);
-            if now_secs.saturating_sub(last) < REVIVE_COOLDOWN_SECS {
-                return c.clone();
+                //--- H3: if the NODE rejected this revision, do not endlessly retry it.
+                //--- But an operator asking again is a different thing entirely: the usual
+                //--- cause is transient (a file lock while the EA was writing its ini), and
+                //--- the id is `<node>R<rev>`, so "push the same revision again" was refused
+                //--- forever unless the operator edited the config to mint a new revision.
+                //--- Honour an explicit (non-empty actor) re-issue by reviving it.
+                if actor.is_empty() {
+                    return c.clone();
+                }
+            } else if c.state != STATE_PENDING {
+                //--- A command that has ENDED - `unknown` after the ladder - is revived here,
+                //--- because the whole point of this call is "this node needs this revision". A node
+                //--- that restarts with a stale ini, or one that was simply offline for the whole ladder,
+                //--- would otherwise be stuck on the old config forever.
+                //---
+                //--- BUT NOT ON EVERY HEARTBEAT. This is called from the REG/HBT2
+                //--- comparison, which fires every 5 s - so an unconditional
+                //--- revival turns a node that keeps REJECTING a bad config into a
+                //--- push every 5 seconds, forever, with a log line each time.
+                //--- The cooldown makes the self-heal a retry every minute instead:
+                //--- fast enough to recover a node that came back, slow enough that
+                //--- a refusal is not amplified into a flood.
+                //--- H3: an explicit operator re-issue skips the cooldown - they can see
+                //--- the node's state and are deliberately asking now.
+                if actor.is_empty() && now_secs.saturating_sub(prev_last) < REVIVE_COOLDOWN_SECS {
+                    return c.clone();
+                }
             }
             c.state = STATE_PENDING.to_string();
             c.attempts = 0;
             c.ack_at = 0;
             c.err = String::new();
-            c.ts = now_secs;
+            //--- H3: strictly increasing timestamp. Reviving an ACKED/REJECTED command
+            //--- inside the same second it was acked would produce `inc.ts == cur.ts`
+            //--- with a LOWER state rank, and both `load()` and the standby's
+            //--- `apply_delta_lines()` order by `(ts, rank, attempts)` - so the revival
+            //--- row would be discarded and the command would stay terminal everywhere.
+            c.ts = now_secs.max(prev_last.saturating_add(1));
             c.next_at = Instant::now();
             if !actor.is_empty() {
                 c.actor = actor.to_string();
@@ -1022,6 +1041,60 @@ impl Inner {
         }
     }
 
+    /// V1/C1: append replicated lines VERBATIM.
+    ///
+    /// The standby used to append only the rows that ADVANCED in-memory state,
+    /// and to append them RE-SERIALISED. Both halves were wrong:
+    ///  * filtering made the standby's physical line count permanently lower than
+    ///    the primary's (load() counts every valid line), which is what produced
+    ///    the 1Hz "I am behind" resync loop and the full replace_all behind it;
+    ///  * re-serialising meant any field the running build did not model was
+    ///    dropped, so after a role swap the promoted node's journal was not a
+    ///    faithful copy of the primary's.
+    /// Physical replication and state application are now separate: every valid
+    /// line lands on disk, while `should_insert` still decides what the in-memory
+    /// map believes.
+    fn append_raw(&mut self, lines: &[String], max_seq_seen: u64) -> io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let f = match self.file.as_mut() {
+            Some(f) => f,
+            None => {
+                if !self.enabled {
+                    self.line_count += lines.len();
+                    self.max_seq = self.max_seq.max(max_seq_seen);
+                    return Ok(());
+                }
+                return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
+            }
+        };
+        let mut buf = String::new();
+        let mut written = 0usize;
+        for l in lines {
+            let t = l.trim_end_matches(['\r', '\n']);
+            if t.is_empty() {
+                continue;
+            }
+            buf.push_str(t);
+            buf.push('\n');
+            written += 1;
+        }
+        if written == 0 {
+            return Ok(());
+        }
+        self.line_count += written;
+        self.max_seq = self.max_seq.max(max_seq_seen);
+        match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("[hub] COMMAND JOURNAL RAW WRITE FAILED: {}", e);
+                self.line_count -= written;
+                Err(e)
+            }
+        }
+    }
+
     /// Drop terminal commands older than `max_age_secs`, and forget the
     /// sequence numbers of nodes that no longer have any command.
     ///
@@ -1030,12 +1103,39 @@ impl Inner {
     /// ever issued - and `stats()` walks all of them. PENDING commands are
     /// never dropped: they are the ones still owed an answer.
     fn prune_terminal(&mut self, now_secs: u64, max_age_secs: u64) -> usize {
+        //--- H2: never prune away the highest-seq command of a node.
+        //--- `load()` rebuilds each node's `seq` (and the global `max_seq`) from
+        //--- the rows in the journal. Dropping every row a quiet node ever wrote
+        //--- therefore reset that node's sequence to 0 on the NEXT restart, and
+        //--- the ids it then minted (`<node>-<op>-1`, `-2`, ...) collided with ids
+        //--- the EA still remembered in its dedup ring - so brand-new commands were
+        //--- silently discarded as duplicates - while the cluster heartbeat saw
+        //--- `max_cmd_seq` go BACKWARDS.
+        //--- Keeping exactly one watermark row per node costs a line and makes the
+        //--- sequence monotonic across restarts and across compact_journal().
+        let mut watermark: HashMap<String, (String, u64)> = HashMap::new();
+        for (id, c) in self.commands.iter() {
+            let seqt = c.seq;
+            match watermark.get(&c.node) {
+                Some((_, best)) if *best >= seqt => {}
+                _ => {
+                    watermark.insert(c.node.clone(), (id.clone(), seqt));
+                }
+            }
+        }
+        let keep_ids: std::collections::HashSet<String> =
+            watermark.values().map(|(id, _)| id.clone()).collect();
+
         let before = self.commands.len();
-        self.commands.retain(|_, c| {
+        let now = now_secs;
+        self.commands.retain(|id, c| {
             if c.state == STATE_PENDING {
                 return true;
             }
-            now_secs.saturating_sub(c.ts) <= max_age_secs
+            if keep_ids.contains(id) {
+                return true;
+            }
+            now.saturating_sub(c.ts) <= max_age_secs
         });
         self.in_flight.retain(|id| self.commands.contains_key(id));
         // Note: Do NOT prune self.seq - the per-node sequence counter must remain monotonic
@@ -1446,11 +1546,18 @@ mod tests {
         assert_eq!(finished_cmd.state, STATE_UNKNOWN);
         let t_done = finished_cmd.ts;
 
-        // Inside the cooldown the command stays finished: the comparison that
-        // calls this runs every 5 s, and reviving on every heartbeat would turn
-        // a node that keeps REJECTING a config into a permanent flood.
-        let early = s.issue_cfg_at("receiver:1", 5, "op", "", t_done + 5);
+        // Inside the cooldown an AUTOMATED comparison (empty actor) leaves the
+        // command finished: that comparison runs every 5 s, and reviving on every
+        // heartbeat would turn a node that keeps REJECTING a config into a
+        // permanent flood.
+        let early = s.issue_cfg_at("receiver:1", 5, "", "", t_done + 5);
         assert_eq!(early.state, STATE_UNKNOWN, "revived inside the cooldown");
+
+        // An explicit operator re-issue is a different thing: the usual cause of
+        // a rejection is transient (a file lock), and the id is <node>R<rev>, so
+        // refusing the same revision forever left no way to retry it at all.
+        let manual = s.issue_cfg_at("receiver:1", 5, "op", "", t_done + 5);
+        assert_eq!(manual.state, STATE_PENDING, "operator re-issue must revive");
 
         // After it, the re-push must revive the command to pending with 0
         // attempts and due immediately.
@@ -1672,6 +1779,57 @@ mod tests {
         // Step 3: Exact duplicate of line1 must be rejected to prevent inflation
         let applied_dup = s.apply_delta_lines(&[line1]).unwrap();
         assert_eq!(applied_dup, 0, "duplicate identical retry line must not be applied");
+
+        // V1: ...but it must still be MIRRORED to disk. Filtering it out of the
+        // physical journal is what made the standby's line count drift below the
+        // primary's and drove the 1Hz resync loop.
+        let (lines, _seq) = s.sync_stats();
+        assert_eq!(lines, 3, "every valid replicated line must be mirrored, applied or not");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// V1 regression lock: the standby's physical journal must contain exactly the
+    /// lines the primary sent, byte for byte, including rows the state machine
+    /// considers stale. Anything else re-opens the "line count never converges"
+    /// loop that forces a full replace_all every second.
+    #[test]
+    fn replicated_lines_are_mirrored_verbatim_even_when_state_rejects_them() {
+        let p = tmp("delta_mirror");
+        let s = CommandStore::open(&p).unwrap();
+        let ts = 1700000500;
+        let mk = |attempts: u32, extra: &str| {
+            serde_json::json!({
+                "id": "cmd-mirror-1",
+                "node": "receiver:2",
+                "seq": 7,
+                "op": "pause",
+                "args": "",
+                "actor": "op",
+                "state": "pending",
+                "attempts": attempts,
+                "ts": ts,
+                "err": "",
+                // a field this build does not model - it must survive verbatim
+                "future_field": extra,
+            })
+            .to_string()
+        };
+        let a = mk(1, "alpha");
+        let b = mk(0, "beta"); // lower attempts -> state rejects it
+
+        let applied = s.apply_delta_lines(&[a.clone(), b.clone()]).unwrap();
+        assert_eq!(applied, 1, "only the advancing row changes state");
+
+        let (lines, max_seq) = s.sync_stats();
+        assert_eq!(lines, 2, "both lines must be on disk");
+        assert_eq!(max_seq, 7);
+
+        // the on-disk journal is the primary's bytes, not a re-serialisation
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(body.contains("future_field"), "unmodelled fields must be preserved verbatim");
+        assert!(body.contains("alpha"), "first line must be present verbatim");
+        assert!(body.contains("beta"), "rejected line must still be mirrored");
 
         let _ = std::fs::remove_file(&p);
     }

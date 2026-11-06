@@ -886,7 +886,11 @@ fn send_receipt(
         h
     );
     sock.send_multipart(
-        vec![format!("@{}", sid).into_bytes(), env.into_bytes()],
+        //--- B7: normalise the topic the same way every other control frame is
+        //--- normalised. The payload keeps the raw SID (the sender needs the value
+        //--- its ini calls `id=`), but the TOPIC must be the node's @<nid>, or a
+        //--- 10-digit account only ever lands here by coincidence.
+        vec![format!("@{}", copier_nid(sid)).into_bytes(), env.into_bytes()],
         zmq::DONTWAIT,
     )
 }
@@ -1858,7 +1862,14 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         if ty == "PING" {
                             let nid = envelope_kv(&payload, "FROM");
                             let ms = envelope_kv(&payload, "MS");
-                            if !nid.is_empty() && !ms.is_empty() {
+                            //--- C2: reply only to something that can be a node id.
+                            //--- FROM is chosen by the publisher, so accepting any string
+                            //--- made the hub a generic "publish to an arbitrary topic"
+                            //--- primitive. A real node id is all digits.
+                            let nid_plausible = !nid.is_empty()
+                                && nid.len() <= 11
+                                && nid.bytes().all(|b| b.is_ascii_digit());
+                            if nid_plausible && !ms.is_empty() {
                                 {
                                     let s = shared.lock_or_recover();
                                     if state.role != s.cluster.state.role {
@@ -2562,7 +2573,14 @@ pub fn run_hub(args: Args) -> Result<(), String> {
 
                                 //--- THE RECEIPT IS RELAYED ONLY TO A REAL
                                 //--- SENDER AND FROM A VALID RECEIVER.
-                                if !sid.is_empty() && sid != "-" {
+                                //--- B7: and only when SID can be a node id at all. During the
+                                //--- 60s warm window sender_valid is true for anything, so an
+                                //--- unconstrained SID turned this into "hub publishes a frame to
+                                //--- any topic you name". A plausible NID is all digits.
+                                let sid_plausible = !sid.is_empty()
+                                    && sid.len() <= 11
+                                    && sid.bytes().all(|b| b.is_ascii_digit());
+                                if !sid.is_empty() && sid != "-" && sid_plausible {
                                     if sender_valid && receiver_valid {
                                         //--- Count what ARRIVED, before the
                                         //--- de-duplication decides what to relay:

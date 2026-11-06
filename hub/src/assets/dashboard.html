@@ -4767,6 +4767,17 @@ function renderPosNodeDetail(){
     var posCount = (n.positions && n.positions.count !== undefined) ? Number(n.positions.count) : 0;
     var posLots = (n.positions && n.positions.lots !== undefined) ? n.positions.lots : 0;
     var orphan = (n.positions && typeof n.positions.orphaned === "number") ? n.positions.orphaned : 0;
+    // H5: ORPHAN counts only copier-tagged mirrors under an unconfigured magic.
+    // The table below filters "Unmanaged", which ALSO includes hand-placed trades
+    // (magic 0, no tc| tag), so the card and the table disagreed whenever the
+    // operator had any manual position open. When the detail rows are present,
+    // count them the same way the table does; otherwise fall back to ORPHAN,
+    // which is then the only number either surface can show.
+    var unmanagedCount = orphan;
+    var detailRows = n.positions_detail || [];
+    if(detailRows.length > 0){
+      unmanagedCount = detailRows.filter(function(p){ return !p.managed; }).length;
+    }
 
     var wt = n.waiting || { total: 0, lots: 0, queued: 0, delayed: 0, mkt_closed: 0 };
     var totalWait = (wt.total !== undefined) ? Number(wt.total) : 0;
@@ -4784,12 +4795,12 @@ function renderPosNodeDetail(){
       '</div>' +
       '<div class="pos-card">' +
       '  <div class="pos-card-label">' + t("cockpit.summary_orphan_manual") + '</div>' +
-      '  <div class="pos-card-val" style="' + (orphan > 0 ? 'color:var(--warn)' : '') + '">+' + orphan + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>' +
-      '  <div class="pos-card-sub">' + (orphan > 0 ? t("cockpit.summary_orphan_sub_active") : t("cockpit.summary_orphan_sub_none")) + '</div>' +
+      '  <div class="pos-card-val" style="' + (unmanagedCount > 0 ? 'color:var(--warn)' : '') + '">+' + unmanagedCount + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.orders_unit") + '</span></div>' +
+      '  <div class="pos-card-sub">' + (unmanagedCount > 0 ? t("cockpit.summary_orphan_sub_active") : t("cockpit.summary_orphan_sub_none")) + '</div>' +
       '</div>' +
       '<div class="pos-card">' +
       '  <div class="pos-card-label">' + t("cockpit.summary_gross_open") + '</div>' +
-      '  <div class="pos-card-val">' + (posCount + orphan) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>' +
+      '  <div class="pos-card-val">' + (posCount + unmanagedCount) + ' <span style="font-size:13px;font-weight:normal;color:var(--dim)">' + t("cockpit.positions_unit") + '</span></div>' +
       '  <div class="pos-card-sub">' + t("cockpit.summary_gross_sub") + '</div>' +
       '</div>';
 

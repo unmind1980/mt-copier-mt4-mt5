@@ -38,6 +38,37 @@ Run:  python snapshot_receipt_test.py
 import re
 import sys
 
+#--- O5: a pure-stdlib Z85 encoder, used when pyzmq is not installed.
+#--- The compressed-snapshot branch below is the only place this file needs
+#--- Z85, and requiring a third-party package for it meant this suite - and
+#--- therefore `tools/tests.sh` - could not run at all in a clean sandbox.
+#--- Alphabet and block size must match ZMQ's (and CopierZmq's) Z85 exactly.
+_Z85_ALPHA = ("0123456789abcdefghijklmnopqrstuvwxyz"
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#")
+
+
+def _z85_encode_py(data):
+    if len(data) % 4 != 0:
+        raise ValueError("Z85 input length must be a multiple of 4")
+    out = []
+    for i in range(0, len(data), 4):
+        v = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3]
+        block = []
+        for _ in range(5):
+            block.append(_Z85_ALPHA[v % 85])
+            v //= 85
+        out.extend(reversed(block))
+    return "".join(out)
+
+
+def z85_encode(data):
+    """Prefer pyzmq's implementation; fall back to the stdlib one above."""
+    try:
+        import zmq.utils.z85 as z85  # type: ignore
+        return z85.encode(data).decode('ascii')
+    except Exception:
+        return _z85_encode_py(data)
+
 # ---------------------------------------------------------------------------
 # The format, as specified in src/Include/Copier/CopierCodec.mqh
 # ---------------------------------------------------------------------------
@@ -85,12 +116,11 @@ def encode_snapshot(records):
     if records:
         recs = CP_SEP_REC.join(records)
         if len(recs) >= 500:
-            import zmq.utils.z85 as z85
             import zlib
             comp = zlib.compress(recs.encode('utf-8'))
             pad = (4 - (len(comp) % 4)) % 4
             padded = comp + b'\x00' * pad
-            r_val = "1:" + str(pad) + ":" + z85.encode(padded).decode('ascii')
+            r_val = "1:" + str(pad) + ":" + z85_encode(padded)
         else:
             r_val = "0:" + recs
         payload += CP_SEP_KV + "R=" + r_val

@@ -38,6 +38,13 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierCluster.mqh>
 
 CopierEventPump g_pump;
+//--- V3/C4: number of PONGs the current probe burst is still waiting for.
+//--- In a dual-hub (HA) deployment the single `@hub` PING is dual-sent, so TWO
+//--- echos are expected; disarming on the first one demoted the slower hub's
+//--- frame to the slow timer path and reported its RTT inflated by the whole
+//--- timer period. The burst is bounded by CP_PUMP_BURST_MAX / CP_PUMP_TIMEOUT_MS,
+//--- so an unreachable peer can never keep the fast pump alive indefinitely.
+int g_pumpPongExpect=0;
 
 //--- identity / transport -------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -423,12 +430,30 @@ string           g_lastTrackedName[CP_MAX_PEERS];// names last bound to each slo
 #define CP_ALERT_QUIET_MS  (5*60*1000)
 bool             g_stateDirty=false;
 bool             g_snapDirty=false;
-void             MarkStateDirty() { g_stateDirty=true; g_snapDirty=true; }
+//--- A2: a change that only needs the in-memory "latest" payload refreshed
+//--- (so a bootstrap/repair still carries current bytes) but must NOT push a
+//--- full snapshot to every receiver. Stop-loss / pending-price moves are
+//--- exactly this: the ~135-byte MODIFY event already carries the new levels,
+//--- and the receiver keeps them in its stop-override table until the next
+//--- periodic snapshot catches up. Broadcasting a full snapshot for every
+//--- trailing-stop tick is what turned a 15s cadence into 4 Hz.
+bool             g_latestDirty=false;
+void             MarkStateDirty()    { g_stateDirty=true; }
+void             MarkSnapshotDirty() { g_stateDirty=true; g_snapDirty=true; }
+void             MarkLatestDirty()   { g_stateDirty=true; g_latestDirty=true; }
 
 //=====================================================================
 // Helpers
 //=====================================================================
-string StatePath() { return "copier_sender_"+(string)CopierAccountLogin()+".st"; }
+//--- C5: the state file used to be keyed by ACCOUNT only. Two senders on the
+//--- same account with different EventsPort (a documented, supported layout -
+//--- one per terminal/session) therefore shared one UID table, and the second
+//--- instance adopted the first one's positions as its own: it would stop
+//--- mirroring them (it believed it already had them) and the real owner would
+//--- lose them on its next restart. Key by account AND instance port.
+string StatePath() { return "copier_sender_"+(string)CopierAccountLogin()+"_"+SenderId()+".st"; }
+//--- pre-C5 name, still read once so an upgrade does not lose the mapping
+string StatePathLegacyAccount() { return "copier_sender_"+(string)CopierAccountLogin()+".st"; }
 
 bool SymbolAllowed(const string sym) { return g_symFilter.Allows(sym); }
 
@@ -778,6 +803,7 @@ int OnInit()
    g_latestSnapPayload="";
    g_latestSnapHash="";
    g_snapDirty=true;
+   g_latestDirty=false;
    g_peers.Clear();
    g_snapStaleCount=0;
    for(int rsh=0;rsh<CP_RECENT_HASH_COUNT;rsh++)
@@ -804,7 +830,27 @@ int OnInit()
    CopierPos saved[];
    double savedOpenLots[];
    int savedCount=0;
-   if(CopierStateFile::Load(StatePath(),hdr,saved,savedCount,savedOpenLots))
+   string usedStatePath=StatePath();
+   bool loadedState=CopierStateFile::Load(usedStatePath,hdr,saved,savedCount,savedOpenLots);
+   if(!loadedState)
+     {
+      //--- C5 migration: an install upgraded from the account-only name (or the
+      //--- original port-only name) still gets its mapping back exactly once.
+      if(CopierStateFile::Load(StatePathLegacyAccount(),hdr,saved,savedCount,savedOpenLots))
+        {
+         loadedState=true;
+         usedStatePath=StatePathLegacyAccount();
+         g_log.Info("restored from pre-C5 state file "+usedStatePath
+                    +"; the mapping is saved under "+StatePath()+" from now on");
+        }
+      else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount,savedOpenLots))
+        {
+         loadedState=true;
+         usedStatePath="copier_sender_"+SenderId()+".st";
+         g_log.Info("restored from legacy state file "+usedStatePath);
+        }
+     }
+   if(loadedState)
      {
       for(int i=0;i<savedCount;i++)
         {
@@ -817,25 +863,11 @@ int OnInit()
          int s=g_prev.Upsert(saved[i]);
          if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
         }
-      g_log.Info("restored "+(string)savedCount+" position(s) from state ("+StatePath()+")");
-     }
-   else if(CopierStateFile::Load("copier_sender_"+SenderId()+".st",hdr,saved,savedCount,savedOpenLots))
-     {
-      for(int i=0;i<savedCount;i++)
-        {
-         if(!SymbolAllowed(saved[i].sym) || !MagicAllowed(saved[i].magic))
-           {
-            g_log.Warn("state restore: ignoring position ticket "+(string)saved[i].ticket+" ("+saved[i].sym+") - disallowed by current filter; receivers may hold orphan mirrors if closed while excluded");
-            continue;
-           }
-         int s=g_prev.Upsert(saved[i]);
-         if(s>=0) g_openLots[s]=(i<ArraySize(savedOpenLots) && savedOpenLots[i]>0.0)?savedOpenLots[i]:saved[i].lots;
-        }
-      g_log.Info("restored "+(string)savedCount+" position(s) from legacy state (copier_sender_"+SenderId()+".st)");
+      g_log.Info("restored "+(string)savedCount+" position(s) from state ("+usedStatePath+")");
      }
    else
      {
-      g_log.Info("no usable state file; starting fresh");
+      g_log.Info("no usable state file for "+StatePath()+"; starting fresh");
      }
 
    g_ssid="";
@@ -1090,9 +1122,14 @@ bool IsHubPeerName(const string nm)
 void CheckPeers()
   {
    long now=CopierNowMs();
+   //--- V3/C4: a new probe round starts from zero expectations; the expectation
+   //--- is armed once at the end so the two blocks below cannot overwrite each other.
+   bool armedRound=false;
    if(now-g_lastPingMs>=CP_PING_MS)
      {
       g_lastPingMs=now;
+      armedRound=true;
+      g_pumpPongExpect=0;
       //--- broadcast: every receiver answers, and each echo names its sender
       //--- so the replies can be told apart. A few dozen bytes every 2s next
       //--- to a snapshot every 2s is nothing.
@@ -1114,9 +1151,9 @@ void CheckPeers()
            {
             if(IsHubPeerName(pn)) continue; // M1: Hub is probed on its own channel below; do not overwrite with direct ping
             g_peers.ProbeSentAt(k,now);
+            g_pumpPongExpect++;
            }
         }
-      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    //--- The HUB is probed on its own channel.
@@ -1133,6 +1170,13 @@ void CheckPeers()
    if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
      {
       g_lastHubPingMs=now;
+      if(!armedRound)
+        {
+         //--- hub-only round: start counting from zero so a leftover expectation
+         //--- from an earlier round cannot keep the pump armed.
+         g_pumpPongExpect=0;
+         armedRound=true;
+        }
       CopierEnv he;
       he.v=CP_PROTO_V;
       he.sid=(string)g_nid;
@@ -1148,14 +1192,18 @@ void CheckPeers()
          g_peers.ProbeSent("hub:primary",now);
          g_peers.ProbeSent("hub:standby",now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+         //--- dual-sent: both hubs answer, so BOTH echos must land before disarming
+         g_pumpPongExpect+=2;
         }
       else
         {
          g_peers.ProbeSent(g_singleHubRole,now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+         g_pumpPongExpect+=1;
         }
-      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
+   if(armedRound && g_pumpPongExpect>0)
+      g_pump.ArmFast(); // Bounded micro burst sized to the echos this round expects
 
    //--- REG/HBT2. The hub's node table is built from these and NOTHING else -
    //--- it never probes for nodes - so this is the only reason this sender is
@@ -1846,7 +1894,9 @@ void HandleHubSubFrame(const CopierEnv &he)
            }
          if(g_peers.PongBack(hfrom,CopierParseLong(hms)))
            {
-            g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+            // V3/C4: only drop the fast pump once every expected echo has landed
+            if(g_pumpPongExpect>0) g_pumpPongExpect--;
+            if(g_pumpPongExpect<=0) g_pump.Disarm();
            }
         }
       return;
@@ -1909,6 +1959,20 @@ void HandleHubSubFrame(const CopierEnv &he)
                  +" (nothing to do for it yet - Phase 2 is read-only)");
   }
 
+//--- P1/O1: resolve the g_prev slot for row i using the index BuildCurrent()
+//--- already computed, falling back to a linear scan only when that index is
+//--- stale (position replaced between ticks). Turns the telemetry encoders
+//--- from O(N*2048) into O(N).
+int PrevSlotForRow(const int i)
+  {
+   int slot=g_prevSlotScratch[i];
+   if(slot>=0 && slot<CP_MAX_POSITIONS && g_prev.UidAt(slot)==g_curScratch[i].uid)
+      return slot;
+   slot=g_prev.Find(g_curScratch[i].uid);
+   if(slot>=0) g_prevSlotScratch[i]=slot;
+   return slot;
+  }
+
 string EncodeSenderPositions(const int count)
   {
    if(count<=0) return "";
@@ -1917,7 +1981,7 @@ string EncodeSenderPositions(const int count)
    for(int i=0;i<count;i++)
      {
       if(written>0) sb.Add(CP_SEP_REC);
-      int slot=g_prev.Find(g_curScratch[i].uid);
+      int slot=PrevSlotForRow(i);
       double initLots=(slot>=0)?g_openLots[slot]:g_curScratch[i].lots;
       // MQL-06: Broadcast scaled lots consistently across SNAP and STAT
       double scaledLots=BroadcastLots(g_curScratch[i].lots,initLots);
@@ -1949,7 +2013,7 @@ void SendSenderStatusReport(const int count)
    double lotsSum=0.0;
    for(int i=0;i<count;i++)
      {
-      int slot=g_prev.Find(g_curScratch[i].uid);
+      int slot=PrevSlotForRow(i);
       double initLots=(slot>=0)?g_openLots[slot]:g_curScratch[i].lots;
       lotsSum+=BroadcastLots(g_curScratch[i].lots,initLots);
      }
@@ -1997,7 +2061,9 @@ void HandleDirectStatusFrame(const string raw)
       CopierKvGet(se.payload,"FROM",pfrom);
       if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
-         g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+         // V3/C4: only drop the fast pump once every expected echo has landed
+         if(g_pumpPongExpect>0) g_pumpPongExpect--;
+         if(g_pumpPongExpect<=0) g_pump.Disarm();
          if(g_once.ShouldEmit("rtt|"+pfrom))
             g_log.Info("link to "+pfrom+" measured: "
                        +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -2087,7 +2153,7 @@ void OnTimer()
                     +" lots="+DoubleToString(g_curScratch[i].lots,2)
                     +" sl="+((g_curScratch[i].sl>0.0)?DoubleToString(g_curScratch[i].sl,5):"none")
                     +" tp="+((g_curScratch[i].tp>0.0)?DoubleToString(g_curScratch[i].tp,5):"none"));
-         MarkStateDirty();
+         MarkSnapshotDirty();
         }
       else
         {
@@ -2106,12 +2172,14 @@ void OnTimer()
                              prevLots,prevKind,prevTicket,g_curScratch[i],ppriceDiff))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
-            if(otherDiff) MarkStateDirty();
+            if(otherDiff) MarkSnapshotDirty();
 
             //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05 & DEF-64-02)
             if(stopsDiff || ppriceDiff)
               {
-               MarkStateDirty();
+               // A2: MODIFY already delivers the new levels; only refresh the in-memory
+               // latest payload (used by bootstrap / targeted repair). No full broadcast.
+               MarkLatestDirty();
                string extraLog = ppriceDiff ? (" pprice="+DoubleToString(g_curScratch[i].pprice,5)) : "";
                g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                           +" side="+(string)g_curScratch[i].side
@@ -2128,7 +2196,7 @@ void OnTimer()
             //--- VOLUME DRIFT (partial close we do not model in the MVP)
             if(lotsDiff)
               {
-               MarkStateDirty();
+               MarkSnapshotDirty();
                if(g_once.ShouldEmit("vol|"+g_curScratch[i].uid))
                   g_log.Info("partial close on "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                              +" "+DoubleToString(prevLots,2)+" -> "+DoubleToString(g_curScratch[i].lots,2)
@@ -2139,7 +2207,7 @@ void OnTimer()
             //--- PENDING ORDER FILLING / KIND CHANGED
             if(kindDiff)
               {
-               MarkStateDirty();
+               MarkSnapshotDirty();
                g_log.Info("uid "+g_curScratch[i].uid+" "+g_curScratch[i].sym+" moved: kind "
                           +(string)prevKind+" -> "+(string)g_curScratch[i].kind+", ticket "
                           +(string)prevTicket+" -> "+(string)g_curScratch[i].ticket
@@ -2182,7 +2250,7 @@ void OnTimer()
       g_slotMissMs[k]=0;
       EmitClose(q,k);
       g_log.Info("close "+q.uid+" tkt="+(string)q.ticket+" "+q.sym);
-      MarkStateDirty();
+      MarkSnapshotDirty();
       g_prev.RemoveAt(k);
       g_openLots[k]=0.0;
      }
@@ -2208,6 +2276,10 @@ void OnTimer()
          if(newSlot>=0)
            {
             g_openLots[newSlot]=g_curScratch[i].lots;
+            //--- P1/O1: publish the freshly allocated slot back into the per-row
+            //--- index so telemetry encoders (reqpos / STAT) never have to scan
+            //--- all 2048 slots looking for a UID we just inserted.
+            g_prevSlotScratch[i]=newSlot;
            }
          else if(g_once.ShouldEmit("prevfull"))
            {
@@ -2256,8 +2328,19 @@ void OnTimer()
    if(dueSnap || (g_snapDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250))
      {
       g_snapDirty=false;
+      g_latestDirty=false;
       s_lastSnapRebuildMs=now;
       BroadcastSnapshot(now);
+     }
+   //--- A2: stop-only changes never broadcast, but the in-memory latest payload must
+   //--- still track them so a late-joining receiver's bootstrap (and any targeted
+   //--- repair) hands out current bytes rather than a snapshot frozen at the last
+   //--- periodic broadcast. Same 250ms debounce, no network traffic.
+   else if(g_latestDirty && g_fillSnapshotDueMs==0 && now-s_lastSnapRebuildMs>=250)
+     {
+      g_latestDirty=false;
+      s_lastSnapRebuildMs=now;
+      RebuildSnapshotPayload();
      }
 
    //--- 7) heartbeat with account state (needed for equity-relative sizing)

@@ -1974,4 +1974,59 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-*交接文档编制完毕，系统运行平稳，所有代码及自动化测试均处于已验证状态。*
+### 一百零八次演进：物理日志镜像、冷启动风控基线、孤儿单重试与 GRACE/PONG/账户寻址加固 (2026-11-06 11:05；已闭环，另 5 项按风险待确认)
+
+- **技术落地项（本轮已修复）**：
+  1. **HA 物理日志镜像与行数收敛（V1 / 报告 C5）**：
+     - `hub/src/commands.rs`、`hub/src/config.rs` 新增 `append_raw()`：Standby 现在把收到的**每一条合法行原样写盘**，`line_count` 与 `count` 按 `load()` 的同一口径累加；`should_insert` / `should_advance` 只决定是否推进内存状态机。这样既让备机物理行数与主机一致（消除 1Hz「我落后」→ `replace_all` 循环），又让备机日志与主机**字节一致**（旧实现是重新序列化，未建模字段会丢失，见报告 C1）。新增 Rust 单测锁住该不变量。
+  2. **盘中冷启动风控基线（L1）**：
+     - `RefreshRisk()` 区分 `g_riskDay == 0`（冷启动/无当日存档）与真正的跨零点换日。冷启动时用 `余额 - 今日已实现盈亏` 反推日初余额作为基线，不再把「当前净值（已含早盘亏损与当前浮盈）」当基线；历史未就绪时保持基线未设置以便下一 tick 重试，彻底消除「早盘亏 5% 却在挂载后 60 秒内显示 0%」与「启动浮盈被固化成基准」。
+  3. **瞬时 `equity<=0` 不再永久闩锁熔断（V2）**：
+     - `CopierRisk::ObserveAt` 的爆仓短路现在要求**连续 2 次**零/负净值确认，且仅在配置了 `dailyLossPct` / `maxDrawdownPct` 时才上闩（遵守「0 = 关闭」契约）；零闩在连续 20 次健康净值后自动释放（真实爆仓不会恢复）。`Configure()` 同步清理新增状态。`CopierSelfTest` 增加 4 条断言。
+  4. **手动平仓可重试 + `#t<ticket>` 防重开记录误删（L2）**：
+     - `ExecuteQueue` 对 `senderIdx == -1` 的 `CP_ACT_CLOSE` 在券商临时拒单时重新入队（最多 6 次），因为没有任何 sender 收敛会再生成该动作；`CopierManualClosedRing` 增加 `m_at` 时间戳与 `RemoveAt`，`Add` 补齐 uid/ticket 双向回填；GC 不再拿 `#t...` 与 desired 的 8 位 UID 比较（必然不匹配 → 下一 tick 就被删），改为「本地已无该 ticket」或 TTL 才回收。
+  5. **MT5 部分平仓历史误判（L3）**：
+     - `CopierIsTicketClosedInHistory` 改为遍历在册持仓比对 `POSITION_IDENTIFIER`（`PositionSelectByTicket` 用的是 POSITION_TICKET，部分平仓/隔夜展期后会变，导致在场仓位被判已平），并把 `DEAL_ENTRY_INOUT` 同时计入进出场量。
+  6. **Two-Pass Sweeper 计数口径对齐（L4）**：
+     - 平仓成功分支区分 `senderIdx >= 0` 与孤儿单，后者扣 `g_orphanCount`，两者都扣账户级 `g_acctPositions` / `g_acctOrders`。
+  7. **热重载遗留 MODIFY 越界（L5）**：
+     - `RemapQueueSenders` 改为压缩式重映射：仅丢弃发送端已消失的 `CP_ACT_MODIFY`（减仓/平仓动作仍保留），消除每次出队打印的 `sender index -1 out of bounds` 假错误。
+  8. **双 Hub PONG 提前 Disarm（C4 / V3 / L6）**：
+     - Sender 与 Receiver 增加 `g_pumpPongExpect`：本轮 PING 双发时预期 2 份 PONG（单 Hub 为 1 份，直连按实际探测数），**收齐或超时**后才 `Disarm()`，慢 Hub 的 RTT 不再被慢定时器周期放大。泵本身有 `CP_PUMP_BURST_MAX` / `CP_PUMP_TIMEOUT_MS` 上限，死节点不会挂死。
+  9. **止损变动不再触发全量快照广播（A2）**：
+     - `MarkStateDirty()` 拆分为 `MarkSnapshotDirty()`（需要全网广播）与 `MarkLatestDirty()`（只刷新内存 latest 供 bootstrap/定向修复，不发网络）。`stopsDiff`/`ppriceDiff` 走后者——`MODIFY` 事件已经把新价位送到接收端的 stop-override 表，此前每 250ms 一次的全量快照（移动止损下 4Hz、单 Sender 1.5MB/s）被彻底消除。
+  10. **单播修复不再改写全局广播哈希（C2，复核确认仍缺）**：
+     - `SnapRepairMaybe` 的 `EmitToNode` 分支移除 `g_snapPayload` / `g_snapHash` 赋值，只 `NoteRecentSnapHash`，避免其余接收端被误判 BEHIND 引发连锁重传。
+  11. **集群「对端未启用」不再当成永久差异（B1）**：
+     - `needs_sync` 只在**双方都能产出该哈希**（非空）时比较 notifications / curve / users；写入前检查路径为空（`--notifications none`）直接跳过并**不置 `file_sync_err`**，消除每秒 sync 请求、工作目录 `.tmp.<pid>` 垃圾文件与 `sync_status` 永久 `sync_err` 造成的自动回切阻塞。
+  12. **全网 `close` 被拒绝（B2）**：
+     - `POST /api/v1/commands` 对 `op == "close"` 返回 400 并提示改用 `/nodes/{id}/commands`。ticket 只在单账户内唯一，广播会让「恰好同号」的无关仓位被平。
+  13. **`note_stat_at` 的 HELD / ORPHAN 解耦（H1）**：
+     - 两个计数独立生效：`HELD=0` 清受管单、`ORPHAN=0` 清 `tc|` 孤儿单，纯手工单（无 `tc|`）只由全量 `POS=` 或 `OPEN=0` 清理。修复「有孤儿单时平光受管单不刷新」与「平掉最后一张孤儿单后它反而被保留 59 秒」。
+  14. **命令 `seq` 水位跨重启保持（H2）**：
+     - `prune_terminal` 为每个节点**保留一条最高 seq 的终态行**作为水位，`compact_journal` 因此不会把低频节点的最高 seq 写没；避免下次重启后 ID 从 `-1` 重新编号（与 EA 去重环碰撞导致新命令被静默丢弃）以及 `max_cmd_seq` 倒退。
+  15. **配置重推与复活时序（H3）**：
+     - `issue_cfg_at` 允许**人工（actor 非空）**复活 `REJECTED`，并跳过 60s 冷却；复活时 `ts = max(now, prev+1)` 严格递增，避免同秒复活因 rank 更低而被 `load()` / `apply_delta_lines()` 丢弃。
+  16. **TLS 监听绑定与启动续期（B4 / C7）**：
+     - 专用 HTTPS 监听改为绑定 `--http` 的同一地址（`Shared::http_host`），不再是硬编码 `0.0.0.0`，UI 开启 TLS 不会悄悄把 127.0.0.1-only 部署暴露到全网；自动续期 worker 启动 60s 后先检查一次再进入 12h 周期。
+  17. **收据/心跳目标收敛（B7 / C2）**：
+     - `send_receipt` 主题走 `copier_nid()`；`RCPT` 转发要求 `SID` 为纯数字（warm 窗口不再让任意字符串成为发布主题）；`PING` 的 `FROM` 必须是纯数字 NID 才回 PONG，关闭「Hub 代发任意主题」原语。
+  18. **快照/数组内存卫生（C4 / C3 / O4）**：
+     - `HandleSnapshot` 清理快照变小后残留的 `[n, prevCount)` 行的字符串；`CopierStateFile::Save` 不再先 `FileDelete(path)`（与注释一致，`FILE_WRITE` 本身截断）；`ClearWaitItems` / `PruneSenderPeakLots` 紧缩后清空尾部字符串；接收端 `g_announceCount` 封顶。
+  19. **Sender 状态文件按实例隔离（C5）**：
+     - `StatePath()` 改为 `copier_sender_<login>_<port>.st`，并保留旧（账号级 / 端口级）文件的一次性迁移读取；同账号挂两个 Sender 不再共用 UID 表互相接管仓位。
+  20. **持仓遥测 O(N) 与探测预算（P1/O1/P2, P1 平仓探测已在前一轮）**：
+     - `CopierPosTable::UidAt(slot)` + `PrevSlotForRow(i)`：`EncodeSenderPositions` / `SendSenderStatusReport` 复用 `BuildCurrent()` 已算出的 `g_prevSlotScratch[i]`（新开仓在 Step 5 回填），把按需遥测从 O(N×2048) 降到 O(N)。
+  21. **前端口径与权限（H5 / WEB-01 / WEB-02）**：
+     - KPI「Orphan / Manual」在有明细行时按 `!managed` 统计（与表格 Unmanaged 一致）；`setRole` 同步 `s.role`，`maybeAutoRequestPositions` 与 `startPosAutoPoll` 增加 `s.userRole`/`s.writes` 门禁，消除 viewer 的周期性 403 弹窗；配置器 `[senderN]` 的 5 个布尔开关继承 `[common]` 默认值。
+  22. **测试与工具链（O5）**：
+     - `tools/snapshot_receipt_test.py` 增加纯标准库 Z85 编码兜底（已与 pyzmq 逐字节比对一致），无 pyzmq 环境也能跑完整套件。
+
+- **本轮明确未改动的项与原因**：
+  1. **A1（数据面发布者归属）**：XPUB/XSUB 的 `(topic, payload)` 不携带 pipe/CURVE 身份，真正的修复需要「每节点独立 pipe」或「payload HMAC 签名」，属协议与拓扑级重写。已按报告建议**收紧 SNAP 豁免的前提**（B7 的纯数字 NID + `send_receipt` 归一），但「allow-list 内任一 key 等价于全部 sender 数据面写权限」这一边界需要您在架构层面确认后再动。
+  2. **B3（`copier.ini` ANSI 落盘 vs UTF-8 承诺）**：改 `FILE_UNICODE` 会让文件变成 UTF-16，Hub 的 UTF-8 读取与 `escape_ini` 全链路都要跟着改，且现有部署的 ini 需要迁移；改成 `%XX` 字节级转义则会改变运维直接编辑 ini 的体验。两者都需要您确认兼容策略（是否接受升级时迁移 + 新格式）。
+  3. **B5 / P4（多 SID 单帧批量收据）**：需要两端同版本（`CP_NODE_VER` 升版）+ 新字段 `RH=`，旧 Hub 会忽略未知键但旧 Receiver 不会发，收益（100 senders 时帧数降 100 倍）只在规模化部署才体现。属协议增量，建议与其它协议变更一起排期。
+  4. **H4（Windows 服务日志/`--instance`）**：涉及注册表安装参数与服务名约定，改错会让既有服务无法卸载/重装；需要您在目标机器上配合验证一次 `install_services.bat` 流程后再改。
+  5. **P5 / P6 / P7（符号报价年龄哈希、RefreshRisk 快车道防抖、poke 节流合并）**：P5 实测成本被报告高估（1 秒 memo 已挡住绝大多数调用，缓存未命中每符号每秒最多 256 次字符串比较 ≈ 2.5 万次/秒，微秒级）；P6 加防抖会让风控读到旧持仓，可能击穿开仓上限（交易安全优先）；P7 纯属逻辑重复，无行为风险也无收益。三项均建议维持现状。
+
+---

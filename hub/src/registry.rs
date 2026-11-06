@@ -511,16 +511,44 @@ impl Registry {
             }
             if let Some(hi) = held_items {
                 e.held_items = Arc::new(hi);
-            } else if (e.held == Some(0) && e.orphaned.unwrap_or(0) == 0) || (role == "sender" && e.held_lots == 0.0) {
-                // BUG-13, HUB-02 & M6: Receiver confirmed 0 held/orphan, or sender confirmed 0 held/lots.
-                // For receiver, only filter out managed mirrors, preserving manual/unmanaged positions
-                // so they are not wiped from the cockpit for up to 59s between 60s POS= updates.
-                if role == "receiver" && e.held_items.iter().any(|item| !item.managed) {
-                    let unmanaged: Vec<_> = e.held_items.iter().filter(|item| !item.managed).cloned().collect();
-                    e.held_items = Arc::new(unmanaged);
-                } else {
+            } else if role == "sender" {
+                //--- a sender's STAT carries HELD/LOTS only; when it reports an
+                //--- empty book there is nothing to keep.
+                if e.held == Some(0) || e.held_lots == 0.0 {
                     e.held_items = Arc::new(Vec::new());
                 }
+            } else if e.held == Some(0) || e.orphaned == Some(0) {
+                //--- H1: the two counts are INDEPENDENT, so they must be applied
+                //--- independently. The previous form required BOTH to be zero,
+                //--- which meant:
+                //---   * HELD=0 with one orphan left over cleared nothing, so the
+                //---     managed mirrors that had just been closed stayed on the
+                //---     cockpit as ghosts until the next 60s POS= report;
+                //---   * and when both were zero, `.filter(!managed)` kept every
+                //---     unmanaged row - including the `tc|` orphan that had just
+                //---     been closed - because orphans report managed=false too.
+                //--- `managed` cannot tell an orphan from a hand-placed trade; the
+                //--- copier tag in the comment can.
+                let clear_managed = e.held == Some(0);
+                let clear_orphans = e.orphaned == Some(0);
+                let kept: Vec<_> = e
+                    .held_items
+                    .iter()
+                    .filter(|item| {
+                        if item.managed {
+                            !clear_managed
+                        } else if item.comment.starts_with("tc|") {
+                            !clear_orphans
+                        } else {
+                            //--- pure manual trade: the copier never opened it and
+                            //--- its own close is not reported here; only a full
+                            //--- POS= report (or OPEN=0) may drop it.
+                            true
+                        }
+                    })
+                    .cloned()
+                    .collect();
+                e.held_items = Arc::new(kept);
             }
             if let Some(wi) = wait_items {
                 e.wait_items = Arc::new(wi);

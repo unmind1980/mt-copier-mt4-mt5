@@ -109,6 +109,13 @@ bool CopierRiskAllowsOpen(const CopierRiskLimits &lim,const double lots,
 // The stateful half: remembers the baselines the two percentage
 // switches are measured from.
 //=====================================================================
+//--- V2: a single observation of equity<=0 is not a blowout - it is also what
+//--- an account switch or a dropped terminal connection looks like for one tick.
+//--- Require CP_ZERO_CONFIRM_N consecutive zeros to trip, and let a zero-latch
+//--- be released by CP_RECOVER_CONFIRM_N consecutive healthy observations (a
+//--- genuinely blown-out account never comes back, so this cannot mask one).
+#define CP_ZERO_CONFIRM_N      2
+#define CP_RECOVER_CONFIRM_N   20
 class CopierRisk
   {
 private:
@@ -120,12 +127,20 @@ private:
    bool              m_dailyTripped;
    bool              m_ddTripped;
    bool              m_justTripped;
+   //--- V2: consecutive zero/negative equity observations, and whether the current
+   //--- drawdown latch came from that blowout path rather than from a percentage
+   //--- breach. Both exist so a single transient `equity==0` (account switch,
+   //--- reconnect) can neither latch the breaker nor be sticky forever.
+   int               m_zeroEquityN;
+   bool              m_zeroLatched;
+   int               m_recoverN;
 
 public:
                      CopierRisk():m_armed(false),m_day(0),
                      m_dayStartEquity(0.0),m_peakEquity(0.0),
                      m_dailyTripped(false),m_ddTripped(false),
-                     m_justTripped(false) {}
+                     m_justTripped(false),
+                     m_zeroEquityN(0),m_zeroLatched(false),m_recoverN(0) {}
 
    //=================================================================
    // Apply a new set of limits.
@@ -164,6 +179,9 @@ public:
       if(!changed) return;
       m_dailyTripped=false;
       m_ddTripped=false;
+      m_zeroEquityN=0;
+      m_zeroLatched=false;
+      m_recoverN=0;
      }
 
    bool              Enabled() const
@@ -185,12 +203,42 @@ public:
                                const double dayStartEquity)
      {
       if(!MathIsValidNumber(equity)) return;
-      // P3-6 & P2-12: If account equity dropped to zero or negative (complete blowout), trip immediately
+      //--- V2: blowout short-circuit.
+      //--- 1) Only meaningful when a percentage limit is actually configured -
+      //---    "0 = switch off, everywhere" (see the file header) means an
+      //---    account with no daily/drawdown limit must never be blocked by this.
+      //--- 2) Require consecutive confirms so one transient 0 does not latch it.
+      //--- 3) Never feed 0/negative into the peak or baseline arithmetic below.
       if(equity<=0.0)
         {
-         if(!m_dailyTripped) { m_dailyTripped=true; m_justTripped=true; }
-         if(!m_ddTripped) { m_ddTripped=true; m_justTripped=true; }
+         m_recoverN=0;
+         m_zeroEquityN++;
+         if(m_zeroEquityN<CP_ZERO_CONFIRM_N) return;
+         if(m_lim.dailyLossPct>0.0 && !m_dailyTripped)
+           {
+            m_dailyTripped=true;
+            m_justTripped=true;
+           }
+         if(m_lim.maxDrawdownPct>0.0 && !m_ddTripped)
+           {
+            m_ddTripped=true;
+            m_zeroLatched=true;
+            m_justTripped=true;
+           }
          return;
+        }
+      m_zeroEquityN=0;
+      if(m_zeroLatched)
+        {
+         //--- transients clear themselves; a real blowout never does
+         m_recoverN++;
+         if(m_recoverN>=CP_RECOVER_CONFIRM_N)
+           {
+            m_zeroLatched=false;
+            m_recoverN=0;
+            m_ddTripped=false;
+            m_dailyTripped=false;
+           }
         }
 
       if(!m_armed)

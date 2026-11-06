@@ -161,6 +161,11 @@ pub struct Shared {
     pub writes_allowed: bool,
     pub tls: Arc<crate::tls::TlsManager>,
     pub http_port: u16,
+    /// B4: the interface the dashboard was actually bound to. The dedicated
+    /// HTTPS listener reuses it instead of hard-coding 0.0.0.0, so enabling TLS
+    /// from the UI cannot silently widen a 127.0.0.1-only deployment to the whole
+    /// network.
+    pub http_host: String,
     pub tx: Option<tokio::sync::broadcast::Sender<Arc<String>>>,
 }
 
@@ -204,6 +209,7 @@ impl Shared {
                 std::path::Path::new(crate::tls::DEFAULT_TLS_CONFIG_PATH),
             )),
             http_port: 0,
+            http_host: "127.0.0.1".to_string(),
             tx: None,
         }
     }
@@ -1932,9 +1938,13 @@ pub fn spawn(
                     }
                 }
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                let current_host: String = addr.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_default();
                 {
                     let mut s = st.lock_or_recover();
                     s.http_port = current_port;
+                    if !current_host.is_empty() {
+                        s.http_host = current_host;
+                    }
                     s.tx = Some(tx.clone());
                 }
 
@@ -2007,9 +2017,9 @@ pub fn spawn(
 
 /// HUB-02: Ensure dedicated HTTPS listener is spawned when TLS is active on custom/standard port
 pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
-    let (current_port, tls_mgr, tx) = {
+    let (current_port, https_bind_host, tls_mgr, tx) = {
         let s = st.lock_or_recover();
-        (s.http_port, Arc::clone(&s.tls), s.tx.clone())
+        (s.http_port, s.http_host.clone(), Arc::clone(&s.tls), s.tx.clone())
     };
     let (https_port, tls_enabled) = {
         let c = tls_mgr.config.lock_or_recover();
@@ -2041,10 +2051,14 @@ pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
     };
     let app_base_https = router(st_https, tx_https);
     tokio::spawn(async move {
-        let bind_addr = format!("0.0.0.0:{}", https_port);
+        //--- B4: bind the SAME interface the plain listener uses. Hard-coding
+        //--- 0.0.0.0 here meant one click in the dashboard silently published a
+        //--- panel that shows every position to the whole network, even though
+        //--- --http 127.0.0.1 was chosen deliberately.
+        let bind_addr = format!("{}:{}", https_bind_host, https_port);
         match tokio::net::TcpListener::bind(&bind_addr).await {
             Ok(l) => {
-                println!("[hub] TLS: Dedicated HTTPS listener active on https://0.0.0.0:{}", https_port);
+                println!("[hub] TLS: Dedicated HTTPS listener active on https://{}", bind_addr);
                 loop {
                     tokio::select! {
                         conn_res = l.accept() => {
@@ -2839,6 +2853,28 @@ async fn commands_global(
             axum::http::StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "close command requires ticket in 'args' or 'ticket' field",
+                "op": op,
+            })),
+        )
+            .into_response();
+    }
+    //--- B2: `close` is NOT a fleet-wide operation.
+    //--- A broker ticket is unique only WITHIN one account. Fanning "close ticket
+    //--- 12345" out to every receiver means any other account that happens to own
+    //--- the same ticket number - routine for accounts opened together at the same
+    //--- broker - gets an unrelated position closed. The operator cannot see that
+    //--- account's ticket list from this dialog, so there is no way for them to
+    //--- discover the mistake before it executes.
+    //--- pause / resume / closeall / reload / reqpos / reqcfg ARE account-scoped
+    //--- and stay fleet-wide.
+    if op == "close" {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "close cannot be issued fleet-wide",
+                "detail": "a ticket is unique only inside one account; use \
+                           POST /api/v1/nodes/{node}/commands with op=close to \
+                           target the account that owns it",
                 "op": op,
             })),
         )

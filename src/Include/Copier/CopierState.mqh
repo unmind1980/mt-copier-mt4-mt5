@@ -205,6 +205,16 @@ public:
       return -1;
      }
 
+   //--- O(1) UID probe for a known slot. Used by callers that cache a slot
+   //--- index across ticks and must cheaply re-validate it before trusting it;
+   //--- returns "" for an out-of-range or empty slot so a stale index can never
+   //--- be mistaken for a hit.
+   string            UidAt(const int i) const
+     {
+      if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return "";
+      return m_p[i].uid;
+     }
+
    int               FindByTicket(const long ticket) const
      {
       if(ticket==0) return -1;
@@ -1308,7 +1318,13 @@ public:
       //--- and eliminate any risk of trailing garbage or ghost positions from previous larger saves.
       int rh=FileOpen(tmp,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(rh==INVALID_HANDLE) return false;
-      FileDelete(path);
+      //--- C3: no FileDelete(path) here. The comment above promises that the
+      //--- target keeps its previous contents until the successor is complete,
+      //--- and deleting first broke exactly that promise: a crash, a full disk
+      //--- or a locked file between the delete and the open left NO destination
+      //--- at all, recoverable only through the .tmp fallback.
+      //--- FILE_WRITE truncates on open by itself, so the "no trailing garbage"
+      //--- goal is met without ever exposing a missing-file window.
       int wh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(wh==INVALID_HANDLE)
         {
@@ -1442,12 +1458,16 @@ private:
    string            m_uid[CP_MAX_MANUAL_CLOSED];
    long              m_ticket[CP_MAX_MANUAL_CLOSED];
    string            m_sid[CP_MAX_MANUAL_CLOSED];
+   //--- L2: when the entry was last (re)written. The GC needs it because some
+   //--- entries can only be identified by ticket (broker-mangled comment), and
+   //--- those have no UID to match against the desired set at all.
+   long              m_at[CP_MAX_MANUAL_CLOSED];
    int               m_n;
 
 public:
                      CopierManualClosedRing(): m_n(0)
      {
-      for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; }
+      for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; m_at[i]=0; }
      }
 
    void Add(const string uid, const long ticket, const string sid="")
@@ -1457,7 +1477,17 @@ public:
         {
          if((StringLen(uid)>0 && m_uid[i]==uid) || (ticket>0 && m_ticket[i]==ticket))
            {
+            //--- L2/C: back-fill whichever half of the identity was missing.
+            //--- The same position is first recorded by ticket (a broker-mangled
+            //--- comment leaves the UID unknown) and later re-recorded by UID once
+            //--- the mapping is recovered - or the other way round. Refreshing only
+            //--- the timestamp left the other column empty, so the GC removed the
+            //--- entry for a reason that did not apply and the broker's own
+            //--- close was then re-opened as a fresh mirror.
+            if(StringLen(uid)>0 && StringLen(m_uid[i])==0) m_uid[i]=uid;
+            if(ticket>0 && m_ticket[i]==0)                 m_ticket[i]=ticket;
             if(StringLen(sid)>0) m_sid[i]=sid;
+            m_at[i]=GetTickCount();
             return;
            }
         }
@@ -1466,6 +1496,7 @@ public:
          m_uid[m_n]=uid;
          m_ticket[m_n]=ticket;
          m_sid[m_n]=sid;
+         m_at[m_n]=GetTickCount();
          m_n++;
         }
       else
@@ -1475,10 +1506,12 @@ public:
             m_uid[i]=m_uid[i+1];
             m_ticket[i]=m_ticket[i+1];
             m_sid[i]=m_sid[i+1];
+            m_at[i]=m_at[i+1];
            }
          m_uid[CP_MAX_MANUAL_CLOSED-1]=uid;
          m_ticket[CP_MAX_MANUAL_CLOSED-1]=ticket;
          m_sid[CP_MAX_MANUAL_CLOSED-1]=sid;
+         m_at[CP_MAX_MANUAL_CLOSED-1]=GetTickCount();
         }
      }
 
@@ -1514,19 +1547,37 @@ public:
             m_uid[j]=m_uid[m_n];
             m_ticket[j]=m_ticket[m_n];
             m_sid[j]=m_sid[m_n];
+            m_at[j]=m_at[m_n];
             m_uid[m_n]="";
             m_ticket[m_n]=0;
             m_sid[m_n]="";
+            m_at[m_n]=0;
            }
          else j++;
         }
+     }
+
+   //--- L2: drop by index (the GC decides by ticket/age, not just by UID).
+   void RemoveAt(const int idx)
+     {
+      if(idx<0 || idx>=m_n) return;
+      m_n--;
+      m_uid[idx]=m_uid[m_n];
+      m_ticket[idx]=m_ticket[m_n];
+      m_sid[idx]=m_sid[m_n];
+      m_at[idx]=m_at[m_n];
+      m_uid[m_n]="";
+      m_ticket[m_n]=0;
+      m_sid[m_n]="";
+      m_at[m_n]=0;
      }
 
    int Count() const { return m_n; }
    string GetUid(const int idx) const { if(idx>=0 && idx<m_n) return m_uid[idx]; return ""; }
    long GetTicket(const int idx) const { if(idx>=0 && idx<m_n) return m_ticket[idx]; return 0; }
    string GetSid(const int idx) const { if(idx>=0 && idx<m_n) return m_sid[idx]; return ""; }
-   void Clear() { m_n=0; for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; } }
+   long GetAt(const int idx) const { if(idx>=0 && idx<m_n) return m_at[idx]; return 0; }
+   void Clear() { m_n=0; for(int i=0;i<CP_MAX_MANUAL_CLOSED;i++) { m_uid[i]=""; m_ticket[i]=0; m_sid[i]=""; m_at[i]=0; } }
   };
 
 #endif

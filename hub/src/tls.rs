@@ -1551,9 +1551,13 @@ impl AcmeClient {
 /// and automatically triggers renewal within 30 days of expiry.
 pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
     tokio::spawn(async move {
+        //--- C7: check once shortly after startup, THEN settle into the 12h cadence.
+        //--- Sleeping first meant a hub that was down while its certificate crossed
+        //--- the 30-day line stayed expired for another 12 hours after coming back -
+        //--- and a hub restarted frequently (deploys, reboots) could postpone renewal
+        //--- indefinitely. A short delay still lets listeners and the config land.
+        tokio::time::sleep(Duration::from_secs(60)).await;
         loop {
-            tokio::time::sleep(Duration::from_secs(12 * 3600)).await;
-
             let (should_renew, domain, email, staging) = {
                 let c = tls_mgr.config.lock_or_recover();
                 if c.enabled && c.auto_renew && (c.mode == TlsMode::Auto || c.mode == TlsMode::CustomDomain) {
@@ -1587,6 +1591,8 @@ pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
                     let _ = save_config(&tls_mgr.config_path, &c);
                 }
             }
+            //--- the steady-state cadence; the first pass above ran after 60s
+            tokio::time::sleep(Duration::from_secs(12 * 3600)).await;
         }
     });
 }

@@ -250,7 +250,9 @@ impl ConfigStore {
         }
         let mut inner = self.inner.lock_or_recover();
         let mut applied = 0;
-        let mut to_append = Vec::new();
+        //--- V1: every valid replicated line is mirrored to disk verbatim; only
+        //--- the rows that ADVANCE state are applied to the in-memory map.
+        let mut raw_valid: Vec<String> = Vec::new();
         let mut staged_current: HashMap<String, Revision> = HashMap::new();
         for line in raw_lines {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
@@ -259,6 +261,7 @@ impl ConfigStore {
                 if node.is_empty() || rev == 0 {
                     continue;
                 }
+                raw_valid.push(line.clone());
                 let r = Revision {
                     node: node.clone(),
                     rev,
@@ -274,19 +277,15 @@ impl ConfigStore {
                     None => true,
                 };
                 if should_advance {
-                    staged_current.insert(node, r.clone());
-                    // P0-03, N70-05 & N74-04: Collect replicated line for single batch flush.
-                    // Only append new revisions so Standby journal line count does not inflate
-                    // beyond Primary on redundant replay batches (preventing infinite full resync oscillation).
-                    to_append.push(r);
+                    staged_current.insert(node, r);
                     applied += 1;
                 }
             }
         }
         // A86-04: Persist to disk FIRST before updating in-memory current map.
-        // If append_many fails, inner.current remains unchanged, allowing future sync attempts to re-apply.
-        if !to_append.is_empty() {
-            inner.append_many(&to_append)?;
+        // If the write fails, inner.current remains unchanged, allowing future sync attempts to re-apply.
+        if !raw_valid.is_empty() {
+            inner.append_raw(&raw_valid)?;
         }
         for (node, r) in staged_current {
             inner.current.insert(node, r);
@@ -561,6 +560,9 @@ impl Inner {
 
     /// N70-05: Batch append replicated revisions with a single sync_data() disk barrier,
     /// eliminating per-line fsync stalls while holding the inner mutex.
+    /// Kept for callers that hold `Revision` values; `apply_delta_lines` uses
+    /// `append_raw` so the replicated bytes stay identical to the primary's.
+    #[allow(dead_code)]
     fn append_many(&mut self, revs: &[Revision]) -> std::io::Result<()> {
         if revs.is_empty() {
             return Ok(());
@@ -591,6 +593,47 @@ impl Inner {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "config journal file handle is not open"));
         }
         self.count += revs.len() as u64;
+        Ok(())
+    }
+
+    /// V1/C1: append replicated lines VERBATIM.
+    ///
+    /// Two problems this solves at once:
+    ///  * the standby's journal becomes byte-identical to the primary's (it used
+    ///    to hold RE-SERIALISED rows, so any field the older build did not know
+    ///    about was silently dropped and the file drifted from the source), and
+    ///  * the physical line count stays equal. `load()` counts every valid line;
+    ///    filtering duplicates out of the append path made the standby count
+    ///    lower than the primary forever, which drove the 1Hz "I am behind"
+    ///    resync loop and the full-file replace_all that followed it.
+    /// The in-memory `current` map is still advanced only by `should_advance` -
+    /// physical replication and state application are separate concerns.
+    fn append_raw(&mut self, lines: &[String]) -> std::io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let mut buf = String::new();
+        for l in lines {
+            let t = l.trim_end_matches(['\r', '\n']);
+            if t.is_empty() {
+                continue;
+            }
+            buf.push_str(t);
+            buf.push('\n');
+        }
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let n = buf.matches('\n').count();
+        if let Some(f) = self.file.as_mut() {
+            if let Err(e) = f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
+                eprintln!("[hub] CONFIG RAW APPEND FAILED: {}", e);
+                return Err(e);
+            }
+        } else {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "config journal file handle is not open"));
+        }
+        self.count += n as u64;
         Ok(())
     }
 }

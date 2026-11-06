@@ -45,6 +45,11 @@ int timeEndPeriod(uint uPeriod);
 #include <Copier/CopierCluster.mqh>
 
 CopierEventPump g_pump;
+//--- V3/C4: PONGs still outstanding for the current probe burst. A dual-hub PING
+//--- is dual-sent, so both hubs answer; disarming on the first echo pushed the
+//--- second one onto the slow timer and inflated its reported RTT. Bounded by
+//--- CP_PUMP_BURST_MAX / CP_PUMP_TIMEOUT_MS, so a dead peer cannot wedge it.
+int g_pumpPongExpect=0;
 
 //--- configuration --------------------------------------------------
 //--- NOTE every comment below STARTS WITH THE VARIABLE NAME.
@@ -600,6 +605,22 @@ string SenderLabel(const int si)
    return "manual";
   }
 
+//--- L2: is this LOCAL ticket still working on this account?
+//--- Used by the manual-closed GC, which must not evict an ignore entry while
+//--- the position it protects is still open (that is exactly the window in
+//--- which the mirror would be re-created).
+bool LocalTicketStillOpen(const long ticket)
+  {
+   if(ticket<=0) return false;
+#ifdef __MQL5__
+   if(PositionSelectByTicket((ulong)ticket)) return true;
+   return OrderSelect((ulong)ticket);
+#else
+   if(ticket>2147483647) return false;
+   return OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES);
+#endif
+  }
+
 //--- Pre-allocated scratch buffer for LocalForSender / ConvergeSender (zero ArrayResize)
 CopierPos      g_locScratch[CP_MAX_POSITIONS];
 
@@ -607,17 +628,37 @@ void ClearWaitItems(const int si=-1)
   {
    if(si<0)
      {
+      //--- O4: release the string fields of every slot we are about to orphan,
+      //--- in addition to lowering the count. CopierWaitItem holds four strings;
+      //--- dropping only the count kept all of them referenced until the slot
+      //--- was overwritten (which, for a table that is allocated once, is never).
+      for(int i=0;i<g_waitItemsCount;i++)
+        {
+         g_waitItems[i].uid="";
+         g_waitItems[i].sym="";
+         g_waitItems[i].stage="";
+         g_waitItems[i].reason="";
+        }
       g_waitItemsCount=0;
       return;
      }
    if(si>=g_nSenders) return;
    long targetMagic=g_magic[si];
+   int oldCount=g_waitItemsCount;
    int w=0;
-   for(int i=0;i<g_waitItemsCount;i++)
+   for(int i=0;i<oldCount;i++)
      {
       if(g_waitItems[i].magic==targetMagic) continue; // remove only this sender's items
       if(w!=i) g_waitItems[w]=g_waitItems[i];
       w++;
+     }
+   //--- O4: clear the vacated tail so the removed rows stop pinning strings
+   for(int k=w;k<oldCount;k++)
+     {
+      g_waitItems[k].uid="";
+      g_waitItems[k].sym="";
+      g_waitItems[k].stage="";
+      g_waitItems[k].reason="";
      }
    g_waitItemsCount=w;
   }
@@ -854,6 +895,13 @@ CopierTradingTimes g_hours;  // IncludeTradingTimes / DayTradingTimes, server ti
 CopierSeenRing  g_fillDropped; // UIDs given up on - sticky, so it is not
                                // re-derived and re-alerted every pass
 CopierManualClosedRing g_manualClosed; // Manually closed positions by operator; prevents converge from re-opening
+//--- L2: how long a ticket-keyed ignore entry survives when the position is
+//--- still open locally. It exists to stop the mirror being re-created right
+//--- after the operator closed it; once the sender has also dropped it the
+//--- desired-set check collects the entry long before this expires. The TTL is
+//--- only the backstop for entries whose broker comment was mangled and which
+//--- therefore have no UID to match on.
+#define CP_MANUAL_CLOSED_TTL_MS (15*60*1000)
 CopierRisk      g_risk;      // circuit breakers (all off unless configured)
 //--- Our own exposure, refreshed once per tick so every sender's converge
 //--- pass gates against the SAME numbers. Computing it per sender would let
@@ -972,8 +1020,9 @@ void PruneSenderPeakLots()
      }
 
    //--- Compact active entries in single pass
+   int oldPeakCount=g_uidPeakLotsCount;
    int writeIdx=0;
-   for(int i=0;i<g_uidPeakLotsCount;i++)
+   for(int i=0;i<oldPeakCount;i++)
      {
       if(isAlive[i])
         {
@@ -981,6 +1030,9 @@ void PruneSenderPeakLots()
          writeIdx++;
         }
      }
+   //--- O4: clear the vacated tail, otherwise every pruned UID string stays
+   //--- referenced by the array slot it used to occupy
+   for(int k=writeIdx;k<oldPeakCount;k++) g_uidPeakLots[k].uid="";
    g_uidPeakLotsCount=writeIdx;
    //--- the compaction moved rows, so every cached index is suspect
    ArrayInitialize(g_peakLookup,0);
@@ -2874,28 +2926,54 @@ void ClearQueueExceptRiskReducing()
    if(g_qn<=0) g_qHead=0;
   }
 
-// M2: Remap preserved queue actions' senderIdx from old configuration to new indices
+// M2 & L5: Remap preserved queue actions' senderIdx from old configuration to new indices.
+//--- L5: a CP_ACT_MODIFY whose sender disappeared is dropped rather than kept with
+//--- senderIdx == -1. Risk-reducing exits (CLOSE/TRIM/DEDUP) must survive a reload -
+//--- they are the only path that can still flatten the position - but a stop update
+//--- has no meaning without its sender, and keeping it only produced a bogus
+//--- "action in queue for sender index -1 out of bounds" error on every dequeue.
 void RemapQueueSenders(const string &beforeSid[],const int beforeN)
   {
+   int w=0;
    for(int i=0;i<g_qn;i++)
      {
       int idx=g_qHead+i;
-      int oldSi=g_q[idx].senderIdx;
+      CopierAction a=g_q[idx];
+      int oldSi=a.senderIdx;
+      int newSi=oldSi;
       if(oldSi>=0 && oldSi<beforeN)
         {
          string oldSid=beforeSid[oldSi];
-         int newSi=-1;
+         newSi=-1;
          for(int j=0;j<g_nSenders;j++)
            {
             if(g_sid[j]==oldSid) { newSi=j; break; }
            }
-         g_q[idx].senderIdx=newSi;
         }
       else if(oldSi>=beforeN)
         {
-         g_q[idx].senderIdx=-1;
+         newSi=-1;
         }
+      a.senderIdx=newSi;
+      if(newSi<0 && a.kind==CP_ACT_MODIFY)
+        {
+         g_q[idx].uid="";
+         g_q[idx].sym="";
+         g_q[idx].key="";
+         continue;                       // compacted away, not merely skipped
+        }
+      if(w!=i) g_q[g_qHead+w]=a;
+      w++;
      }
+   for(int k=w;k<g_qn;k++)
+     {
+      int idx=g_qHead+k;
+      g_q[idx].uid="";
+      g_q[idx].sym="";
+      g_q[idx].key="";
+     }
+   g_qn=w;
+   if(g_qn<=0) g_qHead=0;
   }
 
 // OPT-01: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer()
@@ -3343,6 +3421,11 @@ void ExecuteQueue()
             ok=CopierClosePosition(a.ticket,dev,err,asyncMode,prefetchedPx);
         }
 
+      //--- L2 retry budget: hoisted above both branches so the orphan-close
+      //--- re-queue below can read it. Stays 1 for every failure mode that does
+      //--- not climb the ladder.
+      int fails=1;
+
       if(ok)
         {
          //--- record the SAME key PushAction tested, or the dedup silently
@@ -3595,7 +3678,7 @@ void ExecuteQueue()
             // BUG-01: Invalidate signature using exact 4-step probe hash to prevent freezing
             StopSigInvalidate(a.ticket);
            }
-         int fails;
+         fails=1;
          if(CopierIsTradeDisabled(err))
            {
             fails=1;
@@ -3706,6 +3789,32 @@ void ExecuteQueue()
                        +"s; further identical failures reported at most"
                        +" once a minute)");
         }
+
+      //--- L2: a close that has NO owning sender cannot be re-derived.
+      //--- ConvergeSender only walks configured senders, so an operator's
+      //--- `CMD close` on a manual/orphan position (senderIdx == -1) was executed
+      //--- exactly once: one requote and the command answered OK while the
+      //--- position stayed open forever, with nothing anywhere to retry it.
+      //--- Re-queue while the retry budget lasts; the queue's 1s CLOSE cap keeps
+      //--- the rate at one attempt per second and `skipped <= g_qn` bounds the pass.
+      if(a.senderIdx<0 && a.kind==CP_ACT_CLOSE && fails<=5
+         && !CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err)
+         && err!=-4 && err!=-5)
+        {
+         if(g_once.ShouldEmit("cmdretry|"+a.uid+"|"+(string)a.ticket))
+            g_log.Warn("close of "+a.uid+" (ticket "+(string)a.ticket+", "+a.sym
+                       +") was refused by the broker (err="+(string)err+") -"
+                       +" re-queued for retry attempt "+(string)(fails+1)+" of 6."
+                       +" There is no sender to re-issue it, so this queue is the"
+                       +" only retry path.");
+         CopierAction retry=a;
+         ShiftQueue();
+         done++;
+         PushAction(-1,CP_ACT_CLOSE,retry.uid,retry.sym,retry.side,retry.lots,
+                    retry.ticket,0,"",0.0,0.0,retry.ordKind);
+         continue;
+        }
+
       ShiftQueue();
       done++;
      }
@@ -3740,11 +3849,25 @@ void ExecuteQueue()
             // M-01: Update g_seen, g_ourCount and g_ourLots on Sweeper close success
             if(CopierSeenRingApplies(sa.kind)) g_seen.Add(sa.key);
             g_backoff.Clear(sa.key);
+            //--- L4: mirror the main-path counter rules exactly. A manual/orphan
+            //--- exit (senderIdx == -1) has no managed counters to give back - it
+            //--- must decrement the ORPHAN tally instead. The old code decremented
+            //--- g_ourPositions/g_ourCount for every straggler, so one orphan
+            //--- closed through the sweeper permanently understated the managed
+            //--- position count (and never decremented the orphan count at all).
             if(sa.ordKind==CP_ORD_MARKET)
               {
-               if(g_ourPositions>0) g_ourPositions--;
-               if(g_ourCount>0) g_ourCount--;
-               g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+               if(sa.senderIdx>=0)
+                 {
+                  if(g_ourPositions>0) g_ourPositions--;
+                  if(g_ourCount>0) g_ourCount--;
+                  g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+                 }
+               else
+                 {
+                  if(g_orphanCount>0) g_orphanCount--;
+                 }
+               if(g_acctPositions>0) g_acctPositions--;
                if(sa.senderIdx>=0 && sa.senderIdx<CP_MAX_SENDERS)
                  {
                   sAddedCount[sa.senderIdx]--;
@@ -3753,9 +3876,17 @@ void ExecuteQueue()
               }
             else if(sa.ordKind==CP_ORD_PENDING)
               {
-               if(g_ourPending>0) g_ourPending--;
-               if(g_ourCount>0) g_ourCount--;
-               g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+               if(sa.senderIdx>=0)
+                 {
+                  if(g_ourPending>0) g_ourPending--;
+                  if(g_ourCount>0) g_ourCount--;
+                  g_ourLots=MathMax(0.0,g_ourLots-sa.lots);
+                 }
+               else
+                 {
+                  if(g_orphanCount>0) g_orphanCount--;
+                 }
+               if(g_acctOrders>0) g_acctOrders--;
                //--- N57-14: the per-sender tallies were only decremented on the
                //--- MARKET branch above, so a pending order removed here left
                //--- sAddedCount/sAddedLots permanently one order high. Those
@@ -4914,11 +5045,57 @@ void RefreshRisk()
    long dayStart=CopierServerDayStart();
    if(dayStart!=g_riskDay)
      {
+      //--- L1: a COLD start is not a day rollover.
+      //--- On a mid-day (re)start with no same-day risk file, g_riskDay is 0.
+      //--- Treating that like "the clock just crossed midnight" sampled the
+      //--- CURRENT equity/balance as the day-start baseline, which:
+      //---   * forgave every loss already realised this morning (the switch the
+      //---     operator set for 3% silently read 0% for the first minute), and
+      //---   * froze whatever floating P/L existed at attach time into the
+      //---     baseline once the 60s recalibration added its cash-flow delta.
+      //--- Derive the day-start BALANCE from balance-minus-realised instead, and
+      //--- use it as the equity baseline (a flat account at day start equals its
+      //--- balance, and today's floating P/L then correctly counts as loss).
+      bool wasColdStart=(g_riskDay==0);
       g_riskDay=dayStart;
-      g_lastRealizedMs=now;
-      // Day rolled over while running: capture exact opening equity and balance
-      g_riskDayStartEquity=CopierAccountEquity();
-      g_riskDayStartBalance=CopierAccountBalance();
+      if(wasColdStart)
+        {
+         bool rOk=false;
+         double realized=CopierRealizedToday(dayStart,rOk);
+         double curBal=CopierAccountBalance();
+         if(rOk)
+           {
+            double trueStartBal=curBal-realized;
+            if(trueStartBal>0.0)
+              {
+               g_riskDayStartBalance=trueStartBal;
+               g_riskDayStartEquity=trueStartBal;
+              }
+            else
+              {
+               //--- realised history inconsistent with the balance (deposit/withdrawal
+               //--- today): fall back to the live account rather than a negative baseline
+               g_riskDayStartBalance=curBal;
+               g_riskDayStartEquity=CopierAccountEquity();
+              }
+            g_lastRealizedMs=now;
+           }
+         else
+           {
+            //--- history not ready yet: leave the baseline unset so the
+            //--- recalibration branch below retries on the very next tick
+            g_riskDayStartBalance=0.0;
+            g_riskDayStartEquity=0.0;
+            g_lastRealizedMs=0;
+           }
+        }
+      else
+        {
+         g_lastRealizedMs=now;
+         //--- Day rolled over while running: capture exact opening equity and balance
+         g_riskDayStartEquity=CopierAccountEquity();
+         g_riskDayStartBalance=CopierAccountBalance();
+        }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
      }
@@ -5894,72 +6071,64 @@ void ConvergeSender(const int si)
         }
      }
 
-   //--- N84-02 & N84-07: Garbage collect manually closed UIDs that the sender no longer holds in desired set
+   //--- N84-02, N84-07 & L2: Garbage collect manually closed entries.
+   //---
+   //--- Three kinds of entry live in this ring and they must NOT be collected
+   //--- the same way:
+   //---   * real UIDs      -> collected when the owning sender no longer holds them
+   //---                        in its desired set (the original rule);
+   //---   * "#t<localTkt>" -> a position whose broker comment was mangled, so it
+   //---                        has no UID at all. It can never appear in the
+   //---                        desired set (which carries 8-hex UIDs), so the old
+   //---                        rule deleted it on the very next tick - the mirror
+   //---                        was then re-opened immediately after the operator
+   //---                        closed it. Collect it when the local ticket is
+   //---                        gone, or after a generous TTL as a backstop;
+   //---   * ticket-only    -> same treatment as "#t", just without the prefix.
    if(g_manualClosed.Count()>0 && g_ready[si])
      {
       bool gcChanged=false;
       string curSid=g_sid[si];
+      long gcNow=GetTickCount();
       for(int m=g_manualClosed.Count()-1; m>=0; m--)
         {
          string mUid=g_manualClosed.GetUid(m);
-         if(StringLen(mUid)==0) continue;
+         long   mTkt=g_manualClosed.GetTicket(m);
          string mSid=g_manualClosed.GetSid(m);
 
-         if(StringLen(mSid)>0)
+         bool uidIsTicketPlaceholder=(StringLen(mUid)>=2 && StringSubstr(mUid,0,2)=="#t");
+         if(StringLen(mUid)==0 || uidIsTicketPlaceholder)
            {
-            // MQL-BUG-04: If mSid is "manual" or belongs to a removed sender, safely clean it up
-            bool senderFound=false;
-            for(int os=0; os<g_nSenders; os++)
+            if(mTkt<=0) continue;
+            long ageMs=(long)(gcNow-(long)g_manualClosed.GetAt(m));
+            if(!LocalTicketStillOpen(mTkt) || ageMs>CP_MANUAL_CLOSED_TTL_MS)
               {
-               if(g_sid[os]==mSid) { senderFound=true; break; }
-              }
-            if(!senderFound)
-              {
-               g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") no longer belongs to any active sender. Cleaned up.");
-               g_manualClosed.Forget(mUid);
-               gcChanged=true;
-               continue;
-              }
-            // Direct O(D) GC: if entry belongs to this sender, check this sender's desired set only
-            if(mSid!=curSid) continue;
-            bool senderStillHolds=false;
-            for(int d=0; d<g_desiredCount[si]; d++)
-              {
-               if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
-              }
-            if(!senderStillHolds)
-              {
-               g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") was closed by operator and sender no longer holds it. Removed from ignore table.");
-               g_manualClosed.Forget(mUid);
+               g_log.Info("ManualClosed GC: ticket "+IntegerToString(mTkt)+" ("
+                          +(StringLen(mUid)>0?mUid:"no uid")+") is "
+                          +(LocalTicketStillOpen(mTkt)?"older than the ignore TTL":"no longer open locally")
+                          +". Removed from ignore table.");
+               g_manualClosed.RemoveAt(m);
                gcChanged=true;
               }
+            continue;
            }
-         else
-           {
-            // Legacy entry without sid: require ALL senders to be ready before evaluating
-            bool allReady=true;
-            for(int os=0; os<g_nSenders; os++)
-              {
-               if(!g_ready[os]) { allReady=false; break; }
-              }
-            if(!allReady) continue;
+         //--- direct O(D) GC: if entry belongs to this sender, check this sender's
+         //--- desired set only. Entries attributed to ANOTHER sender are left alone.
+         if(StringLen(mSid)>0 && mSid!=curSid) continue;
 
-            bool anyHolds=false;
-            for(int os=0; os<g_nSenders; os++)
-              {
-               int obase=os*CP_MAX_POSITIONS;
-               for(int od=0; od<g_desiredCount[os]; od++)
-                 {
-                  if(g_desired[obase+od].uid==mUid) { anyHolds=true; break; }
-                 }
-               if(anyHolds) break;
-              }
-            if(!anyHolds)
-              {
+         bool senderStillHolds=false;
+         for(int d=0; d<g_desiredCount[si]; d++)
+           {
+            if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
+           }
+         if(!senderStillHolds)
+           {
+            if(StringLen(mSid)>0)
+               g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") was closed by operator and sender no longer holds it. Removed from ignore table.");
+            else
                g_log.Info("ManualClosed GC: legacy UID "+mUid+" was closed by operator and no sender holds it. Removed from ignore table.");
-               g_manualClosed.Forget(mUid);
-               gcChanged=true;
-              }
+            g_manualClosed.RemoveAt(m);
+            gcChanged=true;
            }
         }
       if(gcChanged) CmdStateSave(); // N83-02: Synchronize disk state when manual closed entries are GC'd
@@ -6050,10 +6219,21 @@ void HandleSnapshot(const int si,const CopierEnv &e)
                   +" why.");
      }
    int base=si*CP_MAX_POSITIONS;
+   int prevCount=g_desiredCount[si];
    for(int i=0;i<n;i++)
      {
       g_desired[base+i]=g_scratch[i];
       GetOrUpdateSenderPeakLots(g_scratch[i].uid,g_scratch[i].lots);
+     }
+   //--- C4: release the rows this snapshot shrank past. CopierPos carries three
+   //--- strings; leaving them behind kept up to 2048 UID/symbol/comment references
+   //--- alive per sender for the life of the terminal, and every shrink of a large
+   //--- book leaked another batch.
+   for(int i=n;i<prevCount && i<CP_MAX_POSITIONS;i++)
+     {
+      g_desired[base+i].uid="";
+      g_desired[base+i].sym="";
+      g_desired[base+i].cmt="";
      }
    g_desiredCount[si]=n;
    g_ready[si]=true;
@@ -7195,7 +7375,9 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
               }
             if(g_peers.PongBack(pfrom,CopierParseLong(pms)))
               {
-               g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+               // V3/C4: disarm only after every expected echo has landed
+               if(g_pumpPongExpect>0) g_pumpPongExpect--;
+               if(g_pumpPongExpect<=0) g_pump.Disarm();
                if(g_once.ShouldEmit("rtt|"+pfrom))
                   g_log.Info("link to "+pfrom+" measured: "
                              +(string)g_peers.RttFor(pfrom)+" ms round trip");
@@ -7283,7 +7465,9 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       if((pto==(string)CopierAccountLogin() || (g_hubOn && pto==(string)g_nid)) && StringLen(pfrom)>0
          && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
-         g_pump.Disarm(); // Echo arrived -> cancel fast pump immediately
+         // V3/C4: disarm only after every expected echo has landed
+         if(g_pumpPongExpect>0) g_pumpPongExpect--;
+         if(g_pumpPongExpect<=0) g_pump.Disarm();
          //--- first successful measurement: the only line that distinguishes
          //--- "the link is fine" from "both ends answer and nobody records it"
          if(g_once.ShouldEmit("rtt|"+pfrom))
@@ -7793,9 +7977,12 @@ void OnDeinit(const int reason)
 //--- directions, rather than each side guessing differently.
 void CheckPeersPing(const long now)
   {
+   bool armedRound=false;
    if(!g_hubOn && now-g_lastPingMs>=CP_PING_MS)
      {
       g_lastPingMs=now;
+      g_pumpPongExpect=0;
+      armedRound=true;
       CopierSendStatus(CP_T_PING,
                        CopierPayloadPing(now,(string)CopierAccountLogin()));
       for(int k=0;k<CP_MAX_PEERS;k++)
@@ -7805,14 +7992,19 @@ void CheckPeersPing(const long now)
            {
             if(IsHubPeerName(pn)) continue; // M1: Do not overwrite hub peer probe timestamps from direct ping
             g_peers.ProbeSentAt(k,now);
+            g_pumpPongExpect++;
            }
         }
-      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
 
    if(g_hubOn && now-g_lastHubPingMs>=CP_PING_MS)
      {
       g_lastHubPingMs=now;
+      if(!armedRound)
+        {
+         g_pumpPongExpect=0;
+         armedRound=true;
+        }
       CopierEnv he;
       he.v=CP_PROTO_V;
       he.sid=(string)g_nid;
@@ -7828,14 +8020,17 @@ void CheckPeersPing(const long now)
          g_peers.ProbeSent("hub:primary",now);
          g_peers.ProbeSent("hub:standby",now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+         g_pumpPongExpect+=2;           // dual-sent: both hubs answer
         }
       else
         {
          g_peers.ProbeSent(g_singleHubRole,now);
          g_peers.Forget(g_hubPeerName); // Clean up standalone placeholder
+         g_pumpPongExpect+=1;
         }
-      g_pump.ArmFast(); // Bounded micro burst to catch immediate local PONG
      }
+   if(armedRound && g_pumpPongExpect>0)
+      g_pump.ArmFast(); // Bounded micro burst sized to the echos this round expects
   }
 
 //--- F-09: accurately recognize hub peers whether standalone "hub" or HA "hub:primary" / "hub:standby"
@@ -8366,6 +8561,10 @@ void OnTimer()
       g_lastHbt2Ms=CopierNowMs();
       HubAnnounce(g_announceCount<CP_REG_REPEATS);
       g_announceCount++;
+      //--- O4: saturate instead of counting forever. Nothing reads this beyond
+      //--- the CP_REG_REPEATS threshold, and an unbounded counter is a latent
+      //--- overflow on a terminal that runs for months.
+      if(g_announceCount>CP_REG_REPEATS) g_announceCount=CP_REG_REPEATS;
      }
 
    //--- M4b self-heal: ask the hub for a config if we still have none.
