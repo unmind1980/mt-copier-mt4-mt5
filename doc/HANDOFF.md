@@ -2030,3 +2030,47 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   5. **P5 / P6 / P7（符号报价年龄哈希、RefreshRisk 快车道防抖、poke 节流合并）**：P5 实测成本被报告高估（1 秒 memo 已挡住绝大多数调用，缓存未命中每符号每秒最多 256 次字符串比较 ≈ 2.5 万次/秒，微秒级）；P6 加防抖会让风控读到旧持仓，可能击穿开仓上限（交易安全优先）；P7 纯属逻辑重复，无行为风险也无收益。三项均建议维持现状。
 
 ---
+
+### 一百零九次演进：配置编码自检、信任边界成文、批量收据与多实例服务 (2026-11-06 14:30；已闭环)
+
+- **技术落地项**：
+  1. **配置文件写后自检（B3）**：
+     - `src/Include/Copier/CopierConfig.mqh` 新增 `CopierIniCmpNormalize()` 与 `CopierIniWriteAtomic` 的**写后读回比对**：`CopierIniWriteAll` 用 `FILE_ANSI`，落在终端系统代码页之外的字符会被静默写成 `?`，而推送本身仍返回 OK、内存配置仍正确，损坏只在下次 `LoadConfig()` 才显现。现在写盘后立即读回，不一致就打印一条带首个差异位置与字符的 WARN（**不拒绝**该配置——即将加载的模型来自刚写入的字符串，运行配置是对的，坏的只是磁盘副本）。
+     - `CopierSelfTest` 增加 5 条断言，锁住"只忽略行尾形状、绝不忽略内容差异"的语义。
+  2. **文档澄清 ini 的三层语义（B3）**：
+     - `doc/PROTOCOL.md` 新增 "What round-trip means for the ini" 一节，明确 ① 线路层（`escape_ini` ⇄ `CopierIniEscape`）逐字节无损；② 模型层**不是**往返（只保留已知键，注释/未知键不进模型，`IH=` 算的是模型重渲染）；③ 磁盘层仅在单一 ANSI 代码页内无损、跨机器不可移植；并指出 `Load Current Setting from Node` 显示的是重渲染而非原文。
+  3. **数据面信任边界成文 + 豁免收紧（A1）**：
+     - `doc/PROTOCOL.md` 新增 "The allow-list is a TRUST BOUNDARY, not an isolation mechanism"：写明 allow-list 内任一 key 等价于对**全部 sender 数据面**的写权限，一条伪造 `SNAP N=0` 即可清仓；并说明 XPUB 只给 `(topic,payload)`、ZAP 只在握手回答一次，所以 Hub 在转发点无法区分"冒充 Hub"与"冒充别的 sender"。结论落到运维规则：**一个 Hub 一个运维方**；直连模式同性质且无仲裁，只可用于可信点对点链路。
+     - 转发守卫收紧：`topic != SID` 只允许 `SNAP` 且 topic 必须是**纯数字节点 id**（定向修复的唯一合法形态）。曾考虑要求"必须是已注册 receiver"，实测会误伤刚上线/registry 刚过期的 receiver 的合法修复，收益为零，故只做形状校验。
+     - `tools/hub_stat_path_test.py` 增加两条断言（非数字 topic 的 SNAP 被丢弃、数字 topic 仍可达），把该规则锁死。
+  4. **批量收据（B5 / P4）**：
+     - 接收端：`g_nSenders>1` 时不再每 sender 一条 `STAT`，改为一条 `RH=<sid>:<h>,<sid>:<h>,...`（`CP_STAT_RH_CHUNK`=1200 字节分片）。首个分片同时重复第一对为 `SID=`/`H=`，使旧 Hub 至少收到一条收据；`HELD/LOTS/EQ/POS/WAITLIST/BLOCKED/RISK` 仍只在首个分片出现，重字段仍是每分钟解析一次。
+     - Hub 端：新增 `parse_rh_pairs()` 与 `relay_one_receipt()`，把单条与批量两种形态收敛到**同一条**校验/镜像边/去重/`RCPT` 单播路径，避免两套逻辑漂移；无 `RH` 时回退单条 `SID`/`H`，完全向后兼容。
+     - 收益：100 senders × N receivers 的入站帧量从 `O(senders)` 降到 `O(1)`，Hub 的每帧固定开销（信封解码、约 20 次 key 查找、状态锁、收据去重）同比减少。
+     - 新增 4 条 Rust 单测（`parse_rh_pairs` 的正常/畸形/上限、`copier_nid` 归一）与 6 条 Python 端到端断言。
+  5. **Windows 服务多实例与日志落点（H4）**：
+     - `hub/src/service.rs`：服务名由 `service_name(role, instance)` 生成（`MTCopierPrimary` / `MTCopierPrimary_<instance>`），`install/uninstall/start/stop/status` 全部接受 `--instance`；显示名带实例后缀。
+     - 服务日志目录改为**显式解析** `--workdir`（先看 SCM 传入的参数，再看进程命令行），再回退到当前目录/可执行文件目录；启动时打印日志落点。此前是相对路径，依赖 `main()` 的 chdir 生效，chdir 失败就会落到 `System32`。
+     - `redirect_stdio_to_log` 用 `static Mutex<Option<File>>` 持有句柄，取代 `mem::forget`（同样的生命周期，但句柄可寻址、重复调用不会孤立前一个）。
+     - `tools/service_*.bat` 支持 `MTC_INSTANCE` 环境变量（安装/卸载传 `--instance`，启停/查询拼接服务名后缀），未设置时行为与历史完全一致。
+
+- **本轮验证**：
+  - 16 个 MQL 二进制目标 0 错误 0 警告（ALL GREEN）；
+  - Rust 167/167 单元测试通过（新增 4 条），0 warnings；
+  - Python 全套 24 个套件全绿，其中 `hub_stat_path_test.py` 从 20 项增至 28 项。
+
+- **第 109 轮独立复核（outputs/mt-copier-fullstack-audit-2026-11-06-r3.md）发现并已修复的回归**：
+  1. **F-01 `CopierIniCmpNormalize` 是 O(n²)**（本轮新增代码的严重性能回归）：逐字符 `out += c` 在 100-sender / 270 KB ini 上会产生数十 GB 复制，且每次 CFG 推送调用两次，跑在 EA 主线程。**已改为 `CopierIniCmpDiff()` 双游标比较，零分配 O(n)**；SelfTest 增加"200 KB 文本比较 < 200 ms"的性能护栏。
+  2. **F-02 bat 延迟展开陷阱**：`set` 写在 `if (...)` 复合块内、用 `%VAR%` 引用，cmd 在进入块前就完成展开 → `--instance` 永远为空，装第二个服务会静默重配第一个。**已把定义移到块外顶层，并全部改用 `!VAR!`**；`sc start/stop/query` 也补上 `!MTC_INST_SUFFIX!`（已用 cmd 冒烟验证 `arg=--instance edge / suffix=_edge`）。
+  3. **F-03 分块尺寸错误**：`CP_STAT_RH_CHUNK=1200` 是按"`CP_MAX_SENDERS`=32"算的，实际是 100（约 2.1 KB）→ 满配必分 2 帧，且第 2 帧没有 `SID=`/`H=`，老 Hub 静默丢掉其余 sender 的收据。**已提到 4096（满配单帧），每帧都带 `SID=`/`H=`**，新增 Rust 单测锁住"满配必须单帧"的算术。
+  4. **F-04/F-16 批量省帧没省锁**：`relay_one_receipt` 每 pair 两次全局锁 + 两次注册表全表扫描。**合并为 `relay_receipts()` 一次锁、一次注册表快照、一次 primary 判定**，锁外只做去重与发送。
+  5. **F-05 只配日内限额时零净值闩锁一整天**：释放路径挂在回撤闩上。**改为 `m_zeroDaily` / `m_zeroDd` 双标志独立记录与释放**，SelfTest 补"仅 dailyLossPct + 2 次零 + 25 次健康 → 放行"。
+  6. **F-08 `RH=` 字段无形状校验**：`h` 被原样拼进 `RCPT` 的 `P=`，可注入 `;`/`|`。**`parse_rh_pairs` 现在要求 sid 纯数字 ≤11 位、h 为空或 8 位 hex**，非法对直接丢弃；上限从 4096 收到 512。新增"分隔符注入必须被拒绝"单测。
+  7. **F-10 "hash 非空"把"文件还没建"也跳过**：全新 Standby（路径有效但文件不存在）永远不发起首次同步。**改用 `notif_enabled` / `curve_clients_enabled` 标志（本地按路径判定，对端声明，旧对端回退到 hash 非空）**。
+  8. **F-11 同步失败仍采纳 epoch**：`file_sync_err` 置位时 epoch 已写入内存与磁盘，与 HUB-02 注释承诺相反。**加 `sync_clean` 守卫，只有全部落盘成功才提代**。
+  9. **F-14 Standby 连只读全网查询也 409**：`!is_primary` 检查在 `is_read_only` 之前。**改为 `!is_primary && !is_read_only`**（仅 `commands_global`，每节点接口的写门禁不变）。
+  10. **F-09 文档/注释与代码不符**：`CP_MAX_SENDERS` 写 32（实为 100）、PROTOCOL 说"已注册 receiver"（实为纯数字形状）。**均已更正**；`CP_NODE_VER` 由 `2.0` 升到 `2.1` 作为 `RH=` 能力的标记。
+
+- **复核后仍未处理（记录在案）**：F-06（两端 ini 形状校验仍有 4 条规则不对齐，属"节点更宽松、Hub 更严格"，不会重现 HUB-03 死循环，但本地编辑的 ini 仍可能与 Hub 判定不一致）、F-07（B3 仍是"警告不阻断"，根因 `FILE_ANSI` 未改）、F-12（用户表强同步默认关闭，需文档明示或改默认）、F-13（压缩字段解码失败时 Hub 返回原文、节点返回空）、F-15/F-17/F-18/F-19（hash 缓存键、通知连接池、尾帧标志、报价年龄哈希，均为历轮已评估的低优先项）。
+
+---

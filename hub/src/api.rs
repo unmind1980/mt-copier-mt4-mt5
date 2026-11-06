@@ -2826,7 +2826,11 @@ async fn commands_global(
         let s = st.lock_or_recover();
         (s.writes, s.cluster.is_primary())
     };
-    if !is_primary {
+    //--- F-14: read-only operations are allowed on a Standby too. This check used to
+    //--- run before `is_read_only` was consulted, so the fleet-wide `reqpos`/`reqcfg`
+    //--- - pure queries, and how an operator verifies holdings before a failover -
+    //--- answered 409 on the standby. The write gate below already exempts them.
+    if !is_primary && !is_read_only {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
@@ -3434,6 +3438,10 @@ async fn cluster_status(
         users_hash,
         notif_hash,
         curve_clients_hash,
+        //--- F-10: announce whether the feature is ON, independently of whether the
+        //--- file exists yet. "path empty" is the only reliable off-switch.
+        notif_enabled: !notif_path.as_os_str().is_empty(),
+        curve_clients_enabled: !curve_clients_path.as_os_str().is_empty(),
         is_configured_primary,
         failback_locked,
         ts: unix_secs(),

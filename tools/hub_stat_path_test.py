@@ -161,6 +161,48 @@ def main():
         for k in ("EQ", "BL", "HELD", "LOTS", "NSEND", "BLOCKED", "RISK"):
             check(f"the relayed receipt carries no {k}", k not in kv)
 
+    # --- B5/P4: ONE STAT can carry MANY receipts. The batched form exists so a
+    # --- receiver mirroring N senders stops paying the hub's per-frame cost N times
+    # --- a second; the hub must split it back into the same per-sender unicasts.
+    print()
+    print("== 2b. B5/P4: one STAT carries many receipts ==")
+    sender2 = ctx.socket(zmq.XSUB)
+    sender2.setsockopt(zmq.LINGER, 0)
+    sender2.connect(f"tcp://127.0.0.1:{PORT}")
+    sender2.send(b"\x01@" + NID_OTHER.encode())
+    time.sleep(1.0)               # let the second sender's subscription propagate
+
+    def wait_rcpt_on(sock, timeout=1.5):
+        end = time.time() + timeout
+        while time.time() < end:
+            for parts in drain(sock):
+                if len(parts) >= 2:
+                    ty, kv = rcv_payload(parts[1])
+                    if ty == "RCPT":
+                        return parts, kv
+            time.sleep(0.05)
+        return None, None
+
+    drain(sender)
+    drain(sender2)
+    recv.send_multipart([b"@hub", stat_env(
+        b"LOGIN=" + RECV_LOGIN.encode()
+        + b";RH=" + NID_SENDER.encode() + b":aaaaaaaa," + NID_OTHER.encode() + b":bbbbbbbb")])
+    p1, kv1 = wait_rcpt_on(sender)
+    p2, kv2 = wait_rcpt_on(sender2)
+    check("a batched STAT relays the first sender's receipt", p1 is not None,
+          "nothing arrived" if p1 is None else "ok")
+    check("...and the second sender's, from the SAME frame", p2 is not None,
+          "nothing arrived" if p2 is None else "ok")
+    if p1 is not None:
+        check("the first pair keeps its own hash", kv1.get("H") == "aaaaaaaa", str(kv1.get("H")))
+        check("...and is addressed to the first sender",
+              p1[0] == b"@" + NID_SENDER.encode(), p1[0].decode("latin-1"))
+    if p2 is not None:
+        check("the second pair keeps its own hash", kv2.get("H") == "bbbbbbbb", str(kv2.get("H")))
+        check("...and is addressed to the second sender",
+              p2[0] == b"@" + NID_OTHER.encode(), p2[0].decode("latin-1"))
+
     print()
     print("== 3. a STAT that cannot be addressed is not relayed ==")
     drain(sender)
@@ -235,6 +277,25 @@ def main():
     time.sleep(0.7)
     check("a repair on '@<receiver nid>' reaches nobody (the hub consumes it)",
           not any(repair in p for p in drain_sock(r_target)))
+
+    # --- A1 tightening: `topic != SID` is only legal for a SNAP addressed to a
+    # --- NUMERIC node id. A SNAP aimed at a made-up topic used to be forwarded to
+    # --- whoever happened to subscribe to that string; nothing legitimate does
+    # --- that, and the hub is the only party that may originate on `@`.
+    drain_sock(r_target)
+    sender.send_multipart([b"not-a-node-id", repair])
+    time.sleep(0.7)
+    check("a SNAP on a non-numeric topic is dropped",
+          not any(repair in p for p in drain_sock(r_target)))
+
+    # --- ...while the same SNAP on a real receiver nid still works, i.e. the rule
+    # --- is a shape test and not a blanket ban (asserted above, re-checked here so
+    # --- a future "fix" cannot satisfy one half at the expense of the other)
+    drain_sock(r_target)
+    sender.send_multipart([NID_RECV.encode(), repair])
+    time.sleep(0.7)
+    check("...but a numeric topic still reaches the receiver",
+          any(repair in p for p in drain_sock(r_target)))
 
     # --- log volume: a routine uplink must not write a line per message
     #

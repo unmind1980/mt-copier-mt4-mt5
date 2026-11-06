@@ -20,6 +20,19 @@ cd /d "%REPO%"
 
 set "BIN=%REPO%\hub\target\release\copier-hub.exe"
 
+rem --- H4: optional instance suffix, so a second Primary/Standby can live on this
+rem --- host without reconfiguring the first one. Unset = historic service names.
+rem --- Delayed expansion (!VAR!) is mandatory here: cmd.exe expands %VAR% for a
+rem --- whole if(...) block before running it, so a value set inside the block is
+rem --- invisible to a %VAR% reference in the same block - which silently made
+rem --- --instance a no-op and made a second install reconfigure the first service.
+set "MTC_INST_ARG="
+set "MTC_INST_SUFFIX="
+if defined MTC_INSTANCE (
+    set "MTC_INST_ARG=--instance !MTC_INSTANCE!"
+    set "MTC_INST_SUFFIX=_!MTC_INSTANCE!"
+)
+
 echo Please choose which Windows Service to uninstall from this computer:
 echo.
 echo   [1] Uninstall Primary Hub Service (MTCopierPrimary)
@@ -39,10 +52,12 @@ exit /b 0
 echo.
 echo Stopping and removing MTCopierPrimary service...
 if exist "%BIN%" (
-    "%BIN%" --service-uninstall primary
+rem --- H4: optional instance suffix, so a second Primary/Standby can be installed
+rem --- on this host without reconfiguring the first one. Unset = historic names.
+    "%BIN%" --service-uninstall primary !MTC_INST_ARG!
 ) else (
-    sc stop MTCopierPrimary >nul 2>&1
-    sc delete MTCopierPrimary >nul 2>&1
+    sc stop MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
+    sc delete MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
 )
 goto :done
 
@@ -50,10 +65,10 @@ goto :done
 echo.
 echo Stopping and removing MTCopierStandby service...
 if exist "%BIN%" (
-    "%BIN%" --service-uninstall standby
+    "%BIN%" --service-uninstall standby !MTC_INST_ARG!
 ) else (
-    sc stop MTCopierStandby >nul 2>&1
-    sc delete MTCopierStandby >nul 2>&1
+    sc stop MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
+    sc delete MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
 )
 goto :done
 
@@ -61,13 +76,13 @@ goto :done
 echo.
 echo Stopping and removing ALL MT-Copier services...
 if exist "%BIN%" (
-    "%BIN%" --service-uninstall primary
-    "%BIN%" --service-uninstall standby
+    "%BIN%" --service-uninstall primary !MTC_INST_ARG!
+    "%BIN%" --service-uninstall standby !MTC_INST_ARG!
 ) else (
-    sc stop MTCopierPrimary >nul 2>&1
-    sc delete MTCopierPrimary >nul 2>&1
-    sc stop MTCopierStandby >nul 2>&1
-    sc delete MTCopierStandby >nul 2>&1
+    sc stop MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
+    sc delete MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
+    sc stop MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
+    sc delete MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
 )
 goto :done
 

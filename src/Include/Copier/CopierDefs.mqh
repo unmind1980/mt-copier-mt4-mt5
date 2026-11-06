@@ -230,6 +230,26 @@ bool CopierSeenRingApplies(const int kind)
 #define CP_SEP_FIELD "|"
 #define CP_SEP_KV    ";"
 #define CP_SEP_REC   "~"
+
+//--- B5/P4: batching receipts into one STAT.
+//---
+//--- A receiver of N senders used to emit N STAT frames per heartbeat, each
+//--- carrying ONE `SID`/`H` pair - so 100 senders x N receivers meant 100xN
+//--- frames a second, all of them paying the full per-frame cost (envelope
+//--- parse, ~20 key lookups, a state lock, receipt de-duplication) to deliver
+//--- 8 bytes of payload each. The batched form carries the same pairs in one
+//--- frame as `RH=<sid>:<h>,<sid>:<h>,...`; the hub splits it back into the
+//--- same per-sender `RCPT` unicasts, so nothing downstream changes.
+//---
+//--- The limit is sized so the FULL configuration always fits in ONE frame:
+//--- `CP_MAX_SENDERS` x (11-digit sid + ':' + 8-char hash + ',') is under 2 KB,
+//--- and 4096 leaves room for the rest of the payload plus any future growth.
+//--- It exists only so raising CP_MAX_SENDERS cannot silently produce an
+//--- oversized field; chunking is a backstop, not the normal path. (An earlier
+//--- 1200 was derived from a wrong assumption that CP_MAX_SENDERS was 32, which
+//--- split a full config across two frames and cost older hubs every receipt
+//--- but the first.)
+#define CP_STAT_RH_CHUNK 4096
 #define CP_SEP_ITEM  ","
 
 #define CP_PROTO_V   1
@@ -319,7 +339,13 @@ bool CopierSeenRingApplies(const int kind)
 //--- to decide whether it can talk to a node at all; a build stamp is a
 //--- datetime that changes on every compile and would make every node look
 //--- "upgraded" for no reason.
-#define CP_NODE_VER  "2.0"
+//---
+//--- 2.1 adds the batched receipt field `RH=` on STAT (see CP_STAT_RH_CHUNK).
+//--- It is an ADDITIVE change - a 2.0 receiver simply never sends the field and
+//--- a 2.0 hub ignores it - but the number is what lets an operator see, from
+//--- `/nodes`, whether a rolling upgrade has actually finished before trusting
+//--- the reduced frame count.
+#define CP_NODE_VER  "2.1"
 
 //--- How often a node says "still here" on the central channel.
 //---

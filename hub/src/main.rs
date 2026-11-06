@@ -92,6 +92,7 @@ use positions::{parse_snap, Positions};
 use registry::Liveness;
 use stats::Stats;
 use crate::lockx::LockExt;
+use crate::api::SharedState;
 
 /// Set by the Ctrl-C handler or SCM Stop/Shutdown event, read by the loop.
 pub(crate) static EXIT: AtomicBool = AtomicBool::new(false);
@@ -337,6 +338,10 @@ pub struct Args {
     pub service_stop: Option<String>,
     pub service_status: Option<String>,
     pub workdir: Option<String>,
+    /// H4: optional suffix for the Windows service name, so two instances of the
+    /// same role can coexist on one machine (`MTCopierPrimary_edge`, ...). Empty
+    /// means the historic, unsuffixed name.
+    pub instance: Option<String>,
 }
 
 pub fn parse_args() -> Result<Args, String> {
@@ -374,6 +379,7 @@ pub fn parse_args() -> Result<Args, String> {
         service_stop: None,
         service_status: None,
         workdir: None,
+        instance: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -572,6 +578,23 @@ pub fn parse_args() -> Result<Args, String> {
                 a.workdir = Some(need(i)?.clone());
                 i += 2;
             }
+            "--instance" => {
+                //--- H4: a short, name-safe suffix. Anything else would have to be
+                //--- quoted through SCM, the registry and `sc.exe`, which is a fight
+                //--- not worth picking.
+                let v = need(i)?.clone();
+                let ok = !v.is_empty()
+                    && v.len() <= 24
+                    && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if !ok {
+                    return Err(format!(
+                        "--instance must be 1-24 chars of [A-Za-z0-9_-], got '{}'",
+                        v
+                    ));
+                }
+                a.instance = Some(v);
+                i += 2;
+            }
             "--help" | "-h" => {
                 return Err("help".to_string());
             }
@@ -643,6 +666,8 @@ fn usage() {
     println!("  --service-start ROLE   start Windows Service");
     println!("  --service-stop ROLE    stop Windows Service");
     println!("  --service-status ROLE  query Windows Service status");
+    println!("  --instance NAME        suffix the service name (MTCopierPrimary_NAME),");
+    println!("                         so two instances of one role can coexist");
     println!("  --workdir PATH         working directory for the hub process");
 }
 
@@ -903,6 +928,194 @@ fn describe_sub(prefix: &str) -> String {
     }
 }
 
+/// B5/P4: split a batched receipt list (`<sid>:<h>,<sid>:<h>,...`) into pairs.
+///
+/// A receiver of N senders used to send N `STAT` frames per heartbeat; the batched
+/// form carries the same N pairs in one frame, and this is where they are taken
+/// apart again so every downstream step (validation, mirror edge, de-duplication,
+/// RCPT unicast) sees exactly what it saw before.
+///
+/// Malformed entries are dropped individually rather than failing the whole frame:
+/// one bad pair must not cost the other twenty their receipts.
+///
+/// F-08: both halves are SHAPE-CHECKED here, not later. `h` is pasted verbatim
+/// into the `RCPT` payload (`P=LOGIN=..;SID=..;H=<h>`), so a hash containing `;`
+/// or `|` would inject or truncate envelope fields on the sender's side. A real
+/// snapshot hash is exactly 8 lowercase hex characters and an empty hash is a
+/// legal "no snapshot yet", so nothing else has any business being here. `sid` is
+/// held to the same shape `relay_receipts` uses, which also lets a junk pair be
+/// discarded before it ever reaches the state lock.
+fn parse_rh_pairs(rh: &str) -> Vec<(String, String)> {
+    //--- bounded well above CP_MAX_SENDERS (100): this is a corruption guard, not
+    //--- a capacity, and 40x headroom was an arbitrary number that made a hostile
+    //--- field 40x more expensive than it needed to be.
+    const MAX_PAIRS: usize = 512;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for part in rh.split(',') {
+        if out.len() >= MAX_PAIRS {
+            break;
+        }
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        //--- split_once(':') and not split(':') - a hash never contains ':',
+        //--- and taking the FIRST colon leaves the rest intact if one ever does.
+        let (sid, h) = match p.split_once(':') {
+            Some((s, h)) => (s.trim(), h.trim()),
+            None => continue,
+        };
+        let sid_ok = !sid.is_empty()
+            && sid.len() <= 11
+            && sid.bytes().all(|b| b.is_ascii_digit());
+        let h_ok = h.is_empty() || (h.len() == 8 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !sid_ok || !h_ok {
+            continue;
+        }
+        out.push((sid.to_string(), h.to_string()));
+    }
+    out
+}
+
+/// One batch of receipts, end to end: plausibility, registry validation, mirror
+/// edges, de-duplication, and the `RCPT` unicasts.
+///
+/// Extracted from the STAT handler so the single (`SID=`/`H=`) and batched (`RH=`)
+/// forms cannot drift apart - the single form is just a one-element batch.
+/// Returns `true` when a new sender->receiver mirror edge was recorded.
+///
+/// F-04/F-16: everything that needs the registry happens under ONE lock, with the
+/// node list snapshotted once (O(K)) instead of rescanned per pair (O(N*K)), and
+/// the primary/peer check hoisted out of the loop. Batching the frames without
+/// batching the locks would have moved the same 2xN acquisitions into a single
+/// frame - more contention, not less.
+#[allow(clippy::too_many_arguments)]
+fn relay_receipts(
+    sock: &zmq::Socket,
+    state: &mut HubState,
+    shared: &SharedState,
+    st: &mut Stats,
+    warm: bool,
+    login: &str,
+    pairs: &[(String, String)],
+    last_rcpt_relayed: &mut std::collections::HashMap<(String, String), (String, Instant)>,
+    last_rcpt_prune: &mut Instant,
+    last_rcpt_drop: &mut Instant,
+) -> bool {
+    if pairs.is_empty() {
+        return false;
+    }
+
+    let mut accepted: Vec<(String, String)> = Vec::with_capacity(pairs.len());
+    let (changed, is_primary_or_takeover) = {
+        let mut s = shared.lock_or_recover();
+
+        //--- one registry snapshot for the whole batch
+        let mut sender_nids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut receiver_nids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut n_senders = 0usize;
+        let mut n_receivers = 0usize;
+        for n in s.reg.nodes().iter() {
+            match n.role {
+                registry::Role::Sender => {
+                    n_senders += 1;
+                    sender_nids.insert(copier_nid(&n.acc));
+                }
+                registry::Role::Receiver => {
+                    n_receivers += 1;
+                    receiver_nids.insert(copier_nid(&n.acc));
+                }
+                registry::Role::Unknown => {}
+            }
+        }
+        let login_is_receiver = s.reg.get(&format!("receiver:{}", login)).is_some()
+            || receiver_nids.contains(login);
+        // DEF-61-11: only fall back to the role count when the direct lookup missed
+        let receiver_valid = login_is_receiver || warm || n_receivers == 0;
+
+        let mut changed = false;
+        for (sid, h) in pairs {
+            if sid.is_empty() || sid == "-" {
+                continue;
+            }
+            let sid_is_sender = s.reg.get(&format!("sender:{}", sid)).is_some()
+                || sender_nids.contains(sid.as_str());
+            let sender_valid = sid_is_sender || warm || n_senders == 0;
+
+            //--- F-21: the warm window is what makes an unknown sender acceptable,
+            //--- so an empty registry must not grant that forever. When there is no
+            //--- sender at all, only the first 60s may guess.
+            let sender_ok = sender_valid && (sid_is_sender || warm);
+
+            if sender_ok && receiver_valid {
+                if s
+                    .mirrors
+                    .entry(sid.clone())
+                    .or_default()
+                    .insert(login.to_string(), Instant::now())
+                    .is_none()
+                {
+                    changed = true;
+                }
+                accepted.push((sid.clone(), h.clone()));
+            }
+        }
+
+        let prim = s.cluster.is_primary() || !s.cluster.is_peer_alive(Duration::from_secs(6));
+        (changed, prim)
+    };
+
+    if accepted.is_empty() {
+        //--- rate-limited: a misconfigured receiver emits one STAT a second, and a
+        //--- line a second buries everything else.
+        if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
+            *last_rcpt_drop = Instant::now();
+            println!(
+                "[hub] WARN  STAT from {} names a SID that is not a registered sender - receipt NOT relayed (further reports suppressed for 60s)",
+                login
+            );
+        }
+        return changed;
+    }
+
+    //--- Forget pairs that stopped reporting; this map has no other eviction path.
+    if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
+        *last_rcpt_prune = Instant::now();
+        last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(600));
+    }
+
+    for (sid, h) in accepted {
+        //--- Count what ARRIVED, before de-duplication decides what to relay: the
+        //--- difference between the two is the saving, and reporting only the relays
+        //--- would look like lost heartbeats.
+        //--- F-20: this is now per PAIR rather than per frame, which is the honest
+        //--- unit (the batch is a transport detail). `receipt/seen` keeps meaning
+        //--- "how many of the reports we saw did we re-send".
+        st.note_receipt_seen();
+
+        let rcpt_key = (login.to_string(), sid.clone());
+        let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
+            Some((prev_h, last_t)) => {
+                //--- immediately on a changed (or still empty) hash; otherwise at
+                //--- most one relay per 3s, which is what keeps the steady state quiet
+                prev_h != &h || h.is_empty() || last_t.elapsed() >= Duration::from_secs(3)
+            }
+            None => true,
+        };
+        if !should_relay || !is_primary_or_takeover {
+            continue;
+        }
+        match send_receipt(sock, &sid, login, &h, state) {
+            Err(e) => eprintln!("[hub] receipt relay failed: {}", e),
+            Ok(()) => {
+                st.note_receipt();
+                last_rcpt_relayed.insert(rcpt_key, (h, Instant::now()));
+            }
+        }
+    }
+    changed
+}
+
 /// When an ACK quotes an id the hub has no record of, the command lookup
 /// returns nothing - so we have no `kind` to prefix the `unknown_ack` audit
 /// action with. But the id is not random: config ids are `<node>R<rev>` and op
@@ -1028,7 +1241,7 @@ fn main() {
             custom.push(raw[i].clone());
         }
 
-        match service::win_service::install(role, wd, &custom) {
+        match service::win_service::install(role, wd, args.instance.as_deref(), &custom) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("copier-hub: service install failed: {}", e);
@@ -1038,7 +1251,7 @@ fn main() {
     }
 
     if let Some(role) = &args.service_uninstall {
-        match service::win_service::uninstall(role) {
+        match service::win_service::uninstall(role, args.instance.as_deref()) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("copier-hub: service uninstall failed: {}", e);
@@ -1048,7 +1261,7 @@ fn main() {
     }
 
     if let Some(role) = &args.service_start {
-        match service::win_service::start(role) {
+        match service::win_service::start(role, args.instance.as_deref()) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("copier-hub: service start failed: {}", e);
@@ -1058,7 +1271,7 @@ fn main() {
     }
 
     if let Some(role) = &args.service_stop {
-        match service::win_service::stop(role) {
+        match service::win_service::stop(role, args.instance.as_deref()) {
             Ok(()) => std::process::exit(0),
             Err(e) => {
                 eprintln!("copier-hub: service stop failed: {}", e);
@@ -1068,7 +1281,7 @@ fn main() {
     }
 
     if let Some(role) = &args.service_status {
-        match service::win_service::status(role) {
+        match service::win_service::status(role, args.instance.as_deref()) {
             Ok(st) => {
                 println!("{}", st);
                 std::process::exit(0);
@@ -2516,9 +2729,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     (None, None)
                                 };
 
-                                //--- One lock for all: note_stat, ping, and mirror edge
-                                let mut sender_valid = false;
-                                let mut receiver_valid = false;
+                                //--- one lock for the frame-level telemetry. The
+                                //--- per-sender validation and mirror edge moved into
+                                //--- relay_one_receipt() so the single (`SID=`/`H=`) and
+                                //--- batched (`RH=`) receipt forms cannot drift apart.
                                 let mut stat_changed = false;
                                 {
                                     let mut s = shared.lock_or_recover();
@@ -2547,94 +2761,40 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                         s.reg.note_ping(role, &login, ping_ms);
                                         stat_changed = true;
                                     }
+                                }
 
-                                    if role == "receiver" && !sid.is_empty() && sid != "-" {
-                                        let warm = started.elapsed() < Duration::from_secs(60);
-                                        let skey = format!("sender:{}", sid);
-                                        let rkey = format!("receiver:{}", login);
-                                        // HUB-01: Support both raw login acc and 9-digit copier_nid matching for 10-digit accounts
-                                        let sid_is_sender = s.reg.get(&skey).is_some() || s.reg.nodes().iter().any(|n| n.role == registry::Role::Sender && copier_nid(&n.acc) == sid);
-                                        let login_is_receiver = s.reg.get(&rkey).is_some() || s.reg.nodes().iter().any(|n| n.role == registry::Role::Receiver && copier_nid(&n.acc) == login);
-                                        // DEF-61-11: Short-circuit evaluate role count only when sender/receiver is unknown
-                                        sender_valid = sid_is_sender || warm || s.reg.count_by_role(registry::Role::Sender) == 0;
-                                        receiver_valid = login_is_receiver || warm || s.reg.count_by_role(registry::Role::Receiver) == 0;
-
-                                        if sender_valid && receiver_valid {
-                                            if s.mirrors.entry(sid.clone()).or_default().insert(login.clone(), Instant::now()).is_none() {
-                                                stat_changed = true;
-                                            }
-                                        }
+                                //--- B5/P4: ONE frame can carry MANY receipts.
+                                //--- `RH=<sid>:<h>,<sid>:<h>,...` is the batched form a
+                                //--- receiver now sends when it mirrors more than one
+                                //--- sender; the original single `SID=`/`H=` form is still
+                                //--- accepted (and is still repeated on the first batched
+                                //--- frame, so an older hub receives one receipt instead
+                                //--- of none).
+                                if role == "receiver" {
+                                    let warm = started.elapsed() < Duration::from_secs(60);
+                                    let rh_raw = envelope_kv(&payload, "RH");
+                                    let mut pairs: Vec<(String, String)> = parse_rh_pairs(&rh_raw);
+                                    if pairs.is_empty() && !sid.is_empty() && sid != "-" {
+                                        pairs.push((sid.clone(), h.clone()));
+                                    }
+                                    if relay_receipts(
+                                        &sock,
+                                        &mut state,
+                                        &shared,
+                                        &mut st,
+                                        warm,
+                                        &login,
+                                        &pairs,
+                                        &mut last_rcpt_relayed,
+                                        &mut last_rcpt_prune,
+                                        &mut last_rcpt_drop,
+                                    ) {
+                                        stat_changed = true;
                                     }
                                 }
 
                                 if stat_changed {
                                     poke_pending = true;
-                                }
-
-                                //--- THE RECEIPT IS RELAYED ONLY TO A REAL
-                                //--- SENDER AND FROM A VALID RECEIVER.
-                                //--- B7: and only when SID can be a node id at all. During the
-                                //--- 60s warm window sender_valid is true for anything, so an
-                                //--- unconstrained SID turned this into "hub publishes a frame to
-                                //--- any topic you name". A plausible NID is all digits.
-                                let sid_plausible = !sid.is_empty()
-                                    && sid.len() <= 11
-                                    && sid.bytes().all(|b| b.is_ascii_digit());
-                                if !sid.is_empty() && sid != "-" && sid_plausible {
-                                    if sender_valid && receiver_valid {
-                                        //--- Count what ARRIVED, before the
-                                        //--- de-duplication decides what to relay:
-                                        //--- the difference between the two is the
-                                        //--- saving, and reporting only the relays
-                                        //--- would look like lost heartbeats.
-                                        st.note_receipt_seen();
-                                        //--- Forget pairs that stopped reporting.
-                                        //--- A receiver that is renamed or moved
-                                        //--- leaves its old key behind forever
-                                        //--- otherwise, and this map has no other
-                                        //--- eviction path.
-                                        if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
-                                            last_rcpt_prune = Instant::now();
-                                            last_rcpt_relayed.retain(|_, (_, t)| {
-                                                t.elapsed() < Duration::from_secs(600)
-                                            });
-                                        }
-                                        let rcpt_key = (login.clone(), sid.clone());
-                                        let should_relay = match last_rcpt_relayed.get(&rcpt_key) {
-                                            Some((prev_h, last_t)) => {
-                                                // Relay immediately if hash changed or empty (new node/change), or throttle to 3s in steady state
-                                                prev_h != &h || h.is_empty() || last_t.elapsed() >= Duration::from_secs(3)
-                                            }
-                                            None => true, // First time seen
-                                        };
-
-                                        let is_primary_or_takeover = {
-                                            let s = shared.lock_or_recover();
-                                            s.cluster.is_primary() || !s.cluster.is_peer_alive(Duration::from_secs(6))
-                                        };
-
-                                        if should_relay && is_primary_or_takeover {
-                                            if let Err(e) =
-                                                send_receipt(&sock, &sid, &login, &h, &mut state)
-                                            {
-                                                eprintln!("[hub] receipt relay failed: {}", e);
-                                            } else {
-                                                st.note_receipt();
-                                                last_rcpt_relayed.insert(rcpt_key, (h.clone(), Instant::now()));
-                                            }
-                                        }
-                                    } else if last_rcpt_drop.elapsed() >= Duration::from_secs(60) {
-                                        //--- Rate-limited: a misconfigured receiver
-                                        //--- emits one STAT a second, and a line a
-                                        //--- second buries everything else.
-                                        last_rcpt_drop = Instant::now();
-                                        println!(
-                                            "[hub] WARN  STAT from {} names SID={} which is not a \
-                                             registered sender - receipt NOT relayed \
-                                             (further reports suppressed for 60s)",
-                                            login, sid
-                                        );
-                                    }
                                 }
                             }
                         }
@@ -2666,17 +2826,34 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             skip_frame = true;
                         }
 
-                        // F-02 Security: On data topics, only SNAP (targeted repair) may have topic != SID
-                        if !skip_frame && !env_sid.is_empty() && topic_str != env_sid && ty != "SNAP" {
-                            dropped_security_frames += 1;
-                            if last_drop_warn.elapsed() >= Duration::from_secs(2) {
-                                eprintln!(
-                                    "[hub] DROP mismatched topic {} != SID {} for type {} (total dropped: {})",
-                                    topic_str, env_sid, ty, dropped_security_frames
-                                );
-                                last_drop_warn = Instant::now();
+                        // F-02 Security: on a data topic, topic != SID is legal ONLY
+                        // for a targeted repair, and a targeted repair is addressed to a
+                        // RECEIVER's node id (the sender re-sends its last broadcast
+                        // bytes on `<receiver nid>`). Anything else is a frame claiming to
+                        // be one sender while addressed to a topic nothing asked for.
+                        //
+                        // The topic must also LOOK like a node id. Requiring it to be a
+                        // registered receiver was considered and rejected: the repair is
+                        // exactly the mechanism a receiver uses while it is still catching
+                        // up, and a registry entry that has just aged out would silently
+                        // turn the repair into a drop - a correctness cost for no real
+                        // security gain, because the identity problem here (A1) is that a
+                        // node can name any SID at all, not which topic it picks.
+                        if !skip_frame && !env_sid.is_empty() && topic_str != env_sid {
+                            let topic_is_nid = !topic_str.is_empty()
+                                && topic_str.len() <= 11
+                                && topic_str.bytes().all(|b| b.is_ascii_digit());
+                            if !(ty == "SNAP" && topic_is_nid) {
+                                dropped_security_frames += 1;
+                                if last_drop_warn.elapsed() >= Duration::from_secs(2) {
+                                    eprintln!(
+                                        "[hub] DROP mismatched topic {} != SID {} for type {} (total dropped: {})",
+                                        topic_str, env_sid, ty, dropped_security_frames
+                                    );
+                                    last_drop_warn = Instant::now();
+                                }
+                                skip_frame = true;
                             }
-                            skip_frame = true;
                         }
 
                         if !skip_frame {
@@ -3189,4 +3366,109 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     drop(sock);
     drop(ctx);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B5/P4: the batched receipt field. The hub splits `RH=` back into the same
+    /// per-sender receipts it used to receive one frame at a time, so a parsing
+    /// mistake here silently stops receipts for some senders - which looks exactly
+    /// like "that sender went quiet".
+    #[test]
+    fn batched_receipt_pairs_are_split_back_into_singles() {
+        let got = parse_rh_pairs("520333160:ab12cd34,600123456:deadbeef");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, "520333160");
+        assert_eq!(got[0].1, "ab12cd34");
+        assert_eq!(got[1].0, "600123456");
+        assert_eq!(got[1].1, "deadbeef");
+    }
+
+    #[test]
+    fn batched_receipt_pairs_tolerate_the_shapes_a_real_wire_produces() {
+        // trailing comma, stray spaces, an empty entry, and a pair with no hash
+        let got = parse_rh_pairs(" 520333160 : ab12cd34 , ,600123456:,700000001:deadbeef,");
+        assert_eq!(got.len(), 3, "the empty entry must be skipped, not counted");
+        assert_eq!(got[0], ("520333160".to_string(), "ab12cd34".to_string()));
+        assert_eq!(got[1], ("600123456".to_string(), String::new()));
+        assert_eq!(got[2], ("700000001".to_string(), "deadbeef".to_string()));
+
+        // no colon at all -> dropped rather than guessed at
+        assert!(parse_rh_pairs("nonsense").is_empty());
+        // empty field -> nothing to relay
+        assert!(parse_rh_pairs("").is_empty());
+    }
+
+    /// F-08: the hash is pasted verbatim into the `RCPT` payload, so a pair that
+    /// carries a delimiter must never survive the split. Same for a SID that is not
+    /// a node id - dropping it here also keeps it away from the state lock.
+    #[test]
+    fn batched_receipt_pairs_reject_delimiter_injection() {
+        assert!(parse_rh_pairs("520333160:ab;SID=evil").is_empty(), "';' must be rejected");
+        assert!(parse_rh_pairs("520333160:ab|T=CMD").is_empty(), "'|' must be rejected");
+        assert!(parse_rh_pairs("520333160:ab12cd").is_empty(), "a 6-char hash is not a hash");
+        assert!(parse_rh_pairs("520333160:ab12cd34ff").is_empty(), "a 10-char hash is not a hash");
+        assert!(parse_rh_pairs("not-a-nid:ab12cd34").is_empty(), "a non-numeric SID is rejected");
+        assert!(parse_rh_pairs("520333160123:ab12cd34").is_empty(), "a 12-digit SID is rejected");
+        // ...and the legal shapes still pass
+        assert_eq!(parse_rh_pairs("520333160:ab12cd34").len(), 1);
+        assert_eq!(parse_rh_pairs("520333160:").len(), 1, "an empty hash means 'no snapshot yet'");
+    }
+
+    #[test]
+    fn batched_receipt_pairs_are_bounded() {
+        let many = (0..9000)
+            .map(|i| format!("{}:{:08x}", 500_000_000u64 + i, i))
+            .collect::<Vec<_>>()
+            .join(",");
+        let got = parse_rh_pairs(&many);
+        assert!(got.len() <= 512, "the split must be bounded, got {}", got.len());
+    }
+
+    /// F-03: the whole configuration must fit in ONE receipt frame.
+    ///
+    /// `CP_STAT_RH_CHUNK` is 4096 in `CopierDefs.mqh` and `CP_MAX_SENDERS` is 100.
+    /// The first version of the chunk constant was derived from a wrong assumption
+    /// that CP_MAX_SENDERS was 32, which split a full config across two frames and
+    /// cost a hub that predates `RH=` every receipt but the first. The arithmetic
+    /// lives here so that changing either number fails a test instead of silently
+    /// reintroducing the split.
+    #[test]
+    fn a_full_configuration_fits_in_one_receipt_frame() {
+        const CP_MAX_SENDERS: usize = 100;
+        const CP_STAT_RH_CHUNK: usize = 4096;
+        // largest legal pair: "<11-digit sid>:<8-hex hash>," - the trailing comma is
+        // only on all but the first, so this is a strict upper bound
+        let worst = CP_MAX_SENDERS * (11 + 1 + 8 + 1);
+        assert!(
+            worst < CP_STAT_RH_CHUNK,
+            "a full configuration ({}) must fit in one RH field ({})",
+            worst,
+            CP_STAT_RH_CHUNK
+        );
+
+        // ...and the split really does return all 100 pairs, in order, when they fit
+        let rh = (0..CP_MAX_SENDERS)
+            .map(|i| format!("{}:{:08x}", 500_000_000u64 + i as u64, i))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(rh.len() < CP_STAT_RH_CHUNK, "fixture must fit in one chunk, got {}", rh.len());
+        let got = parse_rh_pairs(&rh);
+        assert_eq!(got.len(), CP_MAX_SENDERS);
+        assert_eq!(got[0].0, "500000000");
+        assert_eq!(got[CP_MAX_SENDERS - 1].0, "500000099");
+    }
+
+    /// HUB-01/B5: a 10-digit account's nid is what a receiver reports as SID, and
+    /// what the receipt topic must be derived from again.
+    #[test]
+    fn copier_nid_matches_the_mql_rule() {
+        assert_eq!(copier_nid("600123456"), "600123456");
+        assert_eq!(copier_nid("2520333160"), "520333160");
+        assert_eq!(copier_nid("3000000000"), "999999999");
+        assert_eq!(copier_nid("0"), "999999998");
+        assert_eq!(copier_nid("not-a-number"), "not-a-number");
+    }
 }

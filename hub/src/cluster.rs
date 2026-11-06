@@ -68,6 +68,17 @@ pub struct ClusterStatusResponse {
     pub users_hash: String,
     pub notif_hash: String,
     pub curve_clients_hash: String,
+    /// F-10: whether THIS side actually has the feature switched on (a non-empty
+    /// path). `notif_hash` alone cannot answer it: `file_sha256` returns "" both
+    /// for "path is empty / feature off" and for "file does not exist yet", and
+    /// treating those as the same meant a brand-new Standby with a valid path but
+    /// no file yet never asked for the channels at all.
+    /// `#[serde(default)]` so a peer running an older build (which sends neither
+    /// field) deserialises instead of failing - see `needs_sync` for the fallback.
+    #[serde(default)]
+    pub notif_enabled: bool,
+    #[serde(default)]
+    pub curve_clients_enabled: bool,
     pub is_configured_primary: bool,
     pub failback_locked: bool,
     pub ts: u64,
@@ -660,12 +671,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 //--- write to the empty path failed, sync_status stuck at sync_err,
                 //--- and ADR-10 auto-failback could never satisfy its "synced" gate.
                 //--- Only compare a hash both sides can actually produce.
-                let notif_diff = remote_st.notif_hash != notif_h
-                    && !remote_st.notif_hash.is_empty()
-                    && !notif_h.is_empty();
-                let curve_diff = remote_st.curve_clients_hash != curve_h
-                    && !remote_st.curve_clients_hash.is_empty()
-                    && !curve_h.is_empty();
+                //--- F-10: "enabled" is a property of the PATH, not of the hash.
+                //--- The local side knows its own path; the remote side announces it.
+                //--- A peer too old to send the flag is judged by its hash being
+                //--- non-empty, which is what the previous rule did.
+                let local_notif_on = !notif_path.as_os_str().is_empty();
+                let remote_notif_on = remote_st.notif_enabled || !remote_st.notif_hash.is_empty();
+                let notif_diff =
+                    local_notif_on && remote_notif_on && remote_st.notif_hash != notif_h;
+
+                let local_curve_on = !curve_path.as_os_str().is_empty();
+                let remote_curve_on =
+                    remote_st.curve_clients_enabled || !remote_st.curve_clients_hash.is_empty();
+                let curve_diff =
+                    local_curve_on && remote_curve_on && remote_st.curve_clients_hash != curve_h;
 
                 let needs_sync = remote_st.cfg_lines > cfg_lines_count
                     || remote_st.cmd_lines > cmd_lines_count
@@ -913,7 +932,16 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         s.users.apply_loaded_users(u);
                                     }
 
-                                    let save_info = if data.epoch > s.cluster.epoch() {
+                                    //--- F-11: adopt the Primary's epoch ONLY when every
+                                    //--- part of the payload actually landed. This is the
+                                    //--- guard the HUB-02 comment above promises; without
+                                    //--- it a failed file write left the Standby holding
+                                    //--- OLD users/commands/CURVE data while claiming the
+                                    //--- Primary's epoch, so a later promote or takeover
+                                    //--- would carry stale state into the highest epoch -
+                                    //--- exactly the rollback HUB-02 exists to prevent.
+                                    let sync_clean = file_sync_err.is_none();
+                                    let save_info = if sync_clean && data.epoch > s.cluster.epoch() {
                                         s.cluster.state.epoch = data.epoch;
                                         (true, s.cluster.state.clone(), s.cluster.state_path.clone())
                                     } else {

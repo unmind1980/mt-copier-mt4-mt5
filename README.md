@@ -84,6 +84,7 @@ Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-
 
 ### 7. Production Windows Services
 - **Background Daemon Installation**: Simple scripts (`install_services.bat`, `start_services.bat`) to install Primary and Standby Hubs as native Windows services, running invisibly with automatic restart on failure.
+- **Multiple instances per host**: `copier-hub.exe --service-install primary --instance edge` registers `MTCopierPrimary_edge` (display name "MT-Copier Primary Hub (edge)") instead of reconfiguring the existing `MTCopierPrimary`. `--service-uninstall/start/stop/status` take the same `--instance`, and the `tools/service_*.bat` helpers honour an `MTC_INSTANCE` environment variable so the interactive scripts can drive either deployment. Each instance keeps its own service log under its `--workdir` (`hub_<service>_service.log`), so two instances never share a log file.
 
 ---
 

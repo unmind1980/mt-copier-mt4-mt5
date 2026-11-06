@@ -84,6 +84,7 @@
 
 ### 7. 生产级 Windows 系统服务支持
 - **后台静默守护**：提供一键安装脚本（`install_services.bat`、`start_services.bat`），将主备 Hub 注册为原生 Windows 服务，开机自启动，崩溃自动拉起。
+- **同机多实例**：`copier-hub.exe --service-install primary --instance edge` 会注册 `MTCopierPrimary_edge`（显示名 "MT-Copier Primary Hub (edge)"），而不是改写已有的 `MTCopierPrimary`。`--service-uninstall/start/stop/status` 接受同一个 `--instance`；`tools/service_*.bat` 支持 `MTC_INSTANCE` 环境变量，交互脚本也能驱动任一套部署。每个实例的服务日志写在各自的 `--workdir` 下（`hub_<服务名>_service.log`），两个实例不会争用同一个日志文件。
 
 ---
 

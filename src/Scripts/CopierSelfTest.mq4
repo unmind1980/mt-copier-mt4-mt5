@@ -1378,6 +1378,27 @@ void TestRiskDailyAndDrawdown()
    Ok("risk: sustained healthy equity releases the zero latch",
       !rkRecover.DrawdownTripped());
 
+   // F-05: the same must hold for a DAILY-ONLY configuration. Gating the release
+   // on the drawdown latch meant "DailyLossPct set, MaxDrawdownPct off" - a very
+   // common choice - stayed blocked for the whole server day after two transient
+   // zero-equity samples (account switch, reconnect).
+   CopierRisk rkRecoverDaily;
+   CopierRiskLimits dOnly;
+   dOnly.maxLotsPerPosition=0.0;
+   dOnly.maxTotalLots      =0.0;
+   dOnly.maxOpenPositions  =0;
+   dOnly.dailyLossPct      =5.0;
+   dOnly.maxDrawdownPct    =0.0;
+   rkRecoverDaily.Configure(dOnly);
+   rkRecoverDaily.ObserveAt(0.0,400,0.0);
+   rkRecoverDaily.ObserveAt(0.0,400,0.0);
+   Ok("risk: transient zero trips the daily-only switch",rkRecoverDaily.DailyTripped());
+   for(int rj=0;rj<25;rj++) rkRecoverDaily.ObserveAt(10000.0,400,10000.0);
+   Ok("risk: ...and healthy equity releases it, with no drawdown limit configured",
+      !rkRecoverDaily.DailyTripped());
+   Ok("risk: ...so an open is allowed again",
+      rkRecoverDaily.AllowOpen(0.01,0,0.0,0,0.0,why));
+
    //--- the DRAWDOWN switch, which must LATCH
    CopierRiskLimits dl;
    dl.maxLotsPerPosition=0.0;
@@ -2072,6 +2093,33 @@ void TestNodeAnnounce()
       !CopierIniUnescape("abc%zz",back) && !CopierIniUnescape("abc%",back));
    Ok("ini escape: refuses an escape it never produces",
       !CopierIniUnescape("%41",back));
+
+   //--- B3: the disk round-trip comparator. It must ignore exactly the line-ending
+   //--- shape a text-mode read introduces (CR, trailing newline) and nothing else -
+   //--- otherwise the self-check either cries wolf on every push or, worse, hides
+   //--- the character loss it exists to detect.
+   Ok("ini compare: CRLF and LF compare equal",
+      CopierIniCmpDiff("[s]\r\nk=v\r\n","[s]\nk=v\n")<0);
+   Ok("ini compare: a missing trailing newline compares equal",
+      CopierIniCmpDiff("[s]\nk=v","[s]\nk=v\n")<0);
+   Ok("ini compare: an interior difference is NOT ignored",
+      CopierIniCmpDiff("[s]\nk=v1\n","[s]\nk=v2\n")>=0);
+   string cjkComment="; "+ShortToString(0x4E2D)+ShortToString(0x6587)+"\n[s]\nk=v\n";
+   Ok("ini compare: a lost character is NOT ignored",
+      CopierIniCmpDiff(cjkComment,"; ??\n[s]\nk=v\n")>=0);
+   Ok("ini compare: trailing spaces on the last line still count",
+      CopierIniCmpDiff("[s]\nk=v \n","[s]\nk=v\n")>=0);
+   Ok("ini compare: the first differing index is reported",
+      CopierIniCmpDiff("[s]\nk=ab\n","[s]\nk=ax\n")==7);
+   //--- F-01 regression guard: the comparator must be O(n), not O(n^2). A 200 KB
+   //--- body is what a 100-sender ini looks like; the previous version copied tens
+   //--- of gigabytes doing this and stalled the EA's main thread for seconds.
+   CopierStrBuilder sbBig;
+   for(int bi=0;bi<4000;bi++) sbBig.Add("; filler line for the round-trip comparator\n");
+   string bigA=sbBig.Result();
+   uint tBig=GetTickCount();
+   Ok("ini compare: a 200 KB body compares equal",CopierIniCmpDiff(bigA,bigA)<0);
+   Ok("ini compare: ...and stays fast (O(n), not O(n^2))",(GetTickCount()-tBig)<200);
 
    //--- The shape check, mirroring config::validate_ini on the hub. Both ends
    //--- check because both ends would otherwise have to trust the other.

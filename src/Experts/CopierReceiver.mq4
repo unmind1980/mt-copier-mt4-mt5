@@ -8900,14 +8900,28 @@ void OnTimer()
       if(g_forcePosReport) RefreshRisk();
       bool putPositionSummary=(dueSummary || dueStatus || dueDetail || g_forcePosReport);
       bool putFigures=dueStatus;
-      for(int i=0;i<g_nSenders;i++)
+
+      //--- B5/P4: ONE batched STAT per tick, not one per sender.
+      //---
+      //--- Every frame pays the same fixed cost on the hub (envelope decode,
+      //--- ~20 key lookups, the state lock, receipt de-duplication) no matter how
+      //--- much it carries. With N senders that cost was paid N times a second to
+      //--- deliver 8 bytes each; the pairs now ride together as
+      //--- `RH=<sid>:<h>,<sid>:<h>,...` and the hub splits them back into the same
+      //--- per-sender RCPT unicasts.
+      //---
+      //--- The summary block (HELD/LOTS/POS/WAITLIST/...) is emitted exactly once,
+      //--- on the FIRST frame, exactly as `putPositionSummary=false` used to do -
+      //--- so the heavy fields are still parsed by the hub once per minute, not once
+      //--- per sender.
+      //---
+      //--- The first pair is ALSO repeated as `SID=`/`H=` so that a hub which
+      //--- predates this change still receives one valid receipt per receiver
+      //--- instead of none.
+      if(g_nSenders>0)
         {
-         //--- a receipt is only meaningful for a sender we have actually
-         //--- received a snapshot from; "" says "no receipt yet" and is the
-         //--- honest answer, not a wrong hash.
-         string st="LOGIN="+(string)CopierAccountLogin()
-                   +CP_SEP_KV+"SID="+g_sid[i]
-                   +CP_SEP_KV+"H="+g_snapHash[i];
+         //--- build the once-per-batch suffix up front
+         string tail="";
          if(putPositionSummary)
            {
             int qOpen=0;
@@ -8916,21 +8930,21 @@ void OnTimer()
             int waitTotal=qOpen+g_waitHeld+g_mktHeld;
             double waitLots=qLots+g_waitLots+g_mktHeldLots;
 
-            st+=CP_SEP_KV+"HELD="+(string)g_ourCount
-               +CP_SEP_KV+"LOTS="+CopierFmtDouble(g_ourLots,CP_DIGITS_LOTS)
-               +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
-               +CP_SEP_KV+"WAIT="+(string)waitTotal
-               +CP_SEP_KV+"WLOTS="+CopierFmtDouble(waitLots,CP_DIGITS_LOTS)
-               +CP_SEP_KV+"WQUEUED="+(string)qOpen
-               +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
-               +CP_SEP_KV+"WMKT="+(string)g_mktHeld
-               +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
-               +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
+            tail+=CP_SEP_KV+"HELD="+(string)g_ourCount
+                 +CP_SEP_KV+"LOTS="+CopierFmtDouble(g_ourLots,CP_DIGITS_LOTS)
+                 +CP_SEP_KV+"ORPHAN="+(string)g_orphanCount
+                 +CP_SEP_KV+"WAIT="+(string)waitTotal
+                 +CP_SEP_KV+"WLOTS="+CopierFmtDouble(waitLots,CP_DIGITS_LOTS)
+                 +CP_SEP_KV+"WQUEUED="+(string)qOpen
+                 +CP_SEP_KV+"WDELAYED="+(string)g_waitHeld
+                 +CP_SEP_KV+"WMKT="+(string)g_mktHeld
+                 +CP_SEP_KV+"EQ="+DoubleToString(CopierAccountEquity(),2)
+                 +CP_SEP_KV+"BL="+DoubleToString(CopierAccountBalance(),2);
 
             long rtt=g_peers.RttFor(g_hubPeerName);
             if(rtt<0) rtt=g_peers.RttFor("hub:primary");
             if(rtt<0) rtt=g_peers.RttFor("hub:standby");
-            if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
+            if(rtt>=0) tail+=CP_SEP_KV+"PING="+(string)rtt;
 
             //--- Detailed position & waiting item lists are transmitted once a minute
             //--- or on-demand when requested by WebUI (g_forcePosReport) in Hub mode
@@ -8938,20 +8952,54 @@ void OnTimer()
               {
                string posEnc=EncodeReceiverPositions();
                string waitEnc=EncodeReceiverWaitList();
-               st+=CP_SEP_KV+"POS="+posEnc
-                  +CP_SEP_KV+"WAITLIST="+waitEnc;
+               tail+=CP_SEP_KV+"POS="+posEnc
+                    +CP_SEP_KV+"WAITLIST="+waitEnc;
               }
-
-            putPositionSummary=false;  // once per batch, not per sender
+            putPositionSummary=false;
            }
          if(putFigures)
            {
-            st+=CP_SEP_KV+"NSEND="+(string)g_nSenders
-               +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
-               +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
-            putFigures=false;            // once per batch, not per sender
+            tail+=CP_SEP_KV+"NSEND="+(string)g_nSenders
+                 +CP_SEP_KV+"BLOCKED="+(string)g_riskBlocked
+                 +CP_SEP_KV+"RISK="+(g_risk.AnyTripped()?g_risk.BlockKey():"ok");
+            putFigures=false;
            }
-         CopierSendStatus(CP_T_STAT,st);
+
+         int idx=0;
+         bool firstChunk=true;
+         while(idx<g_nSenders)
+           {
+            int startIdx=idx;
+            string rh="";
+            while(idx<g_nSenders)
+              {
+               //--- a receipt is only meaningful for a sender we have actually
+               //--- received a snapshot from; "" says "no receipt yet" and is the
+               //--- honest answer, not a wrong hash.
+               string pair=g_sid[idx]+":"+g_snapHash[idx];
+               if(StringLen(rh)>0 && StringLen(rh)+1+StringLen(pair)>CP_STAT_RH_CHUNK) break;
+               if(StringLen(rh)>0) rh+=",";
+               rh+=pair;
+               idx++;
+              }
+            string st="LOGIN="+(string)CopierAccountLogin()+CP_SEP_KV+"RH="+rh;
+            //--- EVERY chunk repeats its first pair as `SID=`/`H=`, not just the
+            //--- first one. A hub that predates `RH=` only understands that form,
+            //--- and a mixed-version window (rolling upgrade, or a Primary/Standby
+            //--- pair at different builds) must not silently lose every sender but
+            //--- the first chunk's. With CP_STAT_RH_CHUNK sized for the full
+            //--- configuration there is normally exactly one chunk, so this is
+            //--- belt-and-braces rather than the common path.
+            st+=CP_SEP_KV+"SID="+g_sid[startIdx]
+               +CP_SEP_KV+"H="+g_snapHash[startIdx];
+            if(firstChunk)
+              {
+               st+=tail;
+               firstChunk=false;
+              }
+            CopierSendStatus(CP_T_STAT,st);
+            if(idx<=startIdx) break;   // defensive: an oversized single pair must not spin
+           }
         }
       if(g_nSenders==0 && g_hubOn && putPositionSummary)
         {

@@ -31,6 +31,19 @@ if not exist "%BIN%" (
     exit /b 1
 )
 
+rem --- H4: optional instance suffix, so a second Primary/Standby can live on this
+rem --- host without reconfiguring the first one. Unset = historic service names.
+rem --- Delayed expansion (!VAR!) is mandatory here: cmd.exe expands %VAR% for a
+rem --- whole if(...) block before running it, so a value set inside the block is
+rem --- invisible to a %VAR% reference in the same block - which silently made
+rem --- --instance a no-op and made a second install reconfigure the first service.
+set "MTC_INST_ARG="
+set "MTC_INST_SUFFIX="
+if defined MTC_INSTANCE (
+    set "MTC_INST_ARG=--instance !MTC_INSTANCE!"
+    set "MTC_INST_SUFFIX=_!MTC_INSTANCE!"
+)
+
 rem --- Ensure cluster token exists
 if not exist "cluster_token.txt" (
     for /f "delims=" %%i in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString()+[guid]::NewGuid().ToString()"') do (
@@ -68,10 +81,10 @@ echo.
 echo [1/2] Installing MTCopierPrimary service...
 if "!PEER_IP!"=="" (
     echo [Mode] Standalone Mode (No peer standby configured)
-    "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary
+    "%BIN%" --service-install primary !MTC_INST_ARG! --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary
 ) else (
     echo [Mode] HA Cluster Mode (Peer standby: !PEER_IP!)
-    "%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000
+    "%BIN%" --service-install primary !MTC_INST_ARG! --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000
 )
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierPrimary service.
@@ -79,7 +92,7 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 echo [2/2] Starting MTCopierPrimary service...
-sc start MTCopierPrimary >nul 2>&1
+sc start MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
 timeout /t 2 /nobreak >nul
 goto :verify
 
@@ -98,10 +111,10 @@ echo.
 echo [1/2] Installing MTCopierStandby service...
 if "!PEER_IP!"=="" (
     echo [Mode] Standby Initializing (Configure Primary in Web UI later)
-    "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+    "%BIN%" --service-install standby !MTC_INST_ARG! --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 ) else (
     echo [Mode] Standby Mirror Mode (Peer primary: !PEER_IP!)
-    "%BIN%" --service-install standby --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+    "%BIN%" --service-install standby !MTC_INST_ARG! --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role standby --peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 )
 if %errorLevel% neq 0 (
     echo [ERROR] Failed to install MTCopierStandby service.
@@ -109,7 +122,7 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 echo [2/2] Starting MTCopierStandby service...
-sc start MTCopierStandby >nul 2>&1
+sc start MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
 timeout /t 2 /nobreak >nul
 goto :verify
 
@@ -117,11 +130,11 @@ goto :verify
 echo.
 if not exist "standby_data" mkdir "standby_data"
 echo [Local Dual HA Dev/Test] Installing Primary (6000/6010) and Standby (6001/6011)...
-"%BIN%" --service-install primary --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://127.0.0.1:6011 --peer-zmq tcp://127.0.0.1:6001
-"%BIN%" --service-install standby --workdir "%REPO%" --port 6001 --http 0.0.0.0:6011 --role standby --peer-api http://127.0.0.1:6010 --peer-zmq tcp://127.0.0.1:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+"%BIN%" --service-install primary !MTC_INST_ARG! --workdir "%REPO%" --port 6000 --http 0.0.0.0:6010 --role primary --peer-api http://127.0.0.1:6011 --peer-zmq tcp://127.0.0.1:6001
+"%BIN%" --service-install standby !MTC_INST_ARG! --workdir "%REPO%" --port 6001 --http 0.0.0.0:6011 --role standby --peer-api http://127.0.0.1:6010 --peer-zmq tcp://127.0.0.1:6000 --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
 echo Starting services...
-sc start MTCopierPrimary >nul 2>&1
-sc start MTCopierStandby >nul 2>&1
+sc start MTCopierPrimary!MTC_INST_SUFFIX! >nul 2>&1
+sc start MTCopierStandby!MTC_INST_SUFFIX! >nul 2>&1
 timeout /t 2 /nobreak >nul
 goto :verify
 
@@ -130,8 +143,8 @@ echo.
 echo =======================================================================
 echo   Current Windows Services Status:
 echo =======================================================================
-sc query MTCopierPrimary 2>nul | findstr "STATE"
-sc query MTCopierStandby 2>nul | findstr "STATE"
+sc query MTCopierPrimary!MTC_INST_SUFFIX! 2>nul | findstr "STATE"
+sc query MTCopierStandby!MTC_INST_SUFFIX! 2>nul | findstr "STATE"
 echo.
 echo [SUCCESS] Service installation complete! Automatically starts on boot.
 pause

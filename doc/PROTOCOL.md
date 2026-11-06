@@ -118,6 +118,41 @@ To allow the Central Hub to observe and manage all runtime parameters without bl
    - When a receiver accepts a config push via `ACK`, or receives a `reqcfg` query from Hub, it broadcasts a `CFGRPT` message to `@hub` containing `ROLE=receiver;ACC=<acc>;REV=<rev>;INI=<escaped ini>`.
 4. **Hub API & Dashboard**: `GET /api/v1/nodes/:id/config` returns `current_setting` and `current_setting_ts`. The dashboard provides a one-click button `📥 Load Current Setting from Node` that populates all form fields and the raw INI editor from the live node configuration.
 
+### What "round-trip" means for the ini — three different layers
+
+The escaped `INI=` field, the in-memory model, and the file on the terminal's
+disk are three separate things, and only the first one is byte-exact. This
+matters because two of them are routinely mistaken for each other.
+
+| layer | guarantee | notes |
+| --- | --- | --- |
+| **wire** (`escape_ini` ⇄ `CopierIniEscape`) | **lossless**, byte for byte | `chars()`-based on the Rust side, `StringGetCharacter` on the MQL side. Non-ASCII passes through untouched. Pinned by `tools/hub_config_test.py` and `CopierSelfTest`. |
+| **model** (`CopierIni::Load` → `SerializeCurrentConfigToIni`) | **not a round-trip** | The model keeps the keys it knows and nothing else. Comments, blank lines and unknown keys are **not** parsed and do **not** appear in what the node reports back. `CopierCfgHash` (`IH=`) is computed over this **re-rendered text**, never over the operator's original bytes. |
+| **disk** (`CopierIniWriteAll` / `CopierIniReadAll`) | **lossless only within one ANSI code page** | Both open with `FILE_ANSI`, so every character is encoded through the terminal's system code page. A character that code page cannot represent is written as `?`, silently. |
+
+Three consequences worth stating plainly:
+
+1. **`Load Current Setting from Node` shows a re-render, not your text.** The
+   comments and any keys this build does not model are absent from it. That is
+   by design — the node reports what it is *running*, not what it was *sent* —
+   but it is not a way to recover an edited ini.
+2. **`IH=` cannot be affected by the file encoding.** It is a hash of the model
+   re-render, which contains no comments. A comment mangled on disk cannot move
+   it. (It *would* move if a **value** contained a character outside the code
+   page — there is no such value in the current schema, but adding one, e.g. a
+   symbol alias, would make this real.)
+3. **`copier.ini` is not portable between machines with different code pages.**
+   Copying it from a CP936 terminal to a CP1252 one turns its comments (and any
+   non-ASCII value) into `?`. If a config must travel, send it through the hub
+   (which is UTF-8 end to end), not as a file.
+
+Because the loss at layer 3 is otherwise completely silent, `CopierIniWriteAtomic`
+now reads the file back after writing it and logs one `WARN` naming the first
+differing character when the text does not survive the code-page conversion.
+The push is **not** rejected: the model that is about to be loaded comes from
+the string that was just written, so the running config is correct — only the
+copy on disk is damaged, and only from the next restart onwards.
+
 ### `RCPT` — how the receipt reaches a sender in central mode
 
 In **direct** mode the receiver's `STAT` arrives at the sender by itself and the  
@@ -150,6 +185,52 @@ Three consequences worth stating plainly:
 `H` may legitimately be **empty** in a relayed receipt — that means "no snapshot  
 ingested yet", which the sender is told, because it is not the same as a wrong  
 hash.
+
+### Batched receipts: `RH=` on one `STAT`
+
+A receiver that mirrors N senders used to emit **N `STAT` frames per heartbeat**,
+one per sender, each carrying a single `SID`/`H` pair. Every one of those frames
+paid the hub's full per-frame cost — envelope decode, ~20 key lookups, a state
+lock, receipt de-duplication — to deliver eight bytes. At 100 senders and N
+receivers that is `100 × N` frames a second, all of it routine.
+
+The batched form puts the same pairs in **one** frame:
+
+```
+T=STAT|P=LOGIN=<receiver acc>;RH=<sid>:<h>,<sid>:<h>,...
+```
+
+The hub splits `RH` back into the pairs and runs exactly the same per-sender
+path it ran before (validation → mirror edge → de-duplication → `RCPT` unicast).
+Nothing downstream of the split changed, which is why the receipt semantics are
+identical and only the frame count moves.
+
+Compatibility, in both directions:
+
+- **Hub without `RH` support, receiver with it.** Every chunk repeats its first
+  pair as `SID=`/`H=`, so an older hub relays one receipt per chunk instead of
+  none. `CP_STAT_RH_CHUNK` (4096) is sized so a full configuration is always ONE
+  chunk, which means in practice an older hub gets one receipt — the first
+  sender's — rather than all of them.
+- **Hub with `RH` support, receiver without it.** No `RH` is present, so the hub
+  falls back to the single `SID`/`H` pair — the original behaviour, unchanged.
+- **Version marker.** `CP_NODE_VER` is `2.1` on a receiver that can emit `RH`
+  (it was `2.0`). The field is additive and neither side gates on it, but it is
+  what an operator reads in `/nodes` to confirm a rolling upgrade has finished
+  before trusting the reduced frame count.
+- **Chunking.** `RH` is split at `CP_STAT_RH_CHUNK` into several frames only if
+  it ever needs to be. With `CP_MAX_SENDERS` at 100 the worst case is
+  ~2.1 KB, so one chunk always does today; the limit exists so raising that
+  constant cannot quietly produce an oversized payload. A Rust test pins that
+  arithmetic. Only the first frame carries
+  `HELD`/`LOTS`/`EQ`/`POS`/`WAITLIST`/`BLOCKED`/`RISK`, so the heavy fields are
+  still parsed once per minute, not once per sender.
+
+Malformed entries are dropped individually rather than failing the frame: one
+bad pair must not cost the other twenty their receipts. Both halves of a pair
+are shape-checked — `sid` must be a numeric node id and `h` must be empty or
+exactly eight hex characters — because `h` is pasted verbatim into the `RCPT`
+payload, where a `;` or `|` would inject or truncate fields on the sender.
 
 ### Receipt de-duplication (hub side)
 
@@ -1052,6 +1133,59 @@ It does not replace §19.1's firewall: the network-layer allow-list still
 decides who can reach the port. It does not distinguish accounts — it is
 link-layer, and the account-level boundary is M9's login on the HTTP side. And
 key rotation (G15) is a manual procedure: the allow-list is read at startup.
+
+### The allow-list is a TRUST BOUNDARY, not an isolation mechanism
+
+**Read this before putting two different operators on one hub.**
+
+Once a key is on `curve_clients.txt`, that peer is inside the trust boundary
+for the **entire data plane**. It can publish a frame on *any* sender's topic
+with that sender's `SID` in the envelope, and the hub will forward it verbatim
+to every receiver subscribed to that sender. `CURVE` proves the peer holds an
+authorised key; it does not, and cannot, prove the peer is the node it names.
+
+The consequence is not theoretical: one frame
+
+```
+[<victim's nid>, "V=1|SID=<victim's nid>|...|T=SNAP|P=N=0;H=..."]
+```
+
+makes every mirror of that sender converge to "the sender closed everything"
+and flatten the book. `MODIFY` can move any mirror's SL/TP to an arbitrary
+price (which is a forced close at a price of the attacker's choosing), and
+`OPEN` can open any size on any receiving account.
+
+Why the hub cannot fix this where it forwards: an XPUB socket hands the
+application `(topic, payload)` and nothing else. It does not say which pipe the
+frame arrived on, and it does not expose that pipe's CURVE public key. ZAP
+answers exactly one question — "may this key connect?" — during the handshake,
+and after that the data plane is fully open. The three guards that exist
+(`F-01` rejects `SID=hub` and `CFG`/`CMD` on a data topic, `F-02` requires
+`topic == SID` except for a targeted repair, `H-02` rejects control types on a
+data stream) all defend against **a node impersonating the hub**. None of them
+can defend against a node impersonating **another node**, because the evidence
+needed to tell the difference is not present on the wire.
+
+What the code does enforce today:
+
+- `topic == SID` on every data frame, with exactly one exception: a `SNAP`
+  whose topic is a **numeric node id** (the targeted-repair form, §"Targeted
+  repair" — the sender re-sends its last broadcast bytes on the receiver's nid).
+  Any other mismatch, including a non-numeric topic, is dropped and counted.
+- `RCPT` relay requires `SID` to be a plausible numeric nid, and `PONG` is only
+  sent back to a plausible numeric nid. This closes the "hub publishes to an
+  arbitrary topic you name" primitive.
+- `CFG`/`CMD`/`TOPOLOGY` are hub-originated only and are never accepted from a
+  data topic.
+
+**The operating rule is therefore: one hub, one operator.** If that ever
+stops being true, this must be fixed properly — the options are a per-node
+ingress socket (`ROUTER` + the ZAP `User-Id`, which libzmq *does* expose per
+message), or a payload signature. Both are protocol changes; neither is in v1.
+
+Direct mode has the same property and **no** hub to arbitrate it: a sender's
+`XPUB` accepts a `SNAP` from any peer that can reach the port. Treat direct
+mode as a point-to-point link over a trusted network only.
 
 ## Failure behaviour
 

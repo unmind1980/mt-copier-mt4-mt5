@@ -758,6 +758,55 @@ bool CopierIniParses(const string path)
    return probe.Load(path);
   }
 
+//--- B3: compare two ini texts the way a text-mode write/read round-trip should
+//--- behave: '\r' is ignored anywhere, and trailing newlines at the very end are
+//--- ignored. Everything else is compared EXACTLY, because the whole point is to
+//--- notice characters the ANSI code page could not represent.
+//---
+//--- Returns -1 when they match, otherwise the index in `a` of the first character
+//--- that differs.
+//---
+//--- WHY THIS IS A CURSOR WALK AND NOT TWO NORMALISED STRINGS
+//--- ========================================================
+//--- The first version built both strings character by character (`out += c`).
+//--- MQL strings have no capacity doubling, so every append reallocates and copies
+//--- the whole prefix - the exact pattern `CopierStrBuilder` exists to avoid, and
+//--- which this file's escaper comment measures at ~36 GB of copying for a 270 KB
+//--- ini. Two of those per CFG push, on the EA's main thread, is a multi-second
+//--- stall that would time out heartbeats and the order queue. A two-cursor walk
+//--- allocates nothing and is O(n).
+int CopierIniEffEnd(const string s)
+  {
+   int n=StringLen(s);
+   while(n>0)
+     {
+      ushort c=StringGetCharacter(s,n-1);
+      if(c=='\n' || c=='\r') n--;
+      else break;
+     }
+   return n;
+  }
+
+int CopierIniCmpDiff(const string a,const string b)
+  {
+   int ea=CopierIniEffEnd(a);
+   int eb=CopierIniEffEnd(b);
+   int ia=0;
+   int ib=0;
+   while(true)
+     {
+      //--- a text-mode read may or may not keep CRs; ignore them on both sides
+      while(ia<ea && StringGetCharacter(a,ia)=='\r') ia++;
+      while(ib<eb && StringGetCharacter(b,ib)=='\r') ib++;
+      if(ia>=ea || ib>=eb) break;
+      if(StringGetCharacter(a,ia)!=StringGetCharacter(b,ib)) return ia;
+      ia++;
+      ib++;
+     }
+   if(ia>=ea && ib>=eb) return -1;
+   return (ia<ea)?ia:ea;
+  }
+
 //--- See the block comment above for why the order is what it is.
 bool CopierIniWriteAtomic(const string ini,string &err)
   {
@@ -782,9 +831,39 @@ bool CopierIniWriteAtomic(const string ini,string &err)
       return false;
      }
 
+   //--- 3b. B3: verify the file round-trips through the disk encoding.
+   //---
+   //--- CopierIniWriteAll opens with FILE_ANSI, so every character is encoded
+   //--- through the terminal's ANSI code page. A character outside that code
+   //--- page - a Chinese comment on an English terminal, a Cyrillic symbol name,
+   //--- anything the CP cannot represent - is replaced with '?' and the loss is
+   //--- completely silent: the push still returns OK, the in-memory config is
+   //--- still correct, and the damage only shows up on the next LoadConfig()
+   //--- (i.e. after a restart) as values or comments that changed on their own.
+   //---
+   //--- Read the file back and compare. This does NOT reject the config - the
+   //--- model that is about to be loaded comes from the string we just wrote,
+   //--- not from the file, so the running config is correct. It only makes the
+   //--- loss visible, once per push, with the offending character named.
+   string back="";
+   if(CopierIniReadAll(CP_INI_PATH,back))
+     {
+      int diffAt=CopierIniCmpDiff(ini,back);
+      if(diffAt>=0)
+        {
+         string shown=(diffAt<StringLen(ini))?ShortToString(StringGetCharacter(ini,diffAt)):"(end of text)";
+         Print("CopierIni: WARN - "+CP_INI_PATH+" does not round-trip through the"
+               +" terminal's ANSI code page ("+(string)StringLen(ini)+" -> "
+               +(string)StringLen(back)+" chars, first difference at "+((string)diffAt)
+               +" near '"+shown+"'). Characters the code page cannot represent are"
+               +" stored as '?' and will read back changed after a restart. Keep"
+               +" comments and values ASCII, or move the terminal to a code page"
+               +" that covers them.");
+        }
+     }
+
    //--- 4. the step that is easy to skip and expensive to skip.
    if(CopierIniParses(CP_INI_PATH)) return true;
-
    //--- 5. put the old one back. If there was none, remove the broken file
    //--- rather than leave a half-written one behind: "no ini" has a defined
    //--- recovery (wait for a re-push), "unparseable ini" looks the same but

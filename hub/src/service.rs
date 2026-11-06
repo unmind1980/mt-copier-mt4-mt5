@@ -35,6 +35,48 @@ pub mod win_service {
     pub const STANDBY_SERVICE_NAME: &str = "MTCopierStandby";
     pub const STANDBY_DISPLAY_NAME: &str = "MT-Copier Standby Hub";
 
+    /// H4: the SCM name for a role, optionally suffixed for a second instance.
+    ///
+    /// The names used to be hard-coded, so a machine could host exactly one
+    /// Primary and one Standby - installing a second Primary silently reconfigured
+    /// the first one instead of creating a second service, and both would then
+    /// fight over the same ports and the same data files. The suffix is what makes
+    /// `install_services.bat` able to describe more than one deployment per host.
+    pub fn service_name(role: &str, instance: Option<&str>) -> Result<String, String> {
+        let base = match role {
+            "primary" => PRIMARY_SERVICE_NAME,
+            "standby" => STANDBY_SERVICE_NAME,
+            other => return Err(format!("Unknown service role '{}'. Use 'primary' or 'standby'.", other)),
+        };
+        match instance {
+            Some(i) if !i.is_empty() => Ok(format!("{}_{}", base, i)),
+            _ => Ok(base.to_string()),
+        }
+    }
+
+    /// H4: the log file must live beside THIS instance's data, not beside the exe.
+    ///
+    /// `hub_service_main` used to open `hub_<svc>_service.log` relative to whatever
+    /// the process' working directory happened to be, *before* anything had looked
+    /// at `--workdir`. `main()` does chdir on `--workdir` early, so the common case
+    /// worked by luck; a service installed with a workdir the account cannot enter,
+    /// or a start that skips that path, dropped the log in `System32` instead. The
+    /// directory is now resolved explicitly from the arguments SCM recorded.
+    fn resolve_workdir(cmdline: &[OsString]) -> Option<std::path::PathBuf> {
+        let scan = |tokens: &mut dyn Iterator<Item = OsString>| -> Option<std::path::PathBuf> {
+            let it = tokens;
+            while let Some(a) = it.next() {
+                if a == "--workdir" {
+                    return it.next().map(std::path::PathBuf::from);
+                }
+            }
+            None
+        };
+        scan(&mut cmdline.iter().cloned()).or_else(|| {
+            scan(&mut std::env::args_os())
+        })
+    }
+
     pub fn redirect_stdio_to_log(path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -53,7 +95,12 @@ pub mod win_service {
             SetStdHandle(STD_OUTPUT_HANDLE, raw_handle);
             SetStdHandle(STD_ERROR_HANDLE, raw_handle);
         }
-        std::mem::forget(file);
+        //--- H4: keep the handle in a static instead of `mem::forget`. The file must
+        //--- stay open for the life of the process either way, but the handle is now
+        //--- owned and reachable rather than deliberately leaked - and a second call
+        //--- (which would otherwise orphan the first handle) replaces it cleanly.
+        static LOG_HANDLE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+        *LOG_HANDLE.lock_or_recover() = Some(file);
         Ok(())
     }
 
@@ -71,7 +118,7 @@ pub mod win_service {
             .map_err(|e| format!("Failed to start service dispatcher for {}: {}", service_name, e))
     }
 
-    pub fn hub_service_main(_args: Vec<OsString>) {
+    pub fn hub_service_main(args: Vec<OsString>) {
         let service_name = {
             RUNNING_SERVICE_NAME
                 .lock_or_recover()
@@ -79,11 +126,23 @@ pub mod win_service {
                 .unwrap_or_else(|| PRIMARY_SERVICE_NAME.to_string())
         };
 
-        // Redirect stdout/stderr to a dedicated service log file
-        let log_file = format!("hub_{}_service.log", service_name.to_lowercase());
-        let _ = redirect_stdio_to_log(Path::new(&log_file));
+        //--- H4: resolve the log directory from the arguments SCM recorded, BEFORE
+        //--- opening the log. Falling back to the current directory (which `main()`
+        //--- has already set to --workdir) and then to the exe's directory keeps the
+        //--- old behaviour when no workdir was configured.
+        let log_name = format!("hub_{}_service.log", service_name.to_lowercase());
+        let log_path = resolve_workdir(&args)
+            .map(|wd| wd.join(&log_name))
+            .or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join(&log_name)))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from(&log_name));
+        let _ = redirect_stdio_to_log(&log_path);
 
         println!("[service] Initializing Windows Service '{}'...", service_name);
+        println!("[service] stdout/stderr -> {}", log_path.display());
 
         let status_handle_slot: std::sync::Arc<Mutex<Option<service_control_handler::ServiceStatusHandle>>> =
             std::sync::Arc::new(Mutex::new(None));
@@ -165,11 +224,19 @@ pub mod win_service {
         });
     }
 
-    pub fn install(role: &str, workdir: Option<&Path>, custom_args: &[String]) -> Result<(), String> {
-        let (service_name, display_name, desc, default_args) = match role {
+    pub fn install(
+        role: &str,
+        workdir: Option<&Path>,
+        instance: Option<&str>,
+        custom_args: &[String],
+    ) -> Result<(), String> {
+        let sname = service_name(role, instance)?;
+        let (display_name, desc, default_args) = match role {
             "primary" => (
-                PRIMARY_SERVICE_NAME,
-                PRIMARY_DISPLAY_NAME,
+                match instance {
+                    Some(i) if !i.is_empty() => format!("{} ({})", PRIMARY_DISPLAY_NAME, i),
+                    _ => PRIMARY_DISPLAY_NAME.to_string(),
+                },
                 "MT-Copier Central Hub (Primary Node) - High-performance ZeroMQ & HTTPS router for trade replication",
                 vec![
                     "--port".to_string(), "6000".to_string(),
@@ -178,8 +245,10 @@ pub mod win_service {
                 ],
             ),
             "standby" => (
-                STANDBY_SERVICE_NAME,
-                STANDBY_DISPLAY_NAME,
+                match instance {
+                    Some(i) if !i.is_empty() => format!("{} ({})", STANDBY_DISPLAY_NAME, i),
+                    _ => STANDBY_DISPLAY_NAME.to_string(),
+                },
                 "MT-Copier Central Hub (Standby Mirror Node) - High-performance ZeroMQ & HTTPS router for trade replication",
                 vec![
                     "--port".to_string(), "6000".to_string(),
@@ -221,7 +290,7 @@ pub mod win_service {
 
         let mut launch_args = vec![
             OsString::from("--service-run"),
-            OsString::from(service_name),
+            OsString::from(sname.clone()),
             OsString::from("--workdir"),
             resolved_workdir.as_os_str().to_os_string(),
         ];
@@ -237,7 +306,7 @@ pub mod win_service {
         }
 
         let service_info = ServiceInfo {
-            name: OsString::from(service_name),
+            name: OsString::from(sname.clone()),
             display_name: OsString::from(display_name),
             service_type: ServiceType::OWN_PROCESS,
             start_type: ServiceStartType::AutoStart,
@@ -255,18 +324,18 @@ pub mod win_service {
             | ServiceAccess::STOP
             | ServiceAccess::DELETE;
 
-        let service = match service_manager.open_service(service_name, service_access) {
+        let service = match service_manager.open_service(&sname, service_access) {
             Ok(s) => {
-                println!("[service] Service '{}' already registered. Updating configuration...", service_name);
+                println!("[service] Service '{}' already registered. Updating configuration...", sname);
                 s.change_config(&service_info)
-                    .map_err(|e| format!("Failed to update configuration for service '{}': {}", service_name, e))?;
+                    .map_err(|e| format!("Failed to update configuration for service '{}': {}", sname, e))?;
                 s
             }
             Err(_) => {
-                println!("[service] Registering new Windows Service '{}'...", service_name);
+                println!("[service] Registering new Windows Service '{}'...", sname);
                 service_manager
                     .create_service(&service_info, service_access)
-                    .map_err(|e| format!("Failed to create service '{}': {}", service_name, e))?
+                    .map_err(|e| format!("Failed to create service '{}': {}", sname, e))?
             }
         };
 
@@ -297,18 +366,14 @@ pub mod win_service {
         let _ = service.set_failure_actions_on_non_crash_failures(true);
 
         println!(
-            "[service] SUCCESS: Service '{}' ({}) configured with AutoStart and 5s auto-recovery.",
-            service_name, display_name
+            "[service] SUCCESS: Service '{}' configured with AutoStart and 5s auto-recovery.",
+            sname
         );
         Ok(())
     }
 
-    pub fn uninstall(role: &str) -> Result<(), String> {
-        let service_name = match role {
-            "primary" => PRIMARY_SERVICE_NAME,
-            "standby" => STANDBY_SERVICE_NAME,
-            other => return Err(format!("Unknown service role '{}'", other)),
-        };
+    pub fn uninstall(role: &str, instance: Option<&str>) -> Result<(), String> {
+        let sname = service_name(role, instance)?;
 
         let service_manager = ServiceManager::local_computer(
             None::<&str>,
@@ -318,69 +383,57 @@ pub mod win_service {
 
         let service = service_manager
             .open_service(
-                service_name,
+                &sname,
                 ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
             )
-            .map_err(|e| format!("Cannot open service '{}': {}", service_name, e))?;
+            .map_err(|e| format!("Cannot open service '{}': {}", sname, e))?;
 
         let _ = service.stop();
         std::thread::sleep(Duration::from_millis(500));
 
         service
             .delete()
-            .map_err(|e| format!("Failed to delete service '{}': {}", service_name, e))?;
-        println!("[service] SUCCESS: Service '{}' uninstalled successfully.", service_name);
+            .map_err(|e| format!("Failed to delete service '{}': {}", sname, e))?;
+        println!("[service] SUCCESS: Service '{}' uninstalled successfully.", sname);
         Ok(())
     }
 
-    pub fn start(role: &str) -> Result<(), String> {
-        let service_name = match role {
-            "primary" => PRIMARY_SERVICE_NAME,
-            "standby" => STANDBY_SERVICE_NAME,
-            other => return Err(format!("Unknown service role '{}'", other)),
-        };
+    pub fn start(role: &str, instance: Option<&str>) -> Result<(), String> {
+        let sname = service_name(role, instance)?;
         let service_manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
             .map_err(|e| format!("Cannot connect to SCM: {}", e))?;
         let service = service_manager
-            .open_service(service_name, ServiceAccess::START)
-            .map_err(|e| format!("Cannot open service '{}': {}", service_name, e))?;
+            .open_service(&sname, ServiceAccess::START)
+            .map_err(|e| format!("Cannot open service '{}': {}", sname, e))?;
         let no_args: &[&str] = &[];
         service
             .start(no_args)
-            .map_err(|e| format!("Failed to start service '{}': {}", service_name, e))?;
-        println!("[service] Started service '{}'.", service_name);
+            .map_err(|e| format!("Failed to start service '{}': {}", sname, e))?;
+        println!("[service] Started service '{}'.", sname);
         Ok(())
     }
 
-    pub fn stop(role: &str) -> Result<(), String> {
-        let service_name = match role {
-            "primary" => PRIMARY_SERVICE_NAME,
-            "standby" => STANDBY_SERVICE_NAME,
-            other => return Err(format!("Unknown service role '{}'", other)),
-        };
+    pub fn stop(role: &str, instance: Option<&str>) -> Result<(), String> {
+        let sname = service_name(role, instance)?;
         let service_manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
             .map_err(|e| format!("Cannot connect to SCM: {}", e))?;
         let service = service_manager
-            .open_service(service_name, ServiceAccess::STOP)
-            .map_err(|e| format!("Cannot open service '{}': {}", service_name, e))?;
+            .open_service(&sname, ServiceAccess::STOP)
+            .map_err(|e| format!("Cannot open service '{}': {}", sname, e))?;
         service
             .stop()
-            .map_err(|e| format!("Failed to stop service '{}': {}", service_name, e))?;
-        println!("[service] Stopped service '{}'.", service_name);
+            .map_err(|e| format!("Failed to stop service '{}': {}", sname, e))?;
+        println!("[service] Stopped service '{}'.", sname);
         Ok(())
     }
 
-    pub fn status(role: &str) -> Result<String, String> {
-        let service_name = match role {
-            "primary" => PRIMARY_SERVICE_NAME,
-            "standby" => STANDBY_SERVICE_NAME,
-            other => return Err(format!("Unknown service role '{}'", other)),
-        };
+    pub fn status(role: &str, instance: Option<&str>) -> Result<String, String> {
+        let sname = service_name(role, instance)?;
         let service_manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
             .map_err(|e| format!("Cannot connect to SCM: {}", e))?;
         let service = service_manager
-            .open_service(service_name, ServiceAccess::QUERY_STATUS)
-            .map_err(|e| format!("Service '{}' is not installed or inaccessible: {}", service_name, e))?;
+            .open_service(&sname, ServiceAccess::QUERY_STATUS)
+            .map_err(|e| format!("Service '{}' is not installed or inaccessible: {}", sname, e))?;
         let st = service
             .query_status()
             .map_err(|e| format!("Failed to query status: {}", e))?;
@@ -393,7 +446,7 @@ pub mod win_service {
             ServiceState::PausePending => "PAUSE_PENDING",
             ServiceState::ContinuePending => "CONTINUE_PENDING",
         };
-        Ok(format!("{}: {}", service_name, state_str))
+        Ok(format!("{}: {}", sname, state_str))
     }
 }
 
@@ -404,19 +457,24 @@ pub mod win_service {
     pub fn run_as_service(_name: &str) -> Result<(), String> {
         Err("Windows Service mode is only supported on Windows.".to_string())
     }
-    pub fn install(_role: &str, _workdir: Option<&Path>, _custom_args: &[String]) -> Result<(), String> {
+    pub fn install(
+        _role: &str,
+        _workdir: Option<&Path>,
+        _instance: Option<&str>,
+        _custom_args: &[String],
+    ) -> Result<(), String> {
         Err("Windows Service installation is only supported on Windows.".to_string())
     }
-    pub fn uninstall(_role: &str) -> Result<(), String> {
+    pub fn uninstall(_role: &str, _instance: Option<&str>) -> Result<(), String> {
         Err("Windows Service uninstallation is only supported on Windows.".to_string())
     }
-    pub fn start(_role: &str) -> Result<(), String> {
+    pub fn start(_role: &str, _instance: Option<&str>) -> Result<(), String> {
         Err("Windows Service start is only supported on Windows.".to_string())
     }
-    pub fn stop(_role: &str) -> Result<(), String> {
+    pub fn stop(_role: &str, _instance: Option<&str>) -> Result<(), String> {
         Err("Windows Service stop is only supported on Windows.".to_string())
     }
-    pub fn status(_role: &str) -> Result<String, String> {
+    pub fn status(_role: &str, _instance: Option<&str>) -> Result<String, String> {
         Err("Windows Service status is only supported on Windows.".to_string())
     }
 }
