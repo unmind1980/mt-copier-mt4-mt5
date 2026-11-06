@@ -2299,9 +2299,12 @@ void TestSymbolQuoteAge()
 //---
 //--- WHY THIS IS MEASURED AND NOT ARGUED
 //--- ====================================
-//--- `CopierSymbolFeedStale()` is evaluated once per desired entry, once per local
-//--- position and once per queued action, on EVERY timer tick - and the tick is
-//--- PollMs, 5 ms by default. That is ~400 calls per second per symbol.
+//--- `CopierSymbolFeedStale()` is evaluated only where an ACTION is decided:
+//--- opening a position that is not mirrored yet, re-closing a UID the operator
+//--- closed by hand, and draining the action queue. A converged receiver calls it
+//--- ZERO times per tick. The sustained case is a queue that cannot drain (market
+//--- shut, N actions held): each held action is re-checked every tick, so that is
+//--- N x 200 calls a second for as long as the closure lasts.
 //---
 //--- The age it asks for is memoised in CP_SYMFRESH_CACHE (16) entries. Sixteen is
 //--- smaller than the working set of any receiver that mirrors more than sixteen
@@ -2378,10 +2381,10 @@ void TestSymbolFreshnessCost()
         +((string)hitMs)+" ms / "+((string)ITER)+")");
 
    //--- what that means at the rate a receiver actually calls it
-   double callsPerSec=(double)nsym*200.0*2.0;      // 200 ticks/s (PollMs=5), 2 sites
+   double callsPerSec=(double)nsym*200.0;          // 200 ticks/s (PollMs=5), all held
    double missPct=(callsPerSec*missUs)/10000.0;    // us/s -> % of one core
    double hitPct =(callsPerSec*hitUs )/10000.0;
-   Note("symfresh-cost: at "+DoubleToString(callsPerSec,0)+" calls/s that is ~"
+   Note("symfresh-cost: IF all "+((string)nsym)+" were held and re-checked every tick ("+DoubleToString(callsPerSec,0)+"/s), that is ~"
         +DoubleToString(missPct,2)+"% of one core with the memo thrashed, ~"
         +DoubleToString(hitPct,2)+"% with it warm");
 

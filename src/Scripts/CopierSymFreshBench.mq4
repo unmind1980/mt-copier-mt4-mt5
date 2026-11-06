@@ -8,17 +8,27 @@
 //|                                                                   |
 //| WHAT IT ANSWERS                                                   |
 //| ===============                                                    |
-//| `CopierSymbolFeedStale()` is asked once per desired entry, once per |
-//| local position and once per queued action, on EVERY timer tick -    |
-//| and the tick is PollMs, 5 ms by default. Its answer is memoised in  |
-//| CP_SYMFRESH_CACHE (16) entries, which is smaller than the working   |
-//| set of any receiver mirroring more than sixteen symbols. Past that   |
-//| point the entries evict each other between ticks, the 1 s TTL never |
-//| helps, and every call walks the 256-slot table and asks the         |
-//| terminal for a quote time.                                           |
+//| The COST OF ONE CALL, as a function of how many symbols are in      |
+//| play. Its answer is memoised in CP_SYMFRESH_CACHE (16) entries,     |
+//| which is smaller than the working set of any receiver touching more |
+//| than sixteen symbols; past that point the entries evict each other, |
+//| the 1 s TTL never applies, and every call walks the 256-slot table  |
+//| and asks the terminal for a quote time.                             |
 //|                                                                     |
-//| The table below walks the working set across that boundary, so the  |
-//| cliff at 17 symbols is visible rather than argued about.            |
+//| WHAT THIS IS *NOT*                                                  |
+//| ===================                                                 |
+//| It is not a duty cycle. `CopierSymbolFeedStale()` is called only    |
+//| where an ACTION is being decided: opening a position that is not    |
+//| mirrored yet, re-closing a UID the operator closed by hand, and     |
+//| draining the action queue. A converged receiver calls it ZERO times |
+//| per tick, however many positions it holds.                          |
+//|                                                                     |
+//| The sustained case is a queue that cannot drain - a market that is  |
+//| shut while N actions wait: each held action is rotated and          |
+//| re-checked every tick, so that is N x 200 calls a second for as     |
+//| long as the closure lasts. The `calls/s` column is that scenario,   |
+//| not the steady state. Read it as "if N actions are stuck", not as   |
+//| "if N positions are open".                                          |
 //+------------------------------------------------------------------+
 #property strict
 #property script_show_inputs
@@ -27,9 +37,21 @@
 #include <Copier/CopierCodec.mqh>
 #include <Copier/CopierSymbol.mqh>
 
-//--- Calls per measurement. Bigger = steadier, slower. 20000 takes a few
-//--- seconds in total across the whole table.
-input int InpIterations = 20000;
+//--- 1 ms system timer. Without it GetTickCount() advances in ~15.6 ms steps and
+//--- a sub-16 ms measurement is 0 or 1 tick - which is what produced the
+//--- "too coarse" rows and the meaningless 0.750 / 0.800 pair in the first run.
+#import "winmm.dll"
+int timeBeginPeriod(uint uPeriod);
+int timeEndPeriod(uint uPeriod);
+#import
+
+//--- How long each row is measured for, in milliseconds.
+//---
+//--- A fixed CALL COUNT was the first version and it was a mistake: at 0.75 us
+//--- per call, 20000 calls is 15 ms, which is exactly ONE tick of the default
+//--- Windows timer - the whole table was reading quantisation noise. Measuring
+//--- for a fixed DURATION self-scales: the fast rows simply run more calls.
+input int InpMsPerRow = 400;
 
 //--- The working sets to measure. 16 is CP_SYMFRESH_CACHE; 17 is the first
 //--- size that cannot fit in the memo.
@@ -69,31 +91,52 @@ void BuildSymbols(const int n,string &syms[],int &realCount)
      }
   }
 
-//--- One measurement: `n` symbols, `iter` calls, round-robin.
-//--- Returns microseconds per call, or -1 if the timer could not resolve it.
-double Measure(const int n,const int iter)
+//--- One measurement: `n` symbols, round-robin, for `targetMs` milliseconds.
+//--- Returns microseconds per call (or -1 when the timer still could not resolve
+//--- it), and reports the call count and elapsed ms through the references so the
+//--- table can show how much of the run was quantisation.
+double Measure(const int n,const int targetMs,int &itersOut,long &msOut)
   {
+   itersOut=0;
+   msOut=0;
    string syms[];
    int realCount=0;
    BuildSymbols(n,syms,realCount);
-   if(ArraySize(syms)<=0) return -1.0;
+   int ns=ArraySize(syms);
+   if(ns<=0) return -1.0;
 
    CopierSymbolQuoteReset();
    //--- warm-up pass: the first visit to each symbol populates the table, and for
    //--- n <= CP_SYMFRESH_CACHE also the memo. Without this the first pass would be
    //--- measured as if it were the steady state.
    long sink=0;
-   for(int w=0;w<ArraySize(syms);w++) sink+=CopierSymbolQuoteAgeMs(syms[w]);
+   for(int w=0;w<ns;w++) sink+=CopierSymbolQuoteAgeMs(syms[w]);
 
+   int iters=0;
+   int idx=0;
    long t0=GetTickCount();
-   for(int i=0;i<iter;i++) sink+=CopierSymbolQuoteAgeMs(syms[i%ArraySize(syms)]);
+   while(true)
+     {
+      //--- inner batch of ns calls so the modulo is amortised out of the loop body
+      for(int i=0;i<ns;i++)
+        {
+         sink+=CopierSymbolQuoteAgeMs(syms[idx]);
+         idx++;
+         if(idx>=ns) idx=0;
+        }
+      iters+=ns;
+      if((long)(GetTickCount()-t0)>=targetMs) break;
+     }
    long ms=(long)(GetTickCount()-t0);
-   if(ms<=0) return -1.0;              // below the timer's granularity
-   return (ms*1000.0)/iter;
+   itersOut=iters;
+   msOut=ms;
+   if(ms<=0) return -1.0;
+   return (ms*1000.0)/iters;
   }
 
 void OnStart()
   {
+   timeBeginPeriod(1);
    FileDelete("copier_symfresh_bench.log");
    g_log=FileOpen("copier_symfresh_bench.log",FILE_WRITE|FILE_TXT|FILE_ANSI);
 
@@ -101,42 +144,51 @@ void OnStart()
    Out(" per-symbol quote-freshness gate - cost by working-set size");
    Out(" terminal: "+(string)TerminalInfoInteger(TERMINAL_BUILD)
        +"   symbols in Market Watch: "+(string)SymbolsTotal(true)
-       +"   iterations: "+(string)InpIterations);
+       +"   per row: "+(string)InpMsPerRow+" ms");
    Out(" memo capacity: CP_SYMFRESH_CACHE="+(string)CP_SYMFRESH_CACHE
        +"   table: CP_SYMFRESH_SLOTS="+(string)CP_SYMFRESH_SLOTS);
    Out("================================================================");
    Out("");
-   Out("  symbols | us/call | calls/s @200Hz x2 | implied % of one core");
-   Out("  --------+---------+-------------------+---------------------");
+   Out("  symbols | us/call | calls/s if ALL held | implied % | ms  | calls");
+   Out("  --------+---------+--------------------+-----------+-----+--------");
 
+   int targetMs=(InpMsPerRow<100)?100:InpMsPerRow;
    for(int k=0;k<ArraySize(g_sizes);k++)
      {
       int n=g_sizes[k];
-      double us=Measure(n,InpIterations);
+      int iters=0;
+      long ms=0;
+      double us=Measure(n,targetMs,iters,ms);
       if(us<0.0)
         {
-         Out(StringFormat("  %7d |  (timer too coarse - raise InpIterations)",n));
+         Out(StringFormat("  %7d |  (timer too coarse even at %d ms)",n,targetMs));
          continue;
         }
-      double callsPerSec=(double)n*200.0*2.0;   // 200 ticks/s, 2 call sites/symbol
+      //--- the sustained case: n actions held, rotated and re-checked every tick
+      double callsPerSec=(double)n*200.0;
       double pct=(callsPerSec*us)/10000.0;      // us/s -> % of one core
-      Out(StringFormat("  %7d | %7.3f | %17.0f | %20.2f%%",n,us,callsPerSec,pct));
+      Out(StringFormat("  %7d | %7.3f | %17.0f | %9.2f%% | %4d | %d",
+                       n,us,callsPerSec,pct,(int)ms,iters));
      }
 
    Out("");
    Out("Reading it:");
-   Out("  * us/call is the measurement. The percentage multiplies it by the call");
-   Out("    rate a receiver with this many symbols actually generates, assuming one");
-   Out("    desired entry and one local position per symbol - it is an implication,");
-   Out("    not a measurement.");
-   Out("  * The step between 16 and 17 is the memo boundary. Below it every call is");
-   Out("    a cache hit; above it the entries evict each other between ticks and");
-   Out("    every call pays the full path.");
-   Out("  * Timer granularity is ~15 ms on Windows, so a run shorter than that");
-   Out("    reports 'too coarse' rather than a wrong number.");
+   Out("  * us/call is the measurement. The percentage assumes the SUSTAINED case:");
+   Out("    that many actions stuck behind a shut market, re-checked every tick.");
+   Out("    A converged receiver - positions open, nothing to do - calls this");
+   Out("    function zero times per tick, so its real share is zero.");
+   Out("  * The step between 16 and 17 is the memo boundary: below it every call is");
+   Out("    a cache hit, above it the entries evict each other and every call pays");
+   Out("    the full path. The growth above 16 is the table scan, which averages");
+   Out("    half the number of tracked symbols.");
+   Out("  * Each row runs for InpMsPerRow milliseconds with the system timer at 1 ms,");
+   Out("    so the ms column is also the number of ticks the average is built from -");
+   Out("    a row with only a few ms is noise, and the table says so instead of");
+   Out("    printing a confident-looking number.");
    Out("");
    Out("This script changes nothing and can be deleted after reading the log.");
 
    if(g_log!=INVALID_HANDLE) { FileClose(g_log); g_log=INVALID_HANDLE; }
+   timeEndPeriod(1);
   }
 //+------------------------------------------------------------------+
