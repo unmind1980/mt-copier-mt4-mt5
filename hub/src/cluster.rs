@@ -8,11 +8,10 @@
 //! - ADR-09: Cluster token authentication over internal HTTP sync endpoints.
 //! - ADR-10: Two-Phase Handover for graceful auto-failback to Primary after continuous online stabilization.
 
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -24,8 +23,6 @@ pub const DEFAULT_CLUSTER_ID: &str = "mt-copier-cluster";
 pub const DEFAULT_CLUSTER_TOKEN: &str = "mtc-cluster-auth-secret-token";
 pub const DEFAULT_STATE_FILE: &str = "cluster_state.json";
 pub const DEFAULT_FAILBACK_HOURS: f64 = 24.0;
-
-static HASH_CACHE: Mutex<Option<HashMap<PathBuf, (Option<SystemTime>, u64, String)>>> = Mutex::new(None);
 
 pub fn unix_secs() -> u64 {
     SystemTime::now()
@@ -79,6 +76,14 @@ pub struct ClusterStatusResponse {
     pub notif_enabled: bool,
     #[serde(default)]
     pub curve_clients_enabled: bool,
+    /// F-12: whether THIS hub replicates the user table. It is off by default
+    /// because the file carries password digests and the cluster channel may be
+    /// plaintext (N56-02) - but that default contradicts what the README promises
+    /// for HA, so it is announced here rather than left to a WARN line every five
+    /// minutes. An operator reading `/cluster/status` can now see, without
+    /// grepping logs, that the standby's accounts are not being kept in step.
+    #[serde(default)]
+    pub users_sync_enabled: bool,
     pub is_configured_primary: bool,
     pub failback_locked: bool,
     pub ts: u64,
@@ -145,28 +150,20 @@ pub struct ClusterManager {
 }
 
 /// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
+/// SHA-256 of a file's bytes, or "" when it cannot be read.
+///
+/// F-15: this used to cache the result keyed by `(mtime, length)`. That is not a
+/// valid identity: a file rewritten inside the filesystem's timestamp granularity
+/// with the SAME length (`false` -> `true`, one URL swapped for another of equal
+/// length) kept its old hash, so the two hubs agreed they were already in sync and
+/// the change was never replicated. The files involved are `users.json`,
+/// `alert_channels.json` and `curve_clients.txt` - tens of kilobytes at worst, so
+/// hashing them once a second costs microseconds and the cache was buying nothing
+/// but a correctness hole.
 pub fn file_sha256(path: &Path) -> String {
-    let meta = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return String::new(),
-    };
-    let mtime = meta.modified().ok();
-    let len = meta.len();
-
-    let mut guard = HASH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let map = guard.get_or_insert_with(HashMap::new);
-    if let Some((c_mtime, c_len, hash)) = map.get(path) {
-        if *c_mtime == mtime && *c_len == len {
-            return hash.clone();
-        }
-    }
-
-    if let Ok(bytes) = fs::read(path) {
-        let hash = crate::users::hex(&crate::users::sha256(&bytes));
-        map.insert(path.to_path_buf(), (mtime, len, hash.clone()));
-        hash
-    } else {
-        String::new()
+    match fs::read(path) {
+        Ok(bytes) => crate::users::hex(&crate::users::sha256(&bytes)),
+        Err(_) => String::new(),
     }
 }
 

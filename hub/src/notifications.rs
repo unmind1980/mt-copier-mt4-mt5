@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1249,9 +1250,39 @@ pub(crate) async fn validate_outgoing_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// F-17: how long a pinned client is reused before the host is resolved again.
+///
+/// The client carries a connection pool, so reusing it turns "every alert pays a
+/// DNS lookup + TCP connect + TLS handshake" into "the first alert in this window
+/// does". 300s is short enough that a vendor changing IPs is picked up quickly and
+/// long enough that an alert burst costs one handshake instead of N - which also
+/// matters because many webhook vendors rate-limit per source IP and a burst of
+/// fresh handshakes looks exactly like abuse.
+const PINNED_CLIENT_TTL: Duration = Duration::from_secs(300);
+
+/// Bound on the cache: one entry per distinct webhook host, so this is really
+/// "number of configured channels" - but a bounded map cannot be turned into a
+/// memory leak by a config that rotates URLs.
+const PINNED_CLIENT_MAX: usize = 64;
+
+struct PinnedEntry {
+    addrs: Vec<std::net::SocketAddr>,
+    client: reqwest::Client,
+    at: Instant,
+}
+
+static PINNED_CLIENTS: Mutex<Option<HashMap<String, PinnedEntry>>> = Mutex::new(None);
+
 /// N74-02 & N76-01: Resolves URL, validates every resolved IP against SSRF rules,
 /// and builds a client pinned with `ClientBuilder::resolve_to_addrs(host, &addrs)` (IPv4 prioritized)
 /// to permanently eliminate the DNS Rebinding TOCTOU race window while preserving dual-stack fallback.
+///
+/// F-17: the pinned client is CACHED per `host:port` for `PINNED_CLIENT_TTL`. It
+/// used to be rebuilt for every single send, so an alert burst meant one DNS
+/// lookup and one TLS handshake per alert. The cache does not weaken the SSRF
+/// check: the addresses in the entry were validated when it was created and are
+/// re-validated on every reuse, and the client is still pinned to those exact
+/// addresses - which is the property the TOCTOU fix depends on.
 pub(crate) async fn resolve_pinned_client(
     default_client: &reqwest::Client,
     url_str: &str,
@@ -1261,6 +1292,40 @@ pub(crate) async fn resolve_pinned_client(
         let parsed_url = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
         let port = parsed_url.port_or_known_default().unwrap_or(80);
         let lookup_target = format!("{}:{}", host, port);
+
+        //--- cache hit: re-validate the pinned addresses (cheap, no DNS) and reuse
+        let cached = {
+            let mut guard = PINNED_CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+            let map = guard.get_or_insert_with(HashMap::new);
+            let mut hit: Option<reqwest::Client> = None;
+            let mut drop_entry = false;
+            if let Some(e) = map.get(&lookup_target) {
+                if e.at.elapsed() < PINNED_CLIENT_TTL {
+                    let mut ok = true;
+                    for a in &e.addrs {
+                        if check_single_ip(a.ip(), allow_local).is_err() {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok {
+                        hit = Some(e.client.clone());
+                    } else {
+                        drop_entry = true;
+                    }
+                } else {
+                    drop_entry = true;
+                }
+            }
+            if drop_entry {
+                //--- expired, or an address that is no longer permitted
+                map.remove(&lookup_target);
+            }
+            hit
+        };
+        if let Some(c) = cached {
+            return Ok(c);
+        }
 
         let mut addrs: Vec<std::net::SocketAddr> = Vec::new();
         // N76-03: 3s timeout for DNS lookup
@@ -1295,6 +1360,26 @@ pub(crate) async fn resolve_pinned_client(
             .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .build()
             .map_err(|e| format!("Failed to build pinned client: {}", e))?;
+
+        {
+            let mut guard = PINNED_CLIENTS.lock().unwrap_or_else(|e| e.into_inner());
+            let map = guard.get_or_insert_with(HashMap::new);
+            if map.len() >= PINNED_CLIENT_MAX {
+                //--- drop the oldest entry rather than growing without bound; the
+                //--- next send for that host simply re-resolves.
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, e)| e.at)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
+            }
+            map.insert(
+                lookup_target.clone(),
+                PinnedEntry { addrs: addrs.clone(), client: pinned_client.clone(), at: Instant::now() },
+            );
+        }
         return Ok(pinned_client);
     }
     // If check_url_base returned None, it is an IP literal already validated by check_single_ip

@@ -584,42 +584,100 @@ bool CopierIniUnescape(const string s,string &out)
 //--- Shape check, mirroring config::validate_ini on the hub. Deliberately
 //--- the same rules: the hub refuses a bad ini at the door, and the node
 //--- refuses it again, because the node is the one that would have to run it.
+//--- Shape validation, isomorphic with `config::validate_ini` in the hub.
+//---
+//--- WHY ISOMORPHIC, NOT "GOOD ENOUGH"
+//--- ===================================
+//--- Both ends validate because neither can trust the other, so any rule present
+//--- on one side and missing on the other is a way to build a config that one end
+//--- accepts and the other refuses. The failure mode is not a one-off error: the
+//--- hub re-pushes on the next heartbeat because `node_rev < hub_rev`, forever
+//--- (HUB-03). The rules below are therefore the hub's, transcribed - including
+//--- the four this function used to miss: `key=value` before any section, an empty
+//--- section name, a whitespace-only key, and the section/line caps. The caps use
+//--- CP_INI_SECTIONS / CP_INI_MAX, which already equal the hub's MAX_INI_SECTIONS /
+//--- MAX_INI_LINES (asserted by tools/hub_config_test.py) - the check was simply
+//--- never made here.
+//---
+//--- The LINE COUNT matches Rust's `str::lines()`, not this file's
+//--- `CopierSplitLines`: a trailing newline does not start a new line, so
+//--- "a\nb\n" is two lines, not three. Counting them differently would make the
+//--- cap fire at a different size on the two ends.
 bool CopierIniValidate(const string ini,string &err)
   {
    err="";
+   int len=StringLen(ini);
    if(StringLen(CopierTrim(ini))==0) { err="empty"; return false; }
-   if(StringLen(ini)>CP_INI_MAX_BYTES)
+   if(len>CP_INI_MAX_BYTES)
      {
-      err="too large: "+(string)StringLen(ini)+" bytes";
+      err="too large: "+(string)len+" bytes";
       return false;
      }
+
+   //--- Rust's lines() semantics
+   int lineCount=0;
+   for(int k=0;k<len;k++)
+     {
+      if(StringGetCharacter(ini,k)=='\n') lineCount++;
+     }
+   if(len>0 && StringGetCharacter(ini,len-1)!='\n') lineCount++;
+
    int sections=0;
+   bool hasSection=false;
    string lines[];
    int n=CopierSplitLines(ini,lines);
    for(int i=0;i<n;i++)
      {
       string line=CopierTrim(lines[i]);
       if(StringLen(line)==0) continue;
-      if(StringGetCharacter(line,0)==';' || StringGetCharacter(line,0)=='#')
-         continue;
-      if(StringGetCharacter(line,0)=='[')
+      ushort c0=StringGetCharacter(line,0);
+      if(c0==';' || c0=='#') continue;
+      if(c0=='[')
         {
-         if(StringGetCharacter(line,StringLen(line)-1)!=']' || StringLen(line)<3)
+         int last=StringLen(line)-1;
+         bool ok=(last>=2 && StringGetCharacter(line,last)==']');
+         if(ok)
+           {
+            //--- an EMPTY section name is refused by the hub; `[]` and `[   ]`
+            //--- both used to slip through here because only the closing bracket
+            //--- and a length of 3 were checked.
+            string name=CopierTrim(StringSubstr(line,1,last-1));
+            if(StringLen(name)==0) ok=false;
+           }
+         if(!ok)
            {
             err="line "+(string)(i+1)+": malformed section header";
             return false;
            }
          sections++;
+         hasSection=true;
          continue;
         }
+      if(!hasSection)
+        {
+         err="line "+(string)(i+1)+": key=value before any [section]";
+         return false;
+        }
+      //--- `key=value`, split on the FIRST '=' (the value may contain more). The
+      //--- key must be non-empty AFTER trimming: "  =v" is not a key.
       int eq=StringFind(line,"=");
-      if(eq<=0)
+      if(eq<=0 || StringLen(CopierTrim(StringSubstr(line,0,eq)))==0)
         {
          err="line "+(string)(i+1)+": not a section or key=value";
          return false;
         }
      }
    if(sections==0) { err="no [section] - this is not a copier.ini"; return false; }
+   if(sections>CP_INI_SECTIONS)
+     {
+      err=(string)sections+" sections, over the "+(string)CP_INI_SECTIONS+" limit";
+      return false;
+     }
+   if(lineCount>CP_INI_MAX)
+     {
+      err=(string)lineCount+" lines, over the "+(string)CP_INI_MAX+" limit";
+      return false;
+     }
    return true;
   }
 

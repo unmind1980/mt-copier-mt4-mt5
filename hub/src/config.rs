@@ -1233,6 +1233,65 @@ mod tests {
         assert!(validate_ini("[s]\n=v\n").is_err(), "empty key");
     }
 
+    /// F-06: this table is MIRRORED in `CopierSelfTest.mq4` (`ini validate:` lines)
+    /// and the two must agree row for row. Both ends validate because neither can
+    /// trust the other, so a rule present here and missing there is a config the
+    /// node accepts, reports back, and the hub refuses - which re-pushes forever.
+    #[test]
+    fn ini_shape_rules_are_pinned_for_the_node_to_mirror() {
+        // (ini, accepted?)
+        let table: &[(&str, bool)] = &[
+            ("[sender1]\nid=a\nevents=5555\n", true),
+            ("; hi\n\n[s]\nk=v\n# also\n", true),
+            ("[s]\nk=a=b\n", true),
+            // key=value before any section
+            ("id=a\n[s]\nk=v\n", false),
+            // empty / whitespace-only section name
+            ("[]\nk=v\n", false),
+            ("[   ]\nk=v\n", false),
+            ("[sender0 ]\nk=v\n", true),
+            // whitespace-only key
+            ("[s]\n   =v\n", false),
+            ("[s]\n  k  =v\n", true),
+            // a line that is neither
+            ("[s]\nno equals here\n", false),
+            // no section at all
+            ("id=a\nevents=1\n", false),
+        ];
+        for (ini, want_ok) in table {
+            assert_eq!(
+                validate_ini(ini).is_ok(),
+                *want_ok,
+                "validate_ini disagreed with the pinned table for {:?}",
+                ini
+            );
+        }
+    }
+
+    /// F-06: the caps the node used to enforce only at LOAD time. The boundary
+    /// itself must pass, or the two ends disagree by one.
+    #[test]
+    fn ini_line_and_section_caps_match_the_node() {
+        // CP_INI_MAX = 12288, CP_INI_SECTIONS = CP_MAX_SENDERS + 32 = 132
+        let mut at_cap = String::from("[s]\n");
+        for i in 0..12287 {
+            at_cap.push_str(&format!("k{}=v\n", i));
+        }
+        assert!(validate_ini(&at_cap).is_ok(), "exactly 12288 lines must pass");
+
+        let mut over = at_cap.clone();
+        over.push_str("k=v\n");
+        assert!(validate_ini(&over).is_err(), "12289 lines must be refused");
+
+        let mut sections = String::new();
+        for i in 0..132 {
+            sections.push_str(&format!("[s{}]\nk=v\n", i));
+        }
+        assert!(validate_ini(&sections).is_ok(), "exactly 132 sections must pass");
+        sections.push_str("[s132]\nk=v\n");
+        assert!(validate_ini(&sections).is_err(), "133 sections must be refused");
+    }
+
     #[test]
     fn cfg_hash_vectors_match_specification() {
         assert_eq!(cfg_hash(""), "811c9dc59e3779b9");

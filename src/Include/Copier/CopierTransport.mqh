@@ -117,6 +117,13 @@ private:
    string            m_subPrefixes[CP_MAX_XSUB_SUBS];
    int               m_nSubPrefixes;
    int               m_connectedHubs;
+   //--- F-18: the socket is mid-multipart and the closing frame did not land.
+   //--- ZMQ has no "cancel a partial message": once `sendMore(topic)` succeeds the
+   //--- next `send` is a continuation, so an unclosed frame makes every later
+   //--- message append to the broken one - the peer sees one enormous malformed
+   //--- frame instead of N good ones. Tracked so the next SendUp can try to close
+   //--- it before writing anything new.
+   bool              m_midMultipart;
 
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
@@ -193,7 +200,7 @@ private:
 
 public:
                      CopierTransport():m_ctx(NULL),m_pub(NULL),m_sub(NULL),
-                     m_errno(0),m_nSubPrefixes(0),m_connectedHubs(0) {}
+                     m_errno(0),m_nSubPrefixes(0),m_connectedHubs(0),m_midMultipart(false) {}
 
                     ~CopierTransport() { Close(); }
 
@@ -510,6 +517,21 @@ public:
       //--- on one pipe would cause Receiver to observe seq 3 before seq 2, permanently discarding
       //--- seq 2 as an expired sequence! Dual-send guarantees true active-active zero-loss replication,
       //--- with Receiver's CopierSeenRing (g_seen) and AcceptSeq handling microsecond-level deduplication.
+      //--- F-18: a previous call may have left the socket mid-multipart. Try once
+      //--- to close it with an empty terminator BEFORE writing anything new - that
+      //--- is the only recovery ZMQ offers, and it works as soon as the pipe is
+      //--- writable again. If it still fails the socket cannot be used for uplink
+      //--- at all, and saying so (return false) is better than appending every
+      //--- future message to a frame nobody can parse.
+      if(m_midMultipart)
+        {
+         if(!m_sub.send("",true))
+           {
+            m_errno=CopierZmqErrno();
+            return false;
+           }
+         m_midMultipart=false;
+        }
       int copies=(m_connectedHubs>1) ? 2 : 1;
       int sent=0;
       for(int i=0;i<copies;i++)
@@ -527,7 +549,13 @@ public:
             //--- cleanup and is never worth a wedge. If this one also fails the
             //--- frame is dropped, which is the same outcome the caller reports
             //--- anyway (return false) but without taking the terminal down.
-            m_sub.send("",true);
+            //--- F-18: if even THIS fails the socket stays mid-multipart; record it
+            //--- so the next call closes the frame first instead of appending to it.
+            if(!m_sub.send("",true))
+              {
+               m_errno=CopierZmqErrno();
+               m_midMultipart=true;
+              }
             continue;
            }
          sent++;
@@ -661,6 +689,10 @@ public:
       return DrainSocket(m_pub,out,maxMsgs);
      }
 
+   //--- F-18: true when the uplink socket is stuck mid-multipart. The EA logs it
+   //--- once; recovery is automatic on the next writable tick (see SendUp).
+   bool              FramingCorrupted() const { return m_midMultipart; }
+
    bool              StatusReady() const
      {
       return (CheckPointer(m_pub)!=POINTER_INVALID
@@ -673,6 +705,7 @@ public:
    void              Close()
      {
       m_connectedHubs=0;
+      m_midMultipart=false;
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
       for(int i=0;i<CP_MAX_XSUB_SUBS;i++) m_subPrefixes[i]="";

@@ -176,6 +176,19 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
     } else if field_bytes.starts_with(b"0:") {
         return latin1(&field_bytes[2..]);
     }
+    //--- F-13: a `1:` field that could not be decoded is NOT raw text - it is a
+    //--- corrupt compressed field. Returning it verbatim (the old behaviour) handed
+    //--- the caller a "record string" made of Z85 noise, which parsed to zero
+    //--- records while `N=` still declared the real count; on the SNAP path that
+    //--- combination looked like "the sender has no positions" and cleared the
+    //--- cockpit view. The node rejects the whole packet in the same situation
+    //--- (`CopierDecompressField` returns ""), so returning "" here is both the
+    //--- honest answer and the one that makes the two ends behave alike.
+    //--- A field with NO recognised prefix still falls through as raw text: that is
+    //--- an uncompressed payload from a peer that never adopted the prefix.
+    if field_bytes.starts_with(b"1:") {
+        return String::new();
+    }
     latin1(field_bytes)
 }
 
@@ -288,9 +301,13 @@ mod tests {
     }
 
     #[test]
-    fn decompress_field_corrupted_graceful() {
-        assert_eq!(decompress_field(b"1:0:not_valid_z85!!!"), "1:0:not_valid_z85!!!");
-        assert_eq!(decompress_field(b"1:"), "1:");
+    fn decompress_field_corrupted_yields_nothing() {
+        // F-13: a `1:` field that will not decode is corrupt, not text. Returning it
+        // verbatim made the SNAP path see "declared N, carried 0" and wipe the
+        // cockpit view; the node rejects the whole packet in the same case.
+        assert_eq!(decompress_field(b"1:0:not_valid_z85!!!"), "");
+        assert_eq!(decompress_field(b"1:"), "");
+        assert_eq!(decompress_field(b"1:0:"), "");
     }
 
     #[test]

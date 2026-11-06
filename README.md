@@ -48,7 +48,8 @@ Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-
 - **Many-to-Many Routing**: A single receiver can replicate from dozens of distinct senders concurrently with isolated sequence counters, independent lot multipliers, and magic numbers.
 
 ### 2. Enterprise High-Availability (HA) Dual-Active Cluster
-- **Active-Standby Redundancy**: Primary Hub continuously synchronizes commands, configuration revisions, and client states to the Standby Hub.
+- **Active-Standby Redundancy**: Primary Hub continuously synchronizes commands, configuration revisions, alert channels and the CURVE client allow-list to the Standby Hub.
+- **User table is opt-in**: `users.json` carries password digests and the cluster channel may be plaintext, so it is **not replicated by default**. Set `MTC_SYNC_USERS=1` on **both** hubs if the standby must have the same accounts; `GET /api/v1/cluster/status` reports `users_sync_enabled`. Without it, a failover leaves the standby's old accounts and passwords in force.
 - **Failover & Auto-Failback (ADR-04 / ADR-10)**: Strict epoch-based tie breaking, continuous heartbeat health probes, and stabilized two-phase handover without state loss or duplicate orders.
 - **Atomic Journal Persistence**: Two-phase write barriers with `sync_data` fsync barriers, guaranteeing 100% crash durability for all operational commands.
 

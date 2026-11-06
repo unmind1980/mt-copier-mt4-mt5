@@ -1877,6 +1877,36 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     let view = parse_snap(&payload);
                     let declared = view.declared;
                     let carried = view.records;
+                    //--- F-13: "declares N, carries 0" is a CORRUPT frame, not an
+                    //--- empty book. The encoder only ever emits `N=<count>` with the
+                    //--- matching `R=` records (and omits `R` entirely when count is
+                    //--- 0), so this combination can only come from an undecodable
+                    //--- `R=` field or a truncated payload. Applying it used to wipe
+                    //--- the sender's held items from the cockpit (`carried == 0`
+                    //--- below) on the strength of a frame we could not read - and a
+                    //--- receiver in the same position rejects the whole packet and
+                    //--- keeps its previous desired set. Keep the previous view, say
+                    //--- so once, and move on.
+                    let corrupt = matches!(declared, Some(n) if n > 0) && carried == 0;
+                    if corrupt {
+                        if wire_audit_throttle
+                            .get(&(format!("sender:{}", sid), "snapshot.corrupt".to_string()))
+                            .map(|t| t.elapsed() >= Duration::from_secs(10))
+                            .unwrap_or(true)
+                        {
+                            wire_audit_throttle.insert(
+                                (format!("sender:{}", sid), "snapshot.corrupt".to_string()),
+                                Instant::now(),
+                            );
+                            eprintln!(
+                                "[hub] WARN  SNAP from {} declares N={} but carries 0 records - \
+                                 frame ignored, previous position view kept (further reports \
+                                 suppressed for 10s)",
+                                sid,
+                                declared.unwrap_or(0)
+                            );
+                        }
+                    } else {
                     let mismatched_now = {
                         let mut s = snap_shared.lock_or_recover();
                         let before = s.pos.mismatched;
@@ -1920,6 +1950,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 let _ = tx.send(body);
                             }
                         }
+                    }
                     }
                 }));
             }

@@ -212,6 +212,18 @@ def main():
         check("Standby writes are locked (false)", s_status.get("writes") is False)
         check("Standby epoch is 1", s_status.get("epoch") == 1)
 
+        # F-10 / F-12: the status now says whether a feature is SWITCHED ON,
+        # separately from whether its file exists yet. Without this a fresh
+        # standby whose notifications file has not been created could never ask
+        # for the first sync, and an operator had no way to see from the API that
+        # the user table is not being replicated.
+        check("status reports notifications as enabled", p_status.get("notif_enabled") is True)
+        check("status reports the curve allow-list as enabled",
+              p_status.get("curve_clients_enabled") is True)
+        check("status reports the user-sync switch explicitly",
+              p_status.get("users_sync_enabled") in (True, False),
+              str(p_status.get("users_sync_enabled")))
+
         # ---------------------------------------------------------------------
         # 2. Single-Writer Protection (ADR-03)
         # ---------------------------------------------------------------------

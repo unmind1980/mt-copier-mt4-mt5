@@ -664,6 +664,15 @@ A rejected snapshot leaves the desired set at its last accepted state, so the
 receiver stands still rather than diverging; it never acts on half of a
 snapshot.
 
+**The hub applies the same rule to its own copy of the view.** The hub does not
+act on snapshots — it only displays them — but "declares `N`, carries 0" used to
+mean *the sender went flat* on the cockpit, which is the same wrong conclusion
+one step earlier. The snap worker now treats `N > 0 && records == 0` as a
+corrupt frame: the previous position view is kept, the held-items list is not
+cleared, and the frame is reported (rate-limited) instead. `0 < records < N`
+remains a *mismatch* — audited, but applied, because a sender legitimately
+truncates at its own `CP_MAX_POSITIONS`.
+
 **Rejection logging and escalation.** Rejections are rate-limited: the first
 rejection logs, repeats are silent, and every 30th *consecutive* rejection
 (about 30 seconds at one snapshot per second) escalates the message. The

@@ -2138,6 +2138,44 @@ void TestNodeAnnounce()
       !CopierIniValidate("[s]\nno equals here\n",verr));
    Ok("ini validate: rejects an empty key",!CopierIniValidate("[s]\n=v\n",verr));
 
+   //--- F-06: the four rules the node used to be missing, mirroring
+   //--- config::validate_ini in the hub. Each one is a shape the hub refuses, so
+   //--- accepting it here produced a config the hub would not take back - and a
+   //--- refused CFG is re-pushed every heartbeat, forever (HUB-03).
+   Ok("ini validate: rejects key=value before any section",
+      !CopierIniValidate("id=a\n[s]\nk=v\n",verr));
+   Ok("ini validate: rejects an empty section name",
+      !CopierIniValidate("[]\nk=v\n",verr));
+   Ok("ini validate: rejects a whitespace-only section name",
+      !CopierIniValidate("[   ]\nk=v\n",verr));
+   Ok("ini validate: rejects a whitespace-only key",
+      !CopierIniValidate("[s]\n   =v\n",verr));
+   Ok("ini validate: accepts a key with surrounding spaces",
+      CopierIniValidate("[s]\n  k  =v\n",verr));
+   Ok("ini validate: accepts a section name with spaces inside",
+      CopierIniValidate("[ sender0 ]\nk=v\n",verr));
+   //--- the caps: the node enforced them at LOAD time, not at VALIDATE time, so a
+   //--- pushed config could pass validation and then fail to load.
+   //--- CopierStrBuilder, not `+=`: these fixtures are ~70 KB and the naive append
+   //--- would copy the whole prefix on every one of 12k iterations.
+   CopierStrBuilder sbLines;
+   sbLines.Add("[s]\n");
+   for(int mi=0;mi<CP_INI_MAX+2;mi++) sbLines.Add("k"+((string)mi)+"=v\n");
+   Ok("ini validate: rejects more lines than CP_INI_MAX",
+      !CopierIniValidate(sbLines.Result(),verr));
+
+   CopierStrBuilder sbSect;
+   for(int ms=0;ms<CP_INI_SECTIONS+2;ms++) sbSect.Add("[s"+((string)ms)+"]\nk=v\n");
+   Ok("ini validate: rejects more sections than CP_INI_SECTIONS",
+      !CopierIniValidate(sbSect.Result(),verr));
+
+   //--- ...and the boundary itself is allowed, so the cap is not off by one
+   CopierStrBuilder sbCap;
+   sbCap.Add("[s]\n");
+   for(int mc=0;mc<CP_INI_MAX-1;mc++) sbCap.Add("k"+((string)mc)+"=v\n");
+   Ok("ini validate: exactly CP_INI_MAX lines is allowed",
+      CopierIniValidate(sbCap.Result(),verr));
+
    //--- Split lines, which the validator is built on: it has to handle the
    //--- CRLF a Windows editor writes as well as the LF the hub sends.
    string lines[];

@@ -3442,6 +3442,9 @@ async fn cluster_status(
         //--- file exists yet. "path empty" is the only reliable off-switch.
         notif_enabled: !notif_path.as_os_str().is_empty(),
         curve_clients_enabled: !curve_clients_path.as_os_str().is_empty(),
+        users_sync_enabled: std::env::var("MTC_SYNC_USERS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
         is_configured_primary,
         failback_locked,
         ts: unix_secs(),

@@ -9051,6 +9051,14 @@ void OnTimer()
    UpdatePanel();
    CheckPeersLiveness(now);
 
+   //--- F-18: the uplink socket is stuck mid-multipart, so every send is being
+   //--- refused until it can be closed. That is an uplink outage, not a warning:
+   //--- the hub is not receiving anything from this node.
+   if(g_tp.FramingCorrupted() && g_once.ShouldEmit("framing_corrupt"))
+      g_log.Error("uplink socket is stuck mid-multipart (a frame could not be"
+                  +" terminated). Uplink frames are being refused until the socket"
+                  +" becomes writable again; if this line persists, restart the EA.");
+
    g_log.Tick();
   }
 
