@@ -2086,4 +2086,10 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 - **第 109 轮补充验证**：16 个 MQL 目标 0 错 0 警；Rust **171/171**（新增 F-06 两条表驱动/边界用例）；Python 24 套件全绿，`hub_cluster_test.py` 从 35 项增至 **38** 项（新增 notif/curve/users 开关断言）。
 
+- **F-19 先测再决定（诊断工具）**：
+  - 新增 `src/Scripts/CopierSymFreshBench.mq4`（**纯诊断，不改任何运行时行为**），以及 `CopierSelfTest` 内的 `TestSymbolFreshnessCost()`（两项成本数字随自检一起打印）。
+  - 关键事实（读代码得出，非估算）：`CopierSymbolFeedStale()` 每 tick 被调用一次/每个 desired 条目、一次/每个本地持仓、一次/每个排队动作；`OnTimer()` 无节流，定时器为 `PollMs`（默认 **5ms**，即 200Hz）；其 memo 容量 `CP_SYMFRESH_CACHE=16`，**工作集超过 16 个符号时条目在 tick 之间互相挤出，1 秒 TTL 完全用不上**，每次调用都走 256 槽线性扫描 + 一次 `CopierSymbolQuoteTime` 平台调用。
+  - 基准脚本按工作集 1/8/16/**17**/20/32/50/100 逐个测量，输出 `us/call`、按 200Hz×2 调用点推算的每秒调用数与"占单核百分比"。16→17 之间的台阶就是 memo 边界，用来把"要不要改"变成"看数字"。
+  - 实测结果由操作者在终端运行该脚本读取（`MQL\Files\copier_symfresh_bench.log`）；本机四个终端已部署 `.ex4/.ex5`。**未做修改**：先拿到数字再决定，避免为一个可能只有零点几个百分点的收益去动交易安全门禁的索引结构。
+
 ---

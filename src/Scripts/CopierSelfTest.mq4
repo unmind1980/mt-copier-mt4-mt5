@@ -2295,6 +2295,103 @@ void TestSymbolQuoteAge()
       CopierSymbolFeedStale("CP_NOSUCHSYMBOL",60000)==false);
   }
 
+//--- F-19 benchmark: what the per-symbol freshness gate actually costs HERE.
+//---
+//--- WHY THIS IS MEASURED AND NOT ARGUED
+//--- ====================================
+//--- `CopierSymbolFeedStale()` is evaluated once per desired entry, once per local
+//--- position and once per queued action, on EVERY timer tick - and the tick is
+//--- PollMs, 5 ms by default. That is ~400 calls per second per symbol.
+//---
+//--- The age it asks for is memoised in CP_SYMFRESH_CACHE (16) entries. Sixteen is
+//--- smaller than the working set of any receiver that mirrors more than sixteen
+//--- symbols, and once the working set exceeds the memo the entries evict each
+//--- other between ticks: the 1 s TTL never gets a chance to help, every call walks
+//--- the 256-slot table and asks the terminal for a quote time, and the memo
+//--- silently becomes a no-op. Nothing is wrong with the ANSWER - the gate still
+//--- works - the cost just scales with symbols x ticks.
+//---
+//--- Two runs, same call count, so the numbers are comparable:
+//---   MISS-DOMINATED  round-robin over ~100 symbols -> the memo never survives
+//---   HIT-DOMINATED   one symbol                   -> the memo is always warm
+//--- The gap is the memo's value; the absolute miss number is what decides whether
+//--- changing the memo is worth its risk.
+//---
+//--- Reading the output: `us/call` is the honest figure. `implied` multiplies it by
+//--- the call rate a receiver with this many symbols actually generates, assuming
+//--- one desired entry and one local position per symbol - state the assumption
+//--- rather than pretending the percentage is measured.
+void TestSymbolFreshnessCost()
+  {
+   int want=100;
+   string syms[];
+   ArrayResize(syms,0);
+   int real=0;
+   int total=SymbolsTotal(true);
+   for(int i=0;i<total && ArraySize(syms)<want;i++)
+     {
+      string s=SymbolName(i,true);
+      if(StringLen(s)==0) continue;
+      int m=ArraySize(syms);
+      ArrayResize(syms,m+1,128);
+      syms[m]=s;
+      real++;
+     }
+   //--- A short Market Watch is common. Padding with names the terminal does not
+   //--- know keeps the TABLE the same size (so the scan cost stays representative)
+   //--- while the platform call becomes the cheap "unknown symbol" path - which is
+   //--- why the real-symbol count is printed: the more real symbols, the more of
+   //--- the total this measures.
+   while(ArraySize(syms)<want)
+     {
+      int m=ArraySize(syms);
+      ArrayResize(syms,m+1,128);
+      syms[m]="CPBENCH"+(string)m;
+     }
+   int nsym=ArraySize(syms);
+   if(nsym<=0) return;
+
+   const int ITER=30000;
+   long sink=0;
+
+   //--- miss-dominated: every call lands on a different symbol
+   CopierSymbolQuoteReset();
+   long t0=GetTickCount();
+   for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[i%nsym]);
+   long missMs=(long)(GetTickCount()-t0);
+
+   //--- hit-dominated: one symbol, memo warm after the first call
+   CopierSymbolQuoteReset();
+   sink+=CopierSymbolQuoteAgeMs(syms[0]);
+   t0=GetTickCount();
+   for(int i=0;i<ITER;i++) sink+=CopierSymbolQuoteAgeMs(syms[0]);
+   long hitMs=(long)(GetTickCount()-t0);
+
+   double missUs=(missMs*1000.0)/ITER;
+   double hitUs =(hitMs *1000.0)/ITER;
+
+   Note("symfresh-cost: "+((string)nsym)+" symbols ("+((string)real)+" real, "
+        +((string)(nsym-real))+" padded), "+((string)ITER)+" calls per run");
+   Note("symfresh-cost: memo MISS ~"+DoubleToString(missUs,3)+" us/call  ("
+        +((string)missMs)+" ms / "+((string)ITER)+")");
+   Note("symfresh-cost: memo HIT  ~"+DoubleToString(hitUs,3)+" us/call  ("
+        +((string)hitMs)+" ms / "+((string)ITER)+")");
+
+   //--- what that means at the rate a receiver actually calls it
+   double callsPerSec=(double)nsym*200.0*2.0;      // 200 ticks/s (PollMs=5), 2 sites
+   double missPct=(callsPerSec*missUs)/10000.0;    // us/s -> % of one core
+   double hitPct =(callsPerSec*hitUs )/10000.0;
+   Note("symfresh-cost: at "+DoubleToString(callsPerSec,0)+" calls/s that is ~"
+        +DoubleToString(missPct,2)+"% of one core with the memo thrashed, ~"
+        +DoubleToString(hitPct,2)+"% with it warm");
+
+   //--- The measurement is only meaningful if it ran long enough to beat the
+   //--- ~15 ms tick granularity; 30000 calls always will, so this is a guard
+   //--- against the loop being optimised away rather than a flaky assertion.
+   Ok("symfresh-cost: the benchmark measured something",missMs>0 && sink!=0);
+   CopierSymbolQuoteReset();
+  }
+
 void TestPingPayload()
   {
    //--- A probe is broadcast, so it carries no addressee - but it MUST name
@@ -2921,6 +3018,7 @@ void OnStart()
    TestNodeAnnounce();
    TestPeerLiveness();
    TestSymbolQuoteAge();
+   TestSymbolFreshnessCost();
    TestPingPayload();
    TestLotMode();
    TestKvSuffixCollision();
