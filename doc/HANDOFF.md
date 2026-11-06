@@ -2215,6 +2215,6 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - Rust 单测 **172/172**（新增 `test_ack_propagates_journal_error_and_keeps_the_command_pending`）。
   - `hub_cluster_test.py` 新增两条 Standby 只读 409 断言，**未执行**：端口 6380–6383 是空闲的，但 `hub/target/release/copier-hub.exe` 被在线的两个 Hub 进程占用，无法重建 release 二进制；等重启服务后再跑。
 
-- **部署提醒**：源码、编译产物与文档已更新；**在线的两个 Hub 仍跑旧二进制**（服务重启后生效），四个终端的 EA 需重挂才会加载新 `.ex4/.ex5`，并核对启动日志里的 `build=`。
+- **上线记录（2026-11-07 11:00）**：`git push` 已推送；两个 Hub 以 **Windows 服务**方式重启（`MTCopierPrimary` / `MTCopierStandby`），新 release 二进制（10:22 构建）已在跑，`healthz` 200、6000/6001/6010/6011 全部监听、主备 `cmd_lines=1404 / seq=345 / users_hash` 一致、两侧各 2 个节点在线。`hub_cluster_test.py` **40/40 通过**（含两条新增的 Standby 只读 409 断言）。**四个终端的 EA 仍是重挂前的镜像**，需逐个重挂（或重启终端）才会加载新 `.ex4/.ex5`。
 
 ---
