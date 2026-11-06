@@ -777,9 +777,16 @@ void TestConfig()
           ini.Get("sender1","id"),"icmarkets");
    OkStr("config: index finds a key after the last section boundary",
           ini.Get("sender1","events"),"tcp://10.0.0.9:5555");
+   //--- BOTH directions, because only one of them is the interesting one:
+   //--- `snap` exists in sender0 and NOT in sender1, so sender1 must not see it
+   //--- (section isolation) while sender0 must still return it (the index did not
+   //--- simply lose the row). The first version asserted the second half against
+   //--- "sender0" and therefore demanded that sender0 NOT have its own key -
+   //--- it could never pass.
    Ok("config: a key of sender0 is not visible from sender1",
        ini.Get("sender1","events","none")=="tcp://10.0.0.9:5555"
-       && ini.Get("sender0","snap","none")=="none");
+       && ini.Get("sender1","snap","none")=="none"
+       && ini.Get("sender0","snap","none")=="tcp://10.0.0.5:5556");
 
    //--- declared-vs-present. These are the two numbers that make "I configured
    //--- N senders and only some appeared" answerable, so they are asserted
@@ -1542,8 +1549,11 @@ void TestRiskPendingProjection()
 
    Ok("risk: two held of three leaves room",
       rk.AllowOpen(0.01,2,0.02,0,0.0,why));
+   //--- 2 held + 1 pending already fill maxOpenPositions=3, so the NEXT open is
+   //--- the fourth and must be refused. The assertion used to expect the
+   //--- opposite of both its own name and CopierRiskAllowsOpen()'s rule.
    Ok("risk: one pending counts as the third",
-      rk.AllowOpen(0.01,2,0.02,1,0.01,why));
+      !rk.AllowOpen(0.01,2,0.02,1,0.01,why));
    Ok("risk: a second pending open is refused",
       !rk.AllowOpen(0.01,2,0.02,2,0.02,why));
    //--- this is the live failure exactly: nothing held, three already
@@ -1882,7 +1892,10 @@ void TestProfitTarget()
    double b2OpenPx=1.1000, b2ClosePx=1.1050, b2PipSize=0.0001;
    int b2SenderSide=CP_SIDE_BUY;
    double b2ProfitPips=(b2SenderSide==CP_SIDE_BUY)?((b2ClosePx-b2OpenPx)/b2PipSize):((b2OpenPx-b2ClosePx)/b2PipSize);
-   Ok("profit: sender BUY profit is +50 pips regardless of receiver inversion",b2ProfitPips==50.0);
+   //--- a tolerance, not `==`: (1.1050-1.1000)/0.0001 is 50.00000000000004 in
+   //--- binary floating point, so the exact comparison could never pass
+   Ok("profit: sender BUY profit is +50 pips regardless of receiver inversion",
+      MathAbs(b2ProfitPips-50.0)<0.0000001);
    Ok("profit: +50 satisfies waitforprofitpips=+10",CopierProfitTargetReached(b2ProfitPips,10.0));
   }
 
@@ -2702,10 +2715,16 @@ void TestInvertedStop()
       MathAbs((unswapped-2.0000)-0.0050)<0.0000001);
    Ok("invert: ...and is therefore NOT what we place",unswapped!=sl);
 
-   //--- the primitive still refuses a stop on the wrong side of its own entry,
-   //--- which is why the magnitude variant exists at all
-   Ok("invert: the ordinary mirror would drop such a stop entirely",
-      CopierMirrorStop(1.0950,1.1000,2.0000,CP_SIDE_SELL,true)==0.0);
+   //--- A86-02: a stop that has moved PAST the entry is a TRAILING PROFIT stop,
+   //--- not a mistake. Before A86-02 this primitive returned 0.0 here and the
+   //--- mirror silently lost its stop, so a sender that had locked in profit had
+   //--- no protection at all on this side. It must map to the same side of OUR
+   //--- entry, at the sender's distance - 1.0950 is 50 pips below a SELL entry of
+   //--- 1.1000, so our stop lands 50 pips below ours.
+   double trail=CopierMirrorStop(1.0950,1.1000,2.0000,CP_SIDE_SELL,true);
+   Ok("invert: a trailing SELL stop is mirrored, not dropped",trail>0.0);
+   Ok("invert: ...below our entry, at the sender's distance",
+      MathAbs((2.0000-trail)-0.0050)<0.0000001);
 
    //--- DEF-63-03 & LEG-01 Locked Decision: When sender TP=0, receiver does NOT manufacture
    //--- an artificial stop loss; it stays 0.0 to respect sender's soft/virtual exits.
@@ -2914,7 +2933,12 @@ void TestTopicFilter()
    Ok("topic: @20001 prefix collision is rejected",!CopierIsTopicTarget("@20001","2000","1000",sids,2));
    Ok("topic: sender sid is accepted",CopierIsTopicTarget("252033316","2000","1000",sids,2));
    Ok("topic: sender sid 2520333160 prefix collision is rejected",!CopierIsTopicTarget("2520333160","2000","1000",sids,2));
-   Ok("topic: fallback envSid is accepted",CopierIsTopicTarget("random","2000","1000",sids,2,"252033316"));
+   //--- N73-07: the TOPIC is the delivery authority. An unrecognised topic must
+   //--- not be rescued by a matching envSid - that rescue was exactly the
+   //--- prefix-collision bypass the check exists to close. The old assertion
+   //--- demanded the pre-N73-07 behaviour, which the function never had.
+   Ok("topic: an unknown topic is rejected even when envSid matches",
+      !CopierIsTopicTarget("random","2000","1000",sids,2,"252033316"));
    Ok("topic: unrelated envSid is rejected",!CopierIsTopicTarget("random","2000","1000",sids,2,"999999999"));
   }
 
@@ -2977,20 +3001,41 @@ void TestBackoff()
    Ok("backoff: a key no older than the table survives eviction",
       q.Count("key"+IntegerToString(CP_BACKOFF_SLOTS+39))==1
       && q.Blocked("key"+IntegerToString(CP_BACKOFF_SLOTS+39)));
-   //--- delete several, including interior ones, then confirm the REST are
-   //--- still reachable. Erasing reshuffles the probe chains, so this is the
-   //--- assertion that catches an in-place erase that split a chain.
-   q.Clear("key10");
-   q.Clear("key11");
-   q.Clear("key"+(string)(CP_BACKOFF_SLOTS+39));
-   bool reachable=true;
-   for(int i=20;i<CP_BACKOFF_SLOTS;i++)
+   //--- Which keys survived the overshoot is the EVICTION policy's business, not
+   //--- this test's. So ask the table instead of assuming a range: the property
+   //--- being pinned is "erasing interior entries does not split a probe chain",
+   //--- and the old fixture guessed a range (20..SLOTS-1) that the oldest-first
+   //--- eviction had already removed - it could never pass.
+   string live[];
+   for(int i=0;i<CP_BACKOFF_SLOTS+40;i++)
      {
       string k="key"+IntegerToString(i);
-      if(!q.Blocked(k)) { reachable=false; break; }
+      if(q.Blocked(k))
+        {
+         int m=ArraySize(live);
+         ArrayResize(live,m+1,64);
+         live[m]=k;
+        }
      }
+   int nLive=ArraySize(live);
+   Ok("backoff: most keys survive a 40-key overshoot",nLive>=CP_BACKOFF_SLOTS-40);
+   bool reachable=true;
+   if(nLive>=6)
+     {
+      //--- erase an early, a middle and the newest survivor, then every OTHER
+      //--- survivor must still be findable
+      q.Clear(live[1]);
+      q.Clear(live[nLive/2]);
+      q.Clear(live[nLive-1]);
+      for(int i=0;i<nLive;i++)
+        {
+         if(i==1 || i==nLive/2 || i==nLive-1) continue;
+         if(!q.Blocked(live[i])) { reachable=false; break; }
+        }
+     }
+   else reachable=false;
    Ok("backoff: keys stay reachable after interior erasures",reachable);
-   Ok("backoff: an erased key is gone",!q.Blocked("key10"));
+   Ok("backoff: an erased key is gone",nLive>=2 && !q.Blocked(live[1]));
 
    //--- Test long-ladder protection on full eviction (H-02)
    CopierBackoff bf;
