@@ -171,12 +171,38 @@ void OnStart()
                        n,us,callsPerSec,pct,(int)ms,iters));
      }
 
+   //--- The sustained case, projected from the measured per-call cost. This is
+   //--- the number that matters for "my EA burns a core at the weekend": a queue
+   //--- that cannot drain was walked end to end on EVERY tick, and P1 now walks
+   //--- it at most once a second.
+   Out("");
+   Out("Queue drain with N actions held (per-call cost measured above):");
+   Out("      N |  before P1: 200 passes/s | after P1: 1 pass/s | gain");
+   Out("  ------+--------------------------+--------------------+------");
+   for(int k=0;k<ArraySize(g_sizes);k++)
+     {
+      int n=g_sizes[k];
+      if(n<20) continue;                    // a handful of held actions is noise
+      int iters=0;
+      long ms=0;
+      double us=Measure(n,targetMs,iters,ms);
+      if(us<0.0) continue;
+      double beforeMs=(double)n*200.0*us/1000.0;   // ms of CPU per second
+      double afterMs =(double)n*1.0*us/1000.0;
+      double gain=(afterMs>0.0)?(beforeMs/afterMs):0.0;
+      Out(StringFormat("  %5d | %13.1f ms/s (%5.2f%%) | %6.2f ms/s (%4.2f%%) | %4.0fx",
+                       n,beforeMs,beforeMs/10.0,afterMs,afterMs/10.0,gain));
+     }
+
    Out("");
    Out("Reading it:");
    Out("  * us/call is the measurement. The percentage assumes the SUSTAINED case:");
    Out("    that many actions stuck behind a shut market, re-checked every tick.");
    Out("    A converged receiver - positions open, nothing to do - calls this");
    Out("    function zero times per tick, so its real share is zero.");
+   Out("  * The queue table above is arithmetic on the measured per-call cost, not");
+   Out("    a second measurement: 200 passes/s is the old periodic drain, 1 pass/s");
+   Out("    is the P1 backoff cap. Event-driven drains bypass the backoff.");
    Out("  * The step between 16 and 17 is the memo boundary: below it every call is");
    Out("    a cache hit, above it the entries evict each other and every call pays");
    Out("    the full path. The growth above 16 is the table scan, which averages");

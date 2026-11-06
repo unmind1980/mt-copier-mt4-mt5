@@ -752,6 +752,24 @@ CopierAction g_q[CP_MAX_ACTIONS];
 int    g_qHead=0;      // index of the OLDEST live action
 int    g_qn=0;         // number of live actions, contiguous from g_qHead
 
+//--- P1: a drain pass that makes NO progress must not be repeated every tick.
+//---
+//--- The queue loop is bounded by `skipped<=g_qn`, i.e. by the WHOLE queue, so a
+//--- queue in which every action is held (market shut) is walked end to end on
+//--- every timer tick - 200 times a second, all weekend, re-deriving the same
+//--- answer. Each pass costs a per-symbol freshness evaluation per action.
+//--- Measured on a 4-core VPS: 100 held actions = ~6% of one core, continuously,
+//--- for nothing.
+//---
+//--- So a zero-progress pass arms a retry deadline. The periodic drain checks it;
+//--- the event-driven drains (a trade event arrived, a snapshot changed the
+//--- desired set) never do, and PushAction() clears it outright, because those
+//--- are exactly the moments the answer can change.
+long   g_qRetryAtMs=0;      // periodic drain may run again at this monotonic ms
+long   g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+int    g_qSpinPasses=0;     // consecutive zero-progress passes, for the panel
+long   g_gateCalls=0;       // per-symbol freshness evaluations (diagnostic)
+
 CopierTransport g_tp;
 CopierLog       g_log;
 CopierSeenRing  g_seen;
@@ -2854,6 +2872,11 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    g_q[t].openPx=openPx;
    g_q[t].key=key;
    g_qn++;
+   //--- P1: something new to do - never let a backoff armed by an earlier
+   //--- zero-progress pass delay it.
+   g_qRetryAtMs=0;
+   g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+   g_qSpinPasses=0;
    return true;
   }
 
@@ -2883,6 +2906,11 @@ void ShiftQueue()
 
 void ClearQueue()
   {
+   //--- P1: an emptied queue has nothing to back off from. Without this, a
+   //--- reload could leave a deadline armed for a queue that no longer exists.
+   g_qRetryAtMs=0;
+   g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+   g_qSpinPasses=0;
    for(int i=0;i<g_qn;i++)
      {
       int idx=g_qHead+i;
@@ -3928,6 +3956,20 @@ void ExecuteQueue()
          g_sweepFailed[sc].key="";
         }
      }
+
+   //--- P1: arm the retry deadline when this pass processed NOTHING. A queue in
+   //--- which every action is held would otherwise be walked end to end on every
+   //--- tick, 200 times a second, to re-derive the same answer.
+   CopierQueueNotePass(CopierNowMs(),g_qn,done,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses);
+   //--- entered the "nothing can drain" state: say so ONCE per episode. The
+   //--- count resets on the next pass that processes anything, so a queue that
+   //--- recovers and stalls again logs again rather than staying silent.
+   if(g_qSpinPasses==1)
+      g_log.Info("queue cannot drain: all "+IntegerToString(g_qn)
+                 +" action(s) are held (market shut or feed stale). Periodic drain"
+                 +" now backs off to at most "
+                 +IntegerToString(CP_Q_BACKOFF_MAX_MS)+" ms instead of running every"
+                 +" tick; the event-driven drains still fire immediately.");
   }
 
 //=====================================================================
@@ -8213,6 +8255,23 @@ void UpdatePanel()
                    +"   Balance "+DoubleToString(CopierAccountBalance(),2),
                CP_PANEL_TEXT);
 
+   //--- P1: the queue's own state, and whether the periodic drain is backing
+   //--- off. A queue that cannot drain is not an error - the market is shut - but
+   //--- it used to be re-walked 200 times a second to discover that, forever.
+   //--- Showing the backoff makes both the state and the fix visible instead of
+   //--- leaving "my EA burns a core at the weekend" to be diagnosed from scratch.
+   if(g_qn>0)
+     {
+      long nowQ=CopierNowMs();
+      bool spinning=(g_qSpinPasses>0 && !CopierQueueMayDrain(nowQ,g_qRetryAtMs));
+      int waitMs=(int)(g_qRetryAtMs-nowQ);
+      if(waitMs<0) waitMs=0;
+      g_panel.Row(r++,"Queue      "+IntegerToString(g_qn)+" action(s)"
+                      +(spinning ? ("   held, retry in "+IntegerToString(waitMs)+" ms")
+                                 : "   draining"),
+                  spinning?CP_PANEL_WARN:CP_PANEL_TEXT);
+     }
+
    //--- ORPHANS. Positions carrying this copier's own comment tag but sitting
    //--- under a magic no configured sender owns any more - what a reordered
    //--- copier.ini, or a changed MagicBase, leaves behind.
@@ -8751,7 +8810,11 @@ void OnTimer()
       }
    }
    for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
-   ExecuteQueue();
+   //--- P1: the PERIODIC drain respects the backoff armed by a zero-progress
+   //--- pass. The event-driven drains (a trade event arrived, a snapshot changed
+   //--- the desired set) deliberately do not, and PushAction() clears the
+   //--- deadline outright - those are the moments the answer can change.
+   if(g_qn>0 && CopierQueueMayDrain(CopierNowMs(),g_qRetryAtMs)) ExecuteQueue();
 
    //--- 4) report discarded messages once a minute.
    //---

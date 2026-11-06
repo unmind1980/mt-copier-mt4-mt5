@@ -2293,6 +2293,75 @@ void TestSymbolQuoteAge()
       CopierClockAgeMs(0,now)==-1);
    Ok("symfresh: ...and an unmeasurable clock age does not make one stale",
       CopierSymbolFeedStale("CP_NOSUCHSYMBOL",60000)==false);
+
+   //--- P2: the memo is direct-mapped, so a collision must be a MISS and never a
+   //--- wrong age. Forced here with two names that land in the same bucket - the
+   //--- ages are made distinguishable by letting the first symbol age past the
+   //--- memo TTL, so returning the colliding entry's value would be visible.
+   string bucketFirst[CP_SYMFRESH_CACHE];
+   for(int b=0;b<CP_SYMFRESH_CACHE;b++) bucketFirst[b]="";
+   string c1="",c2="";
+   for(int i=0;i<20000;i++)
+     {
+      string nm="CPX"+IntegerToString(i);
+      int b=(int)(CopierSymHash(nm)&(uint)(CP_SYMFRESH_CACHE-1));
+      if(StringLen(bucketFirst[b])==0) { bucketFirst[b]=nm; continue; }
+      c1=bucketFirst[b];
+      c2=nm;
+      break;
+     }
+   Ok("symfresh: a colliding pair exists to test with",StringLen(c1)>0 && StringLen(c2)>0);
+   if(StringLen(c2)>0)
+     {
+      CopierSymbolQuoteReset();
+      long ca0=CopierSymbolQuoteAgeMs(c1);      // 0: first sight
+      Sleep(1100);                              // let the memo expire, not the table
+      long ca1=CopierSymbolQuoteAgeMs(c1);      // ~1100, memo refreshed
+      long ca2=CopierSymbolQuoteAgeMs(c2);      // same bucket: evicts c1
+      long ca3=CopierSymbolQuoteAgeMs(c1);      // must recompute, NOT read ca2's 0
+      Ok("symfresh: a colliding symbol gets its own age",ca2<ca1 && ca0<50);
+      Ok("symfresh: ...and evicting the first does not corrupt it",ca3>1000);
+     }
+  }
+
+//--- P1: the queue-drain backoff state machine. Pure function, so the whole
+//--- transition table is asserted here rather than trusted.
+void TestQueueBackoff()
+  {
+   long bo=CP_Q_BACKOFF_MIN_MS;
+   long at=0;
+   int  spin=0;
+   long now=1000000;
+
+   CopierQueueNotePass(now,0,0,bo,at,spin);
+   Ok("qbackoff: an empty queue never arms a deadline",at==0 && spin==0);
+
+   CopierQueueNotePass(now,5,1,bo,at,spin);
+   Ok("qbackoff: a pass that processed something does not arm",
+      at==0 && bo==CP_Q_BACKOFF_MIN_MS && spin==0);
+
+   CopierQueueNotePass(now,5,0,bo,at,spin);
+   OkInt("qbackoff: zero progress arms the deadline",at,now+CP_Q_BACKOFF_MIN_MS);
+   Ok("qbackoff: ...the drain is refused before it",!CopierQueueMayDrain(now,at));
+   Ok("qbackoff: ...and allowed at it",CopierQueueMayDrain(at,at));
+   OkInt("qbackoff: ...the next window doubles",bo,CP_Q_BACKOFF_MIN_MS*2);
+   OkInt("qbackoff: ...and the spin counter counts the pass",spin,1);
+
+   for(int i=0;i<12;i++) CopierQueueNotePass(now,5,0,bo,at,spin);
+   OkInt("qbackoff: the ladder caps at CP_Q_BACKOFF_MAX_MS",bo,CP_Q_BACKOFF_MAX_MS);
+
+   CopierQueueNotePass(now,5,3,bo,at,spin);
+   Ok("qbackoff: progress clears the deadline",at==0);
+   Ok("qbackoff: ...resets the ladder",bo==CP_Q_BACKOFF_MIN_MS);
+   OkInt("qbackoff: ...and clears the spin counter",spin,0);
+
+   //--- a deadline armed at t is still in the future at t+1 - the check is a
+   //--- deadline, not "is it set"
+   at=now+500;
+   Ok("qbackoff: a deadline is time-based, not a flag",
+      !CopierQueueMayDrain(now+499,at) && CopierQueueMayDrain(now+500,at));
+   Ok("qbackoff: an unset deadline always allows the drain",
+      CopierQueueMayDrain(now,0));
   }
 
 //--- F-19 benchmark: what the per-symbol freshness gate actually costs HERE.
@@ -3021,6 +3090,7 @@ void OnStart()
    TestNodeAnnounce();
    TestPeerLiveness();
    TestSymbolQuoteAge();
+   TestQueueBackoff();
    TestSymbolFreshnessCost();
    TestPingPayload();
    TestLotMode();

@@ -1445,6 +1445,50 @@ public:
   };
 
 //=====================================================================
+// Queue drain pacing.
+//
+// A drain pass that makes NO progress must not be repeated every timer tick.
+// The receiver's queue loop is bounded by `skipped <= qn`, i.e. by the WHOLE
+// queue, so a queue in which every action is held (market shut) is walked end
+// to end on every tick - 200 times a second, all weekend, re-deriving the same
+// answer, at a per-symbol freshness evaluation per action. Measured: 100 held
+// actions cost ~6% of one core continuously, for nothing.
+//
+// So a zero-progress pass arms a retry deadline. Only the PERIODIC drain
+// consults it; the event-driven drains (a trade event arrived, a snapshot
+// changed the desired set) never do, and a push clears it outright, because
+// those are exactly the moments the answer can change.
+//
+// Kept here rather than in the EA so the transition can be asserted in the
+// self-test without an EA around it.
+//=====================================================================
+#define CP_Q_BACKOFF_MIN_MS  200
+#define CP_Q_BACKOFF_MAX_MS  1000
+
+//--- `done` is the number of actions this pass actually processed (executed or
+//--- dropped). Anything still held leaves it at zero, which is the signal.
+void CopierQueueNotePass(const long nowMs,const int qn,const int done,
+                         long &backoffMs,long &retryAtMs,int &spinPasses)
+  {
+   if(qn<=0 || done>0)
+     {
+      backoffMs=CP_Q_BACKOFF_MIN_MS;
+      retryAtMs=0;
+      spinPasses=0;
+      return;
+     }
+   retryAtMs=nowMs+backoffMs;
+   backoffMs*=2;
+   if(backoffMs>CP_Q_BACKOFF_MAX_MS) backoffMs=CP_Q_BACKOFF_MAX_MS;
+   if(spinPasses<1000000) spinPasses++;
+  }
+
+bool CopierQueueMayDrain(const long nowMs,const long retryAtMs)
+  {
+   return (retryAtMs<=0 || nowMs>=retryAtMs);
+  }
+
+//=====================================================================
 // Dynamic ring for operator manually closed orders.
 // Prevents converge loop from re-opening a position closed by operator
 // while sender still holds it. Entries are automatically garbage-collected
