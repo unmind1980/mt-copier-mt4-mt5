@@ -214,6 +214,87 @@ uint CopierSymHash(const string s)
    return h;
   }
 
+//=====================================================================
+// Per-PASS verdict cache for per-symbol predicates.
+//
+// `CopierSymbolFeedStale()` and `CopierInTradingSession()` are pure functions of
+// (symbol, now), and BOTH are asked once per desired entry and once per queued
+// action. In a grid - a hundred levels of one instrument - that is a hundred
+// identical questions in one pass.
+//
+// The 1-second memos behind each of them (CP_SYMFRESH_CACHE / CP_SESS_CACHE)
+// absorb repeats ACROSS passes, but a hit still costs a clock read plus a hash
+// or a scan, because it has to validate a TTL. This cache has no TTL at all: the
+// caller resets it at the top of a pass, so a hit is one string compare and one
+// integer compare, and nothing else.
+//
+// It stores the SELECTOR alongside the symbol, so a caller that passes a
+// different threshold cannot read another threshold's verdict - the cache is
+// bound to the arguments, not just the name.
+//
+// A miss falls through to the real predicate, so the worst case is exactly the
+// behaviour without this cache. It can only ever be faster, never different.
+//=====================================================================
+#define CP_SYMVERDICT_SLOTS 8
+
+class CopierSymVerdictCache
+  {
+private:
+   string m_key[CP_SYMVERDICT_SLOTS];
+   long   m_sel[CP_SYMVERDICT_SLOTS];
+   bool   m_val[CP_SYMVERDICT_SLOTS];
+   bool   m_used[CP_SYMVERDICT_SLOTS];
+   int    m_next;
+
+public:
+                     CopierSymVerdictCache():m_next(0)
+     {
+      for(int i=0;i<CP_SYMVERDICT_SLOTS;i++)
+        {
+         m_key[i]="";
+         m_sel[i]=0;
+         m_val[i]=false;
+         m_used[i]=false;
+        }
+     }
+
+   void              Reset()
+     {
+      for(int i=0;i<CP_SYMVERDICT_SLOTS;i++)
+        {
+         m_key[i]="";
+         m_sel[i]=0;
+         m_val[i]=false;
+         m_used[i]=false;
+        }
+      m_next=0;
+     }
+
+   bool              Get(const string sym,const long sel,bool &v) const
+     {
+      for(int i=0;i<CP_SYMVERDICT_SLOTS;i++)
+        {
+         if(m_used[i] && m_sel[i]==sel && m_key[i]==sym)
+           {
+            v=m_val[i];
+            return true;
+           }
+        }
+      return false;
+     }
+
+   void              Put(const string sym,const long sel,const bool v)
+     {
+      //--- overwrite round-robin: an evicted entry only costs a recompute
+      m_key[m_next]=sym;
+      m_sel[m_next]=sel;
+      m_val[m_next]=v;
+      m_used[m_next]=true;
+      m_next++;
+      if(m_next>=CP_SYMVERDICT_SLOTS) m_next=0;
+     }
+  };
+
 //--- The symbol's own last quote time, in server time. 0 = not available.
 //---
 //--- MODE_TIME on MT4 is "last quote time" for that symbol, which is the

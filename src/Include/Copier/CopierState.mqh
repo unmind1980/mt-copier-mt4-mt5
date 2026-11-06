@@ -1489,6 +1489,32 @@ bool CopierQueueMayDrain(const long nowMs,const long retryAtMs)
   }
 
 //=====================================================================
+// Converge pacing.
+//
+// Converge is a RECONCILER: it compares the sender's desired set against this
+// account's actual positions and re-derives the difference. Running it 200 times
+// a second (the timer is PollMs, 5 ms) re-derives the same answer 200 times to
+// catch a snapshot that arrives every 15 seconds, and it is the single largest
+// background cost in the receiver - each pass walks the whole account list once
+// per sender.
+//
+// It therefore runs when something can have changed (a snapshot landed, a trade
+// event arrived, an action executed, the config was reloaded) plus on a slow
+// SWEEP. The sweep is not an optimisation, it is the safety net: even if a hook
+// is missed, the next sweep re-derives everything from scratch, so the worst
+// case is a delay, never a divergence.
+//
+// sweepMs<=0 restores the old "every tick" behaviour without a code change.
+//=====================================================================
+bool CopierConvergeDue(const long nowMs,const long lastMs,const bool dirty,
+                       const int sweepMs)
+  {
+   if(dirty) return true;
+   if(sweepMs<=0) return true;
+   return (nowMs-lastMs>=sweepMs);
+  }
+
+//=====================================================================
 // Dynamic ring for operator manually closed orders.
 // Prevents converge loop from re-opening a position closed by operator
 // while sender still holds it. Entries are automatically garbage-collected

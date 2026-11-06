@@ -2324,6 +2324,61 @@ void TestSymbolQuoteAge()
      }
   }
 
+//--- P3: the per-pass verdict cache. It must never return another symbol's - or
+//--- another threshold's - answer, and a miss must be a miss (the caller then
+//--- falls through to the real predicate).
+void TestSymVerdictCache()
+  {
+   CopierSymVerdictCache c;
+   bool v=true;
+
+   Ok("symcache: an empty cache misses",!c.Get("EURUSD",60000,v));
+
+   c.Put("EURUSD",60000,true);
+   Ok("symcache: a stored verdict is returned",c.Get("EURUSD",60000,v) && v==true);
+
+   c.Put("GBPUSD",60000,false);
+   Ok("symcache: a second symbol keeps its own verdict",
+      c.Get("GBPUSD",60000,v) && v==false);
+   Ok("symcache: ...and does not overwrite the first",
+      c.Get("EURUSD",60000,v) && v==true);
+
+   //--- the selector is part of the key: a different threshold must MISS rather
+   //--- than read the other threshold's answer.
+   Ok("symcache: a different threshold misses",
+      !c.Get("EURUSD",30000,v));
+
+   //--- round-robin eviction: filling past the capacity drops the oldest, and a
+   //--- dropped entry is a miss (recompute), never a wrong value.
+   for(int i=0;i<CP_SYMVERDICT_SLOTS+2;i++)
+      c.Put("SYM"+IntegerToString(i),60000,(i%2==0));
+   Ok("symcache: the oldest entry is evicted, not misreported",
+      !c.Get("EURUSD",60000,v));
+   Ok("symcache: the newest entry is still there",
+      c.Get("SYM"+IntegerToString(CP_SYMVERDICT_SLOTS+1),60000,v));
+
+   c.Reset();
+   Ok("symcache: Reset clears everything",!c.Get("SYM"+IntegerToString(CP_SYMVERDICT_SLOTS+1),60000,v));
+  }
+
+//--- P3: the converge cadence. `dirty` always wins; sweepMs<=0 restores the old
+//--- every-tick behaviour; otherwise it is a deadline.
+void TestConvergeCadence()
+  {
+   long now=1000000;
+   Ok("converge due: dirty always converges",CopierConvergeDue(now,now,true,250));
+   Ok("converge due: 0 ms means every tick (legacy)",
+      CopierConvergeDue(now,now,false,0));
+   Ok("converge due: inside the window it does NOT run",
+      !CopierConvergeDue(now,now-249,false,250));
+   Ok("converge due: at the window it runs",
+      CopierConvergeDue(now,now-250,false,250));
+   Ok("converge due: a long gap always runs",
+      CopierConvergeDue(now,now-60000,false,250));
+   //--- the first tick after attach: lastConvergeSweepMs is 0, so it runs
+   Ok("converge due: the first tick converges",CopierConvergeDue(now,0,false,250));
+  }
+
 //--- P1: the queue-drain backoff state machine. Pure function, so the whole
 //--- transition table is asserted here rather than trusted.
 void TestQueueBackoff()
@@ -3091,6 +3146,8 @@ void OnStart()
    TestPeerLiveness();
    TestSymbolQuoteAge();
    TestQueueBackoff();
+   TestSymVerdictCache();
+   TestConvergeCadence();
    TestSymbolFreshnessCost();
    TestPingPayload();
    TestLotMode();

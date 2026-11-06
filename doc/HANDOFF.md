@@ -2101,4 +2101,19 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - **基准**：`CopierSymFreshBench` 改为 1ms 系统定时器 + 按固定时长测量（原来 20000 次调用在 0.75µs 下正好一个 15.6ms tick，整张表是量化噪声），并新增"队列持续场景"投影表（N 个卡住动作，改前 200 遍/秒 vs 改后 1 遍/秒）。
   - **预计**：休市 + 100 积压 **6.2% → 0.03%**；休市重启 + 100 待开 **6.2% → 约 1.2%**（P2 后，残余主要是每次调用的固定开销）；稳态仍为 0。
 
+- **F-19 续：P3 收敛节拍 + 每趟判定缓存（2026-11-06 深夜）**：
+  - **发现**：`ConvergeSender` 与 `RefreshRisk`（整账户扫描）**耦合**，两者都在每个 tick（5ms = 200Hz）跑；converge 内部第一步 `LocalForSender` 还要对每个 sender 再把整账户走一遍。这是接收端**最大的后台开销**，比谓词大一到两个数量级。快照 15 秒一次，而 converge 每秒跑 200 遍 —— 约 3000 倍过度轮询。
+  - **P3 设计**：扫描与对账改用**同一节拍** —— 事件驱动 + 慢速兜底扫描。
+    - `CopierConvergeDue(now,last,dirty,sweepMs)`（`CopierState.mqh`，纯函数）决定是否跑；
+    - 默认 `InpConvergeSweepMs = 250`（4Hz），**0 = 恢复旧行为**；**刻意不进 copier.ini**（ini 是被 Hub 同步的协议产物，这是本地节拍决策），也不进面板；
+    - 脏标记来源：`HandleSnapshot` 落地、`ExecuteQueue` 有动作执行（`done>0`）、配置重载（全量置脏）；
+    - `drainDue`（队列可排空）也强制扫描 —— 因为队列的风控复核读的就是这次扫描的计数，**排空时绝不使用上一趟的数字**；
+    - `SaveReceiverMap()` 增加 `didScan` 前置：它从 `g_acctAllPos` 重建文件，只能在真扫描过的 tick 上跑（`g_mapDirty` 保持到那时，落地延迟 ≤250ms，仍远小于崩溃窗口）；
+    - 等待桶与 `ClearWaitItems(-1)` 与 converge 同门 —— 否则列表被清空却无人重建，看板会显示 0 个等待单。
+  - **安全性论证（关键）**：兜底扫描保证**最终一致**，不依赖"事件是否挂全"。漏挂任一触发点，最坏结果只是晚 250ms 收敛，不会永久偏离。这与纯事件驱动（漏挂即永久不动）是不同风险等级。
+  - **延迟变化**：sender 的 OPEN/CLOSE/MODIFY 与快照落地仍是 ≤5ms（快速通道/置脏，未动）；本地持仓被 SL/TP 打掉、手工平仓、挂单宽限期到期、backoff 到期、风控触发 → ≤250ms。后者全是秒级语义（宽限期 1.5s、冷却 60s、日亏按天）。
+  - **每趟判定缓存（按用户要求本轮一并做）**：`CopierSymVerdictCache`（`CopierSymbol.mqh`，8 槽、无 TTL、pass 顶部 `Reset()`）。`CopierSymbolFeedStale` 与 `CopierInTradingSession` 都是 `(symbol, now)` 的纯函数，网格场景下同一品种在一个 pass 里会被问上百遍。缓存键包含 **selector（阈值）**，所以不同阈值不会读到彼此的结论；未命中就落到原谓词，**最坏情况与不加缓存完全相同**。两个热循环（`ConvergeSender` / `ExecuteQueue`）各用自己的实例。
+  - **未做**：`CopierSymbolQuoteAgeMs` 的 `now` 参数化（P3 之前评估的 P3b）—— 节拍降到 4Hz 后残余已是噪声，再改签名不值得。
+  - **验证**：16 个 MQL 目标 0 错 0 警；自检新增 `TestSymVerdictCache()`（7 条：空缓存未命中、各自保留、阈值隔离、淘汰后不误报、Reset）与 `TestConvergeCadence()`（6 条：dirty 优先、0ms 旧行为、窗口边界、首 tick 必跑）；24 个 Python 套件全绿。
+
 ---

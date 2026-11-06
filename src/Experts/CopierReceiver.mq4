@@ -768,6 +768,55 @@ int    g_qn=0;         // number of live actions, contiguous from g_qHead
 long   g_qRetryAtMs=0;      // periodic drain may run again at this monotonic ms
 long   g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
 int    g_qSpinPasses=0;     // consecutive zero-progress passes, for the panel
+
+//--- P3: ONE cadence for the account scan and the reconcile.
+//---
+//--- `ConvergeSender` re-derives "desired minus actual" from scratch and, to do
+//--- it, walks the whole account position list once per sender. It was called on
+//--- EVERY timer tick (PollMs, 5 ms), i.e. 200 times a second, to catch snapshots
+//--- that arrive every 15 seconds - and `RefreshRisk`, which scans the account
+//--- once, ran on the same tick because converge consumes its output.
+//---
+//--- Both now run when something can have changed (a snapshot landed, a trade
+//--- event arrived, an action executed, the config was reloaded) plus on a slow
+//--- sweep. The sweep is the SAFETY NET, not an optimisation: if a hook is ever
+//--- missed, the next sweep re-derives everything from scratch, so the worst case
+//--- is a delay - never a divergence.
+//---
+//--- 0 restores the old every-tick behaviour. Deliberately NOT an ini key: the
+//--- ini is a protocol artifact synced by the hub, and this is a local pacing
+//--- decision.
+input int InpConvergeSweepMs = 250;   // ConvergeSweepMs - 0 = reconcile every tick (legacy)
+int    g_convergeSweepMs=250;
+long   g_lastConvergeSweepMs=0;
+bool   g_convergeDirty[CP_MAX_SENDERS];
+bool   g_convergeDirtyAll=true;       // first tick must converge
+
+//--- Per-pass verdict caches: one for "this symbol's feed is stale", one for
+//--- "this symbol is inside its trading session". Reset at the top of each pass.
+CopierSymVerdictCache g_staleVerdict;
+CopierSymVerdictCache g_sessVerdict;
+
+//--- Cached wrappers. The cache key carries the SELECTOR (the stall threshold),
+//--- so a future caller with a different threshold cannot read another one's
+//--- verdict. A miss falls through to the real predicate.
+bool SymStaleCached(const string sym)
+  {
+   bool v=false;
+   if(g_staleVerdict.Get(sym,CP_SYM_STALL_MS,v)) return v;
+   v=CopierSymbolFeedStale(sym,CP_SYM_STALL_MS);
+   g_staleVerdict.Put(sym,CP_SYM_STALL_MS,v);
+   return v;
+  }
+
+bool SymInSessionCached(const string sym)
+  {
+   bool v=false;
+   if(g_sessVerdict.Get(sym,0,v)) return v;
+   v=CopierInTradingSession(sym);
+   g_sessVerdict.Put(sym,0,v);
+   return v;
+  }
 long   g_gateCalls=0;       // per-symbol freshness evaluations (diagnostic)
 
 CopierTransport g_tp;
@@ -1380,6 +1429,8 @@ void ResetRuntimeInputsFromInputs()
    PollMs                           = InpPollMs;
    StaleSeconds                     = InpStaleSeconds;
    MaxActionsPerTick                = InpMaxActionsPerTick;
+   g_convergeSweepMs                = InpConvergeSweepMs;
+   if(g_convergeSweepMs<0) g_convergeSweepMs=0;
    LogLevel                         = InpLogLevel;
    StatusEnabled                    = InpStatusEnabled;
    SyncHeartbeatSeconds             = InpSyncHeartbeatSeconds;
@@ -3053,6 +3104,9 @@ void ExecuteQueue()
   {
    int done=0;
    int skipped=0;
+   //--- P3: same rule as ConvergeSender - one pass, verdicts reused inside it.
+   g_staleVerdict.Reset();
+   g_sessVerdict.Reset();
    int sAddedCount[CP_MAX_SENDERS];
    double sAddedLots[CP_MAX_SENDERS];
    int sHeldBase[CP_MAX_SENDERS];
@@ -3134,7 +3188,7 @@ void ExecuteQueue()
       //--- market. Without this, an action queued before the close is
       //--- re-attempted every time the cooldown expires, for the whole
       //--- weekend. Rotated, not dropped - a held action is a delay.
-      if(CopierSymbolFeedStale(a.sym,CP_SYM_STALL_MS))
+      if(SymStaleCached(a.sym))
         {
          if(g_once.ShouldEmit("qsymstall|"+a.sym))
             g_log.Info(a.sym+" has not quoted for "
@@ -3182,7 +3236,7 @@ void ExecuteQueue()
          continue;
         }
 
-      if(a.kind==CP_ACT_OPEN && !CopierInTradingSession(a.sym))
+      if(a.kind==CP_ACT_OPEN && !SymInSessionCached(a.sym))
         {
          RotateQueue();
          skipped++;
@@ -3960,6 +4014,9 @@ void ExecuteQueue()
    //--- P1: arm the retry deadline when this pass processed NOTHING. A queue in
    //--- which every action is held would otherwise be walked end to end on every
    //--- tick, 200 times a second, to re-derive the same answer.
+   //--- P3: something actually executed, so this account's position set changed
+   //--- and the next reconcile must not wait for the sweep.
+   if(done>0) g_convergeDirtyAll=true;
    CopierQueueNotePass(CopierNowMs(),g_qn,done,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses);
    //--- entered the "nothing can drain" state: say so ONCE per episode. The
    //--- count resets on the next pass that processes anything, so a queue that
@@ -5392,6 +5449,11 @@ void ConvergeSender(const int si)
   {
    if(!g_ready[si]) return;    // no snapshot yet -> do nothing at all
 
+   //--- P3: this is one pass over one sender's desired set, so the per-symbol
+   //--- verdicts below are reused within it and dropped at the top of the next.
+   g_staleVerdict.Reset();
+   g_sessVerdict.Reset();
+
    // MQL-02: Safely reset this sender's wait metrics without affecting other senders
    g_waitHeld-=g_senderWaitHeld[si];
    g_waitLots=MathMax(0.0,g_waitLots-g_senderWaitLots[si]);
@@ -5760,7 +5822,7 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      if(CopierSymbolFeedStale(rsym,CP_SYM_STALL_MS))
+      if(SymStaleCached(rsym))
         {
          if(g_once.ShouldEmit("symstall|"+rsym))
             g_log.Info(rsym+" has not quoted for "
@@ -5776,7 +5838,7 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      if(!CopierInTradingSession(rsym))
+      if(!SymInSessionCached(rsym))
         {
          if(g_once.ShouldEmit("sess|"+rsym))
             g_log.Info(rsym+" is outside its trading hours - holding new"
@@ -6279,6 +6341,8 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    g_desiredCount[si]=n;
    g_ready[si]=true;
+   //--- P3: the desired set just changed - reconcile on the very next tick.
+   g_convergeDirty[si]=true;
   }
 
 void StopsForget(const string uid)
@@ -6694,6 +6758,10 @@ void HandleCfg(const CopierEnv &e)
    int added=ResubscribeSenders(beforeSid,beforeN);
    ClearQueueExceptRiskReducing();
    RemapQueueSenders(beforeSid,beforeN);
+   //--- P3: the magic/symbol mapping just changed, so every sender's mirror set
+   //--- is stale. Reconcile everything on the next tick, not on the next sweep.
+   g_convergeDirtyAll=true;
+   for(int ci=0;ci<CP_MAX_SENDERS;ci++) g_convergeDirty[ci]=true;
 
    //--- Warnings, counted the way §10 asks: a magic change orphans positions.
    int warnings=0;
@@ -8727,8 +8795,31 @@ void OnTimer()
    //--- saving then would rebuild g_recKnown from nothing and overwrite the
    //--- state file with N=0, throwing away the identity map OnInit had just
    //--- restored from disk.
-   RefreshRisk();
-   if(g_risk.TakeJustTripped())
+   //--- P3: ONE cadence for the scan and the reconcile, decided here.
+   //---
+   //--- `doConverge` is true on the sweep, or when anything marked itself dirty
+   //--- (snapshot landed, action executed, config reloaded). `drainDue` forces a
+   //--- scan as well, because the queue's risk re-check reads the counters this
+   //--- scan produces - so the drain never runs on numbers from a previous pass.
+   long nowMs=CopierNowMs();
+   bool dirtyAny=g_convergeDirtyAll;
+   if(!dirtyAny)
+     {
+      for(int di=0;di<g_nSenders;di++)
+        {
+         if(g_convergeDirty[di]) { dirtyAny=true; break; }
+        }
+     }
+   bool doConverge=CopierConvergeDue(nowMs,g_lastConvergeSweepMs,dirtyAny,g_convergeSweepMs);
+   bool drainDue=(g_qn>0 && CopierQueueMayDrain(nowMs,g_qRetryAtMs));
+   bool didScan=(doConverge || drainDue);
+   if(doConverge) g_lastConvergeSweepMs=nowMs;
+
+   if(didScan)
+     {
+      RefreshRisk();
+     }
+   if(didScan && g_risk.TakeJustTripped())
      {
       //--- ERROR, not a warning: this is the one event that means the
       //--- receiver has deliberately stopped doing its job. The message
@@ -8753,7 +8844,11 @@ void OnTimer()
    //--- No ignore-list refresh here any more. That list is an INPUT now, and
    //--- changing an input re-runs OnInit, which re-parses it - so the polling
    //--- and the file it polled are both gone.
-   if(g_mapDirty || now-g_lastMapSave>10000)
+   //--- P3: SaveReceiverMap() rebuilds the file from g_acctAllPos, so it may only
+   //--- run on a tick that actually scanned. g_mapDirty stays set until then, so
+   //--- the flush lands within one sweep instead of on the next tick - which is
+   //--- still far inside the crash window this exists to close.
+   if(didScan && (g_mapDirty || now-g_lastMapSave>10000))
      {
       g_lastMapSave=now;
       g_mapDirty=false;
@@ -8782,15 +8877,22 @@ void OnTimer()
    //--- 5) converge every sender, then execute queued actions serially
    //--- reset the held-back tally: it is a per-sweep snapshot, not a running
    //--- total, so an entry that starts moving must stop being counted
-   g_waitHeld=0;
-   g_waitLots=0.0;
-   g_mktHeld=0;
-   g_mktHeldLots=0.0;
-   ArrayInitialize(g_senderWaitHeld,0);
-   ArrayInitialize(g_senderWaitLots,0.0);
-   ArrayInitialize(g_senderMktHeld,0);
-   ArrayInitialize(g_senderMktHeldLots,0.0);
-   ClearWaitItems(-1);
+   //--- P3: these tallies are rebuilt BY the converge pass, so they may only be
+   //--- zeroed on a tick that runs it - otherwise the wait list would be cleared
+   //--- and never repopulated, and the dashboard would report zero waiting orders
+   //--- on a receiver that is holding ten.
+   if(doConverge)
+     {
+      g_waitHeld=0;
+      g_waitLots=0.0;
+      g_mktHeld=0;
+      g_mktHeldLots=0.0;
+      ArrayInitialize(g_senderWaitHeld,0);
+      ArrayInitialize(g_senderWaitLots,0.0);
+      ArrayInitialize(g_senderMktHeld,0);
+      ArrayInitialize(g_senderMktHeldLots,0.0);
+      ClearWaitItems(-1);
+     }
 
    //--- feed liveness, measured on the clock that ALWAYS moves. See the note
    //--- on g_srvChangedMs: the server clock stopping is the signal, and
@@ -8809,7 +8911,14 @@ void OnTimer()
          }
       }
    }
-   for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
+   if(doConverge)
+     {
+      //--- clear BEFORE the pass: anything that marks itself dirty during it must
+      //--- survive to the next tick
+      g_convergeDirtyAll=false;
+      for(int i=0;i<g_nSenders;i++) g_convergeDirty[i]=false;
+      for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
+     }
    //--- P1: the PERIODIC drain respects the backoff armed by a zero-progress
    //--- pass. The event-driven drains (a trade event arrived, a snapshot changed
    //--- the desired set) deliberately do not, and PushAction() clears the
