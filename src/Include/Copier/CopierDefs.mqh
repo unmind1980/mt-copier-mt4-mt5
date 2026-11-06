@@ -378,6 +378,29 @@ bool CopierSeenRingApplies(const int kind)
 //--- so a repeat that arrives after the first one has landed is ignored.
 #define CP_REG_REPEATS 3
 
+//--- N-06: how many HEARTBEATS between two "maintenance" REGs, once the initial
+//--- burst is over. Zero-looking cost, one real guarantee.
+//---
+//--- `SendUp` sends a control frame twice so XSUB's round-robin can land one copy
+//--- on each hub - but that only works while BOTH pipes are writable. If one is
+//--- full or half-open, both copies go to the same hub and the call still returns
+//--- success. The survivor's `g_announceCount` then saturates at CP_REG_REPEATS
+//--- and it only ever sends HBT2 again, so the other hub cannot learn its NAME
+//--- until its own 60 s WHO sweep - and a hub that has just started has no node
+//--- to ask. One REG a minute per node is ~120 bytes and makes the recovery
+//--- bounded by the heartbeat cadence instead of by the sweep.
+#define CP_REG_REFRESH_HBTS 12
+
+//--- N-11: how long "the receiver opened this mirror once" is remembered.
+//---
+//--- `ReopenClosedMirrors=false` is the operator's instruction "I closed this by
+//--- hand, do not put it back"; the ring is what remembers that, and its TTL
+//--- exists only because the ring is fixed-size. It used to be 12 hours, so a
+//--- Friday-evening manual close had expired by Monday and the same UID (the
+//--- sender still holding it) looked like a FIRST open. Seven days covers a long
+//--- weekend plus holidays. Fits in int32 and in the SetTtlMs(long) argument.
+#define CP_EVEROPENED_TTL_MS 604800000
+
 // trade directions
 #define CP_SIDE_BUY   1
 #define CP_SIDE_SELL -1
@@ -472,6 +495,20 @@ struct CopierPos
    double            pprice;   // trigger price
    double            pstop;    // stop-limit only: the limit price
    long              pexpire;  // broker server time, 0 = good till cancelled
+   //--- N-03: the largest volume this UID has ever been seen holding.
+   //---
+   //--- RECEIVER-SIDE BOOKKEEPING, never on the wire and always 0 when decoded
+   //--- from a frame. It exists because FIXED sizing scales a partial close:
+   //--- target = base * (lots / peakLots), and the peak used to live in ONE
+   //--- global 2048-row table shared by every sender. Two senders holding 1200
+   //--- positions each overflowed it, after which the later UIDs got
+   //--- peak == current lots, the ratio never fell below 1, and a sender trim
+   //--- silently stopped scaling the mirror down.
+   //---
+   //--- Keeping it on the row makes the capacity per-sender by construction
+   //--- (a desired slice is CP_MAX_POSITIONS rows) and removes a global table
+   //--- whose eviction policy could never free a live UID.
+   double            initLots;
    bool              used;     // slot occupied (fixed-size table)
   };
 

@@ -1031,7 +1031,14 @@ fn relay_receipts(
         let login_is_receiver = s.reg.get(&format!("receiver:{}", login)).is_some()
             || receiver_nids.contains(login);
         // DEF-61-11: only fall back to the role count when the direct lookup missed
-        let receiver_valid = login_is_receiver || warm || n_receivers == 0;
+        // N-05: mirror of `sender_ok` below. `n_receivers == 0` used to grant an
+        // UNBOUNDED pass, so a hub with no receiver registered yet (fresh cluster,
+        // or the first seconds after a restart) accepted any `LOGIN` as a receiver,
+        // created a mirror edge for it and unicast a RCPT to a node that does not
+        // exist. An empty registry may only be guessed at inside the same 60s warm
+        // window the sender side already uses.
+        let receiver_valid = login_is_receiver || (warm && n_receivers == 0);
+        let receiver_ok = receiver_valid && (login_is_receiver || warm);
 
         let mut changed = false;
         for (sid, h) in pairs {
@@ -1047,7 +1054,7 @@ fn relay_receipts(
             //--- sender at all, only the first 60s may guess.
             let sender_ok = sender_valid && (sid_is_sender || warm);
 
-            if sender_ok && receiver_valid {
+            if sender_ok && receiver_ok {
                 if s
                     .mirrors
                     .entry(sid.clone())
@@ -2598,7 +2605,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 //--- for the second sent operators hunting for a
                                 //--- forger when the real story was a retry.
                                 println!(
-                                    "[hub] WARN  {} ACKed {} - unknown id, or the command is already terminal (late/duplicate ACK)",
+                                    "[hub] WARN  {} ACKed {} - unknown id, already terminal (late/duplicate ACK), or the journal append failed (see the line above)",
                                     who, id
                                 );
                                 // `prefix` is "config" here only because the

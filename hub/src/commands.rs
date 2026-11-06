@@ -904,7 +904,15 @@ impl CommandStore {
     pub fn ack(&self, id: &str, ok: bool, rev: u64, err: &str) -> bool {
         let mut inner = self.inner.lock_or_recover();
         inner.in_flight.remove(id);
-        let updated = match inner.commands.get_mut(id) {
+        //--- N-09: build the candidate state WITHOUT mutating, so the journal can
+        //--- be written first. Every other writer in this module (issue_cfg /
+        //--- issue_op / due_gated) already persists before committing; `ack` was
+        //--- the one place that changed memory and then printed a warning if the
+        //--- append failed, leaving "memory says acked, disk says pending" until
+        //--- the next restart. A failed append now leaves the command pending and
+        //--- returns false, so the retry ladder keeps walking and the next ACK
+        //--- (the node answers the same id again) records it.
+        let updated = match inner.commands.get(id) {
             None => return false,
             Some(c) => {
                 //--- R59-04: a terminal command normally ignores further ACKs, but
@@ -925,18 +933,24 @@ impl CommandStore {
                 if c.is_terminal() && state_rank(new_state) <= state_rank(&c.state) {
                     return false;
                 }
-                c.state = new_state.to_string();
-                c.ack_at = unix_secs();
-                c.err = err.to_string();
+                let mut cand = c.clone();
+                cand.state = new_state.to_string();
+                cand.ack_at = unix_secs();
+                cand.err = err.to_string();
                 if ok && rev > 0 {
-                    c.rev = rev;
+                    cand.rev = rev;
                 }
-                c.clone()
+                cand
             }
         };
         if !inner.append(&updated) {
-            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on ACK for {}", id);
+            eprintln!(
+                "[hub] COMMAND JOURNAL WRITE FAILED on ACK for {} - leaving it pending so the ladder retries",
+                id
+            );
+            return false;
         }
+        inner.commands.insert(updated.id.clone(), updated);
         true
     }
 
@@ -1874,6 +1888,35 @@ mod tests {
     /// N87-01: Verify torn (unparseable) lines and empty id lines are NOT counted
     /// in load() line_count or read_lines_from_path() total, ensuring perfect alignment
     /// between Primary and Standby journal watermarks.
+    /// N-09: an ACK whose journal append fails must NOT commit to memory and must
+    /// not report success. The old order flipped the in-memory state first and only
+    /// printed a warning, so until the next restart the hub believed a command was
+    /// acked while its journal still said `pending` - and the ladder, reading the
+    /// journal, would have re-sent it anyway.
+    #[test]
+    fn test_ack_propagates_journal_error_and_keeps_the_command_pending() {
+        let p = tmp("ack_err");
+        let s = CommandStore::open(&p).unwrap();
+        let c = s.issue_op("receiver:1", "pause", "", "op", "");
+        {
+            let mut inner = s.inner.lock().unwrap();
+            let ro_file = OpenOptions::new().read(true).open(&p).unwrap();
+            inner.file = Some(ro_file);
+        }
+
+        assert!(
+            !s.ack(&c.id, true, 0, ""),
+            "a failed journal append must not be reported as an accepted ACK"
+        );
+        assert_eq!(
+            s.command(&c.id).unwrap().state,
+            STATE_PENDING,
+            "memory must still agree with the journal"
+        );
+
+        let _ = std::fs::remove_file(&p);
+    }
+
     #[test]
     fn test_load_and_read_lines_skip_torn_and_align_line_count() {
         let p = tmp("torn_align");

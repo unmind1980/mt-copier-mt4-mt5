@@ -937,6 +937,36 @@ public:
         }
      }
 
+   //--- N-04: incremental insert for a table that grows one row at a time.
+   //---
+   //--- `StopsOvIndex()` used to append the row and then call
+   //--- `BuildFromStrings()` over the whole table, so filling N slots cost
+   //--- O(N^2) probes. At 512 that was invisible; at CP_MAX_POSITIONS (2048) it
+   //--- is ~2M probes the first time a large book receives stop events. `arr[idx]`
+   //--- must already hold the uid.
+   bool              InsertString(const string &arr[],const int idx)
+     {
+      if(idx<0) return false;
+      string uid=arr[idx];
+      if(StringLen(uid)!=CP_UID_LEN) return false;
+      uint hf=HashOf(uid);
+      int  s=(int)(hf&m_mask);
+      for(int p=0;p<CP_UIDIDX_SLOTS;p++)
+        {
+         int k=(int)((s+p)&m_mask);
+         if(m_slot[k]==0)
+           {
+            m_slot[k]=idx+1;
+            m_hash[k]=hf;
+            m_n++;
+            return true;
+           }
+         //--- already present: keep the FIRST row, the same rule Build() uses
+         if(m_hash[k]==hf && arr[m_slot[k]-1]==uid) return true;
+        }
+      return false;
+     }
+
    int               FindInStrings(const string &arr[],const string uid) const
      {
       if(StringLen(uid)!=CP_UID_LEN || m_n<=0) return -1;

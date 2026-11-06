@@ -603,14 +603,35 @@ bool CopierIniUnescape(const string s,string &out)
 //--- `CopierSplitLines`: a trailing newline does not start a new line, so
 //--- "a\nb\n" is two lines, not three. Counting them differently would make the
 //--- cap fire at a different size on the two ends.
+//---
+//--- N-08: the byte length of `s` once encoded the way the hub counts it.
+//---
+//--- The hub's `validate_ini` compares `ini.len()` (UTF-8 BYTES) against
+//--- MAX_INI_BYTES; this side compared StringLen (UTF-16 code units). They are
+//--- equal for ASCII and diverge by 3x for CJK comments, so the two ends stopped
+//--- agreeing at the boundary the comment above claims is "one decision".
+//--- Falls back to the character count if the conversion fails, which is the
+//--- conservative direction (same as the old behaviour).
+int CopierUtf8Bytes(const string s)
+  {
+   int n=StringLen(s);
+   if(n<=0) return 0;
+   uchar data[];
+   int got=StringToCharArray(s,data,0,-1,CP_UTF8);
+   if(got<=0) return n;
+   if(data[got-1]==0) got--;          // StringToCharArray appends a terminator
+   return got;
+  }
+
 bool CopierIniValidate(const string ini,string &err)
   {
    err="";
    int len=StringLen(ini);
    if(StringLen(CopierTrim(ini))==0) { err="empty"; return false; }
-   if(len>CP_INI_MAX_BYTES)
+   int bytes=CopierUtf8Bytes(ini);
+   if(bytes>CP_INI_MAX_BYTES)
      {
-      err="too large: "+(string)len+" bytes";
+      err="too large: "+(string)bytes+" bytes";
       return false;
      }
 

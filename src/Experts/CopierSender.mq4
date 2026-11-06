@@ -413,6 +413,7 @@ int              g_announceCount=0;     // first CP_REG_REPEATS are REG, then HB
                                         // every 60s forever, so re-arming here would
                                         // mean never settling (measured: 19 REG where
                                         // 3 is correct). See the WHO branch in OnTimer.
+int              g_hbtSinceReg=0;       // N-06: heartbeats since the last maintenance REG
 long             g_bootMs=0;            // for UP=, the node's own uptime
 //--- Edge-triggered disconnect alerts. Without the latch the Alert would fire
 //--- on every timer tick while a peer is down, which is worse than no alert at
@@ -1218,7 +1219,20 @@ void CheckPeers()
    if(g_hubOn && now-g_lastHbt2Ms>=CP_HBT2_MS)
      {
       g_lastHbt2Ms=now;
-      HubAnnounce(g_announceCount<CP_REG_REPEATS);
+      //--- N-06: after the opening burst, re-assert the REG once a minute. Two
+      //--- copies of every control frame are sent so XSUB's round-robin can put
+      //--- one on each hub, but that only works while both pipes are writable;
+      //--- when one is not, the other hub never gets the NAME and this node has
+      //--- already saturated g_announceCount, so it would never try again.
+      bool wantReg=(g_announceCount<CP_REG_REPEATS);
+      if(!wantReg)
+        {
+         g_hbtSinceReg++;
+         if(g_hbtSinceReg>=CP_REG_REFRESH_HBTS) { g_hbtSinceReg=0; wantReg=true; }
+        }
+      else
+         g_hbtSinceReg=0;
+      HubAnnounce(wantReg);
       g_announceCount++;
       if(g_announceCount>CP_REG_REPEATS) g_announceCount=CP_REG_REPEATS;
      }

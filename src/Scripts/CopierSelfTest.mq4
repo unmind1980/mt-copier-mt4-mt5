@@ -3204,6 +3204,14 @@ void TestAuditRound110()
    //--- N-11: the "we opened this once" ring has to outlive a weekend, or
    //--- ReopenClosedMirrors=false stops meaning "leave it closed".
    Ok("everopened: TTL covers at least a week",CP_EVEROPENED_TTL_MS>=7*24*60*60*1000);
+
+   //--- N-03: the peak-lots rule FIXED sizing divides by. The three cases are
+   //--- the whole contract: first sight establishes the baseline, a trim must
+   //--- NOT lower it (or the ratio becomes 1 and the mirror stops scaling down),
+   //--- and added volume raises it (so the mirror never exceeds its fixed size).
+   OkDbl("initlots: first sight is the baseline",CopierNextInitLots(0.0,1.5),1.5,1e-9);
+   OkDbl("initlots: a trim keeps the peak",CopierNextInitLots(2.0,0.5),2.0,1e-9);
+   OkDbl("initlots: added volume raises the peak",CopierNextInitLots(1.0,1.5),1.5,1e-9);
   }
 
 void OnStart()

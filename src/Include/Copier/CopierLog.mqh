@@ -42,6 +42,12 @@ private:
    long              m_bytes;
    int               m_minLevel;
    int               m_gen;      // current generation file index
+   //--- N-12: true when a line is in the CRT buffer but not yet flushed. Emit()
+   //--- used to flush on every line, so a 74-order burst cost 74 flushes on the
+   //--- EA thread that also has to answer the broker. Flushing once per timer
+   //--- tick bounds the loss on a crash to one tick (milliseconds) and makes a
+   //--- burst cost one flush.
+   bool              m_dirty;
 
    //--- rate limiter: CP_LOG_MERGE_SLOTS independent slots, round-robin
    string            m_mMsg[CP_LOG_MERGE_SLOTS];
@@ -141,6 +147,7 @@ private:
         }
       FileSeek(m_handle,0,SEEK_END);
       m_bytes=(long)FileSize(m_handle);
+      m_dirty=false;                      // N-12: a fresh handle has nothing pending
      }
 
    void              Rotate()
@@ -158,7 +165,7 @@ private:
 
 public:
                      CopierLog():m_handle(INVALID_HANDLE),m_base("default"),
-                     m_bytes(0),m_minLevel(CP_LOG_WARN),m_gen(0),m_mNext(0)
+                     m_bytes(0),m_minLevel(CP_LOG_WARN),m_gen(0),m_dirty(false),m_mNext(0)
      {
       for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
         {
@@ -199,6 +206,12 @@ public:
          m_mRep[i]=0;
          m_mMsg[i]="";
          m_mLvl[i]=-1;
+        }
+      //--- N-12: one flush per tick instead of one per line
+      if(m_dirty && m_handle!=INVALID_HANDLE)
+        {
+         FileFlush(m_handle);
+         m_dirty=false;
         }
      }
 
@@ -264,7 +277,16 @@ private:
       if(m_handle==INVALID_HANDLE) return;
 
       FileWrite(m_handle,line);
-      FileFlush(m_handle);
+      //--- an ERROR is flushed immediately: it is the one line worth surviving
+      //--- a terminal kill, and it is rare by construction. Everything else
+      //--- rides the once-per-tick flush in Tick() (N-12).
+      if(level==CP_LOG_ERR)
+        {
+         FileFlush(m_handle);
+         m_dirty=false;
+        }
+      else
+         m_dirty=true;
       m_bytes += StringLen(line) + 2;
       if(m_bytes>CP_MAX_LOG_BYTES)
         {

@@ -148,6 +148,22 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
    return v;
   }
 
+//--- N-03: the "peak lots" rule, in ONE place so it can be tested.
+//---
+//--- `carry` is the peak this UID has already reached (0 when unknown), `lots`
+//--- is what the sender holds now. The result is the highest volume ever seen,
+//--- which is the baseline a FIXED-size mirror divides by when the sender trims:
+//--- target = base * (lots / peak). A trim must never lower the baseline (that
+//--- would make the ratio 1 and silently stop scaling the mirror down), and an
+//--- increase must raise it (the mirror does not grow past its configured size).
+double CopierNextInitLots(const double carry,const double lots)
+  {
+   double il=(carry>0.0)?carry:lots;
+   if(lots>il) il=lots;
+   if(il<0.0) il=0.0;
+   return il;
+  }
+
 //--- returns the final lot size; sets rejected=true when the trade
 //--- should be skipped rather than rounded up to the broker minimum
 double CopierComputeLots(const double senderLots,const int mode,const double param,

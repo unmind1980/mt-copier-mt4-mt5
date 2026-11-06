@@ -239,6 +239,22 @@ def main():
                               body={"op": "pause"}, cookie=s_cookie)
         check("Standby rejects POST command with 409 Conflict", st == 409, f"status={st}, err={res.get('error')}")
 
+        # N-02: a READ-ONLY op is refused too. A Standby has no command dispatcher
+        # (`due_gated` only runs on the Primary), so answering 202 for reqpos/reqcfg
+        # journalled the command locally, never sent it, and never even moved it to
+        # `unknown` - the operator saw "accepted" and a dashboard that never
+        # refreshed. F-14 opened this by consulting is_read_only too late; the rule
+        # is now "a Standby dispatches nothing".
+        st, res, _ = http_req(S_HTTP_PORT, "POST", "/api/v1/nodes/receiver:252033316/commands",
+                              body={"op": "reqpos"}, cookie=s_cookie)
+        check("Standby rejects a read-only reqpos with 409 Conflict", st == 409,
+              f"status={st}, err={res.get('error')}")
+
+        st, res, _ = http_req(S_HTTP_PORT, "POST", "/api/v1/commands",
+                              body={"op": "reqpos"}, cookie=s_cookie)
+        check("Standby rejects a fleet-wide read-only reqpos with 409 Conflict", st == 409,
+              f"status={st}, err={res.get('error')}")
+
         # Try creating user on Standby -> Must return 409 Conflict
         st, res, _ = http_req(S_HTTP_PORT, "POST", "/api/v1/users",
                               body={"id": "operator_standby", "password": "password123", "role": "operator"},

@@ -404,7 +404,14 @@ long    g_lastRiskReport=0;
 //---
 //--- g_stLastMs is the throttle: the moment a stop edit was last queued for
 //--- this uid, so a trailing stop cannot become ten broker calls a second.
-#define CP_MAX_STOPS_OV 512
+//--- N-04: sized to the POSITION table, not to 512. Every UID that ever carried
+//--- a stop change is pinned in this table for as long as the position lives
+//--- (`StopsPrune` keeps `g_stHasOv` entries whose UID is still desired), so
+//--- 512 was a hard ceiling on "positions that can receive live stop events".
+//--- A 513th UID used to have its MODIFY dropped outright and wait for the next
+//--- snapshot (up to SnapshotSeconds). The index below (CP_UIDIDX_SLOTS 4096)
+//--- is sized for exactly this many entries at 50% load.
+#define CP_MAX_STOPS_OV CP_MAX_POSITIONS
 string  g_stUid[CP_MAX_STOPS_OV];
 bool    g_stHasOv[CP_MAX_STOPS_OV];
 double  g_stOvSl[CP_MAX_STOPS_OV];
@@ -452,6 +459,13 @@ CopierStopSig g_stopSig[CP_STOPSIG_SLOTS];
 int     g_snapSkipped=0;             // superseded snapshots collapsed in the drain
 int     g_snapDeclFailed=0;          // snapshots rejected due to invalid N= declaration
 int     g_qDeferred=0;               // actions deferred by a full queue
+//--- N-10: WHY the last PushAction() refused, for the caller that has to answer
+//--- with an ACK. The function has seven distinct refusal paths (seen ring,
+//--- in-flight, two backoffs, unsupported, already queued, queue full) and the
+//--- command ACK used to report every one of them as "queue_full" - so a
+//--- duplicate click or a 1-second CLOSE backoff looked like a full queue to
+//--- the hub's audit and to the operator.
+string  g_pushReject="";
 //--- Entries a WAIT gate is holding back this pass.
 //---
 //--- These are NOT in the action queue, and deliberately so: the wait gate
@@ -905,6 +919,7 @@ long            g_hubUpMs=0;
 long            g_bootMs=0;
 long            g_lastHbt2Ms=0;
 int             g_announceCount=0;      // first CP_REG_REPEATS are REG, then HBT2
+int             g_hbtSinceReg=0;        // N-06: heartbeats since the last maintenance REG
 //--- M4b: the last config push we applied, and the revision we now report.
 //--- Both persist across restarts (see CopierCfgRevSave) so a receiver that
 //--- comes back up does not claim rev 0 and get sent a config it already has.
@@ -1661,118 +1676,118 @@ string CurrentIniHash()
 
 string SerializeCurrentConfigToIni()
   {
-   //--- Chunked accumulation. This function appends ~126 lines per sender, and
-   //--- `out +=` copies the WHOLE string each time: at 100 senders the output
-   //--- is ~270 KB and the copying works out to about a gigabyte - on the
-   //--- thread that also has to answer snapshots and send orders. Flushing
-   //--- into a builder every ~4 KB makes it linear.
+   //--- Linear accumulation, N-07. This function emits ~126 lines per sender and
+   //--- `out +=` copies the WHOLE string each time: at 100 senders the output is
+   //--- ~270 KB and the copying worked out to several megabytes per call - on the
+   //--- thread that also has to answer snapshots and send orders. Every line now
+   //--- goes straight into the builder (which flushes at 4 KB), so each append is
+   //--- bounded by one line.
+   //---
+   //--- The OUTPUT IS BYTE-IDENTICAL: same literals, same order, just handed to the
+   //--- builder instead of a growing accumulator. That matters because this text is
+   //--- what `IH=` hashes - a single byte of drift would look like "the node's
+   //--- config changed" to the hub on every heartbeat.
    CopierStrBuilder sb;
-   string out = "; copier.ini (active current settings)\n";
-   out += "[common]\n";
-   out += "deviationpoints=" + (string)DeviationPoints + "\n";
-   out += "emergencyslpips=" + DoubleToString(EmergencySLPips, 1) + "\n";
-   out += "emergencytppips=" + DoubleToString(EmergencyTPPips, 1) + "\n";
-   out += "reopenclosedmirrors=" + (ReopenClosedMirrors ? "1" : "0") + "\n";
-   out += "dedupduplicates=" + (DedupDuplicates ? "1" : "0") + "\n";
-   out += "ignorenewentrysignals=" + (IgnoreNewEntrySignals ? "1" : "0") + "\n";
-   out += "ignoreallexitsignals=" + (IgnoreAllExitSignals ? "1" : "0") + "\n";
-   out += "ignoreuids=" + IgnoreUids + "\n";
-   out += "nobuy=" + (NoBuy ? "1" : "0") + "\n";
-   out += "nosell=" + (NoSell ? "1" : "0") + "\n";
-   out += "permittedsymbols=" + PermittedSymbols + "\n";
-   out += "permittedmagic=" + PermittedMagic + "\n";
-   out += "minsenderlotsize=" + DoubleToString(MinSenderLotSize, 2) + "\n";
-   out += "maxsenderlotsize=" + DoubleToString(MaxSenderLotSize, 2) + "\n";
-   out += "checkforexistingposition=" + (string)((int)CheckForExistingPosition) + "\n";
-   out += "requirepositionfillwithinseconds=" + (string)RequirePositionFillWithinSeconds + "\n";
-   out += "requirepositionfillwithinminutes=" + (string)RequirePositionFillWithinMinutes + "\n";
-   out += "requirepositionfillwithinhours=" + (string)RequirePositionFillWithinHours + "\n";
-   out += "fillwithinminutesbar=" + (string)FillWithinMinutesBar + "\n";
-   out += "pendingfillgraceseconds=" + DoubleToString(PendingFillGraceSeconds, 1) + "\n";
-   out += "waitforseconds=" + (string)WaitForSeconds + "\n";
-   out += "waitforminutes=" + (string)WaitForMinutes + "\n";
-   out += "waitforhours=" + (string)WaitForHours + "\n";
-   out += "waitforprofitpips=" + DoubleToString(WaitForProfitPips, 1) + "\n";
-   out += "waitforminutesbar=" + (string)WaitForMinutesBar + "\n";
-   out += "includetradingtimes=" + IncludeTradingTimes + "\n";
-   out += "daytradingtimes=" + DayTradingTimes + "\n";
-   out += "inverttrades=" + (InvertTrades ? "1" : "0") + "\n";
-   out += "mirrorstops=" + (MirrorStops ? "1" : "0") + "\n";
-   out += "stopsthrottleseconds=" + (string)StopsThrottleSeconds + "\n";
-   out += "maxlotsperposition=" + DoubleToString(MaxLotsPerPosition, 2) + "\n";
-   out += "maxtotallots=" + DoubleToString(MaxTotalLots, 2) + "\n";
-   out += "maxopenpositions=" + (string)MaxOpenPositions + "\n";
-   out += "dailylosspct=" + DoubleToString(DailyLossPct, 2) + "\n";
-   out += "maxdrawdownpct=" + DoubleToString(MaxDrawdownPct, 2) + "\n";
-   out += "riskcloseallontrip=" + (RiskCloseAllOnTrip ? "1" : "0") + "\n";
-   out += "pollms=" + (string)PollMs + "\n";
-   out += "staleseconds=" + (string)StaleSeconds + "\n";
-   out += "maxactionspertick=" + (string)MaxActionsPerTick + "\n";
-   out += "loglevel=" + (string)LogLevel + "\n";
-   out += "statusenabled=" + (StatusEnabled ? "1" : "0") + "\n";
-   out += "syncheartbeatseconds=" + (string)SyncHeartbeatSeconds + "\n";
-   out += "showpanel=" + (ShowPanel ? "1" : "0") + "\n";
-   out += "showorphanedlist=" + (ShowOrphanedList ? "1" : "0") + "\n";
-   sb.Add(out);
-   out="";
+   sb.Add("; copier.ini (active current settings)\n");
+   sb.Add("[common]\n");
+   sb.Add("deviationpoints=" + (string)DeviationPoints + "\n");
+   sb.Add("emergencyslpips=" + DoubleToString(EmergencySLPips, 1) + "\n");
+   sb.Add("emergencytppips=" + DoubleToString(EmergencyTPPips, 1) + "\n");
+   sb.Add("reopenclosedmirrors=" + (ReopenClosedMirrors ? "1" : "0") + "\n");
+   sb.Add("dedupduplicates=" + (DedupDuplicates ? "1" : "0") + "\n");
+   sb.Add("ignorenewentrysignals=" + (IgnoreNewEntrySignals ? "1" : "0") + "\n");
+   sb.Add("ignoreallexitsignals=" + (IgnoreAllExitSignals ? "1" : "0") + "\n");
+   sb.Add("ignoreuids=" + IgnoreUids + "\n");
+   sb.Add("nobuy=" + (NoBuy ? "1" : "0") + "\n");
+   sb.Add("nosell=" + (NoSell ? "1" : "0") + "\n");
+   sb.Add("permittedsymbols=" + PermittedSymbols + "\n");
+   sb.Add("permittedmagic=" + PermittedMagic + "\n");
+   sb.Add("minsenderlotsize=" + DoubleToString(MinSenderLotSize, 2) + "\n");
+   sb.Add("maxsenderlotsize=" + DoubleToString(MaxSenderLotSize, 2) + "\n");
+   sb.Add("checkforexistingposition=" + (string)((int)CheckForExistingPosition) + "\n");
+   sb.Add("requirepositionfillwithinseconds=" + (string)RequirePositionFillWithinSeconds + "\n");
+   sb.Add("requirepositionfillwithinminutes=" + (string)RequirePositionFillWithinMinutes + "\n");
+   sb.Add("requirepositionfillwithinhours=" + (string)RequirePositionFillWithinHours + "\n");
+   sb.Add("fillwithinminutesbar=" + (string)FillWithinMinutesBar + "\n");
+   sb.Add("pendingfillgraceseconds=" + DoubleToString(PendingFillGraceSeconds, 1) + "\n");
+   sb.Add("waitforseconds=" + (string)WaitForSeconds + "\n");
+   sb.Add("waitforminutes=" + (string)WaitForMinutes + "\n");
+   sb.Add("waitforhours=" + (string)WaitForHours + "\n");
+   sb.Add("waitforprofitpips=" + DoubleToString(WaitForProfitPips, 1) + "\n");
+   sb.Add("waitforminutesbar=" + (string)WaitForMinutesBar + "\n");
+   sb.Add("includetradingtimes=" + IncludeTradingTimes + "\n");
+   sb.Add("daytradingtimes=" + DayTradingTimes + "\n");
+   sb.Add("inverttrades=" + (InvertTrades ? "1" : "0") + "\n");
+   sb.Add("mirrorstops=" + (MirrorStops ? "1" : "0") + "\n");
+   sb.Add("stopsthrottleseconds=" + (string)StopsThrottleSeconds + "\n");
+   sb.Add("maxlotsperposition=" + DoubleToString(MaxLotsPerPosition, 2) + "\n");
+   sb.Add("maxtotallots=" + DoubleToString(MaxTotalLots, 2) + "\n");
+   sb.Add("maxopenpositions=" + (string)MaxOpenPositions + "\n");
+   sb.Add("dailylosspct=" + DoubleToString(DailyLossPct, 2) + "\n");
+   sb.Add("maxdrawdownpct=" + DoubleToString(MaxDrawdownPct, 2) + "\n");
+   sb.Add("riskcloseallontrip=" + (RiskCloseAllOnTrip ? "1" : "0") + "\n");
+   sb.Add("pollms=" + (string)PollMs + "\n");
+   sb.Add("staleseconds=" + (string)StaleSeconds + "\n");
+   sb.Add("maxactionspertick=" + (string)MaxActionsPerTick + "\n");
+   sb.Add("loglevel=" + (string)LogLevel + "\n");
+   sb.Add("statusenabled=" + (StatusEnabled ? "1" : "0") + "\n");
+   sb.Add("syncheartbeatseconds=" + (string)SyncHeartbeatSeconds + "\n");
+   sb.Add("showpanel=" + (ShowPanel ? "1" : "0") + "\n");
+   sb.Add("showorphanedlist=" + (ShowOrphanedList ? "1" : "0") + "\n");
 
    if(g_nSenders > 0)
      {
       for(int i = 0; i < g_nSenders; i++)
         {
-         out += "\n[sender" + (string)i + "]\n";
-         out += "id=" + g_sid[i] + "\n";
-         out += "magic=" + (string)g_magic[i] + "\n";
-         out += "lotmode=" + CopierLotModeKey(g_lotMode[i]) + "\n";
-         out += "lotparam=" + DoubleToString(g_lotParam[i], 4) + "\n";
+         sb.Add("\n[sender" + (string)i + "]\n");
+         sb.Add("id=" + g_sid[i] + "\n");
+         sb.Add("magic=" + (string)g_magic[i] + "\n");
+         sb.Add("lotmode=" + CopierLotModeKey(g_lotMode[i]) + "\n");
+         sb.Add("lotparam=" + DoubleToString(g_lotParam[i], 4) + "\n");
          if(StringLen(g_suffix[i]) > 0)
-            out += "suffix=" + g_suffix[i] + "\n";
+            sb.Add("suffix=" + g_suffix[i] + "\n");
          for(int m = 0; m < g_nMap; m++)
            {
             if(g_mapSender[m] == i)
-               out += "symbol." + g_mapFrom[m] + "=" + g_mapTo[m] + "\n";
+               sb.Add("symbol." + g_mapFrom[m] + "=" + g_mapTo[m] + "\n");
            }
-         out += "deviationpoints=" + (string)g_senderCfg[i].deviationPoints + "\n";
-         out += "emergencyslpips=" + DoubleToString(g_senderCfg[i].emergencySLPips, 1) + "\n";
-         out += "emergencytppips=" + DoubleToString(g_senderCfg[i].emergencyTPPips, 1) + "\n";
-         out += "reopenclosedmirrors=" + (g_senderCfg[i].reopenclosedmirrors ? "1" : "0") + "\n";
-         out += "dedupduplicates=" + (g_senderCfg[i].dedupduplicates ? "1" : "0") + "\n";
-         out += "ignorenewentrysignals=" + (g_senderCfg[i].ignorenewentrysignals ? "1" : "0") + "\n";
-         out += "ignoreallexitsignals=" + (g_senderCfg[i].ignoreallexitsignals ? "1" : "0") + "\n";
-         out += "ignoreuids=" + g_senderCfg[i].ignoreuids + "\n";
-         out += "nobuy=" + (g_senderCfg[i].nobuy ? "1" : "0") + "\n";
-         out += "nosell=" + (g_senderCfg[i].nosell ? "1" : "0") + "\n";
-         out += "permittedsymbols=" + g_senderCfg[i].permittedsymbols + "\n";
-         out += "permittedmagic=" + g_senderCfg[i].permittedmagic + "\n";
-         out += "minsenderlotsize=" + DoubleToString(g_senderCfg[i].minsenderlotsize, 2) + "\n";
-         out += "maxsenderlotsize=" + DoubleToString(g_senderCfg[i].maxsenderlotsize, 2) + "\n";
-         out += "checkforexistingposition=" + (string)((int)g_senderCfg[i].checkforexistingposition) + "\n";
-         out += "requirepositionfillwithinseconds=" + (string)g_senderCfg[i].requirepositionfillwithinseconds + "\n";
-         out += "requirepositionfillwithinminutes=" + (string)g_senderCfg[i].requirepositionfillwithinminutes + "\n";
-         out += "requirepositionfillwithinhours=" + (string)g_senderCfg[i].requirepositionfillwithinhours + "\n";
-         out += "fillwithinminutesbar=" + (string)g_senderCfg[i].fillwithinminutesbar + "\n";
-         out += "pendingfillgraceseconds=" + DoubleToString(g_senderCfg[i].pendingfillgraceseconds, 1) + "\n";
-         out += "waitforseconds=" + (string)g_senderCfg[i].waitforseconds + "\n";
-         out += "waitforminutes=" + (string)g_senderCfg[i].waitforminutes + "\n";
-         out += "waitforhours=" + (string)g_senderCfg[i].waitforhours + "\n";
-         out += "waitforprofitpips=" + DoubleToString(g_senderCfg[i].waitforprofitpips, 1) + "\n";
-         out += "waitforminutesbar=" + (string)g_senderCfg[i].waitforminutesbar + "\n";
-         out += "includetradingtimes=" + g_senderCfg[i].includetradingtimes + "\n";
-         out += "daytradingtimes=" + g_senderCfg[i].daytradingtimes + "\n";
-         out += "inverttrades=" + (g_senderCfg[i].inverttrades ? "1" : "0") + "\n";
-         out += "mirrorstops=" + (g_senderCfg[i].mirrorstops ? "1" : "0") + "\n";
-         out += "stopsthrottleseconds=" + (string)g_senderCfg[i].stopsThrottleSeconds + "\n";
-         out += "maxlotsperposition=" + DoubleToString(g_senderCfg[i].maxLotsPerPosition, 2) + "\n";
-         out += "maxtotallots=" + DoubleToString(g_senderCfg[i].maxTotalLots, 2) + "\n";
-         out += "maxopenpositions=" + (string)g_senderCfg[i].maxOpenPositions + "\n";
-         out += "staleseconds=" + (string)g_senderCfg[i].staleSeconds + "\n";
-         //--- one flush per sender: bounds `out` to a single sender's block
-         sb.Add(out);
-         out="";
+         sb.Add("deviationpoints=" + (string)g_senderCfg[i].deviationPoints + "\n");
+         sb.Add("emergencyslpips=" + DoubleToString(g_senderCfg[i].emergencySLPips, 1) + "\n");
+         sb.Add("emergencytppips=" + DoubleToString(g_senderCfg[i].emergencyTPPips, 1) + "\n");
+         sb.Add("reopenclosedmirrors=" + (g_senderCfg[i].reopenclosedmirrors ? "1" : "0") + "\n");
+         sb.Add("dedupduplicates=" + (g_senderCfg[i].dedupduplicates ? "1" : "0") + "\n");
+         sb.Add("ignorenewentrysignals=" + (g_senderCfg[i].ignorenewentrysignals ? "1" : "0") + "\n");
+         sb.Add("ignoreallexitsignals=" + (g_senderCfg[i].ignoreallexitsignals ? "1" : "0") + "\n");
+         sb.Add("ignoreuids=" + g_senderCfg[i].ignoreuids + "\n");
+         sb.Add("nobuy=" + (g_senderCfg[i].nobuy ? "1" : "0") + "\n");
+         sb.Add("nosell=" + (g_senderCfg[i].nosell ? "1" : "0") + "\n");
+         sb.Add("permittedsymbols=" + g_senderCfg[i].permittedsymbols + "\n");
+         sb.Add("permittedmagic=" + g_senderCfg[i].permittedmagic + "\n");
+         sb.Add("minsenderlotsize=" + DoubleToString(g_senderCfg[i].minsenderlotsize, 2) + "\n");
+         sb.Add("maxsenderlotsize=" + DoubleToString(g_senderCfg[i].maxsenderlotsize, 2) + "\n");
+         sb.Add("checkforexistingposition=" + (string)((int)g_senderCfg[i].checkforexistingposition) + "\n");
+         sb.Add("requirepositionfillwithinseconds=" + (string)g_senderCfg[i].requirepositionfillwithinseconds + "\n");
+         sb.Add("requirepositionfillwithinminutes=" + (string)g_senderCfg[i].requirepositionfillwithinminutes + "\n");
+         sb.Add("requirepositionfillwithinhours=" + (string)g_senderCfg[i].requirepositionfillwithinhours + "\n");
+         sb.Add("fillwithinminutesbar=" + (string)g_senderCfg[i].fillwithinminutesbar + "\n");
+         sb.Add("pendingfillgraceseconds=" + DoubleToString(g_senderCfg[i].pendingfillgraceseconds, 1) + "\n");
+         sb.Add("waitforseconds=" + (string)g_senderCfg[i].waitforseconds + "\n");
+         sb.Add("waitforminutes=" + (string)g_senderCfg[i].waitforminutes + "\n");
+         sb.Add("waitforhours=" + (string)g_senderCfg[i].waitforhours + "\n");
+         sb.Add("waitforprofitpips=" + DoubleToString(g_senderCfg[i].waitforprofitpips, 1) + "\n");
+         sb.Add("waitforminutesbar=" + (string)g_senderCfg[i].waitforminutesbar + "\n");
+         sb.Add("includetradingtimes=" + g_senderCfg[i].includetradingtimes + "\n");
+         sb.Add("daytradingtimes=" + g_senderCfg[i].daytradingtimes + "\n");
+         sb.Add("inverttrades=" + (g_senderCfg[i].inverttrades ? "1" : "0") + "\n");
+         sb.Add("mirrorstops=" + (g_senderCfg[i].mirrorstops ? "1" : "0") + "\n");
+         sb.Add("stopsthrottleseconds=" + (string)g_senderCfg[i].stopsThrottleSeconds + "\n");
+         sb.Add("maxlotsperposition=" + DoubleToString(g_senderCfg[i].maxLotsPerPosition, 2) + "\n");
+         sb.Add("maxtotallots=" + DoubleToString(g_senderCfg[i].maxTotalLots, 2) + "\n");
+         sb.Add("maxopenpositions=" + (string)g_senderCfg[i].maxOpenPositions + "\n");
+         sb.Add("staleseconds=" + (string)g_senderCfg[i].staleSeconds + "\n");
         }
      }
 
-   if(StringLen(out)>0) sb.Add(out);
    return sb.Result();
   }
 
@@ -2852,11 +2867,12 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- different target volumes, or two successive stop changes
    string sname=(si>=0 && si<CP_MAX_SENDERS && StringLen(g_sid[si])>0) ? g_sid[si] : "manual";
    string key=sname+":"+(string)kind+":"+uid+keyExtra;
+   g_pushReject="";
    //--- an idempotent state assignment is guarded by the state comparison
    //--- on every converge pass, NOT by the "already done" ring - see
    //--- CopierSeenRingApplies() for the pilot failure this caused
-   if(CopierSeenRingApplies(kind) && g_seen.Has(key)) return false;
-   if(g_inflight.Has(key)) return false; // NH-04: in-flight suppression for async execution
+   if(CopierSeenRingApplies(kind) && g_seen.Has(key)) { g_pushReject="already_done"; return false; }
+   if(g_inflight.Has(key)) { g_pushReject="in_flight"; return false; } // NH-04: in-flight suppression for async execution
    //--- An action that just FAILED is parked briefly, so a refused request is
    //--- not repeated ten times a second forever.
    //---
@@ -2873,13 +2889,13 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- H-04 & P1-01: Enforce BlockedCapped(1000) to eliminate 200/sec hammering while bounding retry delay to 1s.
    if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
      {
-      if(g_backoff.BlockedCapped(key,1000)) return false;
+      if(g_backoff.BlockedCapped(key,1000)) { g_pushReject="retry_backoff"; return false; }
      }
-   else if(g_backoff.Blocked(key)) return false;
+   else if(g_backoff.Blocked(key)) { g_pushReject="retry_backoff"; return false; }
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
-   if(g_unsupported.Has(key)) return false;
-   if(ActionQueued(si,kind,uid,keyExtra)) return false;
+   if(g_unsupported.Has(key)) { g_pushReject="unsupported"; return false; }
+   if(ActionQueued(si,kind,uid,keyExtra)) { g_pushReject="already_queued"; return false; }
    if(g_qHead+g_qn>=CP_MAX_ACTIONS)
      {
       //--- the tail hit the end of the array: reclaim the dead prefix first,
@@ -2899,6 +2915,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
       //--- action and it goes through as the queue drains. That is why this
       //--- is a warning about throughput, not an error about lost work.
       g_qDeferred++;
+      g_pushReject="queue_full";
       return false;
      }
    int t=g_qHead+g_qn;
@@ -4092,7 +4109,12 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
    if(g_lotMode[si]==CP_SIZE_FIXED)
      {
       double baseLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
-      double origLots=GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
+      //--- N-03: the peak now lives on the desired row. The table lookup remains
+      //--- only as a fallback for a row stored before this field existed (it
+      //--- cannot be 0 on a snapshot-built row), so a miss cannot change sizing.
+      double origLots=(desired.initLots>0.0)
+                      ?desired.initLots
+                      :GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
       if(origLots>0.0 && desired.lots<origLots)
          targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
       else
@@ -6324,10 +6346,39 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    int base=si*CP_MAX_POSITIONS;
    int prevCount=g_desiredCount[si];
+   //--- N-03: carry each UID's peak lots from the row being replaced.
+   //---
+   //--- This is the per-row replacement for the global peak table, which had ONE
+   //--- 2048-row budget shared by every sender: two senders holding 1200 positions
+   //--- each overflowed it, and `PruneSenderPeakLots` cannot free a UID that is
+   //--- still desired - so the last ~350 UIDs were stored with peak == current
+   //--- lots. FIXED sizing scales a partial close by lots/peak, so with peak
+   //--- pinned to the current volume the ratio never fell below 1 and a sender
+   //--- trim silently stopped shrinking the mirror.
+   //---
+   //--- Building the index over the PREVIOUS slice costs one pass per snapshot
+   //--- (the same O(n) a hash build already costs elsewhere) and makes the lookup
+   //--- O(1) instead of a scan per record.
+   if(prevCount>0) g_desIdx.Build(g_desired,base,prevCount);
    for(int i=0;i<n;i++)
      {
+      double carry=0.0;
+      if(prevCount>0)
+        {
+         int prevRow=g_desIdx.Find(g_desired,g_scratch[i].uid);
+         if(prevRow>=base && prevRow<base+prevCount) carry=g_desired[prevRow].initLots;
+        }
       g_desired[base+i]=g_scratch[i];
-      GetOrUpdateSenderPeakLots(g_scratch[i].uid,g_scratch[i].lots);
+      //--- Two tiers on purpose:
+      //---   the ROW is the primary source (per-sender capacity, cannot be
+      //---   evicted while it is live), and
+      //---   the TABLE is the fallback for the one case a row cannot answer -
+      //---   the first snapshot after `ClearDesired()` (sender restart or new
+      //---   SSID), where the previous peak still exists in the table and is
+      //---   what keeps a position that was already trimmed before the restart
+      //---   from being re-scaled to its original size.
+      if(carry<=0.0) carry=GetOrUpdateSenderPeakLots(g_scratch[i].uid,g_scratch[i].lots);
+      g_desired[base+i].initLots=CopierNextInitLots(carry,g_scratch[i].lots);
      }
    //--- C4: release the rows this snapshot shrank past. CopierPos carries three
    //--- strings; leaving them behind kept up to 2048 UID/symbol/comment references
@@ -6400,7 +6451,9 @@ int StopsOvIndex(const string uid,const bool create)
    //--- "never" - which silently disables the throttle for the next change.
    g_stLastMs[n]=-1;
    g_stCount++;
-   StopsRebuildUidIndex();
+   //--- N-04: index the row we just added instead of rebuilding the table
+   if(!g_stUidIdx.InsertString(g_stUid,n))
+      StopsRebuildUidIndex();   // probe table full / hash clash: full rebuild is the fallback
    return n;
   }
 
@@ -6468,6 +6521,12 @@ void StopsPrune(const long now)
          g_stLastMs[i]=g_stLastMs[last];
         }
       g_stCount--;
+      //--- M-03: the slot at the old tail is outside the table now. Leaving the
+      //--- uid there keeps an MQL string reference alive for the life of the
+      //--- array; PruneSenderPeakLots and CopierPosTable::PruneTo already clear
+      //--- theirs for exactly this reason.
+      g_stUid[g_stCount]="";
+      g_stHasOv[g_stCount]=false;
       pruned++;
       g_stOvEpoch++;                   // the effective override set changed
      }
@@ -7022,8 +7081,13 @@ void HandleCmd(const CopierEnv &e)
         }
       else
         {
-         g_cmdAck="ID="+id+";OK=0;ERR=queue_full;REV="+(string)g_cfgRev;
-         g_log.Error("CMD "+id+": manual close failed to queue for ticket #"+(string)targetTicket+" (queue full)");
+         //--- N-10: name the actual refusal. "queue_full" for a duplicate
+         //--- click or a 1s CLOSE backoff sent the hub (and the operator) after
+         //--- a throughput problem that was not there.
+         string why=(StringLen(g_pushReject)>0)?g_pushReject:"not_queueable";
+         g_cmdAck="ID="+id+";OK=0;ERR="+why+";REV="+(string)g_cfgRev;
+         g_log.Error("CMD "+id+": manual close not queued for ticket #"
+                     +(string)targetTicket+" ("+why+")");
         }
       SendCfgAck(g_cmdAck);
       return;
@@ -7150,11 +7214,17 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
   {
    CopierPos p;
    if(!CopierPayloadOpenParse(e.payload,p)) return;
-   GetOrUpdateSenderPeakLots(p.uid,p.lots);
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<g_desiredCount[si];i++)
      {
-      if(g_desired[base+i].uid==p.uid) { g_desired[base+i]=p; return; }
+      if(g_desired[base+i].uid!=p.uid) continue;
+      //--- N-03: an OPEN for a UID we already hold is a re-open (same UID, new
+      //--- ticket). Keep the peak or the next partial close stops scaling.
+      double il=g_desired[base+i].initLots;
+      if(il<=0.0) il=g_desired[base+i].lots;
+      p.initLots=CopierNextInitLots(il,p.lots);
+      g_desired[base+i]=p;
+      return;
      }
    if(g_desiredCount[si]>=CP_MAX_POSITIONS)
      {
@@ -7163,6 +7233,7 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
                     +"); open event dropped for "+p.uid);
       return;
      }
+   p.initLots=(p.lots>0.0)?p.lots:0.0;    // N-03: first sight is the baseline
    g_desired[base+g_desiredCount[si]]=p;
    g_desiredCount[si]++;
   }
@@ -7312,8 +7383,14 @@ void HubAnnounce(const bool isReg)
    if(isReg)
       e.payload+=CP_SEP_KV+"IH="+CurrentIniHash();
 
-   //--- N73-06: Periodically re-assert control channel subscriptions so a dropped initial subscribe
-   //--- frame or hub restart does not leave this receiver permanently unsubscribed to commands.
+   //--- N73-06: re-assert control channel subscriptions on every announce, so a
+   //--- socket rebuild (ConnectHub / a hub that came back after a restart) picks
+   //--- them up on the next heartbeat instead of waiting for a reattach.
+   //--- N-01: Subscribe() is idempotent now - it only sends 0x01 when this socket
+   //--- has not already seen one for that prefix. The old unconditional send made
+   //--- XPUB's per-prefix reference count grow by ~3 every 5 s, which meant
+   //--- Unsubscribe could never cancel it (removing a sender left its stream
+   //--- arriving for the life of the socket).
    g_tp.Subscribe("@"+(string)g_nid);
    long rawAcc=CopierAccountLogin();
    if(rawAcc!=g_nid) g_tp.Subscribe("@"+(string)rawAcc);
@@ -7696,7 +7773,12 @@ int OnInit()
    //--- for a minute on arrival - which looks exactly like a broken feed.
    CopierSymbolQuoteReset();
    g_mktClosed.SetTtlMs(CP_MKTCLOSED_MS);
-   g_everOpened.SetTtlMs(12*60*60*1000);
+   //--- N-11: 7 days, not 12 hours. This ring is what makes `ReopenClosedMirrors
+   //--- = false` mean "the operator closed it, leave it closed"; the TTL exists
+   //--- only because the ring is fixed-size. At 12 h a Friday-evening manual
+   //--- close had expired by Monday, so the same UID (sender still holding it)
+   //--- looked like a FIRST open and was mirrored back.
+   g_everOpened.SetTtlMs(CP_EVEROPENED_TTL_MS);
    //--- Only has to bridge the gap between our own close and the replacement
    //--- open on the next pass - seconds in practice. Five minutes is generous
    //--- enough to survive a retrying close without letting the exemption
@@ -8686,7 +8768,19 @@ void OnTimer()
    if(g_hubOn && CopierNowMs()-g_lastHbt2Ms>=CP_HBT2_MS)
      {
       g_lastHbt2Ms=CopierNowMs();
-      HubAnnounce(g_announceCount<CP_REG_REPEATS);
+      //--- N-06: one maintenance REG a minute after the opening burst. See the
+      //--- note on CP_REG_REFRESH_HBTS: the double-send only reaches both hubs
+      //--- while both pipes are writable, and this counter is already saturated
+      //--- by then, so without this the second hub could stay blind to the node.
+      bool wantReg=(g_announceCount<CP_REG_REPEATS);
+      if(!wantReg)
+        {
+         g_hbtSinceReg++;
+         if(g_hbtSinceReg>=CP_REG_REFRESH_HBTS) { g_hbtSinceReg=0; wantReg=true; }
+        }
+      else
+         g_hbtSinceReg=0;
+      HubAnnounce(wantReg);
       g_announceCount++;
       //--- O4: saturate instead of counting forever. Nothing reads this beyond
       //--- the CP_REG_REPEATS threshold, and an unbounded counter is a latent

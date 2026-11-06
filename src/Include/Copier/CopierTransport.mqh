@@ -115,6 +115,16 @@ private:
    Socket           *m_sub;      // receiver: XSUB - receives data, sends status
    int               m_errno;
    string            m_subPrefixes[CP_MAX_XSUB_SUBS];
+   //--- N-01: how many SUBSCRIBE frames we have actually sent for this prefix
+   //--- on the current socket. XPUB counts a (pipe, prefix) subscription per
+   //--- 0x01 it receives, so one 0x00 only cancels ONE of them: a periodic
+   //--- re-subscribe (HubAnnounce, every 5 s) left the count permanently above
+   //--- zero and made every Unsubscribe a no-op - the removed sender's stream
+   //--- kept arriving for the life of the socket. Counting what we sent and
+   //--- replaying that many 0x00 on removal is the only bookkeeping that stays
+   //--- correct for BOTH cases (a subscribe that was actually lost, and one
+   //--- that landed twice).
+   int               m_subSent[CP_MAX_XSUB_SUBS];
    int               m_nSubPrefixes;
    int               m_connectedHubs;
    //--- F-18: the socket is mid-multipart and the closing frame did not land.
@@ -390,7 +400,7 @@ public:
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       // MQL-06: Reset cached subscription prefixes upon ConnectHub to avoid stale replay
       m_nSubPrefixes=0;
-      for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) m_subPrefixes[sp]="";
+      for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);
@@ -431,49 +441,85 @@ public:
       if(StringLen(ep)==0) return false;
       if(!m_sub.connect(ep)) return false;
       m_connectedHubs++;
-      // H-06: Replay all existing XSUB subscriptions over the newly connected pipe
+      // H-06: Replay all existing XSUB subscriptions over the newly connected pipe.
+      //--- N-01: each replayed frame is another 0x01 the hub will count, so the
+      //--- per-prefix counter has to move with it or the later Unsubscribe is
+      //--- short by exactly this many.
       for(int i=0;i<m_nSubPrefixes;i++)
         {
          if(StringLen(m_subPrefixes[i])>0)
            {
-            m_sub.send("\x01"+m_subPrefixes[i],true);
+            if(m_sub.send("\x01"+m_subPrefixes[i],true))
+               m_subSent[i]++;
            }
         }
       return true;
-     }
+   }
 
    //--- Subscribe / unsubscribe one prefix. XSUB does not auto-subscribe, and
    //--- it does not auto-UNsubscribe either - a node whose sender list changed
    //--- keeps receiving the old stream until it says so.
+   //---
+   //--- IDEMPOTENT (N-01). The caller re-asserts its subscriptions every
+   //--- heartbeat so a lost frame cannot leave it deaf; that is right, but each
+   //--- 0x01 is a SEPARATE subscription as far as XPUB's reference count is
+   //--- concerned, so re-sending every 5 s pushed the count into the thousands
+   //--- and one 0x00 could never cancel it - Unsubscribe was dead for the life
+   //--- of the socket. Sending 0x01 only when we have not already sent one for
+   //--- this prefix keeps the count at 1, and libzmq replays the socket's
+   //--- subscription trie onto every NEW pipe by itself, which is what actually
+   //--- covers a hub restart. A socket that is rebuilt (ConnectHub) clears the
+   //--- table, so the next announce re-subscribes from scratch.
    bool              Subscribe(const string prefix)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       // Record subscription for replay on new pipes (H-06)
       bool found=false;
+      int  slot=-1;
       for(int i=0;i<m_nSubPrefixes;i++)
         {
-         if(m_subPrefixes[i]==prefix) { found=true; break; }
+         if(m_subPrefixes[i]==prefix) { found=true; slot=i; break; }
         }
+      if(found && m_subSent[slot]>0) return true;   // already subscribed on this socket
       if(!found && m_nSubPrefixes<CP_MAX_XSUB_SUBS)
         {
-         m_subPrefixes[m_nSubPrefixes++]=prefix;
+         slot=m_nSubPrefixes;
+         m_subPrefixes[m_nSubPrefixes]=prefix;
+         m_subSent[m_nSubPrefixes]=0;
+         m_nSubPrefixes++;
         }
-      return m_sub.send("\x01"+prefix,true);
+      if(!m_sub.send("\x01"+prefix,true)) return false;
+      //--- count only frames that reached the socket: a failed send is a
+      //--- subscription the hub never saw, and must not need an 0x00 later
+      if(slot>=0) m_subSent[slot]++;
+      return true;
      }
 
    bool              Unsubscribe(const string prefix)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      int sent=0;
       for(int i=0;i<m_nSubPrefixes;i++)
         {
-         if(m_subPrefixes[i]==prefix)
+         if(m_subPrefixes[i]!=prefix) continue;
+         //--- one 0x00 per 0x01 we sent, otherwise XPUB's reference count never
+         //--- reaches zero and the prefix stays live (N-01)
+         int n=m_subSent[i];
+         for(int k=0;k<n;k++)
            {
-            for(int j=i;j<m_nSubPrefixes-1;j++) m_subPrefixes[j]=m_subPrefixes[j+1];
-            m_nSubPrefixes--;
-            break;
+            if(m_sub.send("\x00"+prefix,true)) sent++;
            }
+         for(int j=i;j<m_nSubPrefixes-1;j++)
+           {
+            m_subPrefixes[j]=m_subPrefixes[j+1];
+            m_subSent[j]=m_subSent[j+1];
+           }
+         m_nSubPrefixes--;
+         m_subPrefixes[m_nSubPrefixes]="";
+         m_subSent[m_nSubPrefixes]=0;
+         break;
         }
-      return m_sub.send("\x00"+prefix,true);
+      return (sent>0);
      }
 
    //--- Send a TWO-FRAME message: [topic, payload].
@@ -551,10 +597,17 @@ public:
             //--- anyway (return false) but without taking the terminal down.
             //--- F-18: if even THIS fails the socket stays mid-multipart; record it
             //--- so the next call closes the frame first instead of appending to it.
+            //--- L-01: and STOP the copy loop. A failed terminator means the socket
+            //--- is still holding an unterminated message; the next iteration's
+            //--- sendMore() would append to it, producing [topic][ ][topic][payload]
+            //--- - one corrupt frame the peer cannot parse - and `sent++` would then
+            //--- report SUCCESS for it. Nothing may be written to this socket until
+            //--- the frame is closed.
             if(!m_sub.send("",true))
               {
                m_errno=CopierZmqErrno();
                m_midMultipart=true;
+               break;
               }
             continue;
            }
@@ -708,7 +761,7 @@ public:
       m_midMultipart=false;
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
-      for(int i=0;i<CP_MAX_XSUB_SUBS;i++) m_subPrefixes[i]="";
+      for(int i=0;i<CP_MAX_XSUB_SUBS;i++) { m_subPrefixes[i]=""; m_subSent[i]=0; }
       if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
       if(CheckPointer(m_ctx)!=POINTER_INVALID) { delete m_ctx; m_ctx=NULL; }

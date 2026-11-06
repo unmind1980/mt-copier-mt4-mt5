@@ -213,6 +213,7 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
      }
    p.cmt="";
    p.used=true;
+   p.initLots=0.0;   // N-03: receiver-side only, never carried on the wire
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
    if(p.lots<=0.0) return false;
    if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0 || p.pprice<0.0 || p.pstop<0.0) return false;
@@ -704,6 +705,7 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.used    =true;
    p.profit  =0.0;
    p.swap    =0.0;
+   p.initLots=0.0;  // N-03: filled in by the receiver when the row is stored
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
    if(p.lots<=0.0) return false;
    //--- same refusal as the record decoder: never mirror a pending type we
@@ -759,6 +761,7 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    p.openPx=StringToDouble(opnStr);
    p.sl    =StringToDouble(slStr);
    p.tp    =StringToDouble(tpStr);
+   p.initLots=0.0;   // N-03: not part of a MODIFY; the caller keeps its own
    if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
    string ppStr="";
    if(CopierKvGet(payload,"PPRICE",ppStr)) p.pprice=StringToDouble(ppStr);

@@ -2189,9 +2189,9 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ---
 
-### 一百一十次演进：订阅引用计数、Standby 只读命令、止损覆盖容量与日志刷新（2026-11-07；已修 9 项，2 项按风险留待确认）
+### 一百一十次演进：订阅引用计数、Standby 只读命令、峰值手数按行存储与配置序列化线性化（2026-11-07；12 项审计发现全部闭环）
 
-- **来源**：独立只读审计 `outputs/mt-copier-fullstack-audit-2026-11-07.md`（12 项，N-01..N-12）。本轮把其中 9 项落地，2 项因改动面/无法回归而留给用户决策，1 项改为文档+断言。
+- **来源**：独立只读审计 `outputs/mt-copier-fullstack-audit-2026-11-07.md`（12 项，N-01..N-12）。本轮 12 项全部落地（N-08 的 Hub 侧本就正确，只补了节点侧）。
 
 - **已修**：
   1. **N-01 订阅引用计数（中）**：`CopierTransport::Subscribe` 改为**幂等**（同一 socket 上已发过 `0x01` 就不再发），并用 `m_subSent[]` 记录每个前缀实际发出的帧数，`Unsubscribe` 按该数量补 `0x00`。此前 `HubAnnounce` 每 5 秒无条件重订阅，XPUB 的 `(pipe,prefix)` 引用计数单调增长到数千，**一次 0x00 永远减不到 0**——从 copier.ini 删掉的 sender 仍持续收到数据，Hub 的 `subs` 视图也随之失真。`ConnectExtraHub` 的重放同样计数，保证退订时收支平衡。
@@ -2203,13 +2203,18 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   7. **N-09 ACK 先改内存后写盘（低）**：`CommandStore::ack` 改为**先 append 再提交内存**，写失败返回 false 并保留 pending，让阶梯继续；调用方的 WARN 文案补上「journal append failed」这一种情况。
   8. **N-10 close 的 ACK 一律报 queue_full（低）**：`PushAction` 增加 `g_pushReject`（七个拒绝路径各自命名），`HandleCmd` 的 close 分支按真实原因回 `ERR=`，不再把重复点击/1 秒退避说成队列满。
   9. **N-11 / N-12（低）**：`g_everOpened` TTL 12 小时 → 7 天（跨周末手工平仓不再被当成首次开仓）；日志改为**每 tick 一次 flush**（ERROR 仍立即 flush），74 单突发的 74 次 flush 降到 1 次。
+  10. **N-03 峰值手数按行存储（中）**：`CopierPos` 增加 `initLots`（只在接收端，绝不上线），`HandleSnapshot` / `HandleOpenEvent` 维护「该 UID 见过的最大手数」，`ComputeTargetLotsForMirror` 改用它做 FIXED 比例减仓的基数。这样容量随 `g_desired` 天然变成「每 sender 2048 行」，不再被全局 2048 行表卡住。全局表保留为**两层兜底**：只在 `ClearDesired()`（sender 重启/新 SSID）后的第一份快照里回答「重启前的峰值」，否则一条已经减过仓的持仓会在重启后被重新放大回原始手数。规则本身抽成可测的 `CopierNextInitLots()`。
+  11. **N-07 配置序列化线性化（低中）**：`SerializeCurrentConfigToIni` 的 86 处 `out +=` 全部改为直接 `sb.Add(...)`（由脚本做机械变换，再逐行核对），块内 O(n²) 变成每行一次有界追加。**输出逐字节不变**——同样的字面量、同样的顺序，只是不再经过一个不断增长的累加器，所以 `IH=` 不受影响。
+  12. **N-08 的节点侧**（见第 6 项）。
 
-- **未修与原因**：
-  - **N-03 峰值手数表容量（中）**：`g_uidPeakLots` 是全局 2048 行，多 sender 合计超过 2048 个 UID 后 FIXED 模式的按比例减仓会静默退化为不缩放。真正的修法是把 `initLots` 落到 `g_desired` 行里（或按 sender 分片），牵动 `HandleSnapshot` 热路径 + `ComputeTargetLotsForMirror` + 状态文件，且本机无法运行 MQL 自检来验证——按「大改先确认」的约定留给用户决定。
-  - **N-07 配置序列化块内 O(n²)（低中）**：`SerializeCurrentConfigToIni` 每个 sender 块仍是 ~74 次 `out +=`（满配约 9 MB 复制）。输出必须与 Hub 的 `IH=` 逐字节一致，90 行机械改写虽可编译，但无法在本机跑 MQL 自检验证字节等价；收益只在满配且 CFG 推送时可见，风险不成比例。
-  - **N-08 的字节口径只修了节点侧**：Hub 侧本来就是字节，本轮让两端一致；`hub_config_test.py` 里「含非 ASCII 的大配置」用例仍未补（建议下一轮补）。
+- **未修与原因**：无代码项。仅 `hub_config_test.py` 缺一条「含非 ASCII 的大配置两端同时接受/拒绝」的边界用例（测试缺口，不是缺陷），建议下一轮补。
 
-- **验证**：MT4 / MT5 × Sender / Receiver / SelfTest 共 6 个目标 **0 错误 0 警告**（临时 staging 目录编译，未触碰终端里正在运行的 EA）；Rust 单测 **172/172**（新增 `test_ack_propagates_journal_error_and_keeps_the_command_pending`）；`hub_cluster_test.py` 新增两条 Standby 只读 409 断言（**未执行**：本机 6000/6001/6010/6011 正被在线的双 Hub 占用，不能起测试实例）。
-- **部署提醒**：本轮只改了源码与自检；**线上的两个 Hub 与四个终端仍在跑旧二进制**，需按 `tools/deploy.sh` → `tools/compile.sh` → 重挂 EA / 重启服务 的顺序上线，并核对启动日志里的 `build=`。
+- **验证**：
+  - MT4 / MT5 × Sender / Receiver / SelfTest 共 6 个目标 **0 错误 0 警告**；全量 `tools/compile.sh` 对 5 个终端 **ALL GREEN（0 errors）**。
+  - **MQL 自检 `tools/selftest_run.sh`：715 条断言，0 失败**（708 → 715，新增 7 条：UTF-8 字节计数 ×3、`everOpened` TTL 下限、峰值手数规则 ×3）；`BASELINE` 已随之从 712 提到 715。
+  - Rust 单测 **172/172**（新增 `test_ack_propagates_journal_error_and_keeps_the_command_pending`）。
+  - `hub_cluster_test.py` 新增两条 Standby 只读 409 断言，**未执行**：端口 6380–6383 是空闲的，但 `hub/target/release/copier-hub.exe` 被在线的两个 Hub 进程占用，无法重建 release 二进制；等重启服务后再跑。
+
+- **部署提醒**：源码、编译产物与文档已更新；**在线的两个 Hub 仍跑旧二进制**（服务重启后生效），四个终端的 EA 需重挂才会加载新 `.ex4/.ex5`，并核对启动日志里的 `build=`。
 
 ---

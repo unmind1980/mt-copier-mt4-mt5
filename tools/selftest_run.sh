@@ -58,9 +58,11 @@ FRESH=1
 #--- The recorded assertion count for MT5. Deleting a red assertion is not a
 #--- fix, and without this check it would look exactly like a green run.
 #--- Raise it DELIBERATELY when you add assertions; never lower it to make a
-#--- build pass. (MT4 reports 708: the platforms differ by a few ifdef'd
+#--- build pass. (MT4 reports a few less: the platforms differ by ifdef'd
 #--- assertions, which is why this is a constant here rather than derived.)
-BASELINE=712
+#--- 715 = 708 (2026-11-06 baseline) + 7 added by round 110: three UTF-8 byte
+#--- counts, the everOpened TTL floor, and the three peak-lots cases (N-03).
+BASELINE=715
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

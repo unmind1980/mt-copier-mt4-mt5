@@ -492,6 +492,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.openTime=(long)PositionGetInteger(POSITION_TIME);
       p.kind=CP_ORD_MARKET;
       p.ptype=0; p.pprice=0.0; p.pstop=0.0; p.pexpire=0;
+      p.initLots=0.0;   // N-03: receiver bookkeeping only
       p.used=true;
       //--- grow in chunks if dynamic; if fixed static buffer, check bounds
       if(n>=ArraySize(out))
@@ -538,6 +539,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.pprice=OrderGetDouble(ORDER_PRICE_OPEN);
       p.pstop=OrderGetDouble(ORDER_PRICE_STOPLIMIT);
       p.pexpire=(long)OrderGetInteger(ORDER_TIME_EXPIRATION);
+      p.initLots=0.0;   // N-03: receiver bookkeeping only
       p.used=true;
       //--- grow in chunks if dynamic; if fixed static buffer, check bounds
       if(n>=ArraySize(out))
@@ -592,6 +594,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
          p.pstop=0.0;                                 // MT4 has no stop-limit
          p.pexpire=(long)OrderExpiration();
         }
+      p.initLots=0.0;   // N-03: receiver bookkeeping only
       p.used=true;
       //--- grow in chunks if dynamic; if fixed static buffer, check bounds
       if(n>=ArraySize(out))
@@ -1242,7 +1245,13 @@ bool CopierClosePartial(const long identifier,const double lots,
       return true;
      }
    double have=PositionGetDouble(POSITION_VOLUME);
-   if(lots>=have-0.0000001)
+   //--- L-03: 1e-9, not 1e-7. Volumes travel with CP_DIGITS_LOTS = 8 decimals,
+   //--- so the smallest meaningful step is 1e-8 - and 1e-7 is TEN of those. On a
+   //--- micro position (0.00000020 lots) a legitimate 50% partial close
+   //--- (0.00000010) therefore satisfied "lots >= have - 1e-7" and was refused
+   //--- as if it were a full close. 1e-9 is still far above the ~1e-16 noise of
+   //--- parsing and subtraction, so an exact-equality test behaves exactly.
+   if(lots>=have-0.000000001)
      {
       outErr=-3;
       return false;
@@ -1299,8 +1308,10 @@ bool CopierClosePartial(const long identifier,const double lots,
      }
    double have=OrderLots();
    //--- closing the whole thing is a different operation with different
-   //--- rounding; refuse rather than risk a full exit by accident
-   if(lots>=have-0.0000001) { outErr=-3; return false; }
+   //--- rounding; refuse rather than risk a full exit by accident.
+   //--- L-03: same 1e-9 as the MT5 branch - 1e-7 is ten 8-decimal steps and
+   //--- rejected a real half-close on a micro position.
+   if(lots>=have-0.000000001) { outErr=-3; return false; }
 
    RefreshRates();
    int type=(int)OrderType();
@@ -1370,7 +1381,11 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }
       // Only considered fully closed when total exit volume matches or exceeds total entry volume
-      if(inVol>0.0 && outVol>=inVol-0.0000001)
+      //--- L-03: 1e-9. With 1e-7 a position of 0.00000020 lots whose history
+      //--- showed only HALF of it closed (outVol 0.00000010) satisfied this and
+      //--- was reported fully closed, so the receiver would drop a mirror the
+      //--- sender still holds. Below one 8-decimal step, sum noise cannot reach it.
+      if(inVol>0.0 && outVol>=inVol-0.000000001)
          return true;
      }
    if(HistoryOrderSelect((ulong)ticket))

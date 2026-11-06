@@ -2592,9 +2592,20 @@ async fn post_command(
     };
 
     if !is_primary {
+        //--- N-02: same rule as the fleet-wide endpoint, and now the same words.
+        let peer_url = st.lock_or_recover().cluster.peer_url.clone();
+        let hint = if peer_url.is_empty() {
+            "No peer is configured.".to_string()
+        } else {
+            format!("Issue it against the Primary at {}.", peer_url)
+        };
         return (
             axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+            Json(json!({
+                "error": "Standby node does not dispatch commands (read-only queries included).",
+                "detail": hint,
+                "primary": peer_url,
+            })),
         )
             .into_response();
     }
@@ -2822,18 +2833,35 @@ async fn commands_global(
     }
 
     //--- THE GATE, identical to the per-node endpoint's.
-    let (writes, is_primary) = {
+    let (writes, is_primary, peer_url) = {
         let s = st.lock_or_recover();
-        (s.writes, s.cluster.is_primary())
+        (s.writes, s.cluster.is_primary(), s.cluster.peer_url.clone())
     };
-    //--- F-14: read-only operations are allowed on a Standby too. This check used to
-    //--- run before `is_read_only` was consulted, so the fleet-wide `reqpos`/`reqcfg`
-    //--- - pure queries, and how an operator verifies holdings before a failover -
-    //--- answered 409 on the standby. The write gate below already exempts them.
-    if !is_primary && !is_read_only {
+    //--- N-02: a Standby accepts NO command, not even a read-only one.
+    //---
+    //--- F-14 opened this for reqpos/reqcfg on the theory that "a pure query is
+    //--- safe on a read-only node". It is not: the dispatcher (`due_gated`) only
+    //--- runs on the Primary, so the command was journaled here, answered 202,
+    //--- and never sent to anyone - it did not even reach `unknown`, because that
+    //--- transition also comes from the dispatcher. The operator saw "accepted"
+    //--- and a dashboard that never refreshed. An honest 409 that names the
+    //--- Primary is strictly better than a 202 that does nothing; forwarding the
+    //--- query to the Primary is a separate change (it needs a cluster-token
+    //--- endpoint, because a session token from this hub is not valid there
+    //--- unless MTC_SYNC_USERS is on).
+    if !is_primary {
+        let hint = if peer_url.is_empty() {
+            "No peer is configured.".to_string()
+        } else {
+            format!("Issue it against the Primary at {}.", peer_url)
+        };
         return (
             axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
+            Json(json!({
+                "error": "Standby node does not dispatch commands (read-only queries included).",
+                "detail": hint,
+                "primary": peer_url,
+            })),
         )
             .into_response();
     }
