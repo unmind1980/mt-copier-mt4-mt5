@@ -2039,8 +2039,8 @@ void SendSenderStatusReport(const int count)
             +CP_SEP_KV+"SID="+(string)g_nid
             +CP_SEP_KV+"HELD="+(string)count
             +CP_SEP_KV+"LOTS="+CopierFmtDouble(lotsSum,CP_DIGITS_LOTS)
-            +CP_SEP_KV+"EQ="+DoubleToString(eq,2)
-            +CP_SEP_KV+"BL="+DoubleToString(bal,2);
+            +CP_SEP_KV+"EQ="+CopierFmtDouble(eq,2)
+            +CP_SEP_KV+"BL="+CopierFmtDouble(bal,2);
 
    long rtt=g_peers.RttFor(g_hubPeerName);
    if(rtt<0) rtt=g_peers.RttFor("hub:primary");

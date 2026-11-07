@@ -2542,7 +2542,7 @@ void CmdStateSave()
       string mUid=g_manualClosed.GetUid(i);
       long mTicket=g_manualClosed.GetTicket(i);
       string mSid=g_manualClosed.GetSid(i);
-      if(StringLen(mUid)>0)
+      if(StringLen(mUid)>0 || mTicket>0)
          body+="\nMC="+mUid+"|"+(string)mTicket+"|"+mSid;
      }
    CopierIniWriteAll(CmdStatePath(),body);
@@ -2566,14 +2566,14 @@ void CmdStateLoad()
       if(CopierKvGet(line,"MC",v))
         {
          int sep=StringFind(v,"|");
-         if(sep>0)
+         if(sep>=0)
            {
             string uid=StringSubstr(v,0,sep);
             string rem=StringSubstr(v,sep+1);
             int sep2=StringFind(rem,"|");
             long ticket=0;
             string sid="";
-            if(sep2>0)
+            if(sep2>=0)
               {
                ticket=CopierParseLong(StringSubstr(rem,0,sep2));
                sid=StringSubstr(rem,sep2+1);
@@ -2582,7 +2582,8 @@ void CmdStateLoad()
               {
                ticket=CopierParseLong(rem);
               }
-            g_manualClosed.Add(uid,ticket,sid);
+            if(StringLen(uid)>0 || ticket>0)
+               g_manualClosed.Add(uid,ticket,sid);
            }
          else if(StringLen(v)>0)
            {
@@ -5711,7 +5712,7 @@ void ConvergeSender(const int si)
          // BUG-04: If operator manually closed this UID from WebUI/CMD, retry closing it until gone
          if(g_manualClosed.Has(d.uid))
            {
-            if(!CopierSymbolFeedStale(g_locScratch[li].sym,CP_SYM_STALL_MS))
+            if(!SymbolMarketClosed(g_locScratch[li].sym))
               {
                PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
                           g_locScratch[li].lots,g_locScratch[li].ticket,
@@ -6344,7 +6345,7 @@ void ConvergeSender(const int si)
      {
       bool gcChanged=false;
       string curSid=g_sid[si];
-      long gcNow=GetTickCount();
+      long gcNow=CopierNowMs();
       for(int m=g_manualClosed.Count()-1; m>=0; m--)
         {
          string mUid=g_manualClosed.GetUid(m);
@@ -7406,8 +7407,7 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
   {
    string uid="";
    if(!CopierKvGet(e.payload,"UID",uid)) return;
-   ForgetSenderPeakLots(uid);
-   StopsForget(uid);
+   // R47-07: Peak lots & stops cleanup deferred to ConvergeSender once action is queued
    int base=si*CP_MAX_POSITIONS;
    for(int i=0;i<g_desiredCount[si];i++)
      {
@@ -7416,6 +7416,8 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
       g_desired[base+g_desiredCount[si]-1].uid="";
       g_desired[base+g_desiredCount[si]-1].sym="";
       g_desired[base+g_desiredCount[si]-1].cmt="";
+      g_desired[base+g_desiredCount[si]-1].ticket=0;
+      g_desired[base+g_desiredCount[si]-1].initLots=0.0;
       g_desiredCount[si]--;
       g_convergeDirty[si]=true;
       return;
@@ -7643,6 +7645,10 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
            {
             StopsForget(g_desired[base+d].uid);
             g_desired[base+d].uid="";
+            g_desired[base+d].sym="";
+            g_desired[base+d].cmt="";
+            g_desired[base+d].ticket=0;
+            g_desired[base+d].initLots=0.0;
            }
         }
       g_stOvEpoch++;
@@ -9093,8 +9099,7 @@ void OnTimer()
      }
    bool doConverge=CopierConvergeDue(nowMs,g_lastConvergeSweepMs,dirtyAny,g_convergeSweepMs);
    bool drainDue=(g_qn>0 && CopierQueueMayDrain(nowMs,g_qRetryAtMs));
-   // Only scan positions on drainDue if we are NOT in an escalated backoff / market closed wait
-   bool didScan=(doConverge || (drainDue && g_qSpinPasses==0 && g_qBackoffMs<900000));
+   bool didScan=(doConverge || drainDue);
    if(doConverge) g_lastConvergeSweepMs=nowMs;
 
    if(didScan)
@@ -9201,6 +9206,33 @@ void OnTimer()
       for(int i=0;i<g_nSenders;i++) g_convergeDirty[i]=false;
       for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
      }
+   //--- Periodic check for market reopened on held queue actions (every 5s)
+   static long s_lastMktRecheckMs=0;
+   if(g_qRetryAtMs>0 && g_qn>0 && g_qBackoffMs>=900000 && now-s_lastMktRecheckMs>=5000)
+     {
+      s_lastMktRecheckMs=now;
+      bool hasOpenSym=false;
+      string wokeSym="";
+      for(int i=0;i<g_qn;i++)
+        {
+         int idx=g_qHead+i;
+         string s=g_q[idx].sym;
+         if(!SymbolMarketClosed(s))
+           {
+            hasOpenSym=true;
+            wokeSym=s;
+            break;
+           }
+        }
+      if(hasOpenSym)
+        {
+         g_log.Info("OnTimer: market reopened for "+wokeSym+"; waking action queue immediately");
+         g_qRetryAtMs=0;
+         g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+         g_qSpinPasses=0;
+        }
+     }
+
    //--- P1: the PERIODIC drain respects the backoff armed by a zero-progress
    //--- pass. The event-driven drains (a trade event arrived, a snapshot changed
    //--- the desired set) deliberately do not, and PushAction() clears the
@@ -9518,23 +9550,26 @@ void OnTimer()
 
 void OnTick()
   {
-   // Wake up immediately ONLY from market-closed suspension hold (15 min)
-   // upon receiving a fresh tick for the specific symbol that was held.
+   // Wake up immediately from market-closed suspension hold (15 min)
+   // upon receiving a fresh tick if any queued symbol is verified open.
    if(g_qRetryAtMs>0 && g_qn>0 && g_qBackoffMs>=900000)
      {
-      bool hasActionForThisSym=false;
+      bool hasOpenSym=false;
+      string wokeSym="";
       for(int i=0;i<g_qn;i++)
         {
-         int idx=(g_qHead+i)%CP_MAX_ACTIONS;
-         if(g_q[idx].sym==_Symbol)
+         int idx=g_qHead+i;
+         string s=g_q[idx].sym;
+         if(!SymbolMarketClosed(s))
            {
-            hasActionForThisSym=true;
+            hasOpenSym=true;
+            wokeSym=s;
             break;
            }
         }
-      if(hasActionForThisSym)
+      if(hasOpenSym)
         {
-         g_log.Info("OnTick: market reopened for "+_Symbol+"; waking action queue immediately");
+         g_log.Info("OnTick: market reopened for "+wokeSym+"; waking action queue immediately");
          g_qRetryAtMs=0;
          g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
          g_qSpinPasses=0;

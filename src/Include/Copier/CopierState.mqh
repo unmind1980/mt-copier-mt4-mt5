@@ -1643,7 +1643,7 @@ public:
             if(StringLen(uid)>0 && StringLen(m_uid[i])==0) m_uid[i]=uid;
             if(ticket>0 && m_ticket[i]==0)                 m_ticket[i]=ticket;
             if(StringLen(sid)>0) m_sid[i]=sid;
-            m_at[i]=GetTickCount();
+            m_at[i]=CopierNowMs();
             return;
            }
         }
@@ -1652,7 +1652,7 @@ public:
          m_uid[m_n]=uid;
          m_ticket[m_n]=ticket;
          m_sid[m_n]=sid;
-         m_at[m_n]=GetTickCount();
+         m_at[m_n]=CopierNowMs();
          m_n++;
         }
       else
@@ -1667,7 +1667,7 @@ public:
          m_uid[CP_MAX_MANUAL_CLOSED-1]=uid;
          m_ticket[CP_MAX_MANUAL_CLOSED-1]=ticket;
          m_sid[CP_MAX_MANUAL_CLOSED-1]=sid;
-         m_at[CP_MAX_MANUAL_CLOSED-1]=GetTickCount();
+         m_at[CP_MAX_MANUAL_CLOSED-1]=CopierNowMs();
         }
      }
 

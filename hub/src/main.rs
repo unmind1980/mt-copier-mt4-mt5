@@ -3103,6 +3103,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if let Some((role, acc)) = key.split_once(':') {
                         if role == "sender" {
                             s.mirrors.remove(acc);
+                            if acc.len() > 9 {
+                                s.mirrors.remove(&copier_nid(acc));
+                            }
                         }
                     }
                 }
@@ -3115,12 +3118,18 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if let Some((role, acc)) = key.split_once(':') {
                         if role == "sender" {
                             last_known_receipt.remove(acc);
+                            if acc.len() > 9 {
+                                last_known_receipt.remove(&copier_nid(acc));
+                            }
                         }
                     }
                 }
                 // H-07 & NL-04: Retain only senders currently registered instead of blunt clear()
                 if last_known_receipt.len() > 1024 {
-                    last_known_receipt.retain(|acc, _| s.reg.get(&format!("sender:{}", acc)).is_some());
+                    last_known_receipt.retain(|acc, _| {
+                        s.reg.get(&format!("sender:{}", acc)).is_some()
+                            || s.reg.nodes().into_iter().any(|n| n.role == crate::registry::Role::Sender && (n.acc == *acc || copier_nid(&n.acc) == *acc))
+                    });
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry
                 //--- can keep a receiver online on heartbeats alone while its

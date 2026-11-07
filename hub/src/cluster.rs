@@ -295,14 +295,16 @@ impl ClusterManager {
         self.peer_zmq = peer_zmq.clone();
         self.state.peer_url = peer_url;
         self.state.peer_zmq = peer_zmq;
+        self.peer_online = false;
+        self.last_peer_contact = None;
+        self.continuous_online_start = None;
+        self.peer_status = None;
+        self.last_sync_at = None;
+        self.last_sync_err = String::new();
         if is_empty {
-            self.peer_online = false;
             self.sync_status = "standalone".to_string();
-            self.last_sync_err = String::new();
-            self.continuous_online_start = None;
         } else {
             self.sync_status = "connecting".to_string();
-            self.last_sync_err = String::new();
         }
         self.save()
     }
@@ -434,6 +436,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             .build()
             .unwrap_or_default();
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
+        let mut force_full_cfg_resync = false;
+        let mut force_full_cmd_resync = false;
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -706,18 +710,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         );
                     }
 
-                    static FORCE_FULL_CFG_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                    static FORCE_FULL_CMD_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
                     let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
-                        || FORCE_FULL_CFG_RESYNC.swap(false, std::sync::atomic::Ordering::SeqCst);
+                        || std::mem::replace(&mut force_full_cfg_resync, false);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
                     // BUG-05 & H5: If command line count is equal but remote sequence is ahead,
                     // or if delta sync stalled on filtered lines, request from line 0 and replace_all to resolve deadlock.
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
                         || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq > local_max_cmd_seq)
-                        || FORCE_FULL_CMD_RESYNC.swap(false, std::sync::atomic::Ordering::SeqCst);
+                        || std::mem::replace(&mut force_full_cmd_resync, false);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
                     let sync_req = ClusterSyncRequest {
@@ -773,7 +774,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         Ok(applied) => {
                                             if applied == 0 && cfg_lines_count < remote_st.cfg_lines {
                                                 eprintln!("[hub] cluster sync: cfg delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cfg_delta_lines.len());
-                                                FORCE_FULL_CFG_RESYNC.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                force_full_cfg_resync = true;
                                             }
                                         }
                                         Err(e) => {
@@ -804,7 +805,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         Ok(applied) => {
                                             if applied == 0 && cmd_lines_count < remote_st.cmd_lines {
                                                 eprintln!("[hub] cluster sync: cmd delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cmd_delta_lines.len());
-                                                FORCE_FULL_CMD_RESYNC.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                force_full_cmd_resync = true;
                                             }
                                         }
                                         Err(e) => {
@@ -818,7 +819,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 // Apply full users content if updated (A86-08: propagate all errors)
                                 let mut reload_users = false;
                                 if let Some(u_content) = data.users_content {
-                                    let tmp = users_path.with_extension("json.tmp");
+                                    let tmp = users_path.with_extension(format!("json.{}.tmp", std::process::id()));
                                     match File::create(&tmp).and_then(|mut f| {
                                         f.write_all(u_content.as_bytes())?;
                                         f.sync_all()

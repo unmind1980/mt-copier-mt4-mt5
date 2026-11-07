@@ -138,7 +138,7 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
     );
     //--- temp + rename, the same shape the receiver's ini writer and the M9
     //--- user store use: a crash mid-write must not leave half a keypair.
-    let tmp = path.with_extension("keys.tmp");
+    let tmp = path.with_extension(format!("keys.{}.tmp", std::process::id()));
     std::fs::write(&tmp, &text).map_err(|e| format!("{}: {}", tmp.display(), e))?;
     #[cfg(unix)]
     {
@@ -177,7 +177,7 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
             }
         }
     }
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    crate::cluster::atomic_replace_file(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
 
     Ok((HubKeys { public, secret }, true))
 }
@@ -346,9 +346,9 @@ pub fn append_learned_key(path: &Path, z85: &str) -> Result<bool, String> {
             .map(|d| d.as_secs())
             .unwrap_or(0)
     ));
-    let tmp = path.with_extension("txt.tmp");
+    let tmp = path.with_extension(format!("txt.{}.tmp", std::process::id()));
     std::fs::write(&tmp, text).map_err(|e| format!("{}: {}", tmp.display(), e))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    crate::cluster::atomic_replace_file(&tmp, path).map_err(|e| format!("{}: {}", path.display(), e))?;
     Ok(true)
 }
 

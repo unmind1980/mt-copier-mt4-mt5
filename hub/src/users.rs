@@ -285,7 +285,7 @@ impl UserStore {
     /// Write via a temp file + rename, the same shape the receiver's ini
     /// writer uses: a crash mid-write must not leave half a user list.
     pub fn save(&self) -> Result<(), String> {
-        let tmp = self.path.with_extension("json.tmp");
+        let tmp = self.path.with_extension(format!("json.{}.tmp", std::process::id()));
         let text = serde_json::to_string_pretty(&self.users)
             .map_err(|e| format!("serialise users: {}", e))?;
         //--- fsync the temp before the rename. `write_all` returns once the
@@ -304,7 +304,8 @@ impl UserStore {
             f.sync_all()
                 .map_err(|e| format!("{} (fsync): {}", tmp.display(), e))?;
         }
-        std::fs::rename(&tmp, &self.path).map_err(|e| format!("{}: {}", self.path.display(), e))
+        crate::cluster::atomic_replace_file(&tmp, &self.path)
+            .map_err(|e| format!("{}: {}", self.path.display(), e))
     }
 
     pub fn users(&self) -> &[User] {

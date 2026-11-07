@@ -522,12 +522,31 @@ async fn node_detail(State(st): State<SharedState>, Path(id): Path<String>) -> J
                     let mut targets: Vec<String> = s
                         .mirrors
                         .iter()
-                        .filter(|(_, recvs)| recvs.contains_key(&n.acc))
+                        .filter(|(_, recvs)| {
+                            recvs.contains_key(&n.acc)
+                                || (n.acc.len() > 9 && recvs.contains_key(&crate::copier_nid(&n.acc)))
+                        })
                         .map(|(sender, _)| sender.clone())
                         .collect();
                     targets.sort();
                     let targets: Vec<Value> = targets.into_iter().map(Value::String).collect();
                     obj.insert("mirrors".to_string(), Value::Array(targets));
+                }
+
+                if n.role == Role::Sender {
+                    let recvs_opt = s.mirrors.get(&n.acc).or_else(|| {
+                        if n.acc.len() > 9 {
+                            s.mirrors.get(&crate::copier_nid(&n.acc))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(recvs) = recvs_opt {
+                        let mut targets: Vec<String> = recvs.keys().cloned().collect();
+                        targets.sort();
+                        let targets: Vec<Value> = targets.into_iter().map(Value::String).collect();
+                        obj.insert("mirrors".to_string(), Value::Array(targets));
+                    }
                 }
 
                 body

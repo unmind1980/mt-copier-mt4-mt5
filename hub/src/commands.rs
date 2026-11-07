@@ -1123,17 +1123,31 @@ impl Inner {
         //--- Keeping exactly one watermark row per node costs a line and makes the
         //--- sequence monotonic across restarts and across compact_journal().
         let mut watermark: HashMap<String, (String, u64)> = HashMap::new();
+        let mut latest_cfg: HashMap<String, (String, u64)> = HashMap::new();
         for (id, c) in self.commands.iter() {
-            let seqt = c.seq;
-            match watermark.get(&c.node) {
-                Some((_, best)) if *best >= seqt => {}
-                _ => {
-                    watermark.insert(c.node.clone(), (id.clone(), seqt));
+            if c.kind == KIND_CONFIG {
+                let ts = if c.ack_at > 0 { c.ack_at } else { c.ts };
+                match latest_cfg.get(&c.node) {
+                    Some((_, best_ts)) if *best_ts >= ts => {}
+                    _ => {
+                        latest_cfg.insert(c.node.clone(), (id.clone(), ts));
+                    }
+                }
+            } else {
+                let seqt = c.seq;
+                match watermark.get(&c.node) {
+                    Some((_, best)) if *best >= seqt => {}
+                    _ => {
+                        watermark.insert(c.node.clone(), (id.clone(), seqt));
+                    }
                 }
             }
         }
-        let keep_ids: std::collections::HashSet<String> =
+        let mut keep_ids: std::collections::HashSet<String> =
             watermark.values().map(|(id, _)| id.clone()).collect();
+        for (id, _) in latest_cfg.values() {
+            keep_ids.insert(id.clone());
+        }
 
         let before = self.commands.len();
         let now = now_secs;

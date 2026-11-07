@@ -36,8 +36,8 @@ REPO = os.path.dirname(HERE)
 HUB_BIN = "copier-hub.exe" if sys.platform == "win32" else "copier-hub"
 HUB = os.path.join(REPO, "hub", "target", "release", HUB_BIN)
 
-ZMQ_PORT = 6198
-HTTP_PORT = 6199
+ZMQ_PORT = 6204
+HTTP_PORT = 6205
 CHECKS = []
 
 

@@ -580,10 +580,19 @@ impl Registry {
         }
     }
 
-    /// BUG-02: Clear held items when node has no open positions
+    /// BUG-02 & BUG-CROSS-01: Clear held items when node has no open positions (supporting 10-digit NID fallback)
     pub fn clear_held_items(&mut self, role: &str, acc: &str) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
             e.held_items = Arc::new(Vec::new());
+            return;
+        }
+        if role == "sender" {
+            for node in self.nodes.values_mut() {
+                if node.role == Role::Sender && (node.acc == acc || crate::copier_nid(&node.acc) == acc) {
+                    node.held_items = Arc::new(Vec::new());
+                    break;
+                }
+            }
         }
     }
 
