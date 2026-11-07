@@ -2966,14 +2966,20 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- refusal - see CopierBackoff - so a standing condition (a broker
    //--- limit, an unsupported filling mode) backs off to hours instead of
    //--- being hammered every two seconds.
-   //--- CLOSE, TRIM, and DEDUP actions are risk-reducing exit operations. They must never
-   //--- be delayed by long backoff ladders (P1-01: capped at 1000ms max), protecting trading safety.
-   //--- H-04 & P1-01: Enforce BlockedCapped(1000) to eliminate 200/sec hammering while bounding retry delay to 1s.
+   //--- CLOSE, TRIM, and DEDUP actions are risk-reducing exit operations.
+   //--- They use BlockedExit() with a progressive 60s-capped ladder (1s -> 3s -> 10s -> 30s -> 60s max),
+   //--- protecting capital promptly without ever flooding the broker at 1 request/sec on persistent refusals.
    if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
      {
-      if(g_backoff.BlockedCapped(key,1000)) { g_pushReject="retry_backoff"; return false; }
+      if(g_backoff.BlockedExit(key)) { g_pushReject="retry_backoff"; return false; }
      }
-   else if(g_backoff.Blocked(key)) { g_pushReject="retry_backoff"; return false; }
+   else
+     {
+      //--- MODIFY actions lock backoff to the position ticket rather than the full key.
+      //--- Otherwise micro-price changes in trailing stops generate fresh keys and bypass backoff completely.
+      string boKey = (kind==CP_ACT_MODIFY && ticket!=0) ? (sname+":2:#t"+(string)ticket) : key;
+      if(g_backoff.Blocked(boKey)) { g_pushReject="retry_backoff"; return false; }
+     }
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) { g_pushReject="unsupported"; return false; }
@@ -3233,6 +3239,22 @@ void ExecuteQueue()
    int sweepCount=0;
    int asyncBatchCount=0;
    int mktClosedHeld=0;
+
+   //--- PRE-FLIGHT CHECK: Is trading permitted at this terminal/account?
+   //--- Protects against flood-penalties on read-only (investor) accounts or toggled AutoTrading.
+   bool tradeAllowed = (bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED);
+#ifndef __MQL5__
+   if(!IsTradeAllowed()) tradeAllowed = false;
+#else
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) tradeAllowed = false;
+#endif
+   if(!tradeAllowed)
+     {
+      if(g_once.ShouldEmit("trade_dis_global"))
+         g_log.Warn("Trading is disabled at this terminal (AutoTrading button is off, account is read-only / investor mode, or broker disabled trading). Holding all "+(string)g_qn+" queued action(s).");
+      CopierQueueNotePass(CopierNowMs(),g_qn,0,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses,false);
+      return;
+     }
 
    //--- N72-05 & P1-01: Global feed stall check BEFORE entering the queue loop.
    //--- If server clock is stalled, check if queue has risk-reducing actions (CLOSE/TRIM).
@@ -3732,6 +3754,11 @@ void ExecuteQueue()
          //--- rather than leaving a stale count to punish the next, unrelated
          //--- failure with an hours-long park it never earned.
          g_backoff.Clear(a.key);
+         if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
+           {
+            string sn=SenderLabel(a.senderIdx);
+            g_backoff.Clear(sn+":2:#t"+(string)a.ticket);
+           }
          //--- the sender ticket is logged too: in a many-to-one setup it
          //--- is how you tell which sender an order came from without
          //--- reading the order comment in the terminal
@@ -3772,14 +3799,12 @@ void ExecuteQueue()
         }
       else
         {
-         // Two-Pass Sweeper: record failed batch close action for immediate second-pass retry
-         // MQL-02: Do NOT record actions that failed due to disabled trading, closed market, or unsupported types
-         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && sweepCount<CP_MAX_ACTIONS)
+         // Two-Pass Sweeper: record failed batch close action ONLY for transient requotes / slippage (138, 10004, 10015)
+         // Systemic errors (off quotes, broker busy, disabled) are left to the progressive ladder to prevent request flooding.
+         bool isTransientRequote = (err==138 || err==10004 || err==10015);
+         if(isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && sweepCount<CP_MAX_ACTIONS && isTransientRequote)
            {
-            if(!CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err) && err!=-4 && err!=-5)
-              {
-               g_sweepFailed[sweepCount++]=a;
-              }
+            g_sweepFailed[sweepCount++]=a;
            }
 
          //--- Park this action briefly. A failed action is shifted off the
@@ -3864,11 +3889,12 @@ void ExecuteQueue()
             // BUG-01: Invalidate signature using exact 4-step probe hash to prevent freezing
             StopSigInvalidate(a.ticket);
            }
+         string sname=SenderLabel(a.senderIdx);
+         string boKey=(a.kind==CP_ACT_MODIFY && a.ticket!=0) ? (sname+":2:#t"+(string)a.ticket) : a.key;
          fails=1;
          if(CopierIsTradeDisabled(err))
            {
-            fails=1;
-            g_backoff.Park(a.key,CP_RETRY_BACKOFF_MS);
+            fails=g_backoff.Note(boKey);
            }
          //--- MARKET CLOSED. Not this order's fault and not the broker
          //--- refusing it - there is no market to refuse anything. Arm the
@@ -3898,24 +3924,26 @@ void ExecuteQueue()
             for(int ci=0;ci<StringLen(a.uid);ci++)
                jitter+=StringGetCharacter(a.uid,ci);
             jitter=(jitter%30000);              // spread over 30 seconds
-            g_backoff.Park(a.key,CP_MKTCLOSED_MS+jitter);
+            g_backoff.Park(boKey,CP_MKTCLOSED_MS+jitter);
            }
          else
            {
-            // P3-7: If this action is queued for immediate second pass, defer backoff escalation to Pass 2
-            bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
-                                   && !CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err) && err!=-4 && err!=-5);
+            // Transient requotes (138, 10004, 10015) in batch closes are retried immediately in Sweeper Pass 2
+            isTransientRequote = (err==138 || err==10004 || err==10015);
+            bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && isTransientRequote);
             if(!queuedForSweep)
-               fails=g_backoff.Note(a.key);
+               fails=g_backoff.Note(boKey);
             else
                fails=1;
            }
-         if(fails>=2 && g_onceFail.ShouldEmit("backoff|"+a.key))
+         if(fails>=2 && g_onceFail.ShouldEmit("backoff|"+boKey))
            {
-            long ms=CopierBackoffMs(fails);
+            bool isExit = (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP);
+            long ms=isExit ? CopierExitBackoffMs(fails) : CopierBackoffMs(fails);
+            string waitTxt=isExit ? (IntegerToString(ms/1000)+"s") : CopierBackoffText(fails);
             string why="refused "+((string)fails)+" time(s) running - "
                        +a.uid+" ("+a.sym+") parked for "
-                       +CopierBackoffText(fails)+". A repeat refusal is a"
+                       +waitTxt+". A repeat refusal is a"
                        +" standing condition, not a transient one; retrying"
                        +" fast is what gets an account throttled or blocked.";
             if(ms>=60*60*1000)
@@ -3965,7 +3993,7 @@ void ExecuteQueue()
                               +" backoff ladder is deliberately NOT climbed:"
                               +" switch AutoTrading on and the mirror opens"
                               +" within a couple of seconds)";
-         string sname=SenderLabel(a.senderIdx);
+         // sname already defined above
          if(g_onceFail.ShouldEmit("fail|"+sname+"|"
                                   +(string)a.kind+"|"+a.uid+"|"+(string)err))
             g_log.Warn("trade failed sender="+sname+" uid="+a.uid
@@ -4089,10 +4117,10 @@ void ExecuteQueue()
            }
          else
            {
-            // MQL-02: Protect disabled trading and closed market from climbing 24h backoff ladder in Pass 2
+            // MQL-02: Escalate backoff ladder on pass 2 failure; exit backoff is bounded at 60s max
             if(CopierIsTradeDisabled(serr))
               {
-               g_backoff.Park(sa.key,CP_RETRY_BACKOFF_MS);
+               g_backoff.Note(sa.key);
               }
             else if(CopierIsMarketClosed(serr))
               {
@@ -8843,24 +8871,35 @@ void OnTimer()
      }
 
    //--- Background retry for closeall / risk-close if queue was full during initial batch
-   //--- NH-01: Throttle to 1000ms interval to eliminate high-frequency spinning full-account position scans
+   //--- Step-ladder retry: 1s -> 3s -> 10s -> 30s to prevent constant 1s background churn while ensuring exit completion
    static long s_lastCloseAllRetryMs=0;
-   if((g_cmdCloseAllActive || g_riskCloseAllPending) && now-s_lastCloseAllRetryMs>=1000)
+   static int  s_closeAllPasses=0;
+   if(!g_cmdCloseAllActive && !g_riskCloseAllPending)
      {
-      s_lastCloseAllRetryMs=now;
-      int closeFailed=0, closeTotal=0;
-      int cn=CloseAllOurs("",closeFailed,closeTotal);
-      ExecuteQueue();
-      // BUG-03: Deactivate closeall/risk-close ONLY when all matching positions are verified closed on the account
-      if(closeTotal==0 && g_ourCount==0)
+      s_closeAllPasses=0;
+     }
+   else
+     {
+      long closeAllInterval = (s_closeAllPasses<=1) ? 1000 : ((s_closeAllPasses==2) ? 3000 : ((s_closeAllPasses==3) ? 10000 : 30000));
+      if(now-s_lastCloseAllRetryMs>=closeAllInterval)
         {
-         if(g_cmdCloseAllActive && StringLen(g_cmdCloseAllId)>0)
+         s_lastCloseAllRetryMs=now;
+         s_closeAllPasses++;
+         int closeFailed=0, closeTotal=0;
+         int cn=CloseAllOurs("",closeFailed,closeTotal);
+         ExecuteQueue();
+         // BUG-03: Deactivate closeall/risk-close ONLY when all matching positions are verified closed on the account
+         if(closeTotal==0 && g_ourCount==0)
            {
-            SendCfgAck("ID="+g_cmdCloseAllId+";OK=1;REV="+(string)g_cfgRev);
-            g_cmdCloseAllId="";
+            s_closeAllPasses=0;
+            if(g_cmdCloseAllActive && StringLen(g_cmdCloseAllId)>0)
+              {
+               SendCfgAck("ID="+g_cmdCloseAllId+";OK=1;REV="+(string)g_cfgRev);
+               g_cmdCloseAllId="";
+              }
+            g_cmdCloseAllActive=false;
+            g_riskCloseAllPending=false;
            }
-         g_cmdCloseAllActive=false;
-         g_riskCloseAllPending=false;
         }
      }
 
@@ -9451,12 +9490,25 @@ void OnTimer()
 
 void OnTick()
   {
-   // Wake up immediately from market-closed / escalated backoff upon receiving any new tick
+   // Wake up immediately from market-closed / escalated backoff upon receiving any new tick for our symbols
    if(g_qRetryAtMs>0 && g_qn>0)
      {
-      g_qRetryAtMs=0;
-      g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
-      g_qSpinPasses=0;
+      bool hasActionForThisSym=false;
+      for(int i=0;i<g_qn;i++)
+        {
+         int idx=(g_qHead+i)%CP_MAX_ACTIONS;
+         if(g_q[idx].sym==_Symbol || !SymbolMarketClosed(g_q[idx].sym))
+           {
+            hasActionForThisSym=true;
+            break;
+           }
+        }
+      if(hasActionForThisSym)
+        {
+         g_qRetryAtMs=0;
+         g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+         g_qSpinPasses=0;
+        }
      }
   }
 

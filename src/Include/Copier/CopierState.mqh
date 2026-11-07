@@ -1000,6 +1000,18 @@ long CopierBackoffMs(const int fails)
    return 24*60*60*1000;
   }
 
+//--- Exit operation (CLOSE/TRIM/DEDUP) backoff ladder.
+//--- Caps at 60s max to protect trading safety and exit opportunities,
+//--- while completely eliminating the 1-second hammering rate on persistent broker rejections.
+long CopierExitBackoffMs(const int fails)
+  {
+   if(fails<=1) return 1000;         // 1s
+   if(fails==2) return 3000;         // 3s
+   if(fails==3) return 10000;        // 10s
+   if(fails==4) return 30000;        // 30s
+   return 60000;                     // 60s (capped)
+  }
+
 //--- "900000" tells a reader nothing at 3am; "15m" does.
 string CopierBackoffText(const int fails)
   {
@@ -1187,6 +1199,18 @@ public:
       long now=CopierNowMs();
       if(now>=m_u[i]) return false;
       return (now-m_t[i]<capMs);
+     }
+
+   //--- Blocked for exit actions (CLOSE/TRIM/DEDUP) with a 60s-capped progressive ladder.
+   //--- Never parks for hours, but prevents high-frequency 1-second flooding when the broker rejects.
+   bool              BlockedExit(const string key)
+     {
+      int i=Find(key);
+      if(i<0) return false;
+      long now=CopierNowMs();
+      if(now>=m_u[i]) return false;
+      long exitWait=CopierExitBackoffMs(m_n[i]);
+      return (now-m_t[i]<exitWait);
      }
 
    int               Count(const string key)

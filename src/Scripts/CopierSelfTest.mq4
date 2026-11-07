@@ -3103,6 +3103,18 @@ void TestBackoff()
    for(int i=0;i<CP_BACKOFF_SLOTS+10;i++)
       bf.Note("temp_key_"+IntegerToString(i));
    Ok("backoff: long future-parked key is protected against eviction",bf.Blocked("critical_24h"));
+
+   //--- Exit backoff ladder assertions
+   Ok("backoff exit: step 1 is 1s",CopierExitBackoffMs(1)==1000);
+   Ok("backoff exit: step 2 is 3s",CopierExitBackoffMs(2)==3000);
+   Ok("backoff exit: step 3 is 10s",CopierExitBackoffMs(3)==10000);
+   Ok("backoff exit: step 4 is 30s",CopierExitBackoffMs(4)==30000);
+   Ok("backoff exit: step 5 is 60s (capped)",CopierExitBackoffMs(5)==60000);
+   Ok("backoff exit: step 10 is 60s (capped)",CopierExitBackoffMs(10)==60000);
+
+   CopierBackoff eb;
+   eb.Note("exit_key");
+   Ok("backoff exit: BlockedExit is true immediately after Note",eb.BlockedExit("exit_key"));
   }
 
 void TestR47R48Regressions()
