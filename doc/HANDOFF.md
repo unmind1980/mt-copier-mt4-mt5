@@ -2215,6 +2215,6 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - Rust 单测 **172/172**（新增 `test_ack_propagates_journal_error_and_keeps_the_command_pending`）。
   - `hub_cluster_test.py` 新增两条 Standby 只读 409 断言，**未执行**：端口 6380–6383 是空闲的，但 `hub/target/release/copier-hub.exe` 被在线的两个 Hub 进程占用，无法重建 release 二进制；等重启服务后再跑。
 
-- **上线记录（2026-11-07 11:00）**：`git push` 已推送；两个 Hub 以 **Windows 服务**方式启动（`MTCopierPrimary` / `MTCopierStandby`），新 release 二进制（10:22 构建）验证通过：`healthz` 200、6000/6001/6010/6011 全部监听、主备 `cmd_lines=1404 / seq=345 / users_hash` 一致、两侧各 2 个节点在线；`hub_cluster_test.py` **40/40 通过**（含两条 Standby 只读 409 断言）。**11:01 按操作员要求停回 Stopped**（"何时开着"由人掌握），停机会话干净收尾（`Service ... has stopped.` + 节点汇总，`audit.jsonl` 已落盘）。**注意两个服务的 StartType 仍是 Automatic —— 机器重启会自动拉起；要完全手工需先改成 Manual。** 四个终端的 EA 仍是重挂前的镜像，需逐个重挂（或重启终端）才会加载新 `.ex4/.ex5`。
+- **上线记录（2026-11-07 11:00）**：`git push` 已推送；两个 Hub 以 **Windows 服务**方式启动（`MTCopierPrimary` / `MTCopierStandby`），新 release 二进制（10:22 构建）验证通过：`healthz` 200、6000/6001/6010/6011 全部监听、主备 `cmd_lines=1404 / seq=345 / users_hash` 一致、两侧各 2 个节点在线；`hub_cluster_test.py` **40/40 通过**（含两条 Standby 只读 409 断言）。**11:01 按操作员要求停回 Stopped**（"何时开着"由人掌握），停机会话干净收尾（`Service ... has stopped.` + 节点汇总，`audit.jsonl` 已落盘）。**11:05 两个服务已用 `--service-uninstall primary|standby` 彻底卸载**：这台是测试机，不要开机自启。已核对无其他自启入口（无 `MTCopier*` 服务、无计划任务、无 Run 键、无启动项）。日常用 `tools/start_dual_hubs.bat` 手工拉起（两个控制台窗口，6000/6010 与 6001/6011，并会复用/生成 `cluster_token.txt`）。**注意：重新安装服务用 `install_services.bat`，且安装后 StartType 为 Automatic。** 四个终端的 EA 仍是重挂前的镜像，需逐个重挂（或重启终端）才会加载新 `.ex4/.ex5`。
 
 ---
