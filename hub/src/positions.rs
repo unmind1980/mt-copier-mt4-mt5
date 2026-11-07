@@ -485,7 +485,7 @@ fn parse_f64(b: &[u8]) -> f64 {
 /// Bytes as text for display. The wire is ASCII by construction, but a hostile
 /// peer is not, and nothing here may panic on it.
 fn latin1(b: &[u8]) -> String {
-    b.iter().map(|c| *c as char).collect()
+    crate::envelope::latin1(b)
 }
 
 #[cfg(test)]

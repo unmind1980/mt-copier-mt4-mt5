@@ -1033,6 +1033,11 @@ pub fn generate_csr_der(sign_key: &SigningKey, domain: &str) -> Result<Vec<u8>, 
                                         w.next().write_tagged_implicit(yasna::Tag::context(2), |w| {
                                             w.write_ia5_string(domain);
                                         });
+                                        if let Ok(std::net::IpAddr::V4(v4)) = domain.parse::<std::net::IpAddr>() {
+                                            w.next().write_tagged_implicit(yasna::Tag::context(7), |w| {
+                                                w.write_bytes(&v4.octets());
+                                            });
+                                        }
                                     });
                                 });
                                 w.next().write_bytes(&san_der);

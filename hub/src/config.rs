@@ -308,24 +308,17 @@ impl ConfigStore {
             }
             f.sync_all()?;
         }
+        let (current, count, torn) = load(std::path::Path::new(&tmp))?;
         {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
-        }
-        let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
-        // BUG-85-02 & A86-06: Ensure file handle is reopened and report error if reopen fails
-        let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-        {
-            let mut inner = self.inner.lock_or_recover();
+            crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
+            let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
             inner.file = Some(file);
+            inner.current = current;
+            inner.count = count;
+            inner.torn = torn;
         }
-        replace_res?;
-        // N73-03: Propagate load error instead of unwrap_or_default() wiping in-memory state
-        let (current, count, torn) = load(&self.path)?;
-        let mut inner = self.inner.lock_or_recover();
-        inner.current = current;
-        inner.count = count;
-        inner.torn = torn;
         Ok(lines.len())
     }
 

@@ -495,37 +495,31 @@ impl CommandStore {
             }
             f.sync_all()?;
         }
+        let (mut commands, seq, torn, line_count, max_seq) = load(std::path::Path::new(&tmp))?;
+        let now = unix_secs();
         {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
-        }
-        let replace_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
-        // BUG-85-02 & A86-06: Ensure file handle is reopened and report error if reopen fails
-        let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-        {
-            let mut inner = self.inner.lock_or_recover();
+            crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
+            let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
             inner.file = Some(file);
+            inner.commands = std::mem::take(&mut commands);
+            inner.prune_terminal(now, COMMAND_KEEP_SECS);
+            inner.seq = seq;
+            inner.torn = torn;
+            let pending_ids: Vec<String> = inner
+                .commands
+                .iter()
+                .filter(|(_, c)| c.state == STATE_PENDING)
+                .map(|(id, _)| id.clone())
+                .collect();
+            inner.in_flight.clear();
+            for id in pending_ids {
+                inner.in_flight.insert(id);
+            }
+            inner.line_count = line_count;
+            inner.max_seq = max_seq;
         }
-        replace_res?;
-        let (mut commands, seq, torn, line_count, max_seq) = load(&self.path)?;
-        let now = unix_secs();
-        let mut inner = self.inner.lock_or_recover();
-        inner.commands = std::mem::take(&mut commands);
-        inner.prune_terminal(now, COMMAND_KEEP_SECS);
-        inner.seq = seq;
-        inner.torn = torn;
-        let pending_ids: Vec<String> = inner
-            .commands
-            .iter()
-            .filter(|(_, c)| c.state == STATE_PENDING)
-            .map(|(id, _)| id.clone())
-            .collect();
-        inner.in_flight.clear();
-        for id in pending_ids {
-            inner.in_flight.insert(id);
-        }
-        inner.line_count = line_count;
-        inner.max_seq = max_seq;
         Ok(lines.len())
     }
 

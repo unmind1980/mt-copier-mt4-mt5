@@ -9056,6 +9056,17 @@ function refreshSslStatus(){
         else if(res.suggested_sslip_domain) $("ssl_input_domain").value = res.suggested_sslip_domain;
 
         if(cfg.email) $("ssl_input_email").value = cfg.email;
+        if(cfg.mode === "custom_domain"){
+          $("ssl_mode_custom").checked = true;
+        } else if(cfg.mode === "self_signed"){
+          $("ssl_mode_selfsigned").checked = true;
+        } else if(cfg.mode === "import"){
+          $("ssl_mode_import").checked = true;
+        } else if(cfg.mode === "auto"){
+          $("ssl_mode_auto").checked = true;
+        }
+        if(typeof cfg.enable_http_redirect === "boolean") $("ssl_chk_redirect").checked = cfg.enable_http_redirect;
+        if(typeof cfg.auto_renew === "boolean") $("ssl_chk_renew").checked = cfg.auto_renew;
         if(cfg.https_port === 443){
           $("ssl_port_443").checked = true;
           $("ssl_port_custom").checked = false;

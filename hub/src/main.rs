@@ -1241,7 +1241,7 @@ fn main() {
                 skip_next = false;
                 continue;
             }
-            if raw[i] == "--service-install" || raw[i] == "--workdir" {
+            if raw[i] == "--service-install" || raw[i] == "--workdir" || raw[i] == "--instance" {
                 skip_next = true;
                 continue;
             }
@@ -2897,16 +2897,16 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         }
 
                         if !skip_frame {
-                            let first_res = sock.send(topic, zmq::SNDMORE);
+                            let first_res = sock.send(topic, zmq::DONTWAIT | zmq::SNDMORE);
                             match first_res {
                                 Ok(()) => {
-                                    if let Err(e) = sock.send(payload, 0) {
+                                    if let Err(e) = sock.send(payload, zmq::DONTWAIT) {
                                         eprintln!(
                                             "[hub] WARN forward payload frame failed ({}): closing multipart frame with empty terminator",
                                             e
                                         );
                                         // P1-04: Safely close multipart message with empty frame so socket is not left in torn state
-                                        let _ = sock.send("", 0);
+                                        let _ = sock.send("", zmq::DONTWAIT);
                                     } else {
                                         st.note_forward(topic_str, &ty);
 

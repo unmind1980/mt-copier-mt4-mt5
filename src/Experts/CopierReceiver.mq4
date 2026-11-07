@@ -159,9 +159,9 @@ input bool   InpDedupDuplicates      = true;  // DedupDuplicates - remove a 2nd 
 bool         DedupDuplicates         = true;
 input int    InpStopsThrottleSeconds = 2;     // StopsThrottleSeconds - min gap between stop edits
 int          StopsThrottleSeconds    = 2;
-input int    InpMarketOpenDelayMinutes    = 5;     // MarketOpenDelayMinutes - open warmup delay (0=off, min)
+input int    InpMarketOpenDelayMinutes    = 5;     // OpenDelayMinutes - open warmup delay (0=off, min)
 int          MarketOpenDelayMinutes       = 5;
-input int    InpMarketOpenCloseMaxWaitSec = 120;   // MarketOpenCloseMaxWaitSec - max wait for spread on close (sec)
+input int    InpMarketOpenCloseMaxWaitSec = 120;   // CloseMaxWaitSec - max spread wait on close (sec)
 int          MarketOpenCloseMaxWaitSec    = 120;
 input double InpMaxSpreadMultiplier       = 2.5;   // MaxSpreadMultiplier - wide spread threshold multiplier
 double       MaxSpreadMultiplier          = 2.5;
@@ -1313,6 +1313,11 @@ void MapAdd(const int si,const string from,const string to)
 //--- "the mapping in the file" - which is the whole point of a runtime reload.
 void MapClear()
   {
+   for(int i=0;i<g_nMap;i++)
+     {
+      g_mapFrom[i]="";
+      g_mapTo[i]="";
+     }
    g_nMap=0;
   }
 
@@ -2971,13 +2976,14 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- protecting capital promptly without ever flooding the broker at 1 request/sec on persistent refusals.
    if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
      {
-      if(g_backoff.BlockedExit(key)) { g_pushReject="retry_backoff"; return false; }
+      // SenderIdx < 0 (manual/orphan close re-queues) are held and paced inside ExecuteQueue
+      if(si>=0 && g_backoff.BlockedExit(key)) { g_pushReject="retry_backoff"; return false; }
      }
    else
      {
       //--- MODIFY actions lock backoff to the position ticket rather than the full key.
       //--- Otherwise micro-price changes in trailing stops generate fresh keys and bypass backoff completely.
-      string boKey = (kind==CP_ACT_MODIFY && ticket!=0) ? (sname+":2:#t"+(string)ticket) : key;
+      string boKey = (kind==CP_ACT_MODIFY && ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)ticket) : key;
       if(g_backoff.Blocked(boKey)) { g_pushReject="retry_backoff"; return false; }
      }
    //--- and a longer park for something this platform cannot place at all,
@@ -3292,6 +3298,17 @@ void ExecuteQueue()
            {
             g_log.Error("action in queue for sender index "+(string)a.senderIdx+" out of bounds (nSenders="+(string)g_nSenders+"); dropping action "+a.uid);
             ShiftQueue();
+            continue;
+           }
+        }
+
+      // Paced execution for orphan / manual close actions waiting on backoff
+      if(a.senderIdx<0 && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP))
+        {
+         if(g_backoff.BlockedExit(a.key))
+           {
+            RotateQueue();
+            skipped++;
             continue;
            }
         }
@@ -3757,7 +3774,7 @@ void ExecuteQueue()
          if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
            {
             string sn=SenderLabel(a.senderIdx);
-            g_backoff.Clear(sn+":2:#t"+(string)a.ticket);
+            g_backoff.Clear(sn+":"+(string)CP_ACT_MODIFY+":#t"+(string)a.ticket);
            }
          //--- the sender ticket is logged too: in a many-to-one setup it
          //--- is how you tell which sender an order came from without
@@ -3890,11 +3907,12 @@ void ExecuteQueue()
             StopSigInvalidate(a.ticket);
            }
          string sname=SenderLabel(a.senderIdx);
-         string boKey=(a.kind==CP_ACT_MODIFY && a.ticket!=0) ? (sname+":2:#t"+(string)a.ticket) : a.key;
+         string boKey=(a.kind==CP_ACT_MODIFY && a.ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)a.ticket) : a.key;
          fails=1;
          if(CopierIsTradeDisabled(err))
            {
-            fails=g_backoff.Note(boKey);
+            fails=1;
+            g_backoff.Park(boKey,CP_RETRY_BACKOFF_MS);
            }
          //--- MARKET CLOSED. Not this order's fault and not the broker
          //--- refusing it - there is no market to refuse anything. Arm the
@@ -4117,10 +4135,10 @@ void ExecuteQueue()
            }
          else
            {
-            // MQL-02: Escalate backoff ladder on pass 2 failure; exit backoff is bounded at 60s max
+            // MQL-02: Protect disabled trading and closed market from climbing 24h backoff ladder in Pass 2
             if(CopierIsTradeDisabled(serr))
               {
-               g_backoff.Note(sa.key);
+               g_backoff.Park(sa.key,CP_RETRY_BACKOFF_MS);
               }
             else if(CopierIsMarketClosed(serr))
               {
@@ -5349,6 +5367,11 @@ void RefreshRisk()
       // Guarded by rOk so history fetch failures keep existing baseline instead of wiping to 0.
       bool rOk=false;
       double realized=CopierRealizedToday(dayStart,rOk);
+#ifndef __MQL5__
+      // BUG-07: In MT4, history sync is asynchronous after terminal startup.
+      // If total history is 0 and uptime is under 10s, treat as history not ready yet.
+      if(OrdersHistoryTotal()==0 && (CopierNowMs()-g_bootMs)<10000) rOk=false;
+#endif
       if(rOk)
         {
          double curBal=CopierAccountBalance();
@@ -6364,8 +6387,10 @@ void ConvergeSender(const int si)
          else
            {
             bool anySenderHolds=false;
+            bool allSendersReady=true;
             for(int s=0; s<g_nSenders; s++)
               {
+               if(!g_ready[s]) { allSendersReady=false; }
                int sbase=s*CP_MAX_POSITIONS;
                for(int d=0; d<g_desiredCount[s]; d++)
                  {
@@ -6373,7 +6398,7 @@ void ConvergeSender(const int si)
                  }
                if(anySenderHolds) break;
               }
-            if(!anySenderHolds)
+            if(!anySenderHolds && allSendersReady)
               {
                g_log.Info("ManualClosed GC: legacy UID "+mUid+" was closed by operator and no sender holds it. Removed from ignore table.");
                g_manualClosed.RemoveAt(m);
@@ -6520,6 +6545,8 @@ void HandleSnapshot(const int si,const CopierEnv &e)
       g_desired[base+i].uid="";
       g_desired[base+i].sym="";
       g_desired[base+i].cmt="";
+      g_desired[base+i].ticket=0;
+      g_desired[base+i].initLots=0.0;
      }
    g_desiredCount[si]=n;
    g_ready[si]=true;
@@ -8503,8 +8530,9 @@ void UpdatePanel()
    int peerShow=(nTotal>CP_PANEL_PEER_SHOW)?CP_PANEL_PEER_SHOW:nTotal;
    int peerMore=(nTotal>peerShow)?1:0;
    int riskRow=g_risk.AnyTripped()?1:0;
-   //--- N78-02: Base rows is strictly 9. Exactly matches lines rendered in UpdatePanel.
-   int rows=9+riskRow+peerShow+peerMore+orphanRows;
+   int queueRow=(g_qn>0)?1:0;
+   //--- N78-02: Base rows is 9 plus dynamic Queue line when queue > 0.
+   int rows=9+queueRow+riskRow+peerShow+peerMore+orphanRows;
    g_panel.Begin(rows);
 
    int r=0;
@@ -9490,14 +9518,15 @@ void OnTimer()
 
 void OnTick()
   {
-   // Wake up immediately from market-closed / escalated backoff upon receiving any new tick for our symbols
-   if(g_qRetryAtMs>0 && g_qn>0)
+   // Wake up immediately ONLY from market-closed suspension hold (15 min)
+   // upon receiving a fresh tick for the specific symbol that was held.
+   if(g_qRetryAtMs>0 && g_qn>0 && g_qBackoffMs>=900000)
      {
       bool hasActionForThisSym=false;
       for(int i=0;i<g_qn;i++)
         {
          int idx=(g_qHead+i)%CP_MAX_ACTIONS;
-         if(g_q[idx].sym==_Symbol || !SymbolMarketClosed(g_q[idx].sym))
+         if(g_q[idx].sym==_Symbol)
            {
             hasActionForThisSym=true;
             break;
@@ -9505,6 +9534,7 @@ void OnTick()
         }
       if(hasActionForThisSym)
         {
+         g_log.Info("OnTick: market reopened for "+_Symbol+"; waking action queue immediately");
          g_qRetryAtMs=0;
          g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
          g_qSpinPasses=0;
