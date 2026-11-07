@@ -8514,9 +8514,6 @@ void UpdatePanel()
                    +IntegerToString(g_mktHeld)+" mkt closed)"
                    +((waitTotal>0)?("   "+DoubleToString(waitLots,2)+" lots"):""),
                (waitTotal>0)?CP_PANEL_WARN:CP_PANEL_DIM);
-   g_panel.Row(r++,"Equity "+DoubleToString(CopierAccountEquity(),2)
-                   +"   Balance "+DoubleToString(CopierAccountBalance(),2),
-               CP_PANEL_TEXT);
 
    //--- P1: the queue's own state, and whether the periodic drain is backing
    //--- off. A queue that cannot drain is not an error - the market is shut - but
@@ -8540,6 +8537,10 @@ void UpdatePanel()
       g_panel.Row(r++,"Queue      "+IntegerToString(g_qn)+" action(s)"+qstatus,
                   spinning?CP_PANEL_WARN:CP_PANEL_TEXT);
      }
+
+   g_panel.Row(r++,"Equity "+DoubleToString(CopierAccountEquity(),2)
+                   +"   Balance "+DoubleToString(CopierAccountBalance(),2),
+               CP_PANEL_TEXT);
 
    //--- ORPHANS. Positions carrying this copier's own comment tag but sitting
    //--- under a magic no configured sender owns any more - what a reordered
