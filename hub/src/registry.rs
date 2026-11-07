@@ -104,6 +104,8 @@ pub struct Node {
     /// fact (brokers in another timezone), a CHANGE in the offset is a
     /// broken clock, and only the second is alertable.
     pub node_ts: Option<i64>,
+    pub node_gts: Option<i64>,
+    pub ts_frozen: bool,
     pub drift_secs: Option<i64>,
     #[allow(dead_code)]
     pub drift_prev_secs: Option<i64>,
@@ -424,11 +426,29 @@ impl Registry {
     /// false - the registry would log "named" instead of "registered",
     /// and a node the hub never heard REG from would be visible anyway.
     /// The hub learns who exists ONLY from REG/HBT2, as it always has.
+    #[allow(dead_code)]
     pub fn note_ts(&mut self, role: &str, acc: &str, node_ts: i64, hub_now: i64) {
+        self.note_clocks(role, acc, node_ts, 0, hub_now);
+    }
+
+    /// Record node clocks (TS broker server time, GTS operating system GMT/UTC time)
+    /// and track drift. If node reports GTS, drift is measured against GTS (NTP wall clock)
+    /// which does not halt when the market closes on weekends.
+    pub fn note_clocks(&mut self, role: &str, acc: &str, node_ts: i64, node_gts: i64, hub_now: i64) {
         if let Some(e) = self.nodes.get_mut(&key_of(role, acc)) {
             e.drift_prev_secs = e.drift_secs;
-            e.node_ts = Some(node_ts);
-            e.drift_secs = Some(node_ts - hub_now);
+            if node_ts > 0 {
+                if let Some(prev) = e.node_ts {
+                    e.ts_frozen = prev == node_ts;
+                }
+                e.node_ts = Some(node_ts);
+            }
+            if node_gts > 0 {
+                e.node_gts = Some(node_gts);
+                e.drift_secs = Some(node_gts - hub_now);
+            } else if node_ts > 0 {
+                e.drift_secs = Some(node_ts - hub_now);
+            }
         }
     }
 
@@ -635,6 +655,8 @@ impl Registry {
             regs: 0,
             hbts: 0,
             node_ts: None,
+            node_gts: None,
+            ts_frozen: false,
             drift_secs: None,
             drift_prev_secs: None,
             paused: false,

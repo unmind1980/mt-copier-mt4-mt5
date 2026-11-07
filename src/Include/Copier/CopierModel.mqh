@@ -256,6 +256,7 @@ double CopierRealizedToday(const long dayStart,bool &outOk)
           +HistoryDealGetDouble(t,DEAL_FEE);
      }
 #else
+   if(!IsConnected()) { outOk=false; return 0.0; }
    int total=OrdersHistoryTotal();
    for(int i=0;i<total;i++)
      {

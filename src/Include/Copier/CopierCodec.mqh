@@ -41,6 +41,10 @@ struct CopierEnv
    //--- is NOT comparable across hosts on its own - the receiver derives the
    //--- offset from the best case it has ever seen. See CopierPeers.mqh.
    long              ms;
+   //--- OS system clock in GMT/UTC (TimeGMT()).
+   //--- Broker server time `ts` stops advancing on market close (weekends/holidays)
+   //--- in MT4, causing false clock drift alerts vs Hub. `gts` tracks real UTC 24/7.
+   long              gts;
    string            type;
    string            payload;
   };
@@ -50,12 +54,15 @@ struct CopierEnv
 //=====================================================================
 string CopierEncodeEnv(const CopierEnv &e)
   {
+   long gts=e.gts;
+   if(gts<=0) gts=(long)TimeGMT();
    return "V="+(string)e.v
          +CP_SEP_FIELD+"SID="+e.sid
          +CP_SEP_FIELD+"SSID="+e.ssid
          +CP_SEP_FIELD+"SEQ="+(string)e.seq
          +CP_SEP_FIELD+"TS="+(string)e.ts
          +CP_SEP_FIELD+"MS="+(string)e.ms
+         +CP_SEP_FIELD+"GTS="+(string)gts
          +CP_SEP_FIELD+"T="+e.type
          +CP_SEP_FIELD+"P="+e.payload;
   }
@@ -73,7 +80,7 @@ int CopierDecodeEnv(const string msg,CopierEnv &e)
    e.payload=StringSubstr(msg,p+3); // StringLen("|P=") == 3
 
    // NM-07: Single-pass zero-allocation header scanner replaces StringSplit(parts[])
-   e.v=0; e.sid=""; e.ssid=""; e.seq=0; e.ts=0; e.ms=0; e.type="";
+   e.v=0; e.sid=""; e.ssid=""; e.seq=0; e.ts=0; e.ms=0; e.gts=0; e.type="";
    int start=0;
    while(start<p)
      {
@@ -91,6 +98,7 @@ int CopierDecodeEnv(const string msg,CopierEnv &e)
          else if(k=="TS")   e.ts=CopierParseLong(v);
          //--- 64-bit parse: tick count passes 2^31 after ~25 days of uptime
          else if(k=="MS")   e.ms=CopierParseLong(v);
+         else if(k=="GTS")  e.gts=CopierParseLong(v);
          else if(k=="T")    e.type=v;
         }
       start=nextSep+1;

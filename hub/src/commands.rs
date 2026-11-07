@@ -903,7 +903,6 @@ impl CommandStore {
     /// something the hub has no record of sending.
     pub fn ack(&self, id: &str, ok: bool, rev: u64, err: &str) -> bool {
         let mut inner = self.inner.lock_or_recover();
-        inner.in_flight.remove(id);
         //--- N-09: build the candidate state WITHOUT mutating, so the journal can
         //--- be written first. Every other writer in this module (issue_cfg /
         //--- issue_op / due_gated) already persists before committing; `ack` was
@@ -950,6 +949,8 @@ impl CommandStore {
             );
             return false;
         }
+        // BUG-03: Remove from in_flight only after successful journal persist
+        inner.in_flight.remove(id);
         inner.commands.insert(updated.id.clone(), updated);
         true
     }
@@ -1912,6 +1913,10 @@ mod tests {
             s.command(&c.id).unwrap().state,
             STATE_PENDING,
             "memory must still agree with the journal"
+        );
+        assert!(
+            s.inner.lock().unwrap().in_flight.contains(&c.id),
+            "in_flight must still contain command for retry ladder"
         );
 
         let _ = std::fs::remove_file(&p);

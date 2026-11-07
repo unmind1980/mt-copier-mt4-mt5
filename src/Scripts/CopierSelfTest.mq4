@@ -116,6 +116,7 @@ void TestEnvelope()
    Ok("envelope: session id",d.ssid=="a1b2c3");
    Ok("envelope: sequence",d.seq==42);
    Ok("envelope: timestamp",d.ts==1780000000);
+   Ok("envelope: gts present",d.gts>0);
    Ok("envelope: type",d.type==CP_T_OPEN);
    Ok("envelope: payload survives",d.payload==e.payload);
    Note("wire = "+wire);
@@ -713,7 +714,9 @@ void TestSizing()
    v=CopierComputeLots(0.5,CP_SIZE_MULTIPLIER,1.0,2.0,si,0,0,rej);
    Ok("sizing: symMultiplier 2.0x scales correctly",!rej && MathAbs(v-1.0)<0.0001);
 
-   Ok("sizing: lot digits",CopierLotDigits(0.01)==2);
+   Ok("sizing: lot digits 0.01",CopierLotDigits(0.01)==2);
+   Ok("sizing: lot digits 0.001",CopierLotDigits(0.001)==3);
+   Ok("sizing: lot digits 1e-8 crypto",CopierLotDigits(0.00000001)==8);
   }
 
 
@@ -3212,6 +3215,33 @@ void TestAuditRound110()
    OkDbl("initlots: first sight is the baseline",CopierNextInitLots(0.0,1.5),1.5,1e-9);
    OkDbl("initlots: a trim keeps the peak",CopierNextInitLots(2.0,0.5),2.0,1e-9);
    OkDbl("initlots: added volume raises the peak",CopierNextInitLots(1.0,1.5),1.5,1e-9);
+
+   //--- BUG-01 verification: permutation of UIDs across snapshots does not lose peak lots
+   CopierPos des[2];
+   des[0]=MakePos("AAAA1111",1,"EURUSD",CP_SIDE_BUY,1.0,1.08,0,0,0,100);
+   des[0].initLots=2.0; // previously trimmed from 2.0 to 1.0
+   des[1]=MakePos("BBBB2222",2,"GBPUSD",CP_SIDE_BUY,1.0,1.25,0,0,0,100);
+   des[1].initLots=1.0;
+
+   CopierUidIndex idx;
+   idx.Build(des,0,2);
+
+   // New snapshot arrives in reversed order: BBBB2222 at slot 0, AAAA1111 at slot 1
+   CopierPos scr[2];
+   scr[0]=MakePos("BBBB2222",2,"GBPUSD",CP_SIDE_BUY,1.0,1.25,0,0,0,100);
+   scr[1]=MakePos("AAAA1111",1,"EURUSD",CP_SIDE_BUY,1.0,1.08,0,0,0,100);
+
+   for(int si=0;si<2;si++)
+     {
+      double carry=0.0;
+      int r=idx.Find(des,scr[si].uid);
+      if(r>=0 && r<2) carry=des[r].initLots;
+      scr[si].initLots=CopierNextInitLots(carry,scr[si].lots);
+     }
+   for(int si=0;si<2;si++) des[si]=scr[si];
+
+   OkDbl("initlots: reversed order preserves BBBB initLots",des[0].initLots,1.0,1e-9);
+   OkDbl("initlots: reversed order preserves AAAA peak lots",des[1].initLots,2.0,1e-9);
   }
 
 void OnStart()

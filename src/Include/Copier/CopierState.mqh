@@ -187,6 +187,7 @@ public:
          m_p[i].pexpire=0;
          m_p[i].profit=0.0;
          m_p[i].swap=0.0;
+         m_p[i].initLots=0.0;
         }
       m_n=0;
       m_hint=0;
@@ -265,7 +266,6 @@ public:
       kindDiff =(m_p[i].kind!=cur.kind || m_p[i].ticket!=cur.ticket);
       ppriceDiff=(cur.kind==CP_ORD_PENDING && MathAbs(m_p[i].pprice-cur.pprice)>0.0000001);
       otherDiff=(MathAbs(m_p[i].openPx-cur.openPx)>0.0000001
-                || ppriceDiff
                 || MathAbs(m_p[i].pstop-cur.pstop)>0.0000001
                 || m_p[i].ptype!=cur.ptype
                 || m_p[i].pexpire!=cur.pexpire

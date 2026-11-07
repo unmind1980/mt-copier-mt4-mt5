@@ -250,6 +250,29 @@ pub fn drift_jumped(prev: Option<i64>, cur: i64, threshold: i64) -> bool {
     }
 }
 
+/// Returns true if the global forex/CFD markets are closed for the weekend.
+/// Weekend window: Friday 22:00:00 UTC through Sunday 21:00:00 UTC.
+/// During this window, broker clocks (MT4 TimeCurrent()) freeze at the Friday close,
+/// so drift vs Hub UTC increases by 1s every second.
+pub fn is_weekend_market_closed(now_secs: u64) -> bool {
+    // 1970-01-01 was Thursday (day 4).
+    let day = (now_secs / 86400 + 4) % 7;
+    let sod = now_secs % 86400;
+    // Friday (day 5) after 22:00:00 UTC (79200s)
+    if day == 5 && sod >= 79200 {
+        return true;
+    }
+    // Saturday (day 6) all day
+    if day == 6 {
+        return true;
+    }
+    // Sunday (day 0) before 21:00:00 UTC (75600s)
+    if day == 0 && sod < 75600 {
+        return true;
+    }
+    false
+}
+
 struct NodeAlertSnapshot {
     key: String,
     role_str: &'static str,
@@ -259,6 +282,8 @@ struct NodeAlertSnapshot {
     liveness: crate::registry::Liveness,
     drift_secs: Option<i64>,
     node_ts: Option<i64>,
+    node_gts: Option<i64>,
+    ts_frozen: bool,
     blocked: u32,
     risk: String,
 }
@@ -287,6 +312,8 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
             liveness: n.liveness(instant_now),
             drift_secs: n.drift_secs,
             node_ts: n.node_ts,
+            node_gts: n.node_gts,
+            ts_frozen: n.ts_frozen,
             blocked: n.blocked,
             risk: n.risk.clone(),
         })
@@ -349,7 +376,10 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         //--- a broken clock.
         if let Some(cur) = n.drift_secs {
             let prev = s.alerts.last_drift_secs.get(&n.key).copied();
-            if drift_jumped(prev, cur, DRIFT_ALERT_SECS) {
+            // If the node only reports broker server time (no GTS), suppress alerts
+            // during weekend market closure or when broker ticks are frozen (feed stall).
+            let suppress_broker_drift = n.node_gts.is_none() && (is_weekend_market_closed(now) || n.ts_frozen);
+            if !suppress_broker_drift && drift_jumped(prev, cur, DRIFT_ALERT_SECS) {
                 let a = Alert {
                     ts: now,
                     kind: "node.clock.drift",
@@ -360,6 +390,7 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
                         "was_secs": prev,
                         "changed_by_secs": prev.map(|p| (cur - p).abs()).unwrap_or(0),
                         "node_ts": n.node_ts,
+                        "node_gts": n.node_gts,
                     }),
                 };
                 if s.alerts.allow(a.kind, &n.key, now, silence::CLOCK_DRIFT) {
@@ -549,6 +580,18 @@ mod tests {
         assert!(!drift_jumped(Some(-10800), -10799, 300));
         // Exactly at the threshold fires (>=).
         assert!(drift_jumped(Some(0), 300, 300));
+    }
+
+    #[test]
+    fn weekend_market_closed_suppresses_broker_clock_drift() {
+        // 2026-11-07 05:54:20 UTC is a Saturday (day 6)
+        // 2026-11-07 00:00:00 UTC was 1794009600
+        let sat_time: u64 = 1794009600 + 5 * 3600 + 54 * 60 + 20;
+        assert!(is_weekend_market_closed(sat_time), "Saturday must be recognised as market closed");
+
+        // Wednesday 12:00:00 UTC (day 3) -> 1793774400
+        let wed_time: u64 = 1793774400;
+        assert!(!is_weekend_market_closed(wed_time), "Wednesday must not be market closed");
     }
 
     #[test]

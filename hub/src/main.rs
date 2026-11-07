@@ -2204,6 +2204,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 //--- could ever fire.
                                 let node_ts: i64 =
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
+                                let node_gts: i64 =
+                                    envelope_hdr(&payload, "GTS").parse().unwrap_or(0);
                                 if ty == "REG" {
                                     // Phase 4: Send T=TOPOLOGY to node on registration
                                     let (is_prim, cur_epoch, cur_role, dynamic_peer_zmq) = {
@@ -2423,9 +2425,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 //--- exists (REG created it, or HBT2 implies
                                 //--- it registered earlier). Baseline on the
                                 //--- first observation, jump-detect ever after.
-                                if node_ts > 0 {
+                                if node_ts > 0 || node_gts > 0 {
                                     let mut s = shared.lock_or_recover();
-                                    s.reg.note_ts(&role, &acc, node_ts, unix_secs() as i64);
+                                    s.reg.note_clocks(&role, &acc, node_ts, node_gts, unix_secs() as i64);
                                 }
                                 //--- M5b on the dashboard: the node's own
                                 //--- hub-pause report (PAUSED= on REG/HBT2).

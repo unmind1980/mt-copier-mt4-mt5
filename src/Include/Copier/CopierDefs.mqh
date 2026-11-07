@@ -1054,6 +1054,7 @@ string CopierFmtDouble(const double v,const int digits)
 #ifndef CP_DIGITS_LOTS
 #define CP_DIGITS_LOTS 8
 #endif
+#define CP_LOT_EPS     0.000000001
 
 //--- N72-01: Structure-level lot encodability predicate.
 //--- Directly queries CopierFmtDouble to guarantee that any lot passing this check

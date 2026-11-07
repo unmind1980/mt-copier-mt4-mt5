@@ -836,10 +836,16 @@ async fn handle_socket(
                             break;
                         }
                     }
-                    // A slow client missed some. It is about to be sent the
-                    // current state anyway, so a lag is not an error here -
-                    // it is the reason this design is fine.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    // BUG-08: A slow client missed some broadcast frames. Because beat.tick
+                    // now sends lightweight Ping frames rather than full snapshots, actively
+                    // resend a fresh snapshot to the lagged client so UI doesn't show stale state.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let snap = snapshot_text(&st);
+                        if socket.send(Message::Text(snap)).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -1486,6 +1492,23 @@ async fn users_list(
     Json(json!({ "users": list, "sessions": session_count })).into_response()
 }
 
+// BUG-09: Standardize Standby 409 conflict responses to include `primary` URL and `detail` guide
+pub(crate) fn standby_readonly_conflict(peer_url: &str, action: &str) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let hint = if peer_url.is_empty() {
+        "Perform modifications against the Primary Hub.".to_string()
+    } else {
+        format!("Perform modifications against the Primary at {}.", peer_url)
+    };
+    (
+        axum::http::StatusCode::CONFLICT,
+        Json(json!({
+            "error": format!("Standby node is read-only. {} is only allowed on Primary Hub.", action),
+            "detail": hint,
+            "primary": peer_url,
+        })),
+    )
+}
+
 async fn users_upsert(
     axum::extract::Extension(sess): axum::extract::Extension<Session>,
     axum::extract::State(st): axum::extract::State<SharedState>,
@@ -1495,12 +1518,12 @@ async fn users_upsert(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    if !st.lock_or_recover().cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
     let role = match UserRole::parse(&b.role) {
         Some(r) => r,
@@ -1601,12 +1624,12 @@ async fn users_delete(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    if !st.lock_or_recover().cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
     let removed = {
         let mut s = st.lock_or_recover();
@@ -1653,12 +1676,12 @@ async fn change_password(
     Json(b): Json<PasswordBody>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if !st.lock_or_recover().cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
     if b.new.chars().count() < 8 {
         return (
@@ -2221,21 +2244,18 @@ async fn put_node_config(
     //--- "who pushed this config", which is the first question anyone asks
     //--- after an incident - and M9 exists precisely so there IS a person.
     let actor = sess.user_id.clone();
-    let (writes, is_primary, node_rev) = {
+    let (writes, is_primary, peer_url, node_rev) = {
         let s = st.lock_or_recover();
         (
             s.writes,
             s.cluster.is_primary(),
+            s.cluster.peer_url.clone(),
             s.node_rev.get(&id).copied().unwrap_or(0),
         )
     };
 
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
 
     //--- The gate. Off by default, and the refusal says why rather than just
@@ -2377,16 +2397,12 @@ async fn rollback_node_config(
         )
             .into_response();
     }
-    let (writes, is_primary) = {
+    let (writes, is_primary, peer_url) = {
         let s = st.lock_or_recover();
-        (s.writes, s.cluster.is_primary())
+        (s.writes, s.cluster.is_primary(), s.cluster.peer_url.clone())
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
     if !writes {
         return (
@@ -3131,12 +3147,12 @@ async fn notifications_upsert(
     if sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
     }
-    if !st.lock_or_recover().cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
 
     let id = if b.id.trim().is_empty() {
@@ -3268,12 +3284,12 @@ async fn notifications_delete(
     if sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
     }
-    if !st.lock_or_recover().cluster.is_primary() {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Modification is only allowed on Primary Hub." })),
-        )
-            .into_response();
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
 
     let notif_store = {
@@ -4128,16 +4144,12 @@ async fn tls_configure(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (is_primary, tls_mgr, audit) = {
+    let (is_primary, peer_url, tls_mgr, audit) = {
         let s = st.lock_or_recover();
-        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+        (s.cluster.is_primary(), s.cluster.peer_url.clone(), Arc::clone(&s.tls), Arc::clone(&s.audit))
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only. Configuration is only allowed on Primary Hub." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "Configuration").into_response();
     }
 
     // RUST-OPT-02: Only detect public IP on-demand when Auto mode is selected and domain is not explicitly provided
@@ -4261,16 +4273,12 @@ async fn tls_import(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (is_primary, tls_mgr, audit) = {
+    let (is_primary, peer_url, tls_mgr, audit) = {
         let s = st.lock_or_recover();
-        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+        (s.cluster.is_primary(), s.cluster.peer_url.clone(), Arc::clone(&s.tls), Arc::clone(&s.audit))
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "TLS import").into_response();
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
@@ -4298,16 +4306,12 @@ async fn tls_self_signed(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (is_primary, tls_mgr, audit) = {
+    let (is_primary, peer_url, tls_mgr, audit) = {
         let s = st.lock_or_recover();
-        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+        (s.cluster.is_primary(), s.cluster.peer_url.clone(), Arc::clone(&s.tls), Arc::clone(&s.audit))
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "TLS import").into_response();
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
@@ -4334,16 +4338,12 @@ async fn tls_disable(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (is_primary, tls_mgr, audit) = {
+    let (is_primary, peer_url, tls_mgr, audit) = {
         let s = st.lock_or_recover();
-        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+        (s.cluster.is_primary(), s.cluster.peer_url.clone(), Arc::clone(&s.tls), Arc::clone(&s.audit))
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "TLS import").into_response();
     }
 
     {
@@ -4377,16 +4377,12 @@ async fn tls_renew(
     if sess.role < UserRole::Admin {
         return deny(&st, &sess, "admin");
     }
-    let (is_primary, tls_mgr, audit) = {
+    let (is_primary, peer_url, tls_mgr, audit) = {
         let s = st.lock_or_recover();
-        (s.cluster.is_primary(), Arc::clone(&s.tls), Arc::clone(&s.audit))
+        (s.cluster.is_primary(), s.cluster.peer_url.clone(), Arc::clone(&s.tls), Arc::clone(&s.audit))
     };
     if !is_primary {
-        return (
-            axum::http::StatusCode::CONFLICT,
-            Json(json!({ "error": "Standby node is read-only." })),
-        )
-            .into_response();
+        return standby_readonly_conflict(&peer_url, "TLS import").into_response();
     }
 
     let (domain, email, staging) = {

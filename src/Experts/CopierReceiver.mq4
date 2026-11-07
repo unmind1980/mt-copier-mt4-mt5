@@ -3306,7 +3306,7 @@ void ExecuteQueue()
                     {
                      // Check target lots: if sender trimmed volume while queued, drop stale oversized OPEN
                      double targetLots = ComputeTargetLotsForMirror(asi, g_desired[base+d], a.sym);
-                     if(targetLots > 0.0 && a.lots > targetLots + 0.0001)
+                     if(targetLots > 0.0 && a.lots > targetLots + CP_LOT_EPS)
                        {
                         if(g_once.ShouldEmit("draintrimmed|"+g_sid[asi]+"|"+a.uid))
                            g_log.Info("queued open "+a.uid+" "+a.sym+" dropped: sender trimmed volume while queued ("
@@ -5184,6 +5184,11 @@ void RefreshRisk()
          bool rOk=false;
          double realized=CopierRealizedToday(dayStart,rOk);
          double curBal=CopierAccountBalance();
+#ifndef __MQL5__
+         // BUG-07: In MT4, history sync is asynchronous after terminal startup.
+         // If total history is 0 and uptime is under 10s, treat as history not ready yet.
+         if(OrdersHistoryTotal()==0 && (CopierNowMs()-g_bootMs)<10000) rOk=false;
+#endif
          if(rOk)
            {
             double trueStartBal=curBal-realized;
@@ -5586,7 +5591,7 @@ void ConvergeSender(const int si)
          double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
          if(!hasQueued)
            {
-            if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+0.0001)
+            if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+CP_LOT_EPS)
                g_seen.ForgetUidActions(g_sid[si],d.uid);
             else
                g_seen.ForgetPrefix(g_sid[si]+":"+(string)CP_ACT_OPEN+":"+d.uid);
@@ -6240,21 +6245,39 @@ void ConvergeSender(const int si)
            }
          //--- direct O(D) GC: if entry belongs to this sender, check this sender's
          //--- desired set only. Entries attributed to ANOTHER sender are left alone.
-         if(StringLen(mSid)>0 && mSid!=curSid) continue;
-
-         bool senderStillHolds=false;
-         for(int d=0; d<g_desiredCount[si]; d++)
+         if(StringLen(mSid)>0)
            {
-            if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
-           }
-         if(!senderStillHolds)
-           {
-            if(StringLen(mSid)>0)
+            if(mSid!=curSid) continue;
+            bool senderStillHolds=false;
+            for(int d=0; d<g_desiredCount[si]; d++)
+              {
+               if(g_desired[base+d].uid==mUid) { senderStillHolds=true; break; }
+              }
+            if(!senderStillHolds)
+              {
                g_log.Info("ManualClosed GC: UID "+mUid+" ("+mSid+") was closed by operator and sender no longer holds it. Removed from ignore table.");
-            else
+               g_manualClosed.RemoveAt(m);
+               gcChanged=true;
+              }
+           }
+         else
+           {
+            bool anySenderHolds=false;
+            for(int s=0; s<g_nSenders; s++)
+              {
+               int sbase=s*CP_MAX_POSITIONS;
+               for(int d=0; d<g_desiredCount[s]; d++)
+                 {
+                  if(g_desired[sbase+d].uid==mUid) { anySenderHolds=true; break; }
+                 }
+               if(anySenderHolds) break;
+              }
+            if(!anySenderHolds)
+              {
                g_log.Info("ManualClosed GC: legacy UID "+mUid+" was closed by operator and no sender holds it. Removed from ignore table.");
-            g_manualClosed.RemoveAt(m);
-            gcChanged=true;
+               g_manualClosed.RemoveAt(m);
+               gcChanged=true;
+              }
            }
         }
       if(gcChanged) CmdStateSave(); // N83-02: Synchronize disk state when manual closed entries are GC'd
@@ -6359,6 +6382,9 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //--- Building the index over the PREVIOUS slice costs one pass per snapshot
    //--- (the same O(n) a hash build already costs elsewhere) and makes the lookup
    //--- O(1) instead of a scan per record.
+   //--- BUG-01 Fix: build index of existing g_desired rows before mutating.
+   //--- Phase 1: compute carry & initLots into g_scratch without touching g_desired.
+   //--- In-place mutation during lookup would corrupt the array that g_desIdx probes.
    if(prevCount>0) g_desIdx.Build(g_desired,base,prevCount);
    for(int i=0;i<n;i++)
      {
@@ -6368,7 +6394,6 @@ void HandleSnapshot(const int si,const CopierEnv &e)
          int prevRow=g_desIdx.Find(g_desired,g_scratch[i].uid);
          if(prevRow>=base && prevRow<base+prevCount) carry=g_desired[prevRow].initLots;
         }
-      g_desired[base+i]=g_scratch[i];
       //--- Two tiers on purpose:
       //---   the ROW is the primary source (per-sender capacity, cannot be
       //---   evicted while it is live), and
@@ -6378,7 +6403,12 @@ void HandleSnapshot(const int si,const CopierEnv &e)
       //---   what keeps a position that was already trimmed before the restart
       //---   from being re-scaled to its original size.
       if(carry<=0.0) carry=GetOrUpdateSenderPeakLots(g_scratch[i].uid,g_scratch[i].lots);
-      g_desired[base+i].initLots=CopierNextInitLots(carry,g_scratch[i].lots);
+      g_scratch[i].initLots=CopierNextInitLots(carry,g_scratch[i].lots);
+     }
+   //--- Phase 2: apply new records to g_desired now that index lookups are complete
+   for(int i=0;i<n;i++)
+     {
+      g_desired[base+i]=g_scratch[i];
      }
    //--- C4: release the rows this snapshot shrank past. CopierPos carries three
    //--- strings; leaving them behind kept up to 2048 UID/symbol/comment references
@@ -6414,6 +6444,8 @@ void StopsForget(const string uid)
             g_stLastMs[i]=g_stLastMs[last];
            }
          g_stCount--;
+         g_stUid[g_stCount]="";
+         g_stHasOv[g_stCount]=false;
          g_stOvEpoch++;                 // the effective override set changed
          StopsRebuildUidIndex();
          return;
@@ -7208,6 +7240,7 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvOpn[idx]=p.openPx;
    g_stOvPprice[idx]=p.pprice; // BUG-02 & N70-03: Protected in override table only, preventing self-cancelling ppriceCaughtUp
    g_stOvEpoch++;                          // invalidates the stop-geometry cache
+   g_convergeDirty[si]=true;
   }
 
 void HandleOpenEvent(const int si,const CopierEnv &e)
@@ -7224,6 +7257,7 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
       if(il<=0.0) il=g_desired[base+i].lots;
       p.initLots=CopierNextInitLots(il,p.lots);
       g_desired[base+i]=p;
+      g_convergeDirty[si]=true;
       return;
      }
    if(g_desiredCount[si]>=CP_MAX_POSITIONS)
@@ -7234,8 +7268,10 @@ void HandleOpenEvent(const int si,const CopierEnv &e)
       return;
      }
    p.initLots=(p.lots>0.0)?p.lots:0.0;    // N-03: first sight is the baseline
+   GetOrUpdateSenderPeakLots(p.uid,p.initLots);
    g_desired[base+g_desiredCount[si]]=p;
    g_desiredCount[si]++;
+   g_convergeDirty[si]=true;
   }
 
 void HandleCloseEvent(const int si,const CopierEnv &e)
@@ -7250,7 +7286,10 @@ void HandleCloseEvent(const int si,const CopierEnv &e)
       if(g_desired[base+i].uid!=uid) continue;
       for(int k=i;k<g_desiredCount[si]-1;k++) g_desired[base+k]=g_desired[base+k+1];
       g_desired[base+g_desiredCount[si]-1].uid="";
+      g_desired[base+g_desiredCount[si]-1].sym="";
+      g_desired[base+g_desiredCount[si]-1].cmt="";
       g_desiredCount[si]--;
+      g_convergeDirty[si]=true;
       return;
      }
   }

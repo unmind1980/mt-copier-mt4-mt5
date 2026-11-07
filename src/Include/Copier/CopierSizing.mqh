@@ -114,12 +114,14 @@ string CopierLotModeText(const int mode)
 //--- how many decimals does the broker's volume step need?
 int CopierLotDigits(const double step)
   {
+   if(step<=0.0 || !MathIsValidNumber(step)) return 2;
    for(int d=0; d<=8; d++)
      {
       double scaled=step*MathPow(10,d);
-      if(MathAbs(scaled-MathRound(scaled))<0.0000001) return d;
+      double rounded=MathRound(scaled);
+      if(rounded>=1.0 && MathAbs(scaled-rounded)<0.000000001) return d;
      }
-   return 2;
+   return 8;
   }
 
 //--- snap DOWN to LOTSTEP and clamp to [0, MAXLOT].

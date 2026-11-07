@@ -305,6 +305,8 @@ public:
       if(!InitContext()) return false;
 
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
+      m_nSubPrefixes=0;
+      for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       Hardening(m_sub);
@@ -488,6 +490,7 @@ public:
          m_subSent[m_nSubPrefixes]=0;
          m_nSubPrefixes++;
         }
+      if(!found && slot<0) return false;
       if(!m_sub.send("\x01"+prefix,true)) return false;
       //--- count only frames that reached the socket: a failed send is a
       //--- subscription the hub never saw, and must not need an 0x00 later
