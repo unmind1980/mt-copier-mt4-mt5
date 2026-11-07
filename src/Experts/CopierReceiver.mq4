@@ -159,6 +159,12 @@ input bool   InpDedupDuplicates      = true;  // DedupDuplicates - remove a 2nd 
 bool         DedupDuplicates         = true;
 input int    InpStopsThrottleSeconds = 2;     // StopsThrottleSeconds - min gap between stop edits
 int          StopsThrottleSeconds    = 2;
+input int    InpMarketOpenDelayMinutes    = 5;     // MarketOpenDelayMinutes - open warmup delay (0=off, min)
+int          MarketOpenDelayMinutes       = 5;
+input int    InpMarketOpenCloseMaxWaitSec = 120;   // MarketOpenCloseMaxWaitSec - max wait for spread on close (sec)
+int          MarketOpenCloseMaxWaitSec    = 120;
+input double InpMaxSpreadMultiplier       = 2.5;   // MaxSpreadMultiplier - wide spread threshold multiplier
+double       MaxSpreadMultiplier          = 2.5;
 
 #ifdef __MQL5__
 input group "--- Filters & Direction ---"
@@ -1169,6 +1175,79 @@ void ForgetSenderPeakLots(const string uid)
 CopierSeenRing  g_mktClosed;
 #define CP_MKTCLOSED_MS 60000
 
+//=====================================================================
+// Unified authoritative Market Closed check for all actions (OPEN/CLOSE/MODIFY)
+//=====================================================================
+bool SymbolMarketClosed(const string sym)
+  {
+   if(StringLen(sym)==0) return false;
+   // 1. Broker explicit rejection cache (MT4 132 / MT5 10018)
+   if(g_mktClosed.Has(sym)) return true;
+   // 2. Official trading session schedule (crypto 24/7 is open, forex weekend is closed)
+   if(!SymInSessionCached(sym)) return true;
+   // 3. Feed freshness: quote stream halted for > 60s
+   if(SymStaleCached(sym)) return true;
+   return false;
+  }
+
+#define CP_SPREAD_TRACK_SLOTS 256
+string g_spreadSym[CP_SPREAD_TRACK_SLOTS];
+double g_spreadMin[CP_SPREAD_TRACK_SLOTS];
+
+double GetSymbolMinSpread(const string sym)
+  {
+   if(StringLen(sym)==0) return 0.0;
+   uint h=(uint)(CopierHash32(sym)&(CP_SPREAD_TRACK_SLOTS-1));
+   for(int i=0;i<CP_SPREAD_TRACK_SLOTS;i++)
+     {
+      int s=(int)((h+i)&(CP_SPREAD_TRACK_SLOTS-1));
+      if(g_spreadSym[s]==sym) return g_spreadMin[s];
+      if(StringLen(g_spreadSym[s])==0) break;
+     }
+   return 0.0;
+  }
+
+void TrackSymbolSpread(const string sym,const double curSpread)
+  {
+   if(StringLen(sym)==0 || curSpread<=0.0) return;
+   uint h=(uint)(CopierHash32(sym)&(CP_SPREAD_TRACK_SLOTS-1));
+   for(int i=0;i<CP_SPREAD_TRACK_SLOTS;i++)
+     {
+      int s=(int)((h+i)&(CP_SPREAD_TRACK_SLOTS-1));
+      if(g_spreadSym[s]==sym)
+        {
+         if(g_spreadMin[s]<=0.0 || curSpread<g_spreadMin[s]) g_spreadMin[s]=curSpread;
+         return;
+        }
+      if(StringLen(g_spreadSym[s])==0)
+        {
+         g_spreadSym[s]=sym;
+         g_spreadMin[s]=curSpread;
+         return;
+        }
+     }
+  }
+
+bool SymbolInOpenWarmup(const string sym,int &elapsedSecs)
+  {
+   elapsedSecs=0;
+   if(MarketOpenDelayMinutes<=0) return false;
+   int secs=CopierSecondsSinceSessionOpen(sym);
+   if(secs<0 || secs>=MarketOpenDelayMinutes*60) return false;
+
+   long now=CopierServerTime();
+   MqlDateTime dt;
+   TimeToStruct((datetime)now,dt);
+   int prevDow=(dt.day_of_week==0)?6:(dt.day_of_week-1);
+   datetime f=0,t=0;
+   bool prevHadSession=SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,0,f,t);
+   bool continuous247=(prevHadSession && f==0 && (t%86400==0 || t>=86400));
+   if(continuous247) return false;
+
+   elapsedSecs=secs;
+   return true;
+  }
+
 CopierSeenRing  g_everOpened;// UIDs this receiver has ever opened, so a
                              // re-open can be reported as a RESTORE rather
                              // than looking like a fresh entry
@@ -1408,6 +1487,9 @@ void ResetRuntimeInputsFromInputs()
    DeviationPoints                  = MathMax(0, InpDeviationPoints);
    EmergencySLPips                  = InpEmergencySLPips;
    EmergencyTPPips                  = InpEmergencyTPPips;
+   MarketOpenDelayMinutes           = MathMax(0, InpMarketOpenDelayMinutes);
+   MarketOpenCloseMaxWaitSec        = MathMax(0, InpMarketOpenCloseMaxWaitSec);
+   MaxSpreadMultiplier             = MathMax(1.0, InpMaxSpreadMultiplier);
    ReopenClosedMirrors              = InpReopenClosedMirrors;
    DedupDuplicates                  = InpDedupDuplicates;
    IgnoreNewEntrySignals            = InpIgnoreNewEntrySignals;
@@ -3150,6 +3232,7 @@ void ExecuteQueue()
 
    int sweepCount=0;
    int asyncBatchCount=0;
+   int mktClosedHeld=0;
 
    //--- N72-05 & P1-01: Global feed stall check BEFORE entering the queue loop.
    //--- If server clock is stalled, check if queue has risk-reducing actions (CLOSE/TRIM).
@@ -3163,6 +3246,7 @@ void ExecuteQueue()
                     +(string)((CopierNowMs()-g_srvChangedMs)/1000)+"s -"
                     +" holding ENTIRE queue ("+(string)g_qn+" action(s))."
                     +" Market is closed or feed is down; nothing can be priced from a stale clock.");
+      CopierQueueNotePass(CopierNowMs(),g_qn,0,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses,true);
       return;
      }
 
@@ -3199,41 +3283,50 @@ void ExecuteQueue()
          continue;
         }
 
-      //--- THIS SYMBOL'S OWN FEED, on the way out. Same test as in converge
-      //--- and for the same reason: on MT5 the clock above keeps advancing
-      //--- through the weekly close, so the gate above cannot see a shut
-      //--- market. Without this, an action queued before the close is
-      //--- re-attempted every time the cooldown expires, for the whole
-      //--- weekend. Rotated, not dropped - a held action is a delay.
-      if(SymStaleCached(a.sym))
+      //--- UNIFIED MARKET CLOSED CHECK (Session, Broker 132/10018, or Stale Feed)
+      if(SymbolMarketClosed(a.sym))
         {
-         if(g_once.ShouldEmit("qsymstall|"+a.sym))
-            g_log.Info(a.sym+" has not quoted for "
-                       +(string)(CopierSymbolQuoteAgeMs(a.sym)/1000)+"s -"
-                       +" holding every queued action on it until it quotes"
-                       +" again");
+         if(g_once.ShouldEmit("qclosed|"+a.sym))
+            g_log.Info("market for "+a.sym+" is closed - holding queued action "
+                       +a.uid+" (kind="+(string)a.kind+"); it will execute when the market reopens");
          RotateQueue();
          skipped++;
+         mktClosedHeld++;
          continue;
         }
 
-      //--- MARKET CLOSED, per symbol. The broker said so for THIS symbol
-      //--- within the last minute (g_mktClosed). Checked on the way OUT too,
-      //--- for the same reason as the stale feed: converge skips it, but a
-      //--- close queued BEFORE the broker said so still has to be held.
-      //---
-      //--- This is the case the stale-feed test cannot see: the feed is
-      //--- healthy (other symbols are ticking, so the clock advances) but one
-      //--- instrument is shut - a holiday, or a symbol with a different
-      //--- session. Without this the retry loop returns for that symbol alone.
-      if(g_mktClosed.Has(a.sym))
+      //--- MARKET OPEN WARMUP & SPREAD PROTECTION (Solution A)
+      int warmupElapsed=0;
+      if(SymbolInOpenWarmup(a.sym, warmupElapsed))
         {
-         if(g_once.ShouldEmit("qclosed|"+a.sym))
-            g_log.Info("market for "+a.sym+" is closed - holding every queued"
-                       +" action on it; they go through when it reopens");
-         RotateQueue();
-         skipped++;
-         continue;
+         double curSp = CopierGetSpreadPoints(a.sym);
+         TrackSymbolSpread(a.sym, curSp);
+
+         if(a.kind==CP_ACT_OPEN)
+           {
+            if(g_once.ShouldEmit("warmup_open|"+a.sym))
+               g_log.Info("market open warmup active for "+a.sym+" ("
+                          +IntegerToString(MarketOpenDelayMinutes*60 - warmupElapsed)+"s remaining) - holding queued OPEN");
+            RotateQueue();
+            skipped++;
+            continue;
+           }
+         else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
+           {
+            double minSp = GetSymbolMinSpread(a.sym);
+            bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
+            if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
+              {
+               if(g_once.ShouldEmit("warmup_close|"+a.sym))
+                  g_log.Info("wide spread ("+DoubleToString(curSp,1)+" vs normal "+DoubleToString(minSp,1)
+                             +") on "+a.sym+" during market open - holding CLOSE (timeout in "
+                             +IntegerToString(MarketOpenCloseMaxWaitSec - warmupElapsed)+"s)");
+               RotateQueue();
+               skipped++;
+               continue;
+              }
+           }
+         // Note: a.kind == CP_ACT_MODIFY does NOT cross spread; it proceeds immediately to protect stops!
         }
 
       //--- PAUSED BY HUB COMMAND, on the way OUT. Same reason as every gate
@@ -3248,13 +3341,6 @@ void ExecuteQueue()
          if(g_once.ShouldEmit("qcmdpause"))
             g_log.Warn("paused by a hub command - holding queued OPEN"
                        +" actions; they go through on RESUME");
-         RotateQueue();
-         skipped++;
-         continue;
-        }
-
-      if(a.kind==CP_ACT_OPEN && !SymInSessionCached(a.sym))
-        {
          RotateQueue();
          skipped++;
          continue;
@@ -4033,17 +4119,16 @@ void ExecuteQueue()
    //--- tick, 200 times a second, to re-derive the same answer.
    //--- P3: something actually executed, so this account's position set changed
    //--- and the next reconcile must not wait for the sweep.
+   bool allMktClosed = (g_qn>0 && done==0 && mktClosedHeld==g_qn);
    if(done>0) g_convergeDirtyAll=true;
-   CopierQueueNotePass(CopierNowMs(),g_qn,done,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses);
+   CopierQueueNotePass(CopierNowMs(),g_qn,done,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses,allMktClosed);
    //--- entered the "nothing can drain" state: say so ONCE per episode. The
    //--- count resets on the next pass that processes anything, so a queue that
    //--- recovers and stalls again logs again rather than staying silent.
-   if(g_qSpinPasses==1)
+   if(g_qSpinPasses==1 && !allMktClosed)
       g_log.Info("queue cannot drain: all "+IntegerToString(g_qn)
-                 +" action(s) are held (market shut or feed stale). Periodic drain"
-                 +" now backs off to at most "
-                 +IntegerToString(CP_Q_BACKOFF_MAX_MS)+" ms instead of running every"
-                 +" tick; the event-driven drains still fire immediately.");
+                 +" action(s) are held. Periodic drain backs off (1s -> 10s -> 60s -> 5m -> 10m -> 30m -> 1h);"
+                 +" event-driven drains still fire immediately.");
   }
 
 //=====================================================================
@@ -5849,45 +5934,29 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      if(SymStaleCached(rsym))
-        {
-         if(g_once.ShouldEmit("symstall|"+rsym))
-            g_log.Info(rsym+" has not quoted for "
-                       +(string)(CopierSymbolQuoteAgeMs(rsym)/1000)+"s -"
-                       +" its market is shut or its feed has stopped. Holding"
-                       +" new entries for it; they go through as soon as it"
-                       +" quotes again.");
-         g_senderMktHeld[si]++;
-         g_senderMktHeldLots[si]+=lots;
-         g_mktHeld++;
-         g_mktHeldLots+=lots;
-         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Symbol feed stale");
-         continue;
-        }
-
-      if(!SymInSessionCached(rsym))
-        {
-         if(g_once.ShouldEmit("sess|"+rsym))
-            g_log.Info(rsym+" is outside its trading hours - holding new"
-                       +" entries for it until the session opens");
-         g_senderMktHeld[si]++;
-         g_senderMktHeldLots[si]+=lots;
-         g_mktHeld++;
-         g_mktHeldLots+=lots;
-         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Outside trading hours");
-         continue;
-        }
-
-      if(g_mktClosed.Has(rsym))
+      if(SymbolMarketClosed(rsym))
         {
          if(g_once.ShouldEmit("mktclosed|"+rsym))
-            g_log.Info("market for "+rsym+" is closed - holding new entries"
-                       +" for it; they will go through when it reopens");
+            g_log.Info("market for "+rsym+" is closed (session, stale quotes, or broker closed) - holding new entries; they go through when it reopens");
          g_senderMktHeld[si]++;
          g_senderMktHeldLots[si]+=lots;
          g_mktHeld++;
          g_mktHeldLots+=lots;
-         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Market closed");
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_closed","Market closed / session shut");
+         continue;
+        }
+
+      int warmupElapsed=0;
+      if(SymbolInOpenWarmup(rsym, warmupElapsed))
+        {
+         if(g_once.ShouldEmit("warmup_converge|"+rsym))
+            g_log.Info("market open warmup active for "+rsym+" ("
+                       +IntegerToString(MarketOpenDelayMinutes*60 - warmupElapsed)+"s remaining) - holding new entries");
+         g_senderMktHeld[si]++;
+         g_senderMktHeldLots[si]+=lots;
+         g_mktHeld++;
+         g_mktHeldLots+=lots;
+         AddWaitItem(d.uid,rsym,d.side,lots,d.openPx,g_magic[si],"market_open_warmup","Market open warmup cooldown");
          continue;
         }
 
@@ -7384,6 +7453,7 @@ void HubAnnounce(const bool isReg)
    e.seq=++g_statusSeq;
    e.ts=CopierServerTime();
    e.ms=CopierNowMs();
+   e.gts=(long)TimeGMT();
    e.type=isReg?CP_T_REG:CP_T_HBT2;
    e.payload=isReg
              ?CopierPayloadReg("receiver",CopierAccountLogin(),
@@ -8452,12 +8522,18 @@ void UpdatePanel()
    if(g_qn>0)
      {
       long nowQ=CopierNowMs();
-      bool spinning=(g_qSpinPasses>0 && !CopierQueueMayDrain(nowQ,g_qRetryAtMs));
+      bool spinning=(!CopierQueueMayDrain(nowQ,g_qRetryAtMs));
       int waitMs=(int)(g_qRetryAtMs-nowQ);
       if(waitMs<0) waitMs=0;
-      g_panel.Row(r++,"Queue      "+IntegerToString(g_qn)+" action(s)"
-                      +(spinning ? ("   held, retry in "+IntegerToString(waitMs)+" ms")
-                                 : "   draining"),
+      string qstatus = "   draining";
+      if(spinning)
+        {
+         if(g_qBackoffMs>=900000)
+            qstatus="   held (market closed, awaits reopen)";
+         else
+            qstatus="   held, retry in "+CopierQueueBackoffText(waitMs);
+        }
+      g_panel.Row(r++,"Queue      "+IntegerToString(g_qn)+" action(s)"+qstatus,
                   spinning?CP_PANEL_WARN:CP_PANEL_TEXT);
      }
 
@@ -8945,7 +9021,8 @@ void OnTimer()
      }
    bool doConverge=CopierConvergeDue(nowMs,g_lastConvergeSweepMs,dirtyAny,g_convergeSweepMs);
    bool drainDue=(g_qn>0 && CopierQueueMayDrain(nowMs,g_qRetryAtMs));
-   bool didScan=(doConverge || drainDue);
+   // Only scan positions on drainDue if we are NOT in an escalated backoff / market closed wait
+   bool didScan=(doConverge || (drainDue && g_qSpinPasses==0 && g_qBackoffMs<900000));
    if(doConverge) g_lastConvergeSweepMs=nowMs;
 
    if(didScan)
@@ -9369,8 +9446,13 @@ void OnTimer()
 
 void OnTick()
   {
-   // Pure event & timer driven: zero dependency on symbol tick data.
-   // Eliminates CPU spikes during high-volatility tick bursts.
+   // Wake up immediately from market-closed / escalated backoff upon receiving any new tick
+   if(g_qRetryAtMs>0 && g_qn>0)
+     {
+      g_qRetryAtMs=0;
+      g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+      g_qSpinPasses=0;
+     }
   }
 
 void OnChartEvent(const int id,

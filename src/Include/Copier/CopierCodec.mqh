@@ -55,7 +55,8 @@ struct CopierEnv
 string CopierEncodeEnv(const CopierEnv &e)
   {
    long gts=e.gts;
-   if(gts<=0) gts=(long)TimeGMT();
+   // Sanity guard: must be valid Unix seconds in year 2020..2100; otherwise fall back to live TimeGMT()
+   if(gts<1577836800 || gts>4102444800) gts=(long)TimeGMT();
    return "V="+(string)e.v
          +CP_SEP_FIELD+"SID="+e.sid
          +CP_SEP_FIELD+"SSID="+e.ssid

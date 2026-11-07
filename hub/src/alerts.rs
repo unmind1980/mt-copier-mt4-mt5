@@ -244,6 +244,11 @@ const MAX_FIRED_KEYS: usize = 2048;
 /// measurement establishes the baseline and never fires - a node's opening
 /// position in its own timezone is a fact, not an event.
 pub fn drift_jumped(prev: Option<i64>, cur: i64, threshold: i64) -> bool {
+    // A clock offset within threshold is healthy. Recovering from an old drift
+    // back to healthy (e.g. cur=0) must NOT trigger a drift alert.
+    if cur.abs() < threshold {
+        return false;
+    }
     match prev {
         Some(p) => (cur - p).abs() >= threshold,
         None => false,
@@ -376,6 +381,10 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         //--- a broken clock.
         if let Some(cur) = n.drift_secs {
             let prev = s.alerts.last_drift_secs.get(&n.key).copied();
+            // Keep the baseline updated whenever the clock offset is within healthy range
+            if cur.abs() < DRIFT_ALERT_SECS {
+                s.alerts.last_drift_secs.insert(n.key.clone(), cur);
+            }
             // If the node only reports broker server time (no GTS), suppress alerts
             // during weekend market closure or when broker ticks are frozen (feed stall).
             let suppress_broker_drift = n.node_gts.is_none() && (is_weekend_market_closed(now) || n.ts_frozen);
@@ -574,10 +583,12 @@ mod tests {
         assert!(!drift_jumped(None, -10800, 300));
         // A stable offset never fires, however large.
         assert!(!drift_jumped(Some(-10800), -10800, 300));
-        // The same clock stepping three hours IS a broken clock.
-        assert!(drift_jumped(Some(-10800), 0, 300));
-        // Jitter does not fire.
-        assert!(!drift_jumped(Some(-10800), -10799, 300));
+        // An offset that jumps beyond threshold DOES fire.
+        assert!(drift_jumped(Some(0), 400, 300));
+        // Recovering back to normal (cur within threshold) does NOT fire.
+        assert!(!drift_jumped(Some(-10800), 0, 300));
+        // Jitter within threshold does not fire.
+        assert!(!drift_jumped(Some(400), 450, 300));
         // Exactly at the threshold fires (>=).
         assert!(drift_jumped(Some(0), 300, 300));
     }

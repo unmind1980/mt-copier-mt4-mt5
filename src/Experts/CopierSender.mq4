@@ -512,6 +512,7 @@ void HubAnnounce(const bool isReg)
    e.seq=++g_seq;
    e.ts=CopierServerTime();
    e.ms=CopierNowMs();
+   e.gts=(long)TimeGMT();
    e.type=isReg?CP_T_REG:CP_T_HBT2;
    e.payload=isReg
              ?CopierPayloadReg("sender",CopierAccountLogin(),
@@ -616,6 +617,7 @@ void EmitToNode(const long nid,const string type,const string payload)
    e.seq=++g_seq;
    e.ts=CopierServerTime();
    e.ms=CopierNowMs();
+   e.gts=(long)TimeGMT();
    e.type=type;
    e.payload=payload;
    e.sid=(string)g_nid;
@@ -2055,6 +2057,7 @@ void SendSenderStatusReport(const int count)
    e.seq=++g_seq;
    e.ts=CopierServerTime();
    e.ms=CopierNowMs();
+   e.gts=(long)TimeGMT();
    e.type=CP_T_STAT;
    e.payload=st;
 

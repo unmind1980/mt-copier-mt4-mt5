@@ -2421,14 +2421,27 @@ void TestQueueBackoff()
       at==0 && bo==CP_Q_BACKOFF_MIN_MS && spin==0);
 
    CopierQueueNotePass(now,5,0,bo,at,spin);
-   OkInt("qbackoff: zero progress arms the deadline",at,now+CP_Q_BACKOFF_MIN_MS);
+   OkInt("qbackoff: zero progress arms the deadline",at,now+1000);
    Ok("qbackoff: ...the drain is refused before it",!CopierQueueMayDrain(now,at));
    Ok("qbackoff: ...and allowed at it",CopierQueueMayDrain(at,at));
-   OkInt("qbackoff: ...the next window doubles",bo,CP_Q_BACKOFF_MIN_MS*2);
-   OkInt("qbackoff: ...and the spin counter counts the pass",spin,1);
+   OkInt("qbackoff: ...the spin counter counts the pass",spin,1);
+
+   // Pass 2: 10s
+   CopierQueueNotePass(now,5,0,bo,at,spin);
+   OkInt("qbackoff: pass 2 scales to 10s",bo,10000);
+   OkInt("qbackoff: ...spin is 2",spin,2);
+
+   // Pass 3: 60s
+   CopierQueueNotePass(now,5,0,bo,at,spin);
+   OkInt("qbackoff: pass 3 scales to 60s",bo,60000);
 
    for(int i=0;i<12;i++) CopierQueueNotePass(now,5,0,bo,at,spin);
    OkInt("qbackoff: the ladder caps at CP_Q_BACKOFF_MAX_MS",bo,CP_Q_BACKOFF_MAX_MS);
+
+   // Closed market arms 15m without spinning counter
+   CopierQueueNotePass(now,5,0,bo,at,spin,true);
+   OkInt("qbackoff: closed market sets 15m hold",bo,900000);
+   OkInt("qbackoff: ...at deadline is 15m ahead",at,now+900000);
 
    CopierQueueNotePass(now,5,3,bo,at,spin);
    Ok("qbackoff: progress clears the deadline",at==0);

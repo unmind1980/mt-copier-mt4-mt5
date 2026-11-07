@@ -146,6 +146,68 @@ bool CopierInTradingSession(const string sym)
    return result;
   }
 
+//--- How many seconds have elapsed since the current trading session opened today.
+//--- Returns -1 if not currently inside any trading session.
+int CopierSecondsSinceSessionOpen(const string sym)
+  {
+   if(StringLen(sym)==0) return -1;
+   long now=CopierServerTime();
+   MqlDateTime dt;
+   TimeToStruct((datetime)now,dt);
+   int secOfDay=dt.hour*3600 + dt.min*60 + dt.sec;
+   int dow=dt.day_of_week;
+
+   for(int i=0;i<8;i++)
+     {
+      datetime f=0,t=0;
+      if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dow,i,f,t)) break;
+      if(f==0 && t==0) continue;
+      long fs=(long)(f%86400);
+      long ts=(long)(t%86400);
+      if(ts==0 && t>f) ts=86400;
+      if(fs<=ts)
+        {
+         if(secOfDay>=fs && secOfDay<=ts) return (int)(secOfDay-fs);
+        }
+      else
+        {
+         if(secOfDay>=fs || secOfDay<=ts)
+            return (secOfDay>=fs)?(int)(secOfDay-fs):(int)(secOfDay+(86400-fs));
+        }
+     }
+   return -1;
+  }
+
+//--- Current bid-ask spread in points. Works across MT4 and MT5.
+double CopierGetSpreadPoints(const string sym)
+  {
+   if(StringLen(sym)==0) return 0.0;
+#ifdef __MQL5__
+   long sp=0;
+   if(SymbolInfoInteger(sym,SYMBOL_SPREAD,sp) && sp>0) return (double)sp;
+   MqlTick tick;
+   if(SymbolInfoTick(sym,tick) && tick.ask>0.0 && tick.bid>0.0)
+     {
+      double pt=0.0;
+      if(SymbolInfoDouble(sym,SYMBOL_POINT,pt) && pt>0.0)
+         return (tick.ask-tick.bid)/pt;
+     }
+   return 0.0;
+#else
+   RefreshRates();
+   double sp=MarketInfo(sym,MODE_SPREAD);
+   if(sp>0.0) return sp;
+   double pt=MarketInfo(sym,MODE_POINT);
+   if(pt>0.0)
+     {
+      double ask=MarketInfo(sym,MODE_ASK);
+      double bid=MarketInfo(sym,MODE_BID);
+      if(ask>0.0 && bid>0.0) return (ask-bid)/pt;
+     }
+   return 0.0;
+#endif
+  }
+
 //+------------------------------------------------------------------+
 // Has this SYMBOL's own quote stream stopped advancing?
 //

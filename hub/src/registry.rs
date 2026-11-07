@@ -443,7 +443,8 @@ impl Registry {
                 }
                 e.node_ts = Some(node_ts);
             }
-            if node_gts > 0 {
+            // Accept node_gts only if it falls in a plausible Unix timestamp range (year 2020..2100)
+            if node_gts > 1577836800 && node_gts < 4102444800 {
                 e.node_gts = Some(node_gts);
                 e.drift_secs = Some(node_gts - hub_now);
             } else if node_ts > 0 {

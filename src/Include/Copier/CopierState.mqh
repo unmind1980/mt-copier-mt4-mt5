@@ -1492,13 +1492,36 @@ public:
 // Kept here rather than in the EA so the transition can be asserted in the
 // self-test without an EA around it.
 //=====================================================================
-#define CP_Q_BACKOFF_MIN_MS  200
-#define CP_Q_BACKOFF_MAX_MS  1000
+#define CP_Q_BACKOFF_MIN_MS  1000
+#define CP_Q_BACKOFF_MAX_MS  3600000
+
+//--- Escalating retry gap for the execution queue drain when actions cannot progress:
+//--- 1s -> 10s -> 60s (1m) -> 5m -> 10m -> 30m -> 1h (capped at 1 hour).
+long CopierQueueBackoffStepMs(const int step)
+  {
+   if(step<=1) return 1000;          // 1s
+   if(step==2) return 10000;         // 10s
+   if(step==3) return 60000;         // 60s (1m)
+   if(step==4) return 300000;        // 5m
+   if(step==5) return 600000;        // 10m
+   if(step==6) return 1800000;       // 30m
+   return 3600000;                   // 1h (capped)
+  }
+
+string CopierQueueBackoffText(const long ms)
+  {
+   if(ms<1000)    return IntegerToString((int)ms)+"ms";
+   if(ms<60000)   return IntegerToString((int)(ms/1000))+"s";
+   if(ms<3600000) return IntegerToString((int)(ms/60000))+"m";
+   return IntegerToString((int)(ms/3600000))+"h";
+  }
 
 //--- `done` is the number of actions this pass actually processed (executed or
 //--- dropped). Anything still held leaves it at zero, which is the signal.
+//--- `allMarketClosed` indicates that every held action is due to market closure.
 void CopierQueueNotePass(const long nowMs,const int qn,const int done,
-                         long &backoffMs,long &retryAtMs,int &spinPasses)
+                         long &backoffMs,long &retryAtMs,int &spinPasses,
+                         const bool allMarketClosed=false)
   {
    if(qn<=0 || done>0)
      {
@@ -1507,10 +1530,18 @@ void CopierQueueNotePass(const long nowMs,const int qn,const int done,
       spinPasses=0;
       return;
      }
-   retryAtMs=nowMs+backoffMs;
-   backoffMs*=2;
-   if(backoffMs>CP_Q_BACKOFF_MAX_MS) backoffMs=CP_Q_BACKOFF_MAX_MS;
+   if(allMarketClosed)
+     {
+      // All actions are held because the market is closed.
+      // Suspend periodic drain for 15 minutes (or until OnTick wakes it up).
+      // Do not climb the transient failure spin counter.
+      backoffMs=900000; // 15 minutes
+      retryAtMs=nowMs+backoffMs;
+      return;
+     }
    if(spinPasses<1000000) spinPasses++;
+   backoffMs=CopierQueueBackoffStepMs(spinPasses);
+   retryAtMs=nowMs+backoffMs;
   }
 
 bool CopierQueueMayDrain(const long nowMs,const long retryAtMs)
