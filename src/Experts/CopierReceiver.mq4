@@ -3252,7 +3252,7 @@ void ExecuteQueue()
 
    //--- `skipped` bounds a full rotation, so a queue in which EVERY action is
    //--- blocked does not spin through itself ten times a second.
-   while(g_qn>0 && done<maxActions && skipped<=g_qn)
+   while(g_qn>0 && done<maxActions && skipped<g_qn)
      {
       CopierAction a=g_q[g_qHead];
       int err=0;
@@ -3280,6 +3280,7 @@ void ExecuteQueue()
         {
          RotateQueue();
          skipped++;
+         mktClosedHeld++;
          continue;
         }
 
@@ -4119,7 +4120,7 @@ void ExecuteQueue()
    //--- tick, 200 times a second, to re-derive the same answer.
    //--- P3: something actually executed, so this account's position set changed
    //--- and the next reconcile must not wait for the sweep.
-   bool allMktClosed = (g_qn>0 && done==0 && mktClosedHeld==g_qn);
+   bool allMktClosed = (g_qn>0 && done==0 && (mktClosedHeld>=g_qn || (mktClosedHeld>0 && mktClosedHeld==skipped)));
    if(done>0) g_convergeDirtyAll=true;
    CopierQueueNotePass(CopierNowMs(),g_qn,done,g_qBackoffMs,g_qRetryAtMs,g_qSpinPasses,allMktClosed);
    //--- entered the "nothing can drain" state: say so ONCE per episode. The
@@ -4351,6 +4352,9 @@ void StopSigInvalidate(const long ticket)
 void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                          const CopierPos &local)
   {
+   // Unified market closed check: if the market is shut, orders cannot be modified by broker API.
+   if(SymbolMarketClosed(local.sym)) return;
+
    //--- Already evaluated with exactly these inputs (and the same override
    //--- table) and the answer was "nothing to do". See CopierStopSig.
    int sh=StopSigFindSlot(local.ticket);

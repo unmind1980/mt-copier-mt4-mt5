@@ -1537,6 +1537,7 @@ void CopierQueueNotePass(const long nowMs,const int qn,const int done,
       // Do not climb the transient failure spin counter.
       backoffMs=900000; // 15 minutes
       retryAtMs=nowMs+backoffMs;
+      spinPasses=0;
       return;
      }
    if(spinPasses<1000000) spinPasses++;
