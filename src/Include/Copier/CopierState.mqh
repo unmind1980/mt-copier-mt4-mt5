@@ -1012,6 +1012,17 @@ long CopierExitBackoffMs(const int fails)
    return 60000;                     // 60s (capped)
   }
 
+//--- ISSUE-05 / N-04: Modify operation (MODIFY SL/TP) backoff ladder.
+//--- Caps at 30s max so orders do not stay unprotected for hours/days,
+//--- while preventing tight loops against a broker rejecting invalid stops.
+long CopierModifyBackoffMs(const int fails)
+  {
+   if(fails<=1) return 1000;         // 1s
+   if(fails==2) return 3000;         // 3s
+   if(fails==3) return 10000;        // 10s
+   return 30000;                     // 30s (capped)
+  }
+
 //--- "900000" tells a reader nothing at 3am; "15m" does.
 string CopierBackoffText(const int fails)
   {
@@ -1211,6 +1222,18 @@ public:
       if(now>=m_u[i]) return false;
       long exitWait=CopierExitBackoffMs(m_n[i]);
       return (now-m_t[i]<exitWait);
+     }
+
+   //--- ISSUE-05 / N-04: Blocked for modify actions (MODIFY SL/TP) with a 30s-capped ladder.
+   //--- Ensures order stop adjustments are not locked out for up to 24 hours.
+   bool              BlockedModify(const string key)
+     {
+      int i=Find(key);
+      if(i<0) return false;
+      long now=CopierNowMs();
+      if(now>=m_u[i]) return false;
+      long modWait=CopierModifyBackoffMs(m_n[i]);
+      return (now-m_t[i]<modWait);
      }
 
    int               Count(const string key)

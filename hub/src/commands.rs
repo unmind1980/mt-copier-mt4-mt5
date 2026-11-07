@@ -500,9 +500,17 @@ impl CommandStore {
         {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
-            crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path)?;
-            let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-            inner.file = Some(file);
+            // ISSUE-08 / N-05: Ensure file handle is reopened even on replace errors to prevent permanent NotConnected
+            let rep_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
+            let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+            inner.file = reopen_res.ok();
+            rep_res?;
+            if inner.file.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "failed to reopen command journal file after replace",
+                ));
+            }
             inner.commands = std::mem::take(&mut commands);
             inner.prune_terminal(now, COMMAND_KEEP_SECS);
             inner.seq = seq;

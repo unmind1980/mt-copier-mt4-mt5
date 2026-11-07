@@ -66,6 +66,13 @@ public:
       string parts[];
       int n=StringSplit(s,',',parts);
       int kept=0;
+      // ISSUE-16: Preallocate array capacities once to eliminate repeated ArrayResize in loop
+      if(n>0)
+        {
+         ArrayResize(m_item,n);
+         ArrayResize(m_itemLong,n);
+         ArrayResize(m_itemLongValid,n);
+        }
       for(int i=0;i<n;i++)
         {
          string v=CopierTrim(parts[i]);
@@ -84,15 +91,15 @@ public:
             if(StringLen(v)==0) continue;
            }
 
-         ArrayResize(m_item,kept+1);
-         ArrayResize(m_itemLong,kept+1);
-         ArrayResize(m_itemLongValid,kept+1);
          m_item[kept]=v;
          bool isNum=CopierIsDigits(v);
          m_itemLongValid[kept]=isNum;
          m_itemLong[kept]=isNum ? CopierParseLong(v) : -1;
          kept++;
         }
+      ArrayResize(m_item,kept);
+      ArrayResize(m_itemLong,kept);
+      ArrayResize(m_itemLongValid,kept);
       m_active=(kept>0);
      }
 

@@ -2245,6 +2245,8 @@ void OnTimer()
      }
 
    //--- 3) emit closes for anything that vanished (slot valid but not stamped this tick, 0 string lookups)
+   //--- ISSUE-06 / N-08: Cap deep history probes to 8 per tick to avoid O(N^2) terminal cache resets during mass closes
+   int deepHistProbes=0;
    for(int k=0;k<CP_MAX_POSITIONS;k++)
      {
       if(g_slotStamp[k]==g_stampGen)
@@ -2260,8 +2262,13 @@ void OnTimer()
       // R47-03 & P1: Instant 0ms close when confirmed in history on initial miss;
       // Micro-stepped probe (0ms, 50ms..300ms step, 2000ms debounce) captures asynchronous broker fills in 50-100ms
       long elapsedMiss=now-g_slotMissMs[k];
-      bool shouldProbe=(g_slotMissCount[k]<=1) || (elapsedMiss>=2000) || (elapsedMiss>=50 && elapsedMiss<=300 && (g_slotMissCount[k]%5==0));
-      bool closedInHist = shouldProbe && CopierIsTicketClosedInHistory(q.ticket);
+      bool shouldProbe=((g_slotMissCount[k]<=1) || (elapsedMiss>=2000) || (elapsedMiss>=50 && elapsedMiss<=300 && (g_slotMissCount[k]%5==0))) && (deepHistProbes<8);
+      bool closedInHist=false;
+      if(shouldProbe)
+        {
+         deepHistProbes++;
+         closedInHist=CopierIsTicketClosedInHistory(q.ticket);
+        }
       if(!closedInHist && (elapsedMiss<2000)) continue;
       g_slotMissCount[k]=0;
       g_slotMissMs[k]=0;

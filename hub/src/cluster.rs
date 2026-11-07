@@ -24,6 +24,14 @@ pub const DEFAULT_CLUSTER_TOKEN: &str = "mtc-cluster-auth-secret-token";
 pub const DEFAULT_STATE_FILE: &str = "cluster_state.json";
 pub const DEFAULT_FAILBACK_HOURS: f64 = 24.0;
 
+/// Validates that a cluster token is configured, sufficiently long, and not a public/default token (N56-01 / ISSUE-11).
+pub fn token_is_usable(t: &str) -> bool {
+    !t.is_empty()
+        && t.len() >= 16
+        && t != DEFAULT_CLUSTER_TOKEN
+        && t != "mtc_shared_cluster_token_2026"
+}
+
 pub fn unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -241,13 +249,6 @@ impl ClusterManager {
         //--- no authentication at all, so the known-public values are treated
         //--- exactly like an empty token. The length floor exists for the same
         //--- reason: "abc" is not a credential. (N56-01)
-        let token_is_usable = |t: &str| -> bool {
-            !t.is_empty()
-                && t.len() >= 16
-                && t != DEFAULT_CLUSTER_TOKEN
-                && t != "mtc_shared_cluster_token_2026"
-        };
-
         let resolved_token = if token_is_usable(&cluster_token) {
             cluster_token.to_string()
         } else if token_is_usable(&state.cluster_token) {

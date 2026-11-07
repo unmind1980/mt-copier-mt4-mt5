@@ -1867,6 +1867,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let mut dropped_security_frames: u64 = 0;
     let mut last_snapq_warn = Instant::now() - Duration::from_secs(10);
     let mut last_cfgr_print: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+    let mut last_snap_touch: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+    let mut torn_multipart = false;
 
     //--- Background Worker for Asynchronous Snapshot Parsing
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
@@ -2896,6 +2898,15 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             }
                         }
 
+                        if torn_multipart {
+                            // ISSUE-09: Close hanging multipart frame before starting a new one to prevent boundary inversion
+                            if sock.send("", zmq::DONTWAIT).is_ok() {
+                                torn_multipart = false;
+                            } else {
+                                skip_frame = true;
+                            }
+                        }
+
                         if !skip_frame {
                             let first_res = sock.send(topic, zmq::DONTWAIT | zmq::SNDMORE);
                             match first_res {
@@ -2905,8 +2916,18 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                             "[hub] WARN forward payload frame failed ({}): closing multipart frame with empty terminator",
                                             e
                                         );
-                                        // P1-04: Safely close multipart message with empty frame so socket is not left in torn state
-                                        let _ = sock.send("", zmq::DONTWAIT);
+                                        // P1-04 & ISSUE-09: Safely close multipart message with empty frame so socket is not left in torn state
+                                        let mut closed = false;
+                                        for _ in 0..5 {
+                                            if sock.send("", zmq::DONTWAIT).is_ok() {
+                                                closed = true;
+                                                break;
+                                            }
+                                            std::thread::yield_now();
+                                        }
+                                        if !closed {
+                                            torn_multipart = true;
+                                        }
                                     } else {
                                         st.note_forward(topic_str, &ty);
 
@@ -2938,9 +2959,17 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                             }
                                         }
                                     } else {
-                                        // Touch timestamp in positions without blocking for full parse
-                                        let mut s = shared.lock_or_recover();
-                                        s.pos.touch(&sid, pos_now);
+                                        // ISSUE-12: Touch timestamp in positions without blocking for full parse.
+                                        // Rate-limit to at most once per second per sender to eliminate lock contention on shared.
+                                        let touch_due = match last_snap_touch.get(&sid) {
+                                            Some(t) => pos_now.duration_since(*t) >= Duration::from_secs(1),
+                                            None => true,
+                                        };
+                                        if touch_due {
+                                            last_snap_touch.insert(sid.clone(), pos_now);
+                                            let mut s = shared.lock_or_recover();
+                                            s.pos.touch(&sid, pos_now);
+                                        }
                                     }
                                 }
 

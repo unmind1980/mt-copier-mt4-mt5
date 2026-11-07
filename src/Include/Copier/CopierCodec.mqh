@@ -827,10 +827,10 @@ string CopierPayloadPong(const long ms,const string from,const string to)
 //--- REG / HBT2, the central channel's "who are you" pair.
 //---
 //--- One shape, two builders. They answer the same question - who is this and
-//--- is it still there - so the hub parses them with ONE function. The only
-//--- difference is that REG carries NAME and HBT2 does not: a heartbeat
-//--- repeating a name that cannot have changed is bytes for nothing, every few
-//--- seconds, from every node, forever.
+//--- is it still there - so the hub parses them with ONE function.
+//--- HBT2 intentionally carries NAME (same as REG): when a node's initial REG
+//--- is lost in transit or the hub is restarted, periodic HBT2 ensures the hub
+//--- still learns and displays the human-readable node name without requiring an EA restart.
 //---
 //--- NAME is sanitised HERE rather than at the call site. It travels into the
 //--- hub's registry and from there onto a web page, and a name containing ';'

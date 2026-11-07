@@ -74,11 +74,11 @@ bool CopierInTradingSession(const string sym)
    int foundIdx=-1;
    for(int i=0;i<CP_SESS_CACHE;i++)
      {
-      // NM-13 & MQL-08: 1-second window matching CopierSymbolQuoteAgeMs with foundIdx tracking
+      // ISSUE-17 & NM-13: 30-second window to prevent high-frequency re-probing of daily schedules
       if(g_sessKey[i]==sym)
         {
          foundIdx=i;
-         if(now>=g_sessAt[i] && now-g_sessAt[i]<1) return g_sessVal[i];
+         if(now>=g_sessAt[i] && now-g_sessAt[i]<30) return g_sessVal[i];
          break;
         }
      }

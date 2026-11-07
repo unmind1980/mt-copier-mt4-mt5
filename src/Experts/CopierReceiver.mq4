@@ -2980,12 +2980,16 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
       // SenderIdx < 0 (manual/orphan close re-queues) are held and paced inside ExecuteQueue
       if(si>=0 && g_backoff.BlockedExit(key)) { g_pushReject="retry_backoff"; return false; }
      }
+   else if(kind==CP_ACT_MODIFY)
+     {
+      //--- ISSUE-05 / N-04: MODIFY actions lock backoff to position ticket with 30s-capped BlockedModify ladder.
+      //--- Otherwise micro-price changes in trailing stops generate fresh keys, or rejected stops park for 24 hours.
+      string boKey = (ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)ticket) : key;
+      if(g_backoff.BlockedModify(boKey)) { g_pushReject="retry_backoff"; return false; }
+     }
    else
      {
-      //--- MODIFY actions lock backoff to the position ticket rather than the full key.
-      //--- Otherwise micro-price changes in trailing stops generate fresh keys and bypass backoff completely.
-      string boKey = (kind==CP_ACT_MODIFY && ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)ticket) : key;
-      if(g_backoff.Blocked(boKey)) { g_pushReject="retry_backoff"; return false; }
+      if(g_backoff.Blocked(key)) { g_pushReject="retry_backoff"; return false; }
      }
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
@@ -3325,7 +3329,9 @@ void ExecuteQueue()
         }
 
       //--- UNIFIED MARKET CLOSED CHECK (Session, Broker 132/10018, or Stale Feed)
-      if(SymbolMarketClosed(a.sym))
+      //--- ISSUE-01 / N-01: Risk-reducing exit actions (CLOSE/TRIM/DEDUP) are NEVER held
+      //--- by local quote staleness or session estimates; let the broker execute them.
+      if(a.kind!=CP_ACT_CLOSE && a.kind!=CP_ACT_TRIM && a.kind!=CP_ACT_DEDUP && SymbolMarketClosed(a.sym))
         {
          if(g_once.ShouldEmit("qclosed|"+a.sym))
             g_log.Info("market for "+a.sym+" is closed - holding queued action "
@@ -3955,11 +3961,21 @@ void ExecuteQueue()
             else
                fails=1;
            }
+         // ISSUE-05 / N-04: If modify failed for an order that currently has NO stop loss (naked position),
+         // park for only 2 seconds so safety SL protection can be retried without long delay.
+         if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
+           {
+            if(CopierTicketSL(a.ticket)<=0.0 && a.sl>0.0)
+              {
+               g_backoff.Park(boKey,2000);
+              }
+           }
          if(fails>=2 && g_onceFail.ShouldEmit("backoff|"+boKey))
            {
             bool isExit = (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP);
-            long ms=isExit ? CopierExitBackoffMs(fails) : CopierBackoffMs(fails);
-            string waitTxt=isExit ? (IntegerToString(ms/1000)+"s") : CopierBackoffText(fails);
+            bool isMod  = (a.kind==CP_ACT_MODIFY);
+            long ms=isExit ? CopierExitBackoffMs(fails) : (isMod ? CopierModifyBackoffMs(fails) : CopierBackoffMs(fails));
+            string waitTxt=isExit ? (IntegerToString(ms/1000)+"s") : (isMod ? (IntegerToString(ms/1000)+"s") : CopierBackoffText(fails));
             string why="refused "+((string)fails)+" time(s) running - "
                        +a.uid+" ("+a.sym+") parked for "
                        +waitTxt+". A repeat refusal is a"
@@ -4570,25 +4586,22 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       double rawWantTp=wantTp;
       wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clampedSl);
       wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clampedTp);
-      // MQL-01: In inverted mode with entry price disparity, avoid clamping stops onto live market price
+      // ISSUE-02 / N-03: In both regular and inverted copying, avoid clamping stops onto live market price
       // if the RAW un-clamped stop already crossed market price; retain local stop and do not cache in g_stopSig
-      if(actualInverted)
+      double mktPx=0.0;
+      if(CopierGetClosePrice(local.sym,local.side,mktPx) && mktPx>0.0)
         {
-         double mktPx=0.0;
-         if(CopierGetClosePrice(local.sym,local.side,mktPx) && mktPx>0.0)
+         if(rawWantTp>0.0 && ((local.side==CP_SIDE_BUY && rawWantTp<=mktPx) || (local.side==CP_SIDE_SELL && rawWantTp>=mktPx)))
            {
-            if(rawWantTp>0.0 && ((local.side==CP_SIDE_BUY && rawWantTp<=mktPx) || (local.side==CP_SIDE_SELL && rawWantTp>=mktPx)))
-              {
-               wantTp=local.tp;
-               clampedTp=false;
-               invertedCrossed=true;
-              }
-            if(rawWantSl>0.0 && ((local.side==CP_SIDE_BUY && rawWantSl>=mktPx) || (local.side==CP_SIDE_SELL && rawWantSl<=mktPx)))
-              {
-               wantSl=local.sl;
-               clampedSl=false;
-               invertedCrossed=true;
-              }
+            wantTp=local.tp;
+            clampedTp=false;
+            invertedCrossed=true;
+           }
+         if(rawWantSl>0.0 && ((local.side==CP_SIDE_BUY && rawWantSl>=mktPx) || (local.side==CP_SIDE_SELL && rawWantSl<=mktPx)))
+           {
+            wantSl=local.sl;
+            clampedSl=false;
+            invertedCrossed=true;
            }
         }
       if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
@@ -5361,9 +5374,12 @@ void RefreshRisk()
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
      }
-   else if(g_riskDayStartEquity<=0.0 || now-g_lastRealizedMs>60000)
+   // ISSUE-04 / N-02: Never storm history on every 100ms slow tick. Throttle to 10s when baseline
+   // is pending derivation, and 60s once established. Abort immediately if disconnected.
+   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000)))
      {
       g_lastRealizedMs=now;
+      if(!CopierIsConnected()) return;
       // N49-01 & N49-13: Recalibrate baseline dynamically on intraday cash flow
       // Guarded by rOk so history fetch failures keep existing baseline instead of wiping to 0.
       bool rOk=false;
@@ -7838,17 +7854,19 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       return false;
      }
 
+   // ISSUE-03 / N-07 & H-02: Security check MUST run BEFORE AcceptSeq!
+   // An unauthorized CFG/CMD frame on a data topic must not advance the sequence watermark
+   // before being rejected, which would cause subsequent legitimate trade events to be dropped.
+   if(e.type==CP_T_CFG || e.type==CP_T_CMD)
+     {
+      g_log.Warn("SECURITY: rejected "+e.type+" frame from data stream / sender "+g_sid[si]+"; control frames only accepted from @hub");
+      return false;
+     }
+
    int effectiveStream=(e.type==CP_T_HBT)?CP_STREAM_HBT:stream;
    if(!AcceptSeq(si,e,effectiveStream,topic))
      {
       g_dropped[si]++;
-      return false;
-     }
-
-   // H-02: Never accept CFG or CMD from data topics or non-hub senders (prevents cross-tenant closeall injection)
-   if(e.type==CP_T_CFG || e.type==CP_T_CMD)
-     {
-      g_log.Warn("SECURITY: rejected "+e.type+" frame from data stream / sender "+g_sid[si]+"; control frames only accepted from @hub");
       return false;
      }
    if(e.type==CP_T_SNAP)       HandleSnapshot(si,e);

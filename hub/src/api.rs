@@ -1067,20 +1067,23 @@ async fn require_session(
     let is_cluster_path = path.starts_with("/api/v1/cluster/");
     if is_cluster_path {
         let cluster_token = st.lock_or_recover().cluster.cluster_token.clone();
-        let auth_hdr = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok());
-        let x_hdr = req.headers().get("X-Cluster-Token").and_then(|v| v.to_str().ok());
-        let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h)).map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false)
-            || x_hdr.map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false);
-        if token_matches {
-            // R60-07: Inject Session extension for cluster endpoints expecting admin session
-            req.extensions_mut().insert(Session {
-                user_id: "cluster".to_string(),
-                role: UserRole::Admin,
-                seen: unix_secs(),
-                pass_hash: String::new(),
-            });
-            req.extensions_mut().insert(Token(cluster_token));
-            return next.run(req).await;
+        // ISSUE-11: Enforce token_is_usable - reject weak/default cluster tokens (DEFAULT_CLUSTER_TOKEN)
+        if crate::cluster::token_is_usable(&cluster_token) {
+            let auth_hdr = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+            let x_hdr = req.headers().get("X-Cluster-Token").and_then(|v| v.to_str().ok());
+            let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h)).map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false)
+                || x_hdr.map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false);
+            if token_matches {
+                // R60-07: Inject Session extension for cluster endpoints expecting admin session
+                req.extensions_mut().insert(Session {
+                    user_id: "cluster".to_string(),
+                    role: UserRole::Admin,
+                    seen: unix_secs(),
+                    pass_hash: String::new(),
+                });
+                req.extensions_mut().insert(Token(cluster_token));
+                return next.run(req).await;
+            }
         }
         // P0-2: If cluster token did not match and users auth is disabled, forbid anonymous access
         if !st.lock_or_recover().auth_enabled {
