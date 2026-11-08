@@ -131,6 +131,17 @@ bool CopierGetSymbolInfo(const string sym,CopierSymInfo &si)
    return true;
   }
 
+// N-05: Explicit invalidation of syminfo cache on broker rejections (10016 / 130)
+void CopierInvalidateSymbolInfo(const string sym)
+  {
+   if(StringLen(sym)==0) return;
+   uint h=2166136261;
+   int slen=StringLen(sym);
+   for(int k=0;k<slen;k++) { h^=(uint)StringGetCharacter(sym,k); h*=16777619; }
+   int slot=(int)(h % CP_SYMINFO_CACHE_SLOTS);
+   if(g_siCache[slot].sym==sym) g_siCache[slot].expMs=0;
+  }
+
 //+------------------------------------------------------------------+
 // M1 bar counting.
 //
@@ -880,8 +891,10 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
             ulong posId=(order>0)?order:deal;
             if(posId>0)
               {
-               // N77-02: Clamp stops against broker StopLevel inline before immediate modification,
-               // aligning with MT4 ECN/fallback behavior (N57-13) and avoiding guaranteed 10016 re-rejection.
+               // BUG-02: Protect against crossed stops on fallback.
+               // If stop already crossed market, do NOT hard-clamp to mkBid - mkStop (which causes instant stop-out)
+               // and do not send invalid crossed stop to ECN zero stop-level broker (repeats 10016).
+               // Set crossed stop to 0.0 and let converge/QueueModifyIfNeeded place it safely on next tick.
                double fsl=sl, ftp=tp;
                if(fsl>0.0 || ftp>0.0)
                  {
@@ -890,25 +903,44 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                   int    mkDig=(int)SymbolInfoInteger(sym,SYMBOL_DIGITS);
                   double mkBid=SymbolInfoDouble(sym,SYMBOL_BID);
                   double mkAsk=SymbolInfoDouble(sym,SYMBOL_ASK);
-                  if(mkStop>0.0)
+                  if(side==CP_SIDE_BUY)
                     {
-                     if(side==CP_SIDE_BUY)
+                     if(fsl>0.0)
                        {
-                        if(fsl>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
-                        if(ftp>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                        if(fsl>=mkBid) fsl=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
                        }
-                     else
+                     if(ftp>0.0)
                        {
-                        if(fsl>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
-                        if(ftp>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                        if(ftp<=mkAsk) ftp=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                       }
+                    }
+                  else
+                    {
+                     if(fsl>0.0)
+                       {
+                        if(fsl<=mkAsk) fsl=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
+                       }
+                     if(ftp>0.0)
+                       {
+                        if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
                        }
                     }
                  }
-               int mErr=0;
-               if(!CopierModifyStops((long)posId,sym,fsl,ftp,mErr))
+               // BUG-05: In MT5, position index in terminal cache might lag deal execution.
+               // Verify position is resolvable before attempting modify stops; if not yet indexed,
+               // do not call CopierModifyStops (which would treat not-found as "already gone" and return true).
+               if(fsl>0.0 || ftp>0.0)
                  {
-                  // If immediate clamped modify still fails (e.g. transient broker quotes),
-                  // converge will safely retry stop attachment on next tick.
+                  long resTicket=0; bool resPending=false;
+                  if(CopierResolveCloseTicket((long)posId,resTicket,resPending))
+                    {
+                     int mErr=0;
+                     CopierModifyStops((long)posId,sym,fsl,ftp,mErr);
+                    }
                  }
               }
            }
@@ -950,6 +982,10 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                //--- reachable from here (this header is included BY it), so the
                //--- clamp is done inline against the live bid/ask.
                //--- sl/tp are const parameters, hence the local copies.
+               // BUG-02: Protect against crossed stops on fallback.
+               // If stop already crossed market, do NOT hard-clamp to mkBid - mkStop (which causes instant stop-out)
+               // and do not send invalid crossed stop to ECN zero stop-level broker (repeats 130).
+               // Set crossed stop to 0.0 and let converge/QueueModifyIfNeeded place it safely on next tick.
                double fsl=sl, ftp=tp;
                if(fsl>0.0 || ftp>0.0)
                  {
@@ -958,17 +994,30 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                   int    mkDig=(int)MarketInfo(sym,MODE_DIGITS);
                   double mkBid=MarketInfo(sym,MODE_BID);
                   double mkAsk=MarketInfo(sym,MODE_ASK);
-                  if(mkStop>0.0)
+                  if(cmd==OP_BUY)
                     {
-                     if(cmd==OP_BUY)
+                     if(fsl>0.0)
                        {
-                        if(fsl>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
-                        if(ftp>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                        if(fsl>=mkBid) fsl=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && mkBid-fsl<mkStop) fsl=NormalizeDouble(mkBid-mkStop,mkDig);
                        }
-                     else
+                     if(ftp>0.0)
                        {
-                        if(fsl>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
-                        if(ftp>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                        if(ftp<=mkAsk) ftp=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                       }
+                    }
+                  else
+                    {
+                     if(fsl>0.0)
+                       {
+                        if(fsl<=mkAsk) fsl=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && fsl-mkAsk<mkStop) fsl=NormalizeDouble(mkAsk+mkStop,mkDig);
+                       }
+                     if(ftp>0.0)
+                       {
+                        if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
+                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
                        }
                     }
                  }

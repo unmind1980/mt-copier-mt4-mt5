@@ -2994,7 +2994,23 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) { g_pushReject="unsupported"; return false; }
-   if(ActionQueued(si,kind,uid,keyExtra)) { g_pushReject="already_queued"; return false; }
+   if(ActionQueued(si,kind,uid,keyExtra))
+     {
+      // BUG-01: If an exit action (CLOSE/TRIM/DEDUP) is already in the queue, do not leave it
+      // frozen under an existing queue backoff (which could be up to 15m~1h) if exit backoff has cleared!
+      if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
+        {
+         string exitKey=(uid!="") ? uid : (string)ticket;
+         if(!g_backoff.BlockedExit(exitKey))
+           {
+            g_qRetryAtMs=0;
+            g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+            g_qSpinPasses=0;
+           }
+        }
+      g_pushReject="already_queued";
+      return false;
+     }
    if(g_qHead+g_qn>=CP_MAX_ACTIONS)
      {
       //--- the tail hit the end of the array: reclaim the dead prefix first,
@@ -3912,6 +3928,8 @@ void ExecuteQueue()
            {
             // BUG-01: Invalidate signature using exact 4-step probe hash to prevent freezing
             StopSigInvalidate(a.ticket);
+            // N-05: Invalidate symbol info cache on broker invalid stops so next pass re-fetches geometry
+            if(err==10016 || err==130) CopierInvalidateSymbolInfo(a.sym);
            }
          string sname=SenderLabel(a.senderIdx);
          string boKey=(a.kind==CP_ACT_MODIFY && a.ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)a.ticket) : a.key;
@@ -4572,36 +4590,94 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- For pending orders, clamp against the order's trigger/limit price, NOT live market Bid/Ask!
    bool clampedSl=false, clampedTp=false;
    bool invertedCrossed=false;
+   double rawWantSl=wantSl;
+   double rawWantTp=wantTp;
+   double noiseTol=MathMax(3.0*si2.stopLevel,10.0*si2.point);
+
    if(local.kind==CP_ORD_PENDING)
      {
-      wantSl=CopierFitStopAt(wantSl,local.side,true,anchorPx,si2,clampedSl);
-      wantTp=CopierFitStopAt(wantTp,local.side,false,anchorPx,si2,clampedTp);
+      wantSl=CopierFitStopAt(rawWantSl,local.side,true,anchorPx,si2,clampedSl);
+      wantTp=CopierFitStopAt(rawWantTp,local.side,false,anchorPx,si2,clampedTp);
+      // BUG-06 & N-01: Protect pending orders against crossed stops
+      if(anchorPx>0.0)
+        {
+         if(rawWantSl>0.0)
+           {
+            double distSl=(local.side==CP_SIDE_BUY)?(rawWantSl-anchorPx):(anchorPx-rawWantSl);
+            if(distSl>=0.0) // crossed anchorPx
+              {
+               if(distSl<=noiseTol)
+                 {
+                  if(local.sl>0.0) { wantSl=local.sl; clampedSl=false; invertedCrossed=true; }
+                  else if(g_senderCfg[si].emergencySLPips>0.0)
+                    {
+                     double emSlPx=(local.side==CP_SIDE_BUY) ? (anchorPx-g_senderCfg[si].emergencySLPips*CopierPipOf(si2))
+                                                             : (anchorPx+g_senderCfg[si].emergencySLPips*CopierPipOf(si2));
+                     wantSl=CopierFitStopAt(NormalizeDouble(emSlPx,si2.digits),local.side,true,anchorPx,si2,clampedSl);
+                    }
+                 }
+               else clampedSl=true;
+              }
+           }
+         if(rawWantTp>0.0)
+           {
+            double distTp=(local.side==CP_SIDE_BUY)?(anchorPx-rawWantTp):(rawWantTp-anchorPx);
+            if(distTp>=0.0) // crossed anchorPx
+              {
+               if(distTp<=noiseTol)
+                 {
+                  if(local.tp>0.0) { wantTp=local.tp; clampedTp=false; invertedCrossed=true; }
+                 }
+               else clampedTp=true;
+              }
+           }
+        }
       if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
          g_log.Warn("stop for pending order "+local.uid+" "+local.sym+" was inside this"
                     +" broker's minimum distance and has been widened");
      }
    else
      {
-      double rawWantSl=wantSl;
-      double rawWantTp=wantTp;
-      wantSl=CopierFitStop(wantSl,local.sym,local.side,true,si2,clampedSl);
-      wantTp=CopierFitStop(wantTp,local.sym,local.side,false,si2,clampedTp);
-      // ISSUE-02 / N-03: In both regular and inverted copying, avoid clamping stops onto live market price
-      // if the RAW un-clamped stop already crossed market price; retain local stop and do not cache in g_stopSig
+      wantSl=CopierFitStop(rawWantSl,local.sym,local.side,true,si2,clampedSl);
+      wantTp=CopierFitStop(rawWantTp,local.sym,local.side,false,si2,clampedTp);
+      // ISSUE-02 / N-01: Distinguish noise crossing vs real breakthrough
       double mktPx=0.0;
       if(CopierGetClosePrice(local.sym,local.side,mktPx) && mktPx>0.0)
         {
-         if(rawWantTp>0.0 && ((local.side==CP_SIDE_BUY && rawWantTp<=mktPx) || (local.side==CP_SIDE_SELL && rawWantTp>=mktPx)))
+         if(rawWantSl>0.0)
            {
-            wantTp=local.tp;
-            clampedTp=false;
-            invertedCrossed=true;
+            double distSl=(local.side==CP_SIDE_BUY)?(rawWantSl-mktPx):(mktPx-rawWantSl);
+            if(distSl>=0.0) // crossed live market close price
+              {
+               if(distSl<=noiseTol)
+                 {
+                  // Noise crossing: retain local stop to avoid premature stopout, or use emergency SL if bare
+                  if(local.sl>0.0) { wantSl=local.sl; clampedSl=false; invertedCrossed=true; }
+                  else if(g_senderCfg[si].emergencySLPips>0.0)
+                    {
+                     double emSlPx=(local.side==CP_SIDE_BUY) ? (mktPx-g_senderCfg[si].emergencySLPips*CopierPipOf(si2))
+                                                             : (mktPx+g_senderCfg[si].emergencySLPips*CopierPipOf(si2));
+                     wantSl=CopierFitStop(NormalizeDouble(emSlPx,si2.digits),local.sym,local.side,true,si2,clampedSl);
+                    }
+                 }
+               else
+                 {
+                  // Real breakthrough: market ran through stop. PROTOCOL.md: clamp to closest broker distance
+                  clampedSl=true;
+                 }
+              }
            }
-         if(rawWantSl>0.0 && ((local.side==CP_SIDE_BUY && rawWantSl>=mktPx) || (local.side==CP_SIDE_SELL && rawWantSl<=mktPx)))
+         if(rawWantTp>0.0)
            {
-            wantSl=local.sl;
-            clampedSl=false;
-            invertedCrossed=true;
+            double distTp=(local.side==CP_SIDE_BUY)?(mktPx-rawWantTp):(rawWantTp-mktPx);
+            if(distTp>=0.0) // crossed live market close price
+              {
+               if(distTp<=noiseTol)
+                 {
+                  if(local.tp>0.0) { wantTp=local.tp; clampedTp=false; invertedCrossed=true; }
+                 }
+               else clampedTp=true;
+              }
            }
         }
       if((clampedSl || clampedTp) && g_once.ShouldEmit("slclamp|"+local.uid))
@@ -4717,8 +4793,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(oi>=0) g_stLastMs[oi]=nowMs; // R47-18: Consume throttle window only on successful queue push
       if(local.ticket!=0)
         {
-         // N70-06: Check !emergencyMissing in pushed branch as well, preventing naked orders from caching fake signature
-         if(!clamped && !emergencyMissing)
+         // N70-06 & BUG-12: Check !invertedCrossed in pushed branch too, avoiding caching signature when stops crossed
+         if(!clamped && !emergencyMissing && !invertedCrossed)
            {
             g_stopSig[sh].ticket=local.ticket;
             g_stopSig[sh].epoch=g_stOvEpoch;
@@ -7300,6 +7376,8 @@ void HandleCmd(const CopierEnv &e)
       //--- F-03: preserve risk-reducing actions (CLOSE/TRIM) across reload
       ClearQueueExceptRiskReducing();
       RemapQueueSenders(beforeSid,beforeN);
+      // BUG-11: Trigger immediate reconvergence on reload
+      g_convergeDirtyAll=true;
 
       int warnings=0;
       for(int i=0;i<g_nSenders;i++)
@@ -7506,9 +7584,9 @@ void CopierSendStatus(const string type,const string payload)
 //--- and in central mode that means the hub can see every sender and no
 //--- receiver, which is exactly backwards from what an operator needs to know.
 //---
-//--- REG and HBT2 differ in ONE field (NAME) and are otherwise identical. A
-//--- heartbeat repeating a name that cannot have changed is bytes for nothing,
-//--- every five seconds, from every node.
+//--- REG and HBT2 share the node payload builder path. HBT2 intentionally
+//--- carries NAME so that if Hub restarts and misses initial REG, identity
+//--- is promptly recovered without requiring node re-registration.
 //---
 //--- Neither carries anything a trade depends on. If the hub is down, or drops
 //--- every one of these, mirroring is completely unaffected - that is Phase 2's
@@ -9224,27 +9302,40 @@ void OnTimer()
       for(int i=0;i<g_nSenders;i++) g_convergeDirty[i]=false;
       for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
      }
-   //--- Periodic check for market reopened on held queue actions (every 5s)
+   //--- Periodic check for market reopened or unblocked exit actions on held queue (every 5s)
+   //--- BUG-01: Removed g_qBackoffMs >= 900000 gate so unblocked exit actions or reopened markets
+   //--- wake the queue immediately even when backoff is intermediate (10s, 60s, 300s).
    static long s_lastMktRecheckMs=0;
-   if(g_qRetryAtMs>0 && g_qn>0 && g_qBackoffMs>=900000 && now-s_lastMktRecheckMs>=5000)
+   if(g_qRetryAtMs>0 && g_qn>0 && now-s_lastMktRecheckMs>=5000)
      {
       s_lastMktRecheckMs=now;
-      bool hasOpenSym=false;
-      string wokeSym="";
+      bool wake=false;
+      string wokeReason="";
       for(int i=0;i<g_qn;i++)
         {
          int idx=g_qHead+i;
+         int k=g_q[idx].kind;
          string s=g_q[idx].sym;
-         if(!SymbolMarketClosed(s))
+         if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
            {
-            hasOpenSym=true;
-            wokeSym=s;
+            string ekey = (g_q[idx].uid!="") ? g_q[idx].uid : (string)g_q[idx].ticket;
+            if(!g_backoff.BlockedExit(ekey))
+              {
+               wake=true;
+               wokeReason="unblocked exit action on "+s;
+               break;
+              }
+           }
+         else if(!SymbolMarketClosed(s))
+           {
+            wake=true;
+            wokeReason="open market for "+s;
             break;
            }
         }
-      if(hasOpenSym)
+      if(wake)
         {
-         g_log.Info("OnTimer: market reopened for "+wokeSym+"; waking action queue immediately");
+         g_log.Info("OnTimer: "+wokeReason+"; waking action queue immediately");
          g_qRetryAtMs=0;
          g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
          g_qSpinPasses=0;
@@ -9568,26 +9659,37 @@ void OnTimer()
 
 void OnTick()
   {
-   // Wake up immediately from market-closed suspension hold (15 min)
-   // upon receiving a fresh tick if any queued symbol is verified open.
-   if(g_qRetryAtMs>0 && g_qn>0 && g_qBackoffMs>=900000)
+   // BUG-01: Wake up immediately from queue backoff upon receiving a fresh tick
+   // if any queued action is an unblocked exit action, or if any queued symbol is verified open.
+   if(g_qRetryAtMs>0 && g_qn>0)
      {
-      bool hasOpenSym=false;
-      string wokeSym="";
+      bool wake=false;
+      string wokeReason="";
       for(int i=0;i<g_qn;i++)
         {
          int idx=g_qHead+i;
+         int k=g_q[idx].kind;
          string s=g_q[idx].sym;
-         if(!SymbolMarketClosed(s))
+         if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
            {
-            hasOpenSym=true;
-            wokeSym=s;
+            string ekey = (g_q[idx].uid!="") ? g_q[idx].uid : (string)g_q[idx].ticket;
+            if(!g_backoff.BlockedExit(ekey))
+              {
+               wake=true;
+               wokeReason="unblocked exit action on "+s;
+               break;
+              }
+           }
+         else if(!SymbolMarketClosed(s))
+           {
+            wake=true;
+            wokeReason="open market for "+s;
             break;
            }
         }
-      if(hasOpenSym)
+      if(wake)
         {
-         g_log.Info("OnTick: market reopened for "+wokeSym+"; waking action queue immediately");
+         g_log.Info("OnTick: "+wokeReason+"; waking action queue immediately");
          g_qRetryAtMs=0;
          g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
          g_qSpinPasses=0;

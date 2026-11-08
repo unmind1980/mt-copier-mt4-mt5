@@ -244,11 +244,6 @@ const MAX_FIRED_KEYS: usize = 2048;
 /// measurement establishes the baseline and never fires - a node's opening
 /// position in its own timezone is a fact, not an event.
 pub fn drift_jumped(prev: Option<i64>, cur: i64, threshold: i64) -> bool {
-    // A clock offset within threshold is healthy. Recovering from an old drift
-    // back to healthy (e.g. cur=0) must NOT trigger a drift alert.
-    if cur.abs() < threshold {
-        return false;
-    }
     match prev {
         Some(p) => (cur - p).abs() >= threshold,
         None => false,
@@ -381,10 +376,6 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
         //--- a broken clock.
         if let Some(cur) = n.drift_secs {
             let prev = s.alerts.last_drift_secs.get(&n.key).copied();
-            // Keep the baseline updated whenever the clock offset is within healthy range
-            if cur.abs() < DRIFT_ALERT_SECS {
-                s.alerts.last_drift_secs.insert(n.key.clone(), cur);
-            }
             // If the node only reports broker server time (no GTS), suppress alerts
             // during weekend market closure or when broker ticks are frozen (feed stall).
             let suppress_broker_drift = n.node_gts.is_none() && (is_weekend_market_closed(now) || n.ts_frozen);
@@ -438,6 +429,11 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
             let prev_trip = s.alerts.last_risk_tripped.get(&n.key).cloned().unwrap_or_default();
             if !n.risk.is_empty() && n.risk != "ok" {
                 if n.risk != prev_trip {
+                    // BUG-04: If risk tripped condition changed (e.g. escalated from "daily" to "drawdown"),
+                    // re-arm the silence timer so the escalation alert is NOT suppressed by the prior 300s window!
+                    if !prev_trip.is_empty() {
+                        s.alerts.rearm("risk.tripped", &n.key);
+                    }
                     let a = Alert {
                         ts: now,
                         kind: "risk.tripped",
@@ -585,8 +581,8 @@ mod tests {
         assert!(!drift_jumped(Some(-10800), -10800, 300));
         // An offset that jumps beyond threshold DOES fire.
         assert!(drift_jumped(Some(0), 400, 300));
-        // Recovering back to normal (cur within threshold) does NOT fire.
-        assert!(!drift_jumped(Some(-10800), 0, 300));
+        // The same clock stepping three hours IS a broken clock.
+        assert!(drift_jumped(Some(-10800), 0, 300));
         // Jitter within threshold does not fire.
         assert!(!drift_jumped(Some(400), 450, 300));
         // Exactly at the threshold fires (>=).
@@ -682,5 +678,46 @@ mod tests {
         let fired6 = evaluate(&mut s, now + 45);
         assert_eq!(fired6.len(), 1);
         assert_eq!(fired6[0].kind, "node.offline");
+    }
+
+    #[test]
+    fn risk_tripped_escalation_fires_in_silence_window() {
+        use std::time::Instant;
+        let mut s = Shared::new(
+            6000,
+            std::sync::Arc::new(crate::audit::Audit::disabled()),
+            std::sync::Arc::new(crate::config::ConfigStore::disabled()),
+            std::sync::Arc::new(crate::commands::CommandStore::disabled()),
+            false,
+            None,
+            crate::cluster::ClusterManager::disabled(),
+        );
+        let now = 1000u64;
+        s.reg.on_reg(
+            "receiver",
+            "9999",
+            "v1",
+            "Receiver 9999",
+            60,
+            Instant::now(),
+        );
+
+        // Receiver reports daily loss trip
+        if let Some(n) = s.reg.get_mut("receiver:9999") {
+            n.risk = "daily".to_string();
+        }
+        let fired = evaluate(&mut s, now);
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].kind, "risk.tripped");
+        assert_eq!(fired[0].detail["trip"], "daily");
+
+        // Within 10s (inside 300s silence window), risk escalates to drawdown
+        if let Some(n) = s.reg.get_mut("receiver:9999") {
+            n.risk = "drawdown".to_string();
+        }
+        let fired2 = evaluate(&mut s, now + 10);
+        assert_eq!(fired2.len(), 1, "escalation to drawdown must not be suppressed by silence window");
+        assert_eq!(fired2[0].kind, "risk.tripped");
+        assert_eq!(fired2[0].detail["trip"], "drawdown");
     }
 }

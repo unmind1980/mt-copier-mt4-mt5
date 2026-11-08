@@ -151,7 +151,7 @@ def announce(sock, seq, ts=None):
     """A REG, optionally with a chosen TS for the drift test."""
     if ts is None:
         ts = int(time.time())
-    env = (f"V=1|SID={RECV}|SSID={RECV}|SEQ={seq}|TS={ts}|MS=0|T=REG|"
+    env = (f"V=1|SID={RECV}|SSID={RECV}|SEQ={seq}|TS={ts}|MS=0|GTS={ts}|T=REG|"
            f"P=ROLE=receiver;ACC={RECV};VER=2.0;NAME=alert-test;UP=1")
     sock.send_multipart([b"@hub", env.encode()])
 

@@ -761,7 +761,19 @@ fn leftover_rotations(path: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    out.sort();
+    // BUG-13: Sort by numeric rotation number rather than lexicographical string
+    out.sort_by(|a, b| {
+        let extract_rot = |p: &std::path::Path| -> u64 {
+            p.file_name()
+                .and_then(|f| f.to_str())
+                .and_then(|s| {
+                    let base = s.split(".gz.tmp.").next().unwrap_or(s);
+                    base.rsplit('.').next()?.parse::<u64>().ok()
+                })
+                .unwrap_or(0)
+        };
+        extract_rot(a).cmp(&extract_rot(b)).then_with(|| a.cmp(b))
+    });
     out
 }
 

@@ -126,11 +126,16 @@ impl Positions {
             return; // no identity, no row
         }
         self.parsed += 1;
-        if let Some(dec) = v.declared {
-            if dec != v.records {
-                self.mismatched += 1;
-            }
+        // BUG-07: Reject corrupt, truncated snapshots where declared N does not match records
+        let count_ok = match v.declared {
+            Some(dec) => dec == v.records,
+            None => true,
+        };
+        if !count_ok {
+            self.mismatched += 1;
+            return;
         }
+
         let e = self.by_sender.entry(sid.to_string()).or_insert_with(|| SenderView {
             count: 0,
             lots: 0.0,
@@ -140,14 +145,6 @@ impl Positions {
             snaps: 0,
             items: Arc::new(Vec::new()),
         });
-
-        // F-11 & N49-11: If parsing yielded 0 records on a snapshot without explicit N=0 declaration
-        // (e.g. corrupted decompression or truncated missing N=), preserve the previous view rather than falsely clearing to 0.
-        if v.records == 0 && e.count > 0 && v.declared != Some(0) {
-            e.updated = now;
-            e.snaps += 1;
-            return;
-        }
 
         e.count = v.records;
         e.lots = v.lots;
@@ -556,6 +553,24 @@ mod tests {
         let mut pos = Positions::new();
         pos.on_snap("1", v, Instant::now());
         assert_eq!(pos.mismatched, 0);
+    }
+
+    #[test]
+    fn truncated_snapshot_is_rejected_without_overwriting() {
+        let mut pos = Positions::new();
+        let r1 = rec("U1", "EURUSD", 1, "0.5");
+        let r2 = rec("U2", "GBPUSD", -1, "0.3");
+        let valid = parse_snap(&snap(&[&r1, &r2]));
+        pos.on_snap("S1", valid, Instant::now());
+        assert_eq!(pos.by_sender["S1"].count, 2);
+        assert_eq!(pos.mismatched, 0);
+
+        // Truncated snapshot: declares N=2 but carries only 1 record
+        let corrupt_payload = format!("N=2;R={};H=xyz", r1);
+        let corrupt = parse_snap(corrupt_payload.as_bytes());
+        pos.on_snap("S1", corrupt, Instant::now());
+        assert_eq!(pos.mismatched, 1);
+        assert_eq!(pos.by_sender["S1"].count, 2);
     }
 
     #[test]

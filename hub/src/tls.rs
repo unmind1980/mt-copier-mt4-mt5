@@ -662,6 +662,9 @@ impl TlsManager {
         let key_pem = fs::read_to_string(&self.cert_paths.privkey_pem)
             .map_err(|e| format!("Failed to read privkey.pem: {}", e))?;
 
+        // Threat model / N-06: Local PKCS#12 container password. The PFX file resides locally on the
+        // hub host where the process already owns equal privileges to the key file; the password
+        // exists to satisfy the PKCS#12 container format structure.
         let pfx_bytes = pem_to_pkcs12(&cert_pem, &key_pem, "mtc_tls_pass")?;
         // Persist PFX cache file for fast native reload
         let _ = write_secret_atomic(&self.cert_paths.pfx_file, &pfx_bytes);
@@ -747,6 +750,9 @@ impl TlsManager {
     /// Generate and activate a self-signed certificate.
     pub fn apply_self_signed(&self, domain: &str, https_port: u16) -> Result<(), String> {
         let (cert_pem, key_pem) = generate_self_signed(domain)?;
+        // Threat model / N-06: Local PKCS#12 container password. The PFX file resides locally on the
+        // hub host where the process already owns equal privileges to the key file; the password
+        // exists to satisfy the PKCS#12 container format structure.
         let pfx_bytes = pem_to_pkcs12(&cert_pem, &key_pem, "mtc_tls_pass")?;
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
 

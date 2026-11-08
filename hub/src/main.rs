@@ -84,6 +84,7 @@ mod service;
 mod stats;
 mod tls;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -703,6 +704,7 @@ fn unix_millis() -> u64 {
 struct HubState {
     seq: u64,
     role: String,
+    last_topo_sent: HashMap<String, (String, String, u64, String)>,
 }
 
 /// Echo a node's probe back, on the two-frame channel.
@@ -1561,7 +1563,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     println!();
 
     let mut st = Stats::new();
-    let mut state = HubState { seq: 0, role: cluster_mgr.role().to_string() };
+    let mut state = HubState { seq: 0, role: cluster_mgr.role().to_string(), last_topo_sent: HashMap::new() };
     //--- M2 + M3 state, and M8's view of it.
     //---
     //--- Both now live behind a mutex because the API thread reads them. That
@@ -1920,8 +1922,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         let mut s = snap_shared.lock_or_recover();
                         let before = s.pos.mismatched;
                         s.pos.on_snap(&sid, view, pos_now);
-                        // BUG-02: If sender snapshot carries 0 records, immediately clear held_items in registry to keep WebUI in sync
-                        if carried == 0 {
+                        // BUG-02 & BUG-07: If sender snapshot declares N=0 and carries 0 records, clear held_items in registry
+                        if declared == Some(0) && carried == 0 {
                             s.reg.clear_held_items("sender", &sid);
                         }
                         s.pos.mismatched - before
@@ -2226,7 +2228,12 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     };
                                     let primary_ep = if is_prim { &local_zmq } else { active_peer_zmq };
                                     let standby_ep = if is_prim { active_peer_zmq } else { &local_zmq };
-                                    if !primary_ep.is_empty() || !standby_ep.is_empty() {
+                                    let topo_key = (primary_ep.to_string(), standby_ep.to_string(), cur_epoch, cur_role.clone());
+                                    let should_send_topo = match state.last_topo_sent.get(&acc) {
+                                        Some(prev) => prev != &topo_key,
+                                        None => true,
+                                    };
+                                    if (!primary_ep.is_empty() || !standby_ep.is_empty()) && should_send_topo {
                                         let _ = send_topology(
                                             &sock,
                                             &acc,
@@ -2236,6 +2243,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                             &cur_role,
                                             &mut state,
                                         );
+                                        state.last_topo_sent.insert(acc.clone(), topo_key);
                                     }
 
                                     let name = envelope_kv(&payload, "NAME");

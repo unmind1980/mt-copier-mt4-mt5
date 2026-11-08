@@ -2037,6 +2037,7 @@ pub fn spawn(
                         None
                     };
                     let app = app_base_main.clone();
+                    let tls_mgr_spawn = Arc::clone(&tls_mgr);
                     tokio::spawn(async move {
                         if let Some(acceptor) = acceptor_opt {
                             match acceptor.accept(tcp_stream).await {
@@ -2050,7 +2051,58 @@ pub fn spawn(
                             // do NOT fall back to plaintext HTTP (prevent credential exposure). Drop the connection.
                             eprintln!("[hub] TLS ERR: Rejecting connection on https port {} because certificate acceptor is not ready", current_port);
                         } else {
-                            crate::tls::serve_stream_with_router(tcp_stream, app).await;
+                            // BUG-10: If TLS is enabled on a dedicated port and enable_http_redirect is active,
+                            // redirect browser/dashboard requests arriving on the configured http_port (e.g. port 80)
+                            // to HTTPS while preserving health/cluster/ACME paths.
+                            let redirect_opt = {
+                                let c = tls_mgr_spawn.config.lock_or_recover();
+                                let has_acceptor = tls_mgr_spawn.acceptor.read_or_recover().is_some();
+                                if c.enabled && c.enable_http_redirect && has_acceptor && c.https_port != 0 && c.https_port != current_port && current_port == c.http_port {
+                                    Some((c.domain.clone(), c.https_port))
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some((domain, https_port)) = redirect_opt {
+                                let redirect_app = app.clone().layer(axum::middleware::from_fn(
+                                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+                                        let domain = domain.clone();
+                                        async move {
+                                            use axum::response::IntoResponse;
+                                            let path = req.uri().path();
+                                            let is_html_nav = path == "/" || path == "/index.html"
+                                                || req.headers().get(axum::http::header::ACCEPT)
+                                                    .and_then(|a| a.to_str().ok())
+                                                    .map(|s| s.contains("text/html"))
+                                                    .unwrap_or(false);
+                                            if !is_html_nav || path == "/healthz" || path == "/readyz" || path.starts_with("/api/v1/cluster") || path.starts_with("/.well-known") {
+                                                return next.run(req).await;
+                                            }
+                                            let host_hdr = req.headers().get(axum::http::header::HOST)
+                                                .and_then(|h| h.to_str().ok())
+                                                .and_then(|h| h.split(':').next())
+                                                .unwrap_or("");
+                                            let host = if !domain.is_empty() {
+                                                domain.as_str()
+                                            } else if !host_hdr.is_empty() {
+                                                host_hdr
+                                            } else {
+                                                "localhost"
+                                            };
+                                            let pq = req.uri().path_and_query().map(|x| x.as_str()).unwrap_or("/");
+                                            let target = if https_port == 443 {
+                                                format!("https://{}{}", host, pq)
+                                            } else {
+                                                format!("https://{}:{}{}", host, https_port, pq)
+                                            };
+                                            axum::response::Redirect::permanent(&target).into_response()
+                                        }
+                                    },
+                                ));
+                                crate::tls::serve_stream_with_router(tcp_stream, redirect_app).await;
+                            } else {
+                                crate::tls::serve_stream_with_router(tcp_stream, app).await;
+                            }
                         }
                     });
                 }
@@ -3463,13 +3515,15 @@ async fn cluster_status(
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path) = {
+    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path, cfg_path, cmd_path) = {
         let s = st.lock_or_recover();
         let cfg_lines = s.cfg.total_lines();
         let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
         let users_p = s.users.path().to_path_buf();
         let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
         let curve_p = s.cluster.curve_clients_path.clone();
+        let cfg_p = s.cfg.path().to_path_buf();
+        let cmd_p = s.cmds.path().to_path_buf();
         (
             s.cluster.state.cluster_id.clone(),
             s.cluster.state.hub_id.clone(),
@@ -3484,12 +3538,16 @@ async fn cluster_status(
             users_p,
             notif_p,
             curve_p,
+            cfg_p,
+            cmd_p,
         )
     };
-    // N87-02: Compute file hashes strictly OUTSIDE SharedState lock so 1Hz polling does not block forwarding thread
+    // N87-02 & BUG-03: Compute file hashes strictly OUTSIDE SharedState lock so 1Hz polling does not block forwarding thread
     let users_hash = crate::cluster::file_sha256(&users_path);
     let notif_hash = crate::cluster::file_sha256(&notif_path);
     let curve_clients_hash = crate::cluster::file_sha256(&curve_clients_path);
+    let cfg_hash = crate::cluster::file_sha256(&cfg_path);
+    let cmd_hash = crate::cluster::file_sha256(&cmd_path);
 
     let resp = crate::cluster::ClusterStatusResponse {
         ok: true,
@@ -3501,6 +3559,8 @@ async fn cluster_status(
         cfg_lines,
         cmd_lines,
         max_cmd_seq,
+        cfg_hash,
+        cmd_hash,
         users_hash,
         notif_hash,
         curve_clients_hash,
@@ -4116,12 +4176,14 @@ struct TlsImportBody {
     key_pem: String,
     domain: String,
     https_port: Option<u16>,
+    enable_http_redirect: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
 struct TlsSelfSignedBody {
     domain: String,
     https_port: Option<u16>,
+    enable_http_redirect: Option<bool>,
 }
 
 async fn tls_status(
@@ -4304,6 +4366,9 @@ async fn tls_import(
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
+    if let Some(redir) = b.enable_http_redirect {
+        tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+    }
     match tls_mgr.apply_imported_cert(&b.cert_pem, &b.key_pem, &b.domain, port) {
         Ok(()) => {
             audit.record(&sess.user_id, "", "tls.import", &b.domain, None, None, "ok");
@@ -4337,6 +4402,9 @@ async fn tls_self_signed(
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
+    if let Some(redir) = b.enable_http_redirect {
+        tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+    }
     match tls_mgr.apply_self_signed(&b.domain, port) {
         Ok(()) => {
             audit.record(&sess.user_id, "", "tls.self_signed", &b.domain, None, None, "ok");

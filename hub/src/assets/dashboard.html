@@ -9124,7 +9124,7 @@ function saveSslConfig(){
     fetch("/api/v1/tls/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cert_pem: certPem, key_pem: keyPem, domain: domain || "custom-cert", https_port: port })
+      body: JSON.stringify({ cert_pem: certPem, key_pem: keyPem, domain: domain || "custom-cert", https_port: port, enable_http_redirect: $("ssl_chk_redirect") ? $("ssl_chk_redirect").checked : true })
     }).then(function(r){ return r.json(); }).then(function(res){
       resetSaveBtn();
       if(res.ok){
@@ -9149,7 +9149,7 @@ function saveSslConfig(){
     fetch("/api/v1/tls/self-signed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ domain: domain || "127-0-0-1.sslip.io", https_port: port })
+      body: JSON.stringify({ domain: domain || "127-0-0-1.sslip.io", https_port: port, enable_http_redirect: $("ssl_chk_redirect") ? $("ssl_chk_redirect").checked : true })
     }).then(function(r){ return r.json(); }).then(function(res){
       resetSaveBtn();
       if(res.ok){

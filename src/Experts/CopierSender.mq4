@@ -493,9 +493,9 @@ double BroadcastLots(const double actual,const double initLots=0.0)
 //--- never guesses, so a node that does not announce itself is invisible - and
 //--- "invisible" is indistinguishable from "not running" on the far side.
 //---
-//--- REG and HBT2 differ in ONE field (NAME) and are otherwise identical, which
-//--- is why they share a builder path. A heartbeat repeating a name that cannot
-//--- have changed is bytes for nothing, every five seconds, from every node.
+//--- REG and HBT2 share the node payload builder path. HBT2 intentionally
+//--- carries NAME so that if Hub restarts and misses initial REG, identity
+//--- is promptly recovered without requiring node re-registration.
 //---
 //--- Neither message carries anything a trade depends on. If the hub is down,
 //--- or drops every one of these, trading is completely unaffected - that is
@@ -562,7 +562,7 @@ void Emit(const string type,const string payload,const bool snapshot,
      {
       e.sid=SenderId();
       bool ok=g_tp.Send(CopierEncodeEnv(e));
-      if(!ok && !snapshot)
+      if(!ok && !snapshot && g_once.ShouldEmit("direct_send_fail|"+type))
          g_log.Warn("send failed type="+type+" errno="+(string)g_tp.LastErrno());
      }
 
@@ -581,7 +581,7 @@ void Emit(const string type,const string payload,const bool snapshot,
    if(g_hubOn && centralToo)
      {
       e.sid=(string)g_nid;
-      if(!g_tp.SendUp((string)g_nid,CopierEncodeEnv(e)) && !snapshot)
+      if(!g_tp.SendUp((string)g_nid,CopierEncodeEnv(e)) && !snapshot && g_once.ShouldEmit("hub_send_fail|"+type))
          g_log.Warn("hub send failed type="+type+" errno="
                     +(string)g_tp.LastErrno());
      }
@@ -2257,6 +2257,10 @@ void OnTimer()
         }
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
+      // BUG-08: If we already exhausted our 8 probes for this tick and this slot has never been probed
+      // (g_slotMissCount[k] == 0), don't increment its miss count now! Leave it at 0 so it gets probed
+      // with g_slotMissCount <= 1 on the very next 5ms tick!
+      if(deepHistProbes>=8 && g_slotMissCount[k]==0) continue;
       g_slotMissCount[k]++;
       if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
       // R47-03 & P1: Instant 0ms close when confirmed in history on initial miss;

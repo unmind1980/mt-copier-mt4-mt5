@@ -404,7 +404,7 @@ impl CommandStore {
                 }
                 let attempts = v["attempts"].as_u64().unwrap_or(0) as u32;
                 let step = RETRY_LADDER_SECS
-                    [(attempts as usize).min(RETRY_LADDER_SECS.len() - 1)];
+                    [(attempts.saturating_sub(1) as usize).min(RETRY_LADDER_SECS.len() - 1)];
                 let cmd = Command {
                     id: id.clone(),
                     node: node.clone(),
@@ -971,15 +971,28 @@ impl CommandStore {
     /// Mark an in-flight command as superseded by a newer revision, removing from in_flight.
     pub fn supersede(&self, id: &str, current_rev: u64) {
         let mut inner = self.inner.lock_or_recover();
-        inner.in_flight.remove(id);
-        if let Some(c) = inner.commands.get_mut(id) {
+        let snap_opt = if let Some(c) = inner.commands.get(id) {
             if c.state == STATE_PENDING {
-                c.state = STATE_SUPERSEDED.to_string();
-                c.err = format!("superseded by rev {}", current_rev);
-                let snap = c.clone();
-                if !inner.append(&snap) {
-                    eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on supersede for {}", id);
+                let mut snap = c.clone();
+                snap.state = STATE_SUPERSEDED.to_string();
+                snap.ts = unix_secs();
+                snap.err = format!("superseded by rev {}", current_rev);
+                Some(snap)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(snap) = snap_opt {
+            // BUG-09: Persist first before altering in-memory in_flight and commands
+            if inner.append(&snap) {
+                if let Some(c) = inner.commands.get_mut(id) {
+                    *c = snap;
                 }
+                inner.in_flight.remove(id);
+            } else {
+                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on supersede for {}", id);
             }
         }
     }
@@ -1193,11 +1206,13 @@ pub fn command_id_op(node: &str, op: &str, seq: u64) -> String {
 /// keeps the LAST line for an id, so a snapshot file and a full history are
 /// equivalent inputs - only the size differs.
 fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io::Result<usize> {
-    let tmp = path.with_extension("jsonl.compact");
+    let tmp = path.with_extension(format!("compact.{}.tmp", std::process::id()));
     {
         let mut f = std::fs::File::create(&tmp)?;
+        let mut sorted: Vec<&Command> = commands.values().collect();
+        sorted.sort_by(|a, b| (a.ts, a.seq, &a.id).cmp(&(b.ts, b.seq, &b.id)));
         let mut buf = String::new();
-        for c in commands.values() {
+        for c in sorted {
             let line = json!({
                 "v": 1,
                 "id": c.id,
@@ -1221,9 +1236,7 @@ fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io:
         f.write_all(buf.as_bytes())?;
         f.sync_data()?;
     }
-    //--- std::fs::rename replaces on Windows (MoveFileEx with REPLACE_EXISTING)
-    //--- and on POSIX, so the swap is atomic on both.
-    std::fs::rename(&tmp, path)?;
+    crate::cluster::atomic_replace_file(&tmp, path)?;
     Ok(commands.len())
 }
 

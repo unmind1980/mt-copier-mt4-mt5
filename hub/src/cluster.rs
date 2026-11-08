@@ -70,6 +70,10 @@ pub struct ClusterStatusResponse {
     pub cfg_lines: usize,
     pub cmd_lines: usize,
     pub max_cmd_seq: u64,
+    #[serde(default)]
+    pub cfg_hash: String,
+    #[serde(default)]
+    pub cmd_hash: String,
     pub users_hash: String,
     pub notif_hash: String,
     pub curve_clients_hash: String,
@@ -627,19 +631,23 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 // preventing unsynced Standby from claiming equal epoch and causing split-brain/data-loss on handover.
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
-                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_path, notif_path, curve_path) = {
+                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
                     let s = st.lock_or_recover();
                     let cfg_tot = s.cfg.total_lines();
                     let (cmd_tot, max_seq) = s.cmds.sync_stats();
                     let u_p = s.users.path().to_path_buf();
                     let n_p = s.notif_store.lock_or_recover().path().to_path_buf();
                     let c_p = s.cluster.curve_clients_path.clone();
-                    (cfg_tot, cmd_tot, max_seq, u_p, n_p, c_p)
+                    let cfg_p = s.cfg.path().to_path_buf();
+                    let cmd_p = s.cmds.path().to_path_buf();
+                    (cfg_tot, cmd_tot, max_seq, u_p, n_p, c_p, cfg_p, cmd_p)
                 };
 
                 let users_h = file_sha256(&users_path);
                 let notif_h = file_sha256(&notif_path);
                 let curve_h = file_sha256(&curve_path);
+                let cfg_h = file_sha256(&cfg_path);
+                let cmd_h = file_sha256(&cmd_path);
 
                 //--- N57-12: `> 0` created a blind spot. When the primary's
                 //--- journal is compacted to nothing (everything terminal and
@@ -688,12 +696,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let curve_diff =
                     local_curve_on && remote_curve_on && remote_st.curve_clients_hash != curve_h;
 
-                let needs_sync = remote_st.cfg_lines > cfg_lines_count
-                    || remote_st.cmd_lines > cmd_lines_count
-                    || remote_st.max_cmd_seq > local_max_cmd_seq
-                    || remote_st.cmd_lines < cmd_lines_count
-                    || remote_st.cfg_lines < cfg_lines_count
-                    || (users_sync_enabled && remote_st.users_hash != users_h && !remote_st.users_hash.is_empty() && !users_h.is_empty())
+                let cfg_diff = !cfg_h.is_empty() && !remote_st.cfg_hash.is_empty() && remote_st.cfg_hash != cfg_h;
+                let cmd_diff = !cmd_h.is_empty() && !remote_st.cmd_hash.is_empty() && remote_st.cmd_hash != cmd_h;
+                // BUG-03: Allow users sync when Standby starts with no local users file (users_h is empty)
+                let users_diff = users_sync_enabled && remote_st.users_sync_enabled && !remote_st.users_hash.is_empty() && remote_st.users_hash != users_h;
+
+                let needs_sync = remote_st.cfg_lines != cfg_lines_count
+                    || remote_st.cmd_lines != cmd_lines_count
+                    || remote_st.max_cmd_seq != local_max_cmd_seq
+                    || cfg_diff
+                    || cmd_diff
+                    || users_diff
                     || notif_diff
                     || curve_diff;
 
@@ -712,13 +725,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
 
                     let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
+                        || (cfg_lines_count == remote_st.cfg_lines && cfg_diff)
                         || std::mem::replace(&mut force_full_cfg_resync, false);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
-                    // BUG-05 & H5: If command line count is equal but remote sequence is ahead,
+                    // BUG-03 & BUG-05 & H5: If command line count is equal but remote sequence differs or cmd_diff,
                     // or if delta sync stalled on filtered lines, request from line 0 and replace_all to resolve deadlock.
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
-                        || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq > local_max_cmd_seq)
+                        || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq != local_max_cmd_seq)
+                        || (cmd_lines_count == remote_st.cmd_lines && cmd_diff)
                         || std::mem::replace(&mut force_full_cmd_resync, false);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
@@ -1087,15 +1102,42 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 }
             } else {
-                // BUG-02: Primary node verifies if Standby peer has caught up with our journals
+                // BUG-02 & BUG-03: Primary node verifies if Standby peer has caught up with our journals and hashes
+                let (my_cfg, my_cmd, my_seq, cfg_p, cmd_p, u_p, c_p) = {
+                    let s = st.lock_or_recover();
+                    (
+                        s.cfg.total_lines(),
+                        s.cmds.sync_stats().0,
+                        s.cmds.sync_stats().1,
+                        s.cfg.path().to_path_buf(),
+                        s.cmds.path().to_path_buf(),
+                        s.users.path().to_path_buf(),
+                        s.cluster.curve_clients_path.clone(),
+                    )
+                };
+                let n_p = {
+                    let s = st.lock_or_recover();
+                    let x = s.notif_store.lock_or_recover().path().to_path_buf();
+                    x
+                };
+                let my_cfg_h = file_sha256(&cfg_p);
+                let my_cmd_h = file_sha256(&cmd_p);
+                let my_u_h = file_sha256(&u_p);
+                let my_n_h = file_sha256(&n_p);
+                let my_c_h = file_sha256(&c_p);
+
+                let hashes_ok = (remote_st.cfg_hash.is_empty() || remote_st.cfg_hash == my_cfg_h)
+                    && (remote_st.cmd_hash.is_empty() || remote_st.cmd_hash == my_cmd_h)
+                    && (!remote_st.users_sync_enabled || remote_st.users_hash.is_empty() || remote_st.users_hash == my_u_h)
+                    && (remote_st.notif_hash.is_empty() || remote_st.notif_hash == my_n_h)
+                    && (remote_st.curve_clients_hash.is_empty() || remote_st.curve_clients_hash == my_c_h);
+
                 let mut s = st.lock_or_recover();
-                let my_cfg = s.cfg.total_lines();
-                let (my_cmd, my_seq) = s.cmds.sync_stats();
-                if remote_st.cmd_lines < my_cmd || remote_st.max_cmd_seq < my_seq || remote_st.cfg_lines < my_cfg {
+                if remote_st.cmd_lines != my_cmd || remote_st.max_cmd_seq != my_seq || remote_st.cfg_lines != my_cfg || !hashes_ok {
                     s.cluster.sync_status = "lagging".to_string();
                     s.cluster.last_sync_err = format!(
-                        "standby lagging behind (cmd: {}/{} seq: {}/{} cfg: {}/{})",
-                        remote_st.cmd_lines, my_cmd, remote_st.max_cmd_seq, my_seq, remote_st.cfg_lines, my_cfg
+                        "standby lagging behind (cmd: {}/{} seq: {}/{} cfg: {}/{} hashes_ok: {})",
+                        remote_st.cmd_lines, my_cmd, remote_st.max_cmd_seq, my_seq, remote_st.cfg_lines, my_cfg, hashes_ok
                     );
                 } else {
                     s.cluster.sync_status = "synced".to_string();
