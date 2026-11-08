@@ -3193,6 +3193,14 @@ void TestR47R48Regressions()
    Ok("modify: parse legacy payload without PPRICE succeeds", CopierPayloadModifyParse(legacyMod, pModLegacy));
    OkDbl("modify: legacy parsed pprice defaults to 0.0", pModLegacy.pprice, 0.0, 0.00001);
 
+   // BUG-05: CopierPayloadModify with PSTOP and PEXP roundtrip and backward compatibility
+   string modWithStopExp = CopierPayloadModify("TEST1234", 1.08500, 1.08000, 1.09000, 1.08550, 1.08600, 1750000000);
+   Ok("modify: payload contains PSTOP and PEXP", StringFind(modWithStopExp, ";PSTOP=1.086") > 0 && StringFind(modWithStopExp, ";PEXP=1750000000") > 0);
+   CopierPos pMod3;
+   Ok("modify: parse payload with PSTOP and PEXP succeeds", CopierPayloadModifyParse(modWithStopExp, pMod3));
+   OkDbl("modify: parsed pstop matches", pMod3.pstop, 1.08600, 0.00001);
+   Ok("modify: parsed pexpire matches", pMod3.pexpire == 1750000000);
+
    // M12 & MQL-09: PosTable PruneTo cleans up properly (re-use global g_tFresh to avoid 400KB local stack allocation)
    g_tFresh.Clear();
    CopierPos pSample;

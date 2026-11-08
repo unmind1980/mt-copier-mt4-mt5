@@ -1705,15 +1705,15 @@ async fn send_wechat(
         - **{}**: `{}`\n\
         - **{}**: {}\n\
         - **{}**: {}",
-        fmt.title,
-        fmt.lbl_severity,
-        fmt.severity_badge,
-        fmt.lbl_target,
-        fmt.node,
-        fmt.lbl_time,
-        fmt.time_str,
-        fmt.lbl_detail,
-        fmt.detail_summary
+        markdown_escape(&fmt.title),
+        markdown_escape(&fmt.lbl_severity),
+        markdown_escape(&fmt.severity_badge),
+        markdown_escape(&fmt.lbl_target),
+        markdown_escape(&fmt.node),
+        markdown_escape(&fmt.lbl_time),
+        markdown_escape(&fmt.time_str),
+        markdown_escape(&fmt.lbl_detail),
+        markdown_escape(&fmt.detail_summary)
     );
 
     let params = [

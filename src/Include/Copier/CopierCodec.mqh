@@ -743,10 +743,12 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
 //--- know is the SENDER's stops and the SENDER's entry price - and it needs
 //--- both, because a stop is mirrored as a DISTANCE from the sender's entry and
 //--- re-anchored on the receiver's own fill.
-//--- DEF-63-05: Supports optional PPRICE for real-time pending order trigger price updates
+//--- DEF-63-05 & BUG-05: Supports optional PPRICE, PSTOP, PEXP for real-time pending order updates
 string CopierPayloadModify(const string uid,const double openPx,
                            const double sl,const double tp,
-                           const double pprice=0.0)
+                           const double pprice=0.0,
+                           const double pstop=0.0,
+                           const long pexpire=0)
   {
    string s="UID="+uid
           +CP_SEP_KV+"OPN="+CopierFmtDouble(openPx,CP_DIGITS_PX)
@@ -754,10 +756,14 @@ string CopierPayloadModify(const string uid,const double openPx,
           +CP_SEP_KV+"TP="+CopierFmtDouble(tp,CP_DIGITS_PX);
    if(pprice>0.0)
       s+=CP_SEP_KV+"PPRICE="+CopierFmtDouble(pprice,CP_DIGITS_PX);
+   if(pstop>0.0)
+      s+=CP_SEP_KV+"PSTOP="+CopierFmtDouble(pstop,CP_DIGITS_PX);
+   if(pexpire>0)
+      s+=CP_SEP_KV+"PEXP="+(string)pexpire;
    return s;
   }
 
-//--- Fills only uid/openPx/sl/tp and optional pprice; every other field is left for the caller.
+//--- Fills uid/openPx/sl/tp and optional pprice/pstop/pexpire; every other field is left for caller.
 //--- Deliberately NOT CopierPayloadOpenParse - that one refuses a payload
 //--- without a side or a volume, and a stop change carries neither.
 bool CopierPayloadModifyParse(const string payload,CopierPos &p)
@@ -775,6 +781,12 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    string ppStr="";
    if(CopierKvGet(payload,"PPRICE",ppStr)) p.pprice=StringToDouble(ppStr);
    else                                    p.pprice=0.0;
+   string pstopStr="";
+   if(CopierKvGet(payload,"PSTOP",pstopStr)) p.pstop=StringToDouble(pstopStr);
+   else                                      p.pstop=0.0;
+   string expStr="";
+   if(CopierKvGet(payload,"PEXP",expStr))    p.pexpire=(long)StringToInteger(expStr);
+   else                                      p.pexpire=0;
    return true;
   }
 

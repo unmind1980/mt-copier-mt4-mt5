@@ -4186,6 +4186,16 @@ struct TlsSelfSignedBody {
     enable_http_redirect: Option<bool>,
 }
 
+fn tls_ip_client() -> &'static reqwest::Client {
+    static IP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    IP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_millis(1500))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 async fn tls_status(
     axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
@@ -4200,13 +4210,7 @@ async fn tls_status(
         let c = s.tls.config.lock_or_recover().clone();
         c
     };
-    static IP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = IP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_millis(1500))
-            .build()
-            .unwrap_or_default()
-    });
+    let client = tls_ip_client();
     let detected_ip = crate::tls::detect_public_ip(client).await;
     let sslip_domain = detected_ip.as_deref().map(crate::tls::format_sslip_domain);
 
@@ -4236,14 +4240,14 @@ async fn tls_configure(
         return standby_readonly_conflict(&peer_url, "Configuration").into_response();
     }
 
-    // RUST-OPT-02: Only detect public IP on-demand when Auto mode is selected and domain is not explicitly provided
+    // RUST-OPT-02 & BUG-12: Only detect public IP on-demand when Auto mode is selected, reusing client pool with 1500ms timeout
     let target_domain = match b.mode {
         crate::tls::TlsMode::Auto => {
             if let Some(d) = b.domain.as_deref().filter(|s| !s.trim().is_empty()) {
                 d.trim().to_string()
             } else {
-                let client = reqwest::Client::new();
-                let detected_ip = crate::tls::detect_public_ip(&client).await;
+                let client = tls_ip_client();
+                let detected_ip = crate::tls::detect_public_ip(client).await;
                 if let Some(ip) = detected_ip.as_deref() {
                     crate::tls::format_sslip_domain(ip)
                 } else {

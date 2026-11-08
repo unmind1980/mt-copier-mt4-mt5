@@ -821,20 +821,23 @@ impl CommandStore {
         let mut inner = self.inner.lock_or_recover();
         let ids: Vec<String> = inner.in_flight.iter().cloned().collect();
         let mut out = Vec::new();
-        // Collected rather than appended inline: the loop below holds a
-        // mutable borrow of `inner.commands`, and appending needs `inner`.
+        // Collected rather than appended inline: candidate updates are validated and fsynced
+        // to disk BEFORE in-memory state is committed (WAL principle - N-02).
         let mut changed: Vec<Command> = Vec::new();
         let mut finished: Vec<String> = Vec::new();
+        let mut already_finished: Vec<String> = Vec::new();
+        let mut defer_checks: Vec<(String, Instant)> = Vec::new();
+
         for id in ids {
-            let c = match inner.commands.get_mut(&id) {
+            let c = match inner.commands.get(&id) {
                 Some(cmd) => cmd,
                 None => {
-                    finished.push(id);
+                    already_finished.push(id);
                     continue;
                 }
             };
             if c.state != STATE_PENDING {
-                finished.push(id);
+                already_finished.push(id);
                 continue;
             }
             if !writes_enabled && !is_read_only_op(&c.op) {
@@ -852,51 +855,75 @@ impl CommandStore {
                 // Prevents infinite pending accumulation and enables command.unknown alert for dead nodes.
                 let now_secs = unix_secs();
                 if now_secs.saturating_sub(c.ts) >= 1800 {
-                    c.state = STATE_UNKNOWN.to_string();
-                    c.ts = now_secs; // N78-01: stamp transition time so recent_unknown does not drop it as stale
-                    c.err = "node unreachable for 30m (abandoned after timeout)".to_string();
-                    let snapshot = c.clone();
-                    out.push(snapshot.clone());
-                    changed.push(snapshot);
+                    let mut updated = c.clone();
+                    updated.state = STATE_UNKNOWN.to_string();
+                    updated.ts = now_secs; // N78-01: stamp transition time so recent_unknown does not drop it as stale
+                    updated.err = "node unreachable for 30m (abandoned after timeout)".to_string();
+                    out.push(updated.clone());
+                    changed.push(updated);
                     finished.push(id);
                     continue;
                 }
-                c.next_at = now + Duration::from_secs(2);
+                defer_checks.push((id, now + Duration::from_secs(2)));
                 continue;
             }
             let step = RETRY_LADDER_SECS.get(c.attempts as usize).copied();
             match step {
                 Some(secs) => {
-                    c.attempts += 1;
-                    c.next_at = now + Duration::from_secs(secs);
-                    out.push(c.clone());
-                    changed.push(c.clone());
+                    let mut updated = c.clone();
+                    updated.attempts += 1;
+                    updated.next_at = now + Duration::from_secs(secs);
+                    out.push(updated.clone());
+                    changed.push(updated);
                 }
                 None => {
                     // The ladder is exhausted. `unknown`, not `failed` - we do
                     // not know that it did not arrive, only that nobody said.
-                    c.state = STATE_UNKNOWN.to_string();
-                    c.ts = unix_secs(); // N82-01 & N82-02: Stamp transition time so recent_unknown does not drop it and revive cooldown starts afresh
+                    let mut updated = c.clone();
+                    updated.state = STATE_UNKNOWN.to_string();
+                    updated.ts = unix_secs(); // N82-01 & N82-02: Stamp transition time so recent_unknown does not drop it and revive cooldown starts afresh
                     let total_secs: u64 = RETRY_LADDER_SECS.iter().sum();
-                    c.err = format!(
+                    updated.err = format!(
                         "no ACK after {} attempts ({}s ladder exhausted)",
-                        c.attempts,
+                        updated.attempts,
                         total_secs
                     );
-                    let snapshot = c.clone();
-                    out.push(snapshot.clone());
-                    changed.push(snapshot);
+                    out.push(updated.clone());
+                    changed.push(updated);
                     finished.push(id);
                 }
             }
         }
-        for f in finished {
+
+        // Clean up commands that were already finalized or missing from in_flight
+        for f in already_finished {
             inner.in_flight.remove(&f);
         }
-        //--- ONE fsync for the whole batch instead of one per command
-        if let Err(e) = inner.append_many(&changed) {
-            eprintln!("[hub] COMMAND JOURNAL WRITE FAILED in due_gated: {}", e);
+
+        // Apply deferred in-memory next_at checks for unreachable nodes
+        for (id, next_at) in defer_checks {
+            if let Some(cmd) = inner.commands.get_mut(&id) {
+                cmd.next_at = next_at;
+            }
         }
+
+        // N-02: WAL principle - write changes to disk journal FIRST.
+        // If append_many fails, abort without mutating inner.commands or in_flight,
+        // and return empty vector so unpersisted commands are not dispatched over the wire.
+        if !changed.is_empty() {
+            if let Err(e) = inner.append_many(&changed) {
+                eprintln!("[hub] COMMAND JOURNAL WRITE FAILED in due_gated: {}", e);
+                return Vec::new();
+            }
+            // Commit candidate changes into memory only after successful journal persist
+            for c in changed {
+                inner.commands.insert(c.id.clone(), c);
+            }
+            for f in finished {
+                inner.in_flight.remove(&f);
+            }
+        }
+
         out
     }
 
@@ -1986,6 +2013,43 @@ mod tests {
         assert_eq!(total, 1, "total should match load's line_count");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], valid_line);
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_due_gated_with_append_failure_keeps_memory_intact() {
+        let p = tmp("due_append_fail");
+        let s = CommandStore::open(&p).unwrap();
+        let c = s.issue_op("receiver:1", "pause", "", "op", "");
+        assert_eq!(c.attempts, 0);
+        assert_eq!(c.state, STATE_PENDING);
+
+        // Force append failure by swapping inner file descriptor to read-only
+        {
+            let mut inner = s.inner.lock().unwrap();
+            let ro_file = OpenOptions::new().read(true).open(&p).unwrap();
+            inner.file = Some(ro_file);
+        }
+
+        let due = s.due(Instant::now() + Duration::from_secs(10));
+        assert!(
+            due.is_empty(),
+            "due_gated must return empty vector when journal append fails"
+        );
+        let cmd_after = s.command(&c.id).unwrap();
+        assert_eq!(
+            cmd_after.attempts, 0,
+            "attempts counter in memory must NOT advance when disk append fails"
+        );
+        assert_eq!(
+            cmd_after.state, STATE_PENDING,
+            "command state must remain pending when disk append fails"
+        );
+        assert!(
+            s.inner.lock().unwrap().in_flight.contains(&c.id),
+            "command must remain in in_flight set for retry"
+        );
 
         let _ = std::fs::remove_file(&p);
     }

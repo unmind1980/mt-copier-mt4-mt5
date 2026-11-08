@@ -142,6 +142,16 @@ void CopierInvalidateSymbolInfo(const string sym)
    if(g_siCache[slot].sym==sym) g_siCache[slot].expMs=0;
   }
 
+// BUG-04: Full invalidation of symbol cache on OnInit to prevent stale specifications
+void CopierSymInfoReset()
+  {
+   for(int i=0;i<CP_SYMINFO_CACHE_SLOTS;i++)
+     {
+      g_siCache[i].sym="";
+      g_siCache[i].expMs=0;
+     }
+  }
+
 //+------------------------------------------------------------------+
 // M1 bar counting.
 //

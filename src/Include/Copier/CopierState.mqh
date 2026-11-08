@@ -258,23 +258,42 @@ public:
                                int &prevKind,
                                long &prevTicket,
                                const CopierPos &cur,
-                               bool &ppriceDiff) const
+                               bool &ppriceDiff,
+                               bool &pstopDiff,
+                               bool &pexpireDiff) const
      {
       if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return false;
       stopsDiff=(MathAbs(m_p[i].sl-cur.sl)>0.0000001 || MathAbs(m_p[i].tp-cur.tp)>0.0000001);
       lotsDiff =(MathAbs(m_p[i].lots-cur.lots)>0.0000001);
       kindDiff =(m_p[i].kind!=cur.kind || m_p[i].ticket!=cur.ticket);
       ppriceDiff=(cur.kind==CP_ORD_PENDING && MathAbs(m_p[i].pprice-cur.pprice)>0.0000001);
+      pstopDiff =(cur.kind==CP_ORD_PENDING && MathAbs(m_p[i].pstop-cur.pstop)>0.0000001);
+      pexpireDiff=(cur.kind==CP_ORD_PENDING && m_p[i].pexpire!=cur.pexpire);
       otherDiff=(MathAbs(m_p[i].openPx-cur.openPx)>0.0000001
-                || MathAbs(m_p[i].pstop-cur.pstop)>0.0000001
+                || (cur.kind!=CP_ORD_PENDING && MathAbs(m_p[i].pstop-cur.pstop)>0.0000001)
                 || m_p[i].ptype!=cur.ptype
-                || m_p[i].pexpire!=cur.pexpire
+                || (cur.kind!=CP_ORD_PENDING && m_p[i].pexpire!=cur.pexpire)
                 || m_p[i].sym!=cur.sym
                 || m_p[i].side!=cur.side);
       prevLots  =m_p[i].lots;
       prevKind  =m_p[i].kind;
       prevTicket=m_p[i].ticket;
       return true;
+     }
+
+   bool              CheckSlot(const int i,
+                               bool &stopsDiff,
+                               bool &lotsDiff,
+                               bool &kindDiff,
+                               bool &otherDiff,
+                               double &prevLots,
+                               int &prevKind,
+                               long &prevTicket,
+                               const CopierPos &cur,
+                               bool &ppriceDiff) const
+     {
+      bool pstopDummy=false, expDummy=false;
+      return CheckSlot(i,stopsDiff,lotsDiff,kindDiff,otherDiff,prevLots,prevKind,prevTicket,cur,ppriceDiff,pstopDummy,expDummy);
      }
 
    bool              CheckSlot(const int i,

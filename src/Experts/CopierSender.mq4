@@ -793,6 +793,7 @@ int OnInit()
      }
    // P1-10 fix: Seed MathSrand with high-entropy mix of monotonic tick count, local time and login
    MathSrand((int)(CopierNowMs() ^ (long)TimeLocal() ^ (long)CopierAccountLogin()));
+   CopierSymInfoReset(); // BUG-04: flush symbol specifications cache on init
    g_log.Init("sender_"+SenderId(),LogLevel);
 
    g_symFilter.Set(IncludeSymbols);
@@ -2177,27 +2178,30 @@ void OnTimer()
          g_slotStamp[slot]=g_stampGen;
          g_slotMissCount[slot]=0;
          g_slotMissMs[slot]=0;
-         bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false, ppriceDiff=false;
+         bool stopsDiff=false, lotsDiff=false, kindDiff=false, otherDiff=false, ppriceDiff=false, pstopDiff=false, pexpireDiff=false;
          double prevLots=0.0;
          int prevKind=0;
          long prevTicket=0;
 
          //--- Fast numeric check directly against m_p[slot]: ZERO struct copies,
          //--- ZERO string allocations on 99.9% of steady-state ticks (B11).
-         //--- DEF-64-02: CheckSlot directly evaluates ppriceDiff, eliminating redundant external checks
+         //--- DEF-64-02 & BUG-05: CheckSlot directly evaluates ppriceDiff, pstopDiff, pexpireDiff
          if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
-                             prevLots,prevKind,prevTicket,g_curScratch[i],ppriceDiff))
+                             prevLots,prevKind,prevTicket,g_curScratch[i],ppriceDiff,pstopDiff,pexpireDiff))
            {
             if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
             if(otherDiff) MarkSnapshotDirty();
 
-            //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05 & DEF-64-02)
-            if(stopsDiff || ppriceDiff)
+            //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05 & BUG-05)
+            if(stopsDiff || ppriceDiff || pstopDiff || pexpireDiff)
               {
                // A2: MODIFY already delivers the new levels; only refresh the in-memory
                // latest payload (used by bootstrap / targeted repair). No full broadcast.
                MarkLatestDirty();
-               string extraLog = ppriceDiff ? (" pprice="+DoubleToString(g_curScratch[i].pprice,5)) : "";
+               string extraLog = "";
+               if(ppriceDiff) extraLog += " pprice="+DoubleToString(g_curScratch[i].pprice,5);
+               if(pstopDiff)  extraLog += " pstop="+DoubleToString(g_curScratch[i].pstop,5);
+               if(pexpireDiff) extraLog += " exp="+(string)g_curScratch[i].pexpire;
                g_log.Info("stops "+g_curScratch[i].uid+" "+g_curScratch[i].sym
                           +" side="+(string)g_curScratch[i].side
                           +" entry="+DoubleToString(g_curScratch[i].openPx,5)
@@ -2207,7 +2211,9 @@ void OnTimer()
                Emit(CP_T_MODIFY,
                     CopierPayloadModify(g_curScratch[i].uid,g_curScratch[i].openPx,
                                         g_curScratch[i].sl,g_curScratch[i].tp,
-                                        g_curScratch[i].pprice),false);
+                                        g_curScratch[i].pprice,
+                                        g_curScratch[i].pstop,
+                                        g_curScratch[i].pexpire),false);
               }
 
             //--- VOLUME DRIFT (partial close we do not model in the MVP)

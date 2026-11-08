@@ -424,6 +424,8 @@ double  g_stOvSl[CP_MAX_STOPS_OV];
 double  g_stOvTp[CP_MAX_STOPS_OV];
 double  g_stOvOpn[CP_MAX_STOPS_OV];
 double  g_stOvPprice[CP_MAX_STOPS_OV]; // BUG-02: Pending price override table
+double  g_stOvPstop[CP_MAX_STOPS_OV];  // BUG-05: Real-time StopLimit limit price override table
+long    g_stOvPexp[CP_MAX_STOPS_OV];   // BUG-05: Real-time pending expiration override table
 long    g_stLastMs[CP_MAX_STOPS_OV];
 int     g_stCount=0;
 //--- Bumped on every change to the override table. QueueModifyIfNeeded() caches
@@ -2055,7 +2057,7 @@ bool LoadConfigForHub()
    //--- common case, since most edits touch one sender's settings - would
    //--- otherwise pay a 30 MB memcpy for nothing.
    {
-    int want=g_nSenders*CP_MAX_POSITIONS;
+    int want=MathMax(1,g_nSenders)*CP_MAX_POSITIONS;
     if(ArraySize(g_desired)!=want)
       {
        if(ArrayResize(g_desired,want)<0)
@@ -2072,6 +2074,77 @@ bool LoadConfigForHub()
       g_log.Warn("central mode: "+CP_INI_PATH+" has no [senderN] sections, so"
                  +" this receiver mirrors nothing.");
       return true;
+     }
+
+   //--- BUG-01: Snapshot previous sender stream state and desired positions before re-parsing
+   //--- so an unchanged sender does not lose its mirror sync, readiness or sequence numbers during hot reload.
+   int oldSenderCount = g_nSenders;
+   string oldSid[CP_MAX_SENDERS];
+   long oldMagic[CP_MAX_SENDERS];
+   long oldLastSeq[CP_MAX_SENDERS][CP_STREAM_COUNT];
+   string oldSsidSeen[CP_MAX_SENDERS];
+   int oldDesiredCount[CP_MAX_SENDERS];
+   bool oldReady[CP_MAX_SENDERS];
+   long oldLastMsgMs[CP_MAX_SENDERS];
+   long oldFirstMsgMs[CP_MAX_SENDERS];
+   long oldLastSnapMs[CP_MAX_SENDERS];
+   string oldSnapHash[CP_MAX_SENDERS];
+   bool oldStale[CP_MAX_SENDERS];
+   bool oldClockKnown[CP_MAX_SENDERS];
+   long oldClockOffset[CP_MAX_SENDERS];
+   bool oldClockValid[CP_MAX_SENDERS];
+   int oldRejectStreak[CP_MAX_SENDERS];
+   int oldDropped[CP_MAX_SENDERS];
+
+   ArrayInitialize(oldMagic,0);
+   ArrayInitialize(oldLastSeq,-1);
+   ArrayInitialize(oldDesiredCount,0);
+   ArrayInitialize(oldReady,false);
+   ArrayInitialize(oldLastMsgMs,0);
+   ArrayInitialize(oldFirstMsgMs,0);
+   ArrayInitialize(oldLastSnapMs,0);
+   ArrayInitialize(oldStale,false);
+   ArrayInitialize(oldClockKnown,false);
+   ArrayInitialize(oldClockOffset,0);
+   ArrayInitialize(oldClockValid,false);
+   ArrayInitialize(oldRejectStreak,0);
+   ArrayInitialize(oldDropped,0);
+   for(int z=0;z<CP_MAX_SENDERS;z++)
+     {
+      oldSid[z]="";
+      oldSsidSeen[z]="";
+      oldSnapHash[z]="";
+     }
+
+   CopierPos oldDesiredScratch[];
+   if(oldSenderCount>0)
+     {
+      ArrayResize(oldDesiredScratch, ArraySize(g_desired));
+      for(int s=0; s<oldSenderCount && s<CP_MAX_SENDERS; s++)
+        {
+         oldSid[s]=g_sid[s];
+         oldMagic[s]=g_magic[s];
+         oldLastSeq[s][0]=g_lastSeq[s][0];
+         oldLastSeq[s][1]=g_lastSeq[s][1];
+         oldLastSeq[s][2]=g_lastSeq[s][2];
+         oldSsidSeen[s]=g_ssidSeen[s];
+         oldDesiredCount[s]=g_desiredCount[s];
+         oldReady[s]=g_ready[s];
+         oldLastMsgMs[s]=g_lastMsgMs[s];
+         oldFirstMsgMs[s]=g_firstMsgMs[s];
+         oldLastSnapMs[s]=g_lastSnapMs[s];
+         oldSnapHash[s]=g_snapHash[s];
+         oldStale[s]=g_stale[s];
+         oldClockKnown[s]=g_senderClockKnown[s];
+         oldClockOffset[s]=g_senderClockOffset[s];
+         oldClockValid[s]=g_senderClockOffsetValid[s];
+         oldRejectStreak[s]=g_snapRejectStreak[s];
+         oldDropped[s]=g_dropped[s];
+
+         int sbase = s * CP_MAX_POSITIONS;
+         for(int d=0; d<oldDesiredCount[s]; d++)
+            oldDesiredScratch[sbase + d] = g_desired[sbase + d];
+        }
      }
 
    for(int i=0;i<g_nSenders;i++)
@@ -2115,29 +2188,72 @@ bool LoadConfigForHub()
            }
         }
 
-      //--- reset this sender's stream state. Globals SURVIVE a reinitialisation,
-      //--- so a stale watermark here would make the receiver discard the first
-      //--- messages from a sender it has only just been told about.
-      g_lastSeq[i][CP_STREAM_EVENTS]=-1;
-      g_lastSeq[i][CP_STREAM_SNAP]=-1;
-      g_lastSeq[i][CP_STREAM_HBT]=-1;
-      g_ssidSeen[i]="";
-      ClearAbandonedSsids(i);
-      g_lastMsgMs[i]=0;
-      g_firstMsgMs[i]=0;
-      g_lastSnapMs[i]=0;
-      g_snapHash[i]="";
-      g_stale[i]=false;
-      g_ready[i]=false;
-      g_desiredCount[i]=0;
-      g_senderClockKnown[i]=false;
-      g_senderClockOffset[i]=0;
-      g_senderClockOffsetValid[i]=false;
-      g_snapRejectStreak[i]=0;
-      g_dropped[i]=0;
+      //--- BUG-01: Match against previous configuration. If sender ID and magic
+      //--- are identical, preserve stream sequence, desired positions and readiness.
+      int prevIdx = -1;
+      for(int s=0; s<oldSenderCount && s<CP_MAX_SENDERS; s++)
+        {
+         if(oldSid[s]==g_sid[i] && oldMagic[s]==g_magic[i] && StringLen(g_sid[i])>0)
+           {
+            prevIdx = s;
+            break;
+           }
+        }
+
+      if(prevIdx >= 0)
+        {
+         g_lastSeq[i][0] = oldLastSeq[prevIdx][0];
+         g_lastSeq[i][1] = oldLastSeq[prevIdx][1];
+         g_lastSeq[i][2] = oldLastSeq[prevIdx][2];
+         g_ssidSeen[i]   = oldSsidSeen[prevIdx];
+         g_desiredCount[i]= oldDesiredCount[prevIdx];
+         g_ready[i]      = oldReady[prevIdx];
+         g_lastMsgMs[i]  = oldLastMsgMs[prevIdx];
+         g_firstMsgMs[i] = oldFirstMsgMs[prevIdx];
+         g_lastSnapMs[i] = oldLastSnapMs[prevIdx];
+         g_snapHash[i]   = oldSnapHash[prevIdx];
+         g_stale[i]      = oldStale[prevIdx];
+         g_senderClockKnown[i]       = oldClockKnown[prevIdx];
+         g_senderClockOffset[i]      = oldClockOffset[prevIdx];
+         g_senderClockOffsetValid[i] = oldClockValid[prevIdx];
+         g_snapRejectStreak[i]       = oldRejectStreak[prevIdx];
+         g_dropped[i]    = oldDropped[prevIdx];
+
+         if(oldDesiredCount[prevIdx] > 0)
+           {
+            int srcBase = prevIdx * CP_MAX_POSITIONS;
+            int dstBase = i * CP_MAX_POSITIONS;
+            for(int d=0; d<oldDesiredCount[prevIdx]; d++)
+               g_desired[dstBase + d] = oldDesiredScratch[srcBase + d];
+           }
+        }
+      else
+        {
+         //--- reset this sender's stream state. Globals SURVIVE a reinitialisation,
+         //--- so a stale watermark here would make the receiver discard the first
+         //--- messages from a sender it has only just been told about.
+         g_lastSeq[i][CP_STREAM_EVENTS]=-1;
+         g_lastSeq[i][CP_STREAM_SNAP]=-1;
+         g_lastSeq[i][CP_STREAM_HBT]=-1;
+         g_ssidSeen[i]="";
+         ClearAbandonedSsids(i);
+         g_lastMsgMs[i]=0;
+         g_firstMsgMs[i]=0;
+         g_lastSnapMs[i]=0;
+         g_snapHash[i]="";
+         g_stale[i]=false;
+         g_ready[i]=false;
+         g_desiredCount[i]=0;
+         g_senderClockKnown[i]=false;
+         g_senderClockOffset[i]=0;
+         g_senderClockOffsetValid[i]=false;
+         g_snapRejectStreak[i]=0;
+         g_dropped[i]=0;
+        }
 
       InitSenderSettings(i, ini, sec);
      }
+   ArrayResize(oldDesiredScratch, 0);
 
    double maxGraceSec=0.0;
    for(int i=0;i<g_nSenders;i++)
@@ -4478,13 +4594,17 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double dTp=(g_senderCfg[si].mirrorstops)?desired.tp:0.0;
    double dOpn=desired.openPx;
    double dPPrice=desired.pprice;
+   double dPStop=desired.pstop;
+   long   dPExp=desired.pexpire;
    int oi=StopsOvIndex(desired.uid,false);
    if(oi>=0 && g_stHasOv[oi])
      {
       bool slCaughtUp=(MathAbs(desired.sl-g_stOvSl[oi])<0.0000001);
       bool tpCaughtUp=(MathAbs(desired.tp-g_stOvTp[oi])<0.0000001);
       bool ppriceCaughtUp=(g_stOvPprice[oi]<=0.0 || MathAbs(desired.pprice-g_stOvPprice[oi])<0.0000001);
-      if(slCaughtUp && tpCaughtUp && ppriceCaughtUp)
+      bool pstopCaughtUp=(g_stOvPstop[oi]<=0.0 || MathAbs(desired.pstop-g_stOvPstop[oi])<0.0000001);
+      bool pexpCaughtUp=(g_stOvPexp[oi]<=0 || desired.pexpire==g_stOvPexp[oi]);
+      if(slCaughtUp && tpCaughtUp && ppriceCaughtUp && pstopCaughtUp && pexpCaughtUp)
         {
          g_stHasOv[oi]=false;               // the snapshot caught up
          g_stOvEpoch++;                     // invalidates the stop-geometry cache
@@ -4495,6 +4615,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          dTp=(g_senderCfg[si].mirrorstops)?g_stOvTp[oi]:0.0;
          dOpn=g_stOvOpn[oi];
          if(g_stOvPprice[oi]>0.0) dPPrice=g_stOvPprice[oi];
+         if(g_stOvPstop[oi]>0.0)  dPStop=g_stOvPstop[oi];
+         if(g_stOvPexp[oi]>0)     dPExp=g_stOvPexp[oi];
         }
      }
 
@@ -4695,8 +4817,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    if(local.kind==CP_ORD_PENDING && desired.kind==CP_ORD_PENDING)
      {
       if(dPPrice>0.0 && MathAbs(local.pprice-dPPrice)>si2.point*0.5) pendingDiff=true;
-      if(desired.pstop>0.0 && MathAbs(local.pstop-desired.pstop)>si2.point*0.5) pendingDiff=true;
-      if(desired.pexpire!=local.pexpire) pendingDiff=true;
+      if(dPStop>0.0 && MathAbs(local.pstop-dPStop)>si2.point*0.5) pendingDiff=true;
+      if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
+      else if(dPExp==0 && desired.pexpire!=local.pexpire) pendingDiff=true;
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -4776,8 +4899,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- this the seen-ring would suppress it for its whole TTL and the
    //--- mirror would keep the first stop it ever saw.
    double actPPrice = (local.kind==CP_ORD_PENDING && dPPrice>0.0) ? dPPrice : local.pprice;
-   double actPStop  = (local.kind==CP_ORD_PENDING && desired.pstop>0.0) ? desired.pstop : local.pstop;
-   long   actPExp   = (local.kind==CP_ORD_PENDING) ? desired.pexpire : local.pexpire;
+   double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
+   long   actPExp   = (local.kind==CP_ORD_PENDING) ? ((dPExp>0) ? dPExp : desired.pexpire) : local.pexpire;
 
    bool pushed=PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
                           0.0,local.ticket,0,
@@ -6465,6 +6588,12 @@ void ConvergeSender(const int si)
          if(StringLen(mSid)>0)
            {
             if(mSid!=curSid) continue;
+            // N-01: If local ticket is still open and within TTL, do NOT purge prematurely
+            if(mTkt>0 && LocalTicketStillOpen(mTkt))
+              {
+               long ageMs=(long)(gcNow-(long)g_manualClosed.GetAt(m));
+               if(ageMs<=CP_MANUAL_CLOSED_TTL_MS) continue;
+              }
             bool senderStillHolds=false;
             for(int d=0; d<g_desiredCount[si]; d++)
               {
@@ -6479,6 +6608,12 @@ void ConvergeSender(const int si)
            }
          else
            {
+            // N-01: If local ticket is still open and within TTL, do NOT purge prematurely
+            if(mTkt>0 && LocalTicketStillOpen(mTkt))
+              {
+               long ageMs=(long)(gcNow-(long)g_manualClosed.GetAt(m));
+               if(ageMs<=CP_MANUAL_CLOSED_TTL_MS) continue;
+              }
             bool anySenderHolds=false;
             bool allSendersReady=true;
             for(int s=0; s<g_nSenders; s++)
@@ -6662,6 +6797,8 @@ void StopsForget(const string uid)
             g_stOvTp[i]=g_stOvTp[last];
             g_stOvOpn[i]=g_stOvOpn[last];
             g_stOvPprice[i]=g_stOvPprice[last];
+            g_stOvPstop[i]=g_stOvPstop[last];
+            g_stOvPexp[i]=g_stOvPexp[last];
             g_stLastMs[i]=g_stLastMs[last];
            }
          g_stCount--;
@@ -6698,6 +6835,8 @@ int StopsOvIndex(const string uid,const bool create)
    g_stOvTp[n]=0.0;
    g_stOvOpn[n]=0.0;
    g_stOvPprice[n]=0.0;
+   g_stOvPstop[n]=0.0;
+   g_stOvPexp[n]=0;
    //--- -1, not 0, for "never pushed". CopierNowMs() is a millisecond counter
    //--- that starts at zero when the terminal does, so a stop change in the
    //--- first second after attach would stamp a real 0 and read back as
@@ -6771,6 +6910,8 @@ void StopsPrune(const long now)
          g_stOvTp[i]=g_stOvTp[last];
          g_stOvOpn[i]=g_stOvOpn[last];
          g_stOvPprice[i]=g_stOvPprice[last];
+         g_stOvPstop[i]=g_stOvPstop[last];
+         g_stOvPexp[i]=g_stOvPexp[last];
          g_stLastMs[i]=g_stLastMs[last];
         }
       g_stCount--;
@@ -7462,6 +7603,8 @@ void HandleModifyEvent(const int si,const CopierEnv &e)
    g_stOvTp[idx]=p.tp;
    g_stOvOpn[idx]=p.openPx;
    g_stOvPprice[idx]=p.pprice; // BUG-02 & N70-03: Protected in override table only, preventing self-cancelling ppriceCaughtUp
+   g_stOvPstop[idx]=p.pstop;   // BUG-05: Real-time StopLimit limit price override
+   g_stOvPexp[idx]=p.pexpire;  // BUG-05: Real-time pending expiration override
    g_stOvEpoch++;                          // invalidates the stop-geometry cache
    g_convergeDirty[si]=true;
   }
@@ -7988,6 +8131,7 @@ void HandleMessage(const string topic,const string msg,const int stream)
 int OnInit()
   {
    ResetRuntimeInputsFromInputs();
+   CopierSymInfoReset(); // BUG-04: flush symbol specifications cache on init
    //--- One log per instance, or two receivers in one terminal write the same
    //--- file and overwrite each other's history.
    g_log.Init("receiver"+InstanceSuffix(),LogLevel);
@@ -8989,6 +9133,7 @@ void OnTimer()
             if(fastSender[i] && !g_stale[i] && g_ready[i]) ConvergeSender(i);
            }
          ExecuteQueue();
+         g_lastConvergeSweepMs = now; // BUG-08: Stave off immediate redundant slow-lane sweep in the same invocation
         }
 
       // N67-04 & N68-03: Clear string references on static conflate table to prevent dead string retention

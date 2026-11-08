@@ -725,15 +725,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
 
                     let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
-                        || (cfg_lines_count == remote_st.cfg_lines && cfg_diff)
+                        || cfg_diff
                         || std::mem::replace(&mut force_full_cfg_resync, false);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
-                    // BUG-03 & BUG-05 & H5: If command line count is equal but remote sequence differs or cmd_diff,
-                    // or if delta sync stalled on filtered lines, request from line 0 and replace_all to resolve deadlock.
+                    // BUG-03, BUG-05 & BUG-06: If command line count is greater or divergent (cmd_diff),
+                    // or remote sequence differs, or delta sync stalled, request from line 0 and replace_all to resolve deadlock.
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
+                        || cmd_diff
                         || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq != local_max_cmd_seq)
-                        || (cmd_lines_count == remote_st.cmd_lines && cmd_diff)
                         || std::mem::replace(&mut force_full_cmd_resync, false);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
