@@ -581,17 +581,25 @@ impl CommandStore {
             .map(|cmd| cmd.id.clone())
             .collect();
         let mut superseded_snaps = Vec::new();
-        for sid in stale_ids {
-            inner.in_flight.remove(&sid);
-            if let Some(sc) = inner.commands.get_mut(&sid) {
-                sc.state = STATE_SUPERSEDED.to_string();
-                sc.err = format!("superseded by rev {}", rev);
-                superseded_snaps.push(sc.clone());
+        for sid in &stale_ids {
+            if let Some(sc) = inner.commands.get(sid) {
+                let mut updated = sc.clone();
+                updated.state = STATE_SUPERSEDED.to_string();
+                updated.err = format!("superseded by rev {}", rev);
+                superseded_snaps.push(updated);
             }
         }
         if !superseded_snaps.is_empty() {
             if let Err(e) = inner.append_many(&superseded_snaps) {
                 eprintln!("[hub] COMMAND JOURNAL WRITE FAILED on batch supersede: {}", e);
+            } else {
+                for snap in superseded_snaps {
+                    inner.in_flight.remove(&snap.id);
+                    if let Some(sc) = inner.commands.get_mut(&snap.id) {
+                        sc.state = snap.state;
+                        sc.err = snap.err;
+                    }
+                }
             }
         }
 

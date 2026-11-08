@@ -643,11 +643,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (cfg_tot, cmd_tot, max_seq, u_p, n_p, c_p, cfg_p, cmd_p)
                 };
 
+                // H-03 / H-PERF-01: When journal lines differ, sync is already required;
+                // skip reading and hashing large commands.jsonl / config_revisions.jsonl from disk.
+                let lines_differ = remote_st.cfg_lines != cfg_lines_count
+                    || remote_st.cmd_lines != cmd_lines_count
+                    || remote_st.max_cmd_seq != local_max_cmd_seq;
+
                 let users_h = file_sha256(&users_path);
                 let notif_h = file_sha256(&notif_path);
                 let curve_h = file_sha256(&curve_path);
-                let cfg_h = file_sha256(&cfg_path);
-                let cmd_h = file_sha256(&cmd_path);
+                let (cfg_h, cmd_h) = if lines_differ {
+                    (String::new(), String::new())
+                } else {
+                    (file_sha256(&cfg_path), file_sha256(&cmd_path))
+                };
 
                 //--- N57-12: `> 0` created a blind spot. When the primary's
                 //--- journal is compacted to nothing (everything terminal and
@@ -1120,17 +1129,26 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let x = s.notif_store.lock_or_recover().path().to_path_buf();
                     x
                 };
-                let my_cfg_h = file_sha256(&cfg_p);
-                let my_cmd_h = file_sha256(&cmd_p);
+                let users_sync_enabled = std::env::var("MTC_SYNC_USERS")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+
                 let my_u_h = file_sha256(&u_p);
                 let my_n_h = file_sha256(&n_p);
                 let my_c_h = file_sha256(&c_p);
 
-                let hashes_ok = (remote_st.cfg_hash.is_empty() || remote_st.cfg_hash == my_cfg_h)
-                    && (remote_st.cmd_hash.is_empty() || remote_st.cmd_hash == my_cmd_h)
-                    && (!remote_st.users_sync_enabled || remote_st.users_hash.is_empty() || remote_st.users_hash == my_u_h)
-                    && (remote_st.notif_hash.is_empty() || remote_st.notif_hash == my_n_h)
-                    && (remote_st.curve_clients_hash.is_empty() || remote_st.curve_clients_hash == my_c_h);
+                let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
+                let (my_cfg_h, my_cmd_h) = if lines_match {
+                    (file_sha256(&cfg_p), file_sha256(&cmd_p))
+                } else {
+                    (String::new(), String::new())
+                };
+
+                let hashes_ok = (remote_st.cfg_hash.is_empty() || my_cfg_h.is_empty() || remote_st.cfg_hash == my_cfg_h)
+                    && (remote_st.cmd_hash.is_empty() || my_cmd_h.is_empty() || remote_st.cmd_hash == my_cmd_h)
+                    && (!users_sync_enabled || !remote_st.users_sync_enabled || remote_st.users_hash.is_empty() || remote_st.users_hash == my_u_h)
+                    && (!remote_st.notif_enabled || my_n_h.is_empty() || remote_st.notif_hash.is_empty() || remote_st.notif_hash == my_n_h)
+                    && (remote_st.curve_clients_hash.is_empty() || my_c_h.is_empty() || remote_st.curve_clients_hash == my_c_h);
 
                 let mut s = st.lock_or_recover();
                 if remote_st.cmd_lines != my_cmd || remote_st.max_cmd_seq != my_seq || remote_st.cfg_lines != my_cfg || !hashes_ok {

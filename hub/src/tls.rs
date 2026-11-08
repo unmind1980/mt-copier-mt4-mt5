@@ -845,12 +845,25 @@ pub struct TempChallengeServer {
 impl TempChallengeServer {
     pub async fn start(tls_mgr: Arc<TlsManager>, http_port: u16) -> Result<Self, String> {
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
-        let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
-            format!(
-                "Cannot bind on-demand HTTP challenge listener on port {}: {}",
-                http_port, e
-            )
-        })?;
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                println!(
+                    "[hub] TLS: Port {} is already bound by main HTTP server; relying on primary router for ACME challenge",
+                    http_port
+                );
+                return Ok(TempChallengeServer {
+                    shutdown_tx: None,
+                    port: http_port,
+                });
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Cannot bind on-demand HTTP challenge listener on port {}: {}",
+                    http_port, e
+                ));
+            }
+        };
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let mgr = Arc::clone(&tls_mgr);

@@ -1185,6 +1185,16 @@ void TestFitStop()
          1.09999,0.0000001);
    Ok("fitstop: no level reports not clamped",!cl);
 
+   //--- BUG-03: crossed stop on zero stop-level broker is clamped to legal market side
+   OkDbl("fitstop: zero stopLevel crossed buy sl clamped to legal side",
+         CopierFitStopAt(1.10005,CP_SIDE_BUY,true,1.10000,noLvl,cl),
+         1.09999,0.0000001);
+   Ok("fitstop: zero stopLevel crossed buy sl reports clamped",cl);
+   OkDbl("fitstop: zero stopLevel crossed sell sl clamped to legal side",
+         CopierFitStopAt(1.09995,CP_SIDE_SELL,true,1.10000,noLvl,cl),
+         1.10001,0.0000001);
+   Ok("fitstop: zero stopLevel crossed sell sl reports clamped",cl);
+
    //--- an absent stop stays absent: there is nothing to clamp
    OkDbl("fitstop: absent stop stays absent",
          CopierFitStopAt(0.0,CP_SIDE_BUY,true,1.10000,si,cl),0.0,0.0000001);
@@ -1660,6 +1670,12 @@ void TestPendingCodec()
    CopierPos openPos;
    Ok("open: payload decodes",CopierPayloadOpenParse(openPayload,openPos));
    Ok("open: magic is preserved (F-03)",openPos.magic==770000);
+
+   //--- BUG-10: 64-bit PEXP parsing in modify payload
+   string modPayload=CopierPayloadModify("AAAA1111",1.10000,1.09000,1.12000,1.10000,1.09500,4102444800);
+   CopierPos modPos;
+   Ok("modify: payload decodes",CopierPayloadModifyParse(modPayload,modPos));
+   Ok("modify: 64-bit PEXP is preserved",modPos.pexpire==4102444800);
   }
 
 //=====================================================================

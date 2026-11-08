@@ -302,7 +302,7 @@ def main():
 
         # Verify reading the replicated config from Standby
         st, cfg_res, _ = http_req(S_HTTP_PORT, "GET", "/api/v1/nodes/receiver:252033316/config", cookie=s_cookie)
-        check("Standby can read replicated config revision (200 OK)", st == 200, f"rev={cfg_res.get('revision')}")
+        check("Standby can read replicated config revision (200 OK)", st == 200 and cfg_res.get("hub_rev") == 1, f"hub_rev={cfg_res.get('hub_rev')}")
 
         # ---------------------------------------------------------------------
         # 4. Manual Promotion (POST /api/v1/cluster/promote)

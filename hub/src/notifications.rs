@@ -1394,6 +1394,9 @@ async fn send_wecom(
     let url = if let Some(u) = channel.config.get("webhook_url").and_then(|v| v.as_str()) {
         u.to_string()
     } else if let Some(key) = channel.config.get("key").and_then(|v| v.as_str()) {
+        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err("WeCom key contains invalid characters".to_string());
+        }
         format!("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={}", key)
     } else {
         return Err("WeCom webhook_url or key missing".to_string());
@@ -1481,6 +1484,9 @@ async fn send_dingtalk(
     let raw_url = if let Some(u) = channel.config.get("webhook_url").and_then(|v| v.as_str()) {
         u.to_string()
     } else if let Some(tok) = channel.config.get("access_token").and_then(|v| v.as_str()) {
+        if !tok.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return Err("DingTalk access_token contains invalid characters".to_string());
+        }
         format!("https://oapi.dingtalk.com/robot/send?access_token={}", tok)
     } else {
         return Err("DingTalk webhook_url or access_token missing".to_string());

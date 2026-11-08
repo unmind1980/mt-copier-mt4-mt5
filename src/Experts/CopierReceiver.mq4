@@ -634,13 +634,9 @@ string SenderLabel(const int si)
 bool LocalTicketStillOpen(const long ticket)
   {
    if(ticket<=0) return false;
-#ifdef __MQL5__
-   if(PositionSelectByTicket((ulong)ticket)) return true;
-   return OrderSelect((ulong)ticket);
-#else
-   if(ticket>2147483647) return false;
-   return OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES);
-#endif
+   long resolvedTkt=0;
+   bool isPending=false;
+   return CopierResolveCloseTicket(ticket, resolvedTkt, isPending);
   }
 
 //--- Pre-allocated scratch buffer for LocalForSender / ConvergeSender (zero ArrayResize)
@@ -1247,6 +1243,17 @@ bool SymbolInOpenWarmup(const string sym,int &elapsedSecs)
    if(continuous247) return false;
 
    elapsedSecs=secs;
+   return true;
+  }
+
+bool CopierTradeAllowed()
+  {
+   if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return false;
+#ifdef __MQL5__
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return false;
+#else
+   if(!IsTradeAllowed()) return false;
+#endif
    return true;
   }
 
@@ -2005,6 +2012,84 @@ bool LoadConfigForHub()
    g_lastFullScanMs=0;
    g_posCacheCount=0;
 
+   //--- BUG-02: Snapshot previous sender stream state and desired positions BEFORE
+   //--- modifying g_nSenders or resizing g_desired, so senders do not lose their
+   //--- mirror sync, readiness, sequence numbers or abandoned SSIDs during hot reload.
+   int oldSenderCount = g_nSenders;
+   string oldSid[CP_MAX_SENDERS];
+   long oldMagic[CP_MAX_SENDERS];
+   long oldLastSeq[CP_MAX_SENDERS][CP_STREAM_COUNT];
+   string oldSsidSeen[CP_MAX_SENDERS];
+   string oldSsidOld[CP_MAX_SENDERS][CP_OLD_SSID_MAX];
+   int oldSsidOldHead[CP_MAX_SENDERS];
+   int oldDesiredCount[CP_MAX_SENDERS];
+   bool oldReady[CP_MAX_SENDERS];
+   long oldLastMsgMs[CP_MAX_SENDERS];
+   long oldFirstMsgMs[CP_MAX_SENDERS];
+   long oldLastSnapMs[CP_MAX_SENDERS];
+   string oldSnapHash[CP_MAX_SENDERS];
+   bool oldStale[CP_MAX_SENDERS];
+   bool oldClockKnown[CP_MAX_SENDERS];
+   long oldClockOffset[CP_MAX_SENDERS];
+   bool oldClockValid[CP_MAX_SENDERS];
+   int oldRejectStreak[CP_MAX_SENDERS];
+   int oldDropped[CP_MAX_SENDERS];
+
+   ArrayInitialize(oldMagic,0);
+   ArrayInitialize(oldLastSeq,-1);
+   ArrayInitialize(oldSsidOldHead,0);
+   ArrayInitialize(oldDesiredCount,0);
+   ArrayInitialize(oldReady,false);
+   ArrayInitialize(oldLastMsgMs,0);
+   ArrayInitialize(oldFirstMsgMs,0);
+   ArrayInitialize(oldLastSnapMs,0);
+   ArrayInitialize(oldStale,false);
+   ArrayInitialize(oldClockKnown,false);
+   ArrayInitialize(oldClockOffset,0);
+   ArrayInitialize(oldClockValid,false);
+   ArrayInitialize(oldRejectStreak,0);
+   ArrayInitialize(oldDropped,0);
+   for(int z=0;z<CP_MAX_SENDERS;z++)
+     {
+      oldSid[z]="";
+      oldSsidSeen[z]="";
+      oldSnapHash[z]="";
+      for(int k=0;k<CP_OLD_SSID_MAX;k++) oldSsidOld[z][k]="";
+     }
+
+   CopierPos oldDesiredScratch[];
+   if(oldSenderCount>0)
+     {
+      ArrayResize(oldDesiredScratch, ArraySize(g_desired));
+      for(int s=0; s<oldSenderCount && s<CP_MAX_SENDERS; s++)
+        {
+         oldSid[s]=g_sid[s];
+         oldMagic[s]=g_magic[s];
+         oldLastSeq[s][0]=g_lastSeq[s][0];
+         oldLastSeq[s][1]=g_lastSeq[s][1];
+         oldLastSeq[s][2]=g_lastSeq[s][2];
+         oldSsidSeen[s]=g_ssidSeen[s];
+         for(int k=0;k<CP_OLD_SSID_MAX;k++) oldSsidOld[s][k]=g_ssidOld[s][k];
+         oldSsidOldHead[s]=g_ssidOldHead[s];
+         oldDesiredCount[s]=g_desiredCount[s];
+         oldReady[s]=g_ready[s];
+         oldLastMsgMs[s]=g_lastMsgMs[s];
+         oldFirstMsgMs[s]=g_firstMsgMs[s];
+         oldLastSnapMs[s]=g_lastSnapMs[s];
+         oldSnapHash[s]=g_snapHash[s];
+         oldStale[s]=g_stale[s];
+         oldClockKnown[s]=g_senderClockKnown[s];
+         oldClockOffset[s]=g_senderClockOffset[s];
+         oldClockValid[s]=g_senderClockOffsetValid[s];
+         oldRejectStreak[s]=g_snapRejectStreak[s];
+         oldDropped[s]=g_dropped[s];
+
+         int sbase = s * CP_MAX_POSITIONS;
+         for(int d=0; d<oldDesiredCount[s]; d++)
+            oldDesiredScratch[sbase + d] = g_desired[sbase + d];
+        }
+     }
+
    ResetRuntimeInputsFromInputs();
    ApplyCommonConfig(ini);
 
@@ -2074,77 +2159,6 @@ bool LoadConfigForHub()
       g_log.Warn("central mode: "+CP_INI_PATH+" has no [senderN] sections, so"
                  +" this receiver mirrors nothing.");
       return true;
-     }
-
-   //--- BUG-01: Snapshot previous sender stream state and desired positions before re-parsing
-   //--- so an unchanged sender does not lose its mirror sync, readiness or sequence numbers during hot reload.
-   int oldSenderCount = g_nSenders;
-   string oldSid[CP_MAX_SENDERS];
-   long oldMagic[CP_MAX_SENDERS];
-   long oldLastSeq[CP_MAX_SENDERS][CP_STREAM_COUNT];
-   string oldSsidSeen[CP_MAX_SENDERS];
-   int oldDesiredCount[CP_MAX_SENDERS];
-   bool oldReady[CP_MAX_SENDERS];
-   long oldLastMsgMs[CP_MAX_SENDERS];
-   long oldFirstMsgMs[CP_MAX_SENDERS];
-   long oldLastSnapMs[CP_MAX_SENDERS];
-   string oldSnapHash[CP_MAX_SENDERS];
-   bool oldStale[CP_MAX_SENDERS];
-   bool oldClockKnown[CP_MAX_SENDERS];
-   long oldClockOffset[CP_MAX_SENDERS];
-   bool oldClockValid[CP_MAX_SENDERS];
-   int oldRejectStreak[CP_MAX_SENDERS];
-   int oldDropped[CP_MAX_SENDERS];
-
-   ArrayInitialize(oldMagic,0);
-   ArrayInitialize(oldLastSeq,-1);
-   ArrayInitialize(oldDesiredCount,0);
-   ArrayInitialize(oldReady,false);
-   ArrayInitialize(oldLastMsgMs,0);
-   ArrayInitialize(oldFirstMsgMs,0);
-   ArrayInitialize(oldLastSnapMs,0);
-   ArrayInitialize(oldStale,false);
-   ArrayInitialize(oldClockKnown,false);
-   ArrayInitialize(oldClockOffset,0);
-   ArrayInitialize(oldClockValid,false);
-   ArrayInitialize(oldRejectStreak,0);
-   ArrayInitialize(oldDropped,0);
-   for(int z=0;z<CP_MAX_SENDERS;z++)
-     {
-      oldSid[z]="";
-      oldSsidSeen[z]="";
-      oldSnapHash[z]="";
-     }
-
-   CopierPos oldDesiredScratch[];
-   if(oldSenderCount>0)
-     {
-      ArrayResize(oldDesiredScratch, ArraySize(g_desired));
-      for(int s=0; s<oldSenderCount && s<CP_MAX_SENDERS; s++)
-        {
-         oldSid[s]=g_sid[s];
-         oldMagic[s]=g_magic[s];
-         oldLastSeq[s][0]=g_lastSeq[s][0];
-         oldLastSeq[s][1]=g_lastSeq[s][1];
-         oldLastSeq[s][2]=g_lastSeq[s][2];
-         oldSsidSeen[s]=g_ssidSeen[s];
-         oldDesiredCount[s]=g_desiredCount[s];
-         oldReady[s]=g_ready[s];
-         oldLastMsgMs[s]=g_lastMsgMs[s];
-         oldFirstMsgMs[s]=g_firstMsgMs[s];
-         oldLastSnapMs[s]=g_lastSnapMs[s];
-         oldSnapHash[s]=g_snapHash[s];
-         oldStale[s]=g_stale[s];
-         oldClockKnown[s]=g_senderClockKnown[s];
-         oldClockOffset[s]=g_senderClockOffset[s];
-         oldClockValid[s]=g_senderClockOffsetValid[s];
-         oldRejectStreak[s]=g_snapRejectStreak[s];
-         oldDropped[s]=g_dropped[s];
-
-         int sbase = s * CP_MAX_POSITIONS;
-         for(int d=0; d<oldDesiredCount[s]; d++)
-            oldDesiredScratch[sbase + d] = g_desired[sbase + d];
-        }
      }
 
    for(int i=0;i<g_nSenders;i++)
@@ -2218,6 +2232,13 @@ bool LoadConfigForHub()
          g_senderClockOffsetValid[i] = oldClockValid[prevIdx];
          g_snapRejectStreak[i]       = oldRejectStreak[prevIdx];
          g_dropped[i]    = oldDropped[prevIdx];
+
+         if(prevIdx != i)
+           {
+            for(int k=0; k<CP_OLD_SSID_MAX; k++)
+               g_ssidOld[i][k] = oldSsidOld[prevIdx][k];
+            g_ssidOldHead[i] = oldSsidOldHead[prevIdx];
+           }
 
          if(oldDesiredCount[prevIdx] > 0)
            {
@@ -3116,8 +3137,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
       // frozen under an existing queue backoff (which could be up to 15m~1h) if exit backoff has cleared!
       if(kind==CP_ACT_CLOSE || kind==CP_ACT_TRIM || kind==CP_ACT_DEDUP)
         {
-         string exitKey=(uid!="") ? uid : (string)ticket;
-         if(!g_backoff.BlockedExit(exitKey))
+         if(!g_backoff.BlockedExit(key))
            {
             g_qRetryAtMs=0;
             g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
@@ -3385,13 +3405,7 @@ void ExecuteQueue()
 
    //--- PRE-FLIGHT CHECK: Is trading permitted at this terminal/account?
    //--- Protects against flood-penalties on read-only (investor) accounts or toggled AutoTrading.
-   bool tradeAllowed = (bool)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED);
-#ifndef __MQL5__
-   if(!IsTradeAllowed()) tradeAllowed = false;
-#else
-   if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) tradeAllowed = false;
-#endif
-   if(!tradeAllowed)
+   if(!CopierTradeAllowed())
      {
       if(g_once.ShouldEmit("trade_dis_global"))
          g_log.Warn("Trading is disabled at this terminal (AutoTrading button is off, account is read-only / investor mode, or broker disabled trading). Holding all "+(string)g_qn+" queued action(s).");
@@ -9454,36 +9468,42 @@ void OnTimer()
    if(g_qRetryAtMs>0 && g_qn>0 && now-s_lastMktRecheckMs>=5000)
      {
       s_lastMktRecheckMs=now;
-      bool wake=false;
-      string wokeReason="";
-      for(int i=0;i<g_qn;i++)
+      if(CopierTradeAllowed())
         {
-         int idx=g_qHead+i;
-         int k=g_q[idx].kind;
-         string s=g_q[idx].sym;
-         if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
+         bool wake=false;
+         string wokeReason="";
+         for(int i=0;i<g_qn;i++)
            {
-            string ekey = (g_q[idx].uid!="") ? g_q[idx].uid : (string)g_q[idx].ticket;
-            if(!g_backoff.BlockedExit(ekey))
+            int idx=g_qHead+i;
+            int k=g_q[idx].kind;
+            string s=g_q[idx].sym;
+            if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
               {
-               wake=true;
-               wokeReason="unblocked exit action on "+s;
-               break;
+               if(!g_backoff.BlockedExit(g_q[idx].key))
+                 {
+                  wake=true;
+                  wokeReason="unblocked exit action on "+s;
+                  break;
+                 }
+              }
+            else
+              {
+               int dummyWarmup=0;
+               if(!g_cmdPaused && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup))
+                 {
+                  wake=true;
+                  wokeReason="open market for "+s;
+                  break;
+                 }
               }
            }
-         else if(!SymbolMarketClosed(s))
+         if(wake)
            {
-            wake=true;
-            wokeReason="open market for "+s;
-            break;
+            g_log.Info("OnTimer: "+wokeReason+"; waking action queue immediately");
+            g_qRetryAtMs=0;
+            g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
+            g_qSpinPasses=0;
            }
-        }
-      if(wake)
-        {
-         g_log.Info("OnTimer: "+wokeReason+"; waking action queue immediately");
-         g_qRetryAtMs=0;
-         g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
-         g_qSpinPasses=0;
         }
      }
 
@@ -9806,7 +9826,7 @@ void OnTick()
   {
    // BUG-01: Wake up immediately from queue backoff upon receiving a fresh tick
    // if any queued action is an unblocked exit action, or if any queued symbol is verified open.
-   if(g_qRetryAtMs>0 && g_qn>0)
+   if(g_qRetryAtMs>0 && g_qn>0 && CopierTradeAllowed())
      {
       bool wake=false;
       string wokeReason="";
@@ -9817,19 +9837,22 @@ void OnTick()
          string s=g_q[idx].sym;
          if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
            {
-            string ekey = (g_q[idx].uid!="") ? g_q[idx].uid : (string)g_q[idx].ticket;
-            if(!g_backoff.BlockedExit(ekey))
+            if(!g_backoff.BlockedExit(g_q[idx].key))
               {
                wake=true;
                wokeReason="unblocked exit action on "+s;
                break;
               }
            }
-         else if(!SymbolMarketClosed(s))
+         else
            {
-            wake=true;
-            wokeReason="open market for "+s;
-            break;
+            int dummyWarmup=0;
+            if(!g_cmdPaused && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup))
+              {
+               wake=true;
+               wokeReason="open market for "+s;
+               break;
+              }
            }
         }
       if(wake)

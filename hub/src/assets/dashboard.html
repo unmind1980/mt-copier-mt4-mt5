@@ -9286,6 +9286,10 @@ function openPeerModal(){
           $("peer_input_ip").value = u.hostname;
           if(u.port) $("peer_input_api_port").value = u.port;
         } catch(e) {}
+        if(res.peer_zmq) {
+          var zmqMatch = res.peer_zmq.match(/:(\d+)$/);
+          if(zmqMatch && zmqMatch[1]) $("peer_input_zmq_port").value = zmqMatch[1];
+        }
       }
     })
     .catch(function(e){

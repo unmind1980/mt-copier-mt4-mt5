@@ -1088,9 +1088,17 @@ fn relay_receipts(
     }
 
     //--- Forget pairs that stopped reporting; this map has no other eviction path.
+    const MAX_RCPT_RELAYED_KEYS: usize = 4096;
     if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
         *last_rcpt_prune = Instant::now();
         last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(600));
+    }
+    // H-01 / H-DOS-01: Hard emergency cap against flood of spurious accounts/senders
+    if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
+        last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
+        if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
+            last_rcpt_relayed.clear();
+        }
     }
 
     for (sid, h) in accepted {
@@ -2210,8 +2218,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     envelope_hdr(&payload, "TS").parse().unwrap_or(0);
                                 let node_gts: i64 =
                                     envelope_hdr(&payload, "GTS").parse().unwrap_or(0);
-                                if ty == "REG" {
-                                    // Phase 4: Send T=TOPOLOGY to node on registration
+                                if ty == "REG" || ty == "HBT2" {
+                                    // Phase 4 / BUG-04: Send T=TOPOLOGY to node on registration and on heartbeat if topology changed
                                     let (is_prim, cur_epoch, cur_role, dynamic_peer_zmq) = {
                                         let s = shared.lock_or_recover();
                                         (
@@ -2245,6 +2253,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                         );
                                         state.last_topo_sent.insert(acc.clone(), topo_key);
                                     }
+                                }
+                                if ty == "REG" {
 
                                     let name = envelope_kv(&payload, "NAME");
                                     let node_key = format!("{}:{}", role, acc);
@@ -2289,8 +2299,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                                     None => (false, 0),
                                                 };
                                                 if !throttled {
-                                                    // P1-1: Only Primary with effective writes issues reqcfg to avoid accumulating zombie commands
-                                                    if is_prim && effective_writes {
+                                                    // P1-1 / BUG-06: Primary issues reqcfg to fetch EA current config even in read-only (--writes off) mode
+                                                    if is_prim {
                                                         last_cfg_pull.insert(node_key.clone(), (Instant::now(), attempts + 1));
                                                         println!("[hub] {} reports IH={} (mismatch or empty) - requesting full config via reqcfg (attempt {})", node_key, ih, attempts + 1);
                                                         cmds.issue_op(&node_key, "reqcfg", "", "hub", "127.0.0.1");
@@ -3153,6 +3163,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     last_cfg_pull.remove(key);
                     last_cfgr_print.remove(key);
                     if let Some((role, acc)) = key.split_once(':') {
+                        state.last_topo_sent.remove(acc);
                         if role == "sender" {
                             last_known_receipt.remove(acc);
                             if acc.len() > 9 {

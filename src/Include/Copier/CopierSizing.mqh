@@ -228,7 +228,11 @@ double CopierFitStopAt(const double px,const int side,const bool isSl,
    clamped=false;
    if(px<=0.0) return 0.0;
    if(marketPx<=0.0) return NormalizeDouble(px,si.digits);
-   if(si.stopLevel<=0.0) return NormalizeDouble(px,si.digits);
+
+   // BUG-03: On zero StopLevel ECN brokers (stopLevel == 0), stops must still not cross market price.
+   // Require at least 1 tick / point distance on the legal side to avoid ERR_INVALID_STOPS (130 / 10016).
+   double reqDist = (si.stopLevel > 0.0) ? si.stopLevel : MathMax(si.tickSize, si.point);
+   if(reqDist <= 0.0) reqDist = (si.digits > 0) ? (1.0 / MathPow(10, si.digits)) : 0.00001;
 
    //--- which way is "further from the market"?
    //---   a buy's stop-loss, and a sell's take-profit, sit BELOW the market
@@ -237,12 +241,12 @@ double CopierFitStopAt(const double px,const int side,const bool isSl,
    double out=px;
    if(below)
      {
-      double minPx=marketPx-si.stopLevel;
+      double minPx=marketPx-reqDist;
       if(out>minPx) { out=minPx; clamped=true; }
      }
    else
      {
-      double minPx=marketPx+si.stopLevel;
+      double minPx=marketPx+reqDist;
       if(out<minPx) { out=minPx; clamped=true; }
      }
    return NormalizeDouble(out,si.digits);

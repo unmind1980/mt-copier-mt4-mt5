@@ -785,7 +785,7 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    if(CopierKvGet(payload,"PSTOP",pstopStr)) p.pstop=StringToDouble(pstopStr);
    else                                      p.pstop=0.0;
    string expStr="";
-   if(CopierKvGet(payload,"PEXP",expStr))    p.pexpire=(long)StringToInteger(expStr);
+   if(CopierKvGet(payload,"PEXP",expStr))    p.pexpire=CopierParseLong(expStr);
    else                                      p.pexpire=0;
    return true;
   }

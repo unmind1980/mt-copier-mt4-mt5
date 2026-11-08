@@ -1059,6 +1059,7 @@ async fn require_session(
         || path == "/readyz"
         || path == "/api/v1/locales"
         || path.starts_with("/api/v1/locales/")
+        || path.starts_with("/.well-known/acme-challenge/")
     {
         return next.run(req).await;
     }
@@ -1852,6 +1853,7 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
             "/api/v1/notifications/:id",
             axum::routing::delete(notifications_delete),
         )
+        .route("/.well-known/acme-challenge/:token", get(acme_challenge_handler))
         .route("/api/v1/cluster/status", get(cluster_status))
         .route("/api/v1/cluster/sync", axum::routing::post(cluster_sync))
         .route(
@@ -3288,6 +3290,29 @@ async fn notifications_upsert(
         }
     }
 
+    if b.channel_type == "wecom" || b.channel_type == "wechat_work" {
+        if let Some(key) = b.config.get("key").and_then(|v| v.as_str()) {
+            if !key.is_empty() && !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "WeCom webhook key contains invalid characters" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    if b.channel_type == "dingtalk" {
+        if let Some(tok) = b.config.get("access_token").and_then(|v| v.as_str()) {
+            if !tok.is_empty() && !tok.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "DingTalk access_token contains invalid characters" })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // WEB-01: Preserve channel's existing language if omitted in request (e.g. toggle active)
     let lang = if !b.lang.trim().is_empty() {
         b.lang.trim().to_string()
@@ -3427,6 +3452,26 @@ async fn notifications_test(
     use axum::response::IntoResponse;
     if sess.role < UserRole::Operator {
         return deny(&st, &sess, "operator");
+    }
+
+    let (is_primary, peer_url) = {
+        let s = st.lock_or_recover();
+        (s.cluster.is_primary(), s.cluster.peer_url.clone())
+    };
+    if !is_primary {
+        return standby_readonly_conflict(&peer_url, "Notification Testing").into_response();
+    }
+    let notif_enabled = {
+        let s = st.lock_or_recover();
+        let en = s.notif_store.lock_or_recover().enabled();
+        en
+    };
+    if !notif_enabled {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Notification subsystem is disabled on this hub (--notifications none)" })),
+        )
+            .into_response();
     }
 
     let target_channel = if let Some(mut ch) = req.channel {
@@ -4115,7 +4160,12 @@ async fn cluster_set_peer(
     let (new_url, new_zmq) = if let Some(url) = b.peer_url.filter(|u| !u.trim().is_empty()) {
         (url.trim().to_string(), b.peer_zmq.unwrap_or_default())
     } else if !b.peer_ip.trim().is_empty() {
-        let ip = b.peer_ip.trim();
+        let mut ip = b.peer_ip.trim();
+        if let Some(stripped) = ip.strip_prefix("http://") {
+            ip = stripped;
+        } else if let Some(stripped) = ip.strip_prefix("https://") {
+            ip = stripped;
+        }
         let api_port = b.peer_api_port.unwrap_or(6010);
         let zmq_port = b.peer_zmq_port.unwrap_or(6000);
         (format!("http://{}:{}", ip, api_port), format!("tcp://{}:{}", ip, zmq_port))
@@ -4123,6 +4173,23 @@ async fn cluster_set_peer(
         // Clear peer -> switch cleanly to standalone mode
         (String::new(), String::new())
     };
+
+    if !new_url.is_empty() {
+        if !new_url.starts_with("http://") && !new_url.starts_with("https://") {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "peer_url must begin with http:// or https://" })),
+            )
+                .into_response();
+        }
+        if let Err(e) = crate::notifications::validate_outgoing_url(&new_url).await {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("Invalid peer URL: {}", e) })),
+            )
+                .into_response();
+        }
+    }
 
     let mut s = st.lock_or_recover();
     if let Err(e) = s.cluster.set_peer(new_url.clone(), new_zmq.clone()) {
@@ -4194,6 +4261,26 @@ fn tls_ip_client() -> &'static reqwest::Client {
             .build()
             .unwrap_or_default()
     })
+}
+
+async fn acme_challenge_handler(
+    State(st): State<SharedState>,
+    axum::extract::Path(token): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let key_auth = {
+        let s = st.lock_or_recover();
+        s.tls.get_acme_token(&token)
+    };
+    match key_auth {
+        Some(ka) => (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/plain")],
+            ka,
+        )
+            .into_response(),
+        None => (axum::http::StatusCode::NOT_FOUND, "Token not found").into_response(),
+    }
 }
 
 async fn tls_status(

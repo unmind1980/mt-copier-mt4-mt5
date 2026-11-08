@@ -553,6 +553,7 @@ void Emit(const string type,const string payload,const bool snapshot,
    //--- monotonic ms, so the receiver can estimate the link without any extra
    //--- message: see the header of CopierPeers.mqh
    e.ms=CopierNowMs();
+   e.gts=(long)TimeGMT();
    e.type=type;
    e.payload=payload;
 

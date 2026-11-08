@@ -923,7 +923,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                      if(ftp>0.0)
                        {
                         if(ftp<=mkAsk) ftp=0.0; // crossed: defer to converge
-                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(MathMax(mkBid+mkStop,mkAsk+mkPoint),mkDig);
                        }
                     }
                   else
@@ -936,7 +936,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                      if(ftp>0.0)
                        {
                         if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
-                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(MathMin(mkAsk-mkStop,mkBid-mkPoint),mkDig);
                        }
                     }
                  }
@@ -1014,7 +1014,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                      if(ftp>0.0)
                        {
                         if(ftp<=mkAsk) ftp=0.0; // crossed: defer to converge
-                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(mkBid+mkStop,mkDig);
+                        else if(mkStop>0.0 && ftp-mkBid<mkStop) ftp=NormalizeDouble(MathMax(mkBid+mkStop,mkAsk+mkPoint),mkDig);
                        }
                     }
                   else
@@ -1027,7 +1027,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                      if(ftp>0.0)
                        {
                         if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
-                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(mkAsk-mkStop,mkDig);
+                        else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(MathMin(mkAsk-mkStop,mkBid-mkPoint),mkDig);
                        }
                     }
                  }
