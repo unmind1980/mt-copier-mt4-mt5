@@ -51,6 +51,7 @@ if /i "%CMD%"=="build"    set "SCRIPT=build.sh"       & goto :runsh
 if /i "%CMD%"=="deploy"   set "SCRIPT=deploy.sh"      & goto :runsh
 if /i "%CMD%"=="compile"  set "SCRIPT=compile.sh"     & goto :runsh
 if /i "%CMD%"=="clean"    set "SCRIPT=clean.sh"       & goto :runsh
+if /i "%CMD%"=="cleanlogs" goto :cleanlogs
 if /i "%CMD%"=="pilot"    set "SCRIPT=pilot-setup.sh" & goto :runsh
 if /i "%CMD%"=="phase2"   set "SCRIPT=phase2-setup.sh"& goto :runsh
 if /i "%CMD%"=="deps"     set "SCRIPT=fetch-deps.sh"  & goto :runsh
@@ -126,6 +127,10 @@ REM --- a measurement rather than an assertion.
 call "%HERE%hubrs.bat" --selftest
 goto :end
 
+:cleanlogs
+call "%HERE%clean_terminal_logs.bat"%ARGS%
+goto :end
+
 REM ---------------------------------------------------------------------
 :help
 echo.
@@ -137,6 +142,8 @@ echo     tools\copier.bat build               deploy THEN compile (the normal on
 echo     tools\copier.bat deploy              push sources + DLLs to the targets
 echo     tools\copier.bat deploy --list       show what would be touched
 echo     tools\copier.bat compile             compile everywhere, print the logs
+echo     tools\copier.bat cleanlogs           prune MT daily logs (keep max 10) and caches
+echo     tools\copier.bat cleanlogs --yes     actually prune MT daily logs and caches
 echo     tools\copier.bat phase2              prepare P2 phase 2 (MT4 as sender)
 echo     tools\copier.bat pilot               prepare the MT5 loopback pilot
 echo     tools\copier.bat logcheck            verdict from the copier logs

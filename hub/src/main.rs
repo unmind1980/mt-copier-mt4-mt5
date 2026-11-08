@@ -3220,6 +3220,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if dropped > 0 {
                         println!("[hub] command journal: {} terminal command(s) aged out", dropped);
                     }
+                    if let Ok(Some(n)) = cmds.compact_if_needed(crate::commands::COMMAND_JOURNAL_COMPACT_BYTES) {
+                        println!("[hub] command journal compacted at runtime: {} live command(s)", n);
+                    }
+                    crate::service::win_service::maybe_rotate_service_log();
                 }
 
                 for (key, live) in seed {

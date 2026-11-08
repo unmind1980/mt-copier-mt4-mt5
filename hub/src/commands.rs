@@ -549,6 +549,45 @@ impl CommandStore {
         self.inner.lock_or_recover().prune_terminal(now_secs, max_age_secs)
     }
 
+    /// Compact the on-disk journal if its size exceeds `max_bytes`.
+    /// Safe to call concurrently at runtime: locks inner, prunes terminal entries,
+    /// temporarily drops the file handle for Windows atomic replace, and reopens it.
+    pub fn compact_if_needed(&self, max_bytes: u64) -> std::io::Result<Option<usize>> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let size = match std::fs::metadata(&self.path) {
+            Ok(m) => m.len(),
+            Err(_) => return Ok(None),
+        };
+        if size < max_bytes {
+            return Ok(None);
+        }
+
+        let mut inner = self.inner.lock_or_recover();
+        // Prune memory first before writing out surviving snapshot
+        inner.prune_terminal(unix_secs(), COMMAND_KEEP_SECS);
+
+        // Drop file handle so Windows allows replacing the open file
+        inner.file = None;
+
+        let res = compact_journal(&self.path, &inner.commands);
+
+        // Ensure file handle is always reopened
+        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        inner.file = reopen_res.ok();
+
+        let n = res?;
+        if inner.file.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "failed to reopen command journal file after runtime compact",
+            ));
+        }
+        inner.line_count = n;
+        Ok(Some(n))
+    }
+
     /// Register (or return) the config-push command for a revision.
     ///
     /// Idempotent by construction: the id is a function of `(node, rev)`, so a
@@ -1774,6 +1813,40 @@ mod tests {
         let (total, pending, _) = s.stats();
         assert_eq!(total, 6);
         assert_eq!(pending, 1);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn runtime_compact_if_needed_works_without_restarting() {
+        let p = tmp("compact_runtime");
+        let s = CommandStore::open(&p).unwrap();
+        for _ in 0..5 {
+            let c = s.issue_op("receiver:1", "pause", "", "op", "");
+            s.ack(&c.id, true, 0, "");
+        }
+        let _ = s.issue_op("receiver:1", "resume", "", "op", "");
+        let before = std::fs::read_to_string(&p).unwrap();
+        assert!(before.lines().count() > 6, "expected one line per transition");
+
+        // Below threshold: does not compact
+        assert_eq!(s.compact_if_needed(100 * 1024 * 1024).unwrap(), None);
+
+        // Above threshold: compacts at runtime
+        let compacted = s.compact_if_needed(50).unwrap();
+        assert_eq!(compacted, Some(6));
+
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(after.lines().count(), 6, "runtime compacted journal has 1 line per surviving command");
+
+        // Append handle must still work without restart
+        let new_c = s.issue_op("receiver:1", "closeall", "", "op", "");
+        let after_append = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(after_append.lines().count(), 7, "new command must append successfully after runtime compact");
+        assert!(s.ack(&new_c.id, true, 0, ""));
+
+        // Reopening from disk must succeed and recover exact state
+        let s2 = CommandStore::open(&p).unwrap();
+        assert_eq!(s2.stats().0, 7);
         let _ = std::fs::remove_file(&p);
     }
 

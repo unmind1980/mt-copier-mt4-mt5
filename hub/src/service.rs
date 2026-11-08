@@ -35,6 +35,15 @@ pub mod win_service {
     pub const STANDBY_SERVICE_NAME: &str = "MTCopierStandby";
     pub const STANDBY_DISPLAY_NAME: &str = "MT-Copier Standby Hub";
 
+    /// Maximum size of the Windows Service redirected stdout/stderr log: 10 MB.
+    pub const SERVICE_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+    /// Maximum number of rotated service log archives to retain: 5 copies (.1 to .5).
+    pub const SERVICE_LOG_MAX_BACKUPS: usize = 5;
+
+    // Static handle for service log redirection
+    static LOG_HANDLE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+    static ACTIVE_SERVICE_LOG: Mutex<Option<(std::path::PathBuf, u64, usize)>> = Mutex::new(None);
+
     /// H4: the SCM name for a role, optionally suffixed for a second instance.
     ///
     /// The names used to be hard-coded, so a machine could host exactly one
@@ -99,9 +108,94 @@ pub mod win_service {
         //--- stay open for the life of the process either way, but the handle is now
         //--- owned and reachable rather than deliberately leaked - and a second call
         //--- (which would otherwise orphan the first handle) replaces it cleanly.
-        static LOG_HANDLE: Mutex<Option<std::fs::File>> = Mutex::new(None);
         *LOG_HANDLE.lock_or_recover() = Some(file);
+        *ACTIVE_SERVICE_LOG.lock_or_recover() =
+            Some((path.to_path_buf(), SERVICE_LOG_MAX_BYTES, SERVICE_LOG_MAX_BACKUPS));
         Ok(())
+    }
+
+    /// Size-based rotation for log files on disk.
+    /// Rotates `path` to `path.1`, shifting older backups up to `max_backups`, and prunes oldest.
+    pub fn rotate_log_files(path: &Path, max_bytes: u64, max_backups: usize) -> std::io::Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+        let size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => return Ok(false),
+        };
+        if size < max_bytes {
+            return Ok(false);
+        }
+
+        // Prune oldest archive beyond max_backups
+        let oldest = format!("{}.{}", path.display(), max_backups);
+        let _ = std::fs::remove_file(&oldest);
+
+        // Shift backups up: .4 -> .5, .3 -> .4, etc.
+        for i in (1..max_backups).rev() {
+            let from = format!("{}.{}", path.display(), i);
+            let to = format!("{}.{}", path.display(), i + 1);
+            if std::path::Path::new(&from).exists() {
+                let _ = std::fs::rename(&from, &to);
+            }
+        }
+
+        // Rename current log to .1
+        let backup1 = format!("{}.1", path.display());
+        let _ = std::fs::rename(path, &backup1);
+
+        Ok(true)
+    }
+
+    /// Size-based rotation for Windows Service stdout/stderr log.
+    /// Flushes stdio, drops log handle, rotates disk files, and rebinds stdio to fresh log.
+    pub fn rotate_service_log(path: &Path, max_bytes: u64, max_backups: usize) -> std::io::Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+        let size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => return Ok(false),
+        };
+        if size < max_bytes {
+            return Ok(false);
+        }
+
+        // Flush standard streams before rotating
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+
+        // Release file handle held by LOG_HANDLE so Windows file lock is released
+        {
+            let mut handle_guard = LOG_HANDLE.lock_or_recover();
+            *handle_guard = None;
+        }
+
+        rotate_log_files(path, max_bytes, max_backups)?;
+
+        // Re-open fresh log and bind stdio
+        redirect_stdio_to_log(path)?;
+        Ok(true)
+    }
+
+    /// Periodic runtime check for service log rotation.
+    pub fn maybe_rotate_service_log() -> bool {
+        let target = {
+            let guard = ACTIVE_SERVICE_LOG.lock_or_recover();
+            guard.clone()
+        };
+        if let Some((path, max_bytes, max_backups)) = target {
+            if let Ok(true) = rotate_service_log(&path, max_bytes, max_backups) {
+                println!(
+                    "[service] Service log rotated: size exceeded {} bytes (retention: {} backups)",
+                    max_bytes, max_backups
+                );
+                return true;
+            }
+        }
+        false
     }
 
     define_windows_service!(ffi_service_main, hub_service_main);
@@ -139,6 +233,8 @@ pub mod win_service {
                     .and_then(|p| p.parent().map(|d| d.join(&log_name)))
             })
             .unwrap_or_else(|| std::path::PathBuf::from(&log_name));
+        // Rotate existing log if it exceeded threshold before starting
+        let _ = rotate_service_log(&log_path, SERVICE_LOG_MAX_BYTES, SERVICE_LOG_MAX_BACKUPS);
         let _ = redirect_stdio_to_log(&log_path);
 
         println!("[service] Initializing Windows Service '{}'...", service_name);
@@ -476,5 +572,83 @@ pub mod win_service {
     }
     pub fn status(_role: &str, _instance: Option<&str>) -> Result<String, String> {
         Err("Windows Service status is only supported on Windows.".to_string())
+    }
+    pub fn maybe_rotate_service_log() -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::win_service::*;
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn tmp_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("mtc_test_service_{}_{}.log", name, std::process::id()));
+        p
+    }
+
+    fn cleanup(p: &PathBuf) {
+        let _ = fs::remove_file(p);
+        for i in 1..=10 {
+            let _ = fs::remove_file(format!("{}.{}", p.display(), i));
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_rotate_log_files_threshold_and_backups() {
+        let p = tmp_path("rot_test");
+        cleanup(&p);
+
+        // 1. Non-existent file
+        assert_eq!(rotate_log_files(&p, 100, 3).unwrap(), false);
+
+        // 2. Below threshold
+        {
+            let mut f = fs::File::create(&p).unwrap();
+            f.write_all(b"hello").unwrap();
+        }
+        assert_eq!(rotate_log_files(&p, 100, 3).unwrap(), false);
+        assert!(p.exists());
+
+        // 3. Exceeds threshold: rotate to .1
+        {
+            let mut f = fs::OpenOptions::new().append(true).open(&p).unwrap();
+            f.write_all(&vec![b'A'; 200]).unwrap();
+        }
+        assert_eq!(rotate_log_files(&p, 100, 3).unwrap(), true);
+        let b1 = PathBuf::from(format!("{}.1", p.display()));
+        assert!(b1.exists(), "backup .1 must exist");
+
+        // 4. Rotate again: .1 shifts to .2, new .1 created
+        {
+            let mut f = fs::File::create(&p).unwrap();
+            f.write_all(&vec![b'B'; 200]).unwrap();
+        }
+        assert_eq!(rotate_log_files(&p, 100, 3).unwrap(), true);
+        let b2 = PathBuf::from(format!("{}.2", p.display()));
+        assert!(b2.exists(), "backup .2 must exist");
+        assert!(b1.exists(), "backup .1 must exist");
+
+        // 5. Rotate until max_backups (3) is exceeded: .4 must be pruned
+        for _ in 0..3 {
+            {
+                let mut f = fs::File::create(&p).unwrap();
+                f.write_all(&vec![b'C'; 200]).unwrap();
+            }
+            assert_eq!(rotate_log_files(&p, 100, 3).unwrap(), true);
+        }
+        let b3 = PathBuf::from(format!("{}.3", p.display()));
+        let b4 = PathBuf::from(format!("{}.4", p.display()));
+        assert!(b1.exists(), ".1 exists");
+        assert!(b2.exists(), ".2 exists");
+        assert!(b3.exists(), ".3 exists");
+        assert!(!b4.exists(), ".4 must be pruned because max_backups is 3");
+
+        cleanup(&p);
     }
 }
