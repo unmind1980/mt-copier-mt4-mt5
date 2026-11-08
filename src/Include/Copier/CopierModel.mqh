@@ -268,17 +268,34 @@ bool CopierIsConnected()
 #endif
   }
 
+#ifdef __MQL5__
+bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending);
+#endif
+
 double CopierTicketSL(const long ticket)
   {
    if(ticket<=0) return 0.0;
 #ifdef __MQL5__
+   long realTicket=0;
+   bool isPending=false;
+   if(CopierResolveCloseTicket(ticket,realTicket,isPending))
+     {
+      if(isPending)
+        {
+         if(OrderSelect((ulong)realTicket)) return OrderGetDouble(ORDER_SL);
+        }
+      else
+        {
+         if(PositionSelectByTicket((ulong)realTicket)) return PositionGetDouble(POSITION_SL);
+        }
+     }
    if(PositionSelectByTicket((ulong)ticket))
       return PositionGetDouble(POSITION_SL);
    if(OrderSelect((ulong)ticket))
       return OrderGetDouble(ORDER_SL);
    return 0.0;
 #else
-   if(OrderSelect((int)ticket,SELECT_BY_TICKET))
+   if(OrderSelect((int)ticket,SELECT_BY_TICKET) && OrderCloseTime()==0)
       return OrderStopLoss();
    return 0.0;
 #endif

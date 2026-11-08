@@ -1963,6 +1963,10 @@ void TestKvSuffixCollision()
    //--- the exact call that was broken
    Ok("kv: CopierKvGetLong reads a real OTS, not the default",
       CopierKvGetLong(payload,"OTS",0)==1791417600);
+   Ok("kv: CopierKvGetInt parses int correctly",
+      CopierKvGetInt("FOO=12345;BAR=99","FOO",0)==12345);
+   Ok("kv: CopierKvGetInt returns default when key absent",
+      CopierKvGetInt("FOO=12345","BAZ",42)==42);
   }
 
 void TestLotMode()
@@ -2221,7 +2225,7 @@ void TestNodeAnnounce()
    //--- CRLF a Windows editor writes as well as the LF the hub sends.
    string lines[];
    Ok("split: LF",CopierSplitLines("a\nb\nc",lines)==3 && lines[1]=="b");
-   Ok("split: CRLF",CopierSplitLines("a\r\nb\r\n",lines)==3 && lines[0]=="a"
+   Ok("split: CRLF",CopierSplitLines("a\r\nb\r\n",lines)==2 && lines[0]=="a"
       && lines[1]=="b");
    Ok("split: no trailing newline still yields the last line",
       CopierSplitLines("a\nb",lines)==2 && lines[1]=="b");

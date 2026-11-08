@@ -1205,7 +1205,7 @@ double GetSymbolMinSpread(const string sym)
    return 0.0;
   }
 
-void TrackSymbolSpread(const string sym,const double curSpread)
+void TrackSymbolSpread(const string sym,const double curSpread,const bool inWarmup=false)
   {
    if(StringLen(sym)==0 || curSpread<=0.0) return;
    uint h=(uint)(CopierHash32(sym)&(CP_SPREAD_TRACK_SLOTS-1));
@@ -1214,13 +1214,21 @@ void TrackSymbolSpread(const string sym,const double curSpread)
       int s=(int)((h+i)&(CP_SPREAD_TRACK_SLOTS-1));
       if(g_spreadSym[s]==sym)
         {
-         if(g_spreadMin[s]<=0.0 || curSpread<g_spreadMin[s]) g_spreadMin[s]=curSpread;
+         // ISSUE-02: If currently in warmup, only allow lowering the min spread, never initialize from warmup
+         if(g_spreadMin[s]>0.0)
+           {
+            if(curSpread<g_spreadMin[s]) g_spreadMin[s]=curSpread;
+           }
+         else if(!inWarmup)
+           {
+            g_spreadMin[s]=curSpread;
+           }
          return;
         }
       if(StringLen(g_spreadSym[s])==0)
         {
          g_spreadSym[s]=sym;
-         g_spreadMin[s]=curSpread;
+         g_spreadMin[s]=inWarmup ? 0.0 : curSpread;
          return;
         }
      }
@@ -3323,14 +3331,15 @@ void RemapQueueSenders(const string &beforeSid[],const int beforeN)
    if(g_qn<=0) g_qHead=0;
   }
 
-// OPT-01: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer()
+// OPT-01 / P-03: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer().
+// Yields CPU to the OS scheduler via Sleep(1) in OnTick/non-timer contexts.
 void CopierWaitMs(const int waitMs)
   {
    if(waitMs<=0) return;
    long start=CopierNowMs();
    while(CopierNowMs()-start<waitMs)
      {
-      // busy-wait to provide genuine flow control in timer-driven EA
+      Sleep(1);
      }
   }
 
@@ -3493,7 +3502,7 @@ void ExecuteQueue()
       if(SymbolInOpenWarmup(a.sym, warmupElapsed))
         {
          double curSp = CopierGetSpreadPoints(a.sym);
-         TrackSymbolSpread(a.sym, curSp);
+         TrackSymbolSpread(a.sym, curSp, true);
 
          if(a.kind==CP_ACT_OPEN)
            {
@@ -6782,13 +6791,12 @@ void HandleSnapshot(const int si,const CopierEnv &e)
    //--- strings; leaving them behind kept up to 2048 UID/symbol/comment references
    //--- alive per sender for the life of the terminal, and every shrink of a large
    //--- book leaked another batch.
+   //--- C4 / ISSUE-11: Cleanly zero-initialize the rows this snapshot shrank past,
+   //--- releasing string references and clearing numerical fields (tickets, prices, lots, types).
+   CopierPos emptyPos;
    for(int i=n;i<prevCount && i<CP_MAX_POSITIONS;i++)
      {
-      g_desired[base+i].uid="";
-      g_desired[base+i].sym="";
-      g_desired[base+i].cmt="";
-      g_desired[base+i].ticket=0;
-      g_desired[base+i].initLots=0.0;
+      g_desired[base+i]=emptyPos;
      }
    g_desiredCount[si]=n;
    g_ready[si]=true;
@@ -9489,10 +9497,11 @@ void OnTimer()
             else
               {
                int dummyWarmup=0;
-               if(!g_cmdPaused && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup))
+               bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(g_q[idx].key) : g_backoff.Blocked(g_q[idx].key);
+               if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
                  {
                   wake=true;
-                  wokeReason="open market for "+s;
+                  wokeReason="market reopened for "+s;
                   break;
                  }
               }
@@ -9824,6 +9833,11 @@ void OnTimer()
 
 void OnTick()
   {
+   int dummyW=0;
+   bool inW=SymbolInOpenWarmup(_Symbol,dummyW);
+   double sp=CopierGetSpreadPoints(_Symbol);
+   if(sp>0.0) TrackSymbolSpread(_Symbol,sp,inW);
+
    // BUG-01: Wake up immediately from queue backoff upon receiving a fresh tick
    // if any queued action is an unblocked exit action, or if any queued symbol is verified open.
    if(g_qRetryAtMs>0 && g_qn>0 && CopierTradeAllowed())
@@ -9847,10 +9861,11 @@ void OnTick()
          else
            {
             int dummyWarmup=0;
-            if(!g_cmdPaused && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup))
+            bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(g_q[idx].key) : g_backoff.Blocked(g_q[idx].key);
+            if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
               {
                wake=true;
-               wokeReason="open market for "+s;
+               wokeReason="market reopened for "+s;
                break;
               }
            }

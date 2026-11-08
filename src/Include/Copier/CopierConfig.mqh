@@ -725,7 +725,7 @@ int CopierSplitLines(const string s,string &out[])
          start=i+1;
         }
      }
-   if(start<=n)
+   if(start<n)
      {
       int len=n-start;
       if(len>0 && StringGetCharacter(s,n-1)=='\r') len--;

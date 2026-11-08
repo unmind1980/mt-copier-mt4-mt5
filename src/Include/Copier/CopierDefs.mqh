@@ -526,14 +526,10 @@ struct CopierPos
 // Platform-neutral helpers
 //=====================================================================
 // Monotonic-ish clock in milliseconds, used only for intervals inside
-// one process. Uses high-resolution microsecond timer where available for sub-1ms accuracy.
+// one process. Uses high-resolution microsecond timer for sub-1ms accuracy.
 long CopierNowMs()
   {
-#ifdef __MQL5__
    return (long)(GetMicrosecondCount()/1000);
-#else
-   return (long)(GetMicrosecondCount()/1000);
-#endif
   }
 
 // Broker server time in seconds. This is the only timestamp we ever
@@ -1032,7 +1028,7 @@ int CopierKvGetInt(const string payload,const string key,const int deflt)
   {
    string v;
    if(!CopierKvGet(payload,key,v)) return deflt;
-   return (int)StringToInteger(v);
+   return (int)CopierParseLong(v);
   }
 
 //=====================================================================

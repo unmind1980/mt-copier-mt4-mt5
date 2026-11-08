@@ -556,9 +556,7 @@ public:
       //--- each writable pipe. With a single pipe both copies go to the same
       //--- hub - harmless, because every @hub frame is idempotent (REG upserts,
       //--- ACK sets a terminal state, STAT refreshes a timestamp, a receipt is a
-      //--- high-water mark). Data frames stay single-send: the standby forwards
-      //--- them, so they are not lost either way, and duplicating them would
-      //--- only add traffic.
+      //--- high-water mark).
       //--- R60-18 & ADR-02 / H1: Send 2 copies whenever connected to multiple hubs (HA cluster),
       //--- ensuring BOTH Primary and Standby receive every control AND data frame.
       //--- ZeroMQ XSUB uses round-robin across connected pipes for single sends, which splits

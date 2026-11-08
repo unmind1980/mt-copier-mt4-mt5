@@ -179,6 +179,31 @@ pub fn file_sha256(path: &Path) -> String {
     }
 }
 
+/// MTC_SYNC / H7-01: Cached file SHA-256 for large journals (`commands.jsonl` and `config_revisions.jsonl`).
+/// Uses `fs::metadata` `(mtime, len)` fast path. If unchanged and checked within last 30s, returns cached hash.
+pub fn cached_journal_sha256(
+    path: &Path,
+    cache: &mut Option<(std::time::SystemTime, u64, std::time::Instant, String)>,
+) -> String {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let len = meta.len();
+    let now = std::time::Instant::now();
+
+    if let Some((c_mtime, c_len, c_inst, ref c_hash)) = cache {
+        if *c_mtime == mtime && *c_len == len && now.duration_since(*c_inst) < std::time::Duration::from_secs(30) {
+            return c_hash.clone();
+        }
+    }
+
+    let hash = file_sha256(path);
+    *cache = Some((mtime, len, now, hash.clone()));
+    hash
+}
+
 impl ClusterManager {
     pub fn load_or_create(
         state_path: &Path,
@@ -443,6 +468,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
         let mut force_full_cfg_resync = false;
         let mut force_full_cmd_resync = false;
+        let mut cfg_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
+        let mut cmd_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
+        let mut primary_cfg_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
+        let mut primary_cmd_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -655,7 +684,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let (cfg_h, cmd_h) = if lines_differ {
                     (String::new(), String::new())
                 } else {
-                    (file_sha256(&cfg_path), file_sha256(&cmd_path))
+                    (
+                        cached_journal_sha256(&cfg_path, &mut cfg_cache),
+                        cached_journal_sha256(&cmd_path, &mut cmd_cache),
+                    )
                 };
 
                 //--- N57-12: `> 0` created a blind spot. When the primary's
@@ -1111,9 +1143,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 }
             } else {
-                // BUG-02 & BUG-03: Primary node verifies if Standby peer has caught up with our journals and hashes
-                let (my_cfg, my_cmd, my_seq, cfg_p, cmd_p, u_p, c_p) = {
+                // BUG-02 & BUG-03 / H7-05: Primary node verifies if Standby peer has caught up with our journals and hashes
+                let (my_cfg, my_cmd, my_seq, cfg_p, cmd_p, u_p, c_p, n_p) = {
                     let s = st.lock_or_recover();
+                    let n_path = s.notif_store.lock_or_recover().path().to_path_buf();
                     (
                         s.cfg.total_lines(),
                         s.cmds.sync_stats().0,
@@ -1122,12 +1155,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         s.cmds.path().to_path_buf(),
                         s.users.path().to_path_buf(),
                         s.cluster.curve_clients_path.clone(),
+                        n_path,
                     )
-                };
-                let n_p = {
-                    let s = st.lock_or_recover();
-                    let x = s.notif_store.lock_or_recover().path().to_path_buf();
-                    x
                 };
                 let users_sync_enabled = std::env::var("MTC_SYNC_USERS")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -1139,7 +1168,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
                 let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
                 let (my_cfg_h, my_cmd_h) = if lines_match {
-                    (file_sha256(&cfg_p), file_sha256(&cmd_p))
+                    (
+                        cached_journal_sha256(&cfg_p, &mut primary_cfg_cache),
+                        cached_journal_sha256(&cmd_p, &mut primary_cmd_cache),
+                    )
                 } else {
                     (String::new(), String::new())
                 };

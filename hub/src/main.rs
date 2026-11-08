@@ -1074,6 +1074,28 @@ fn relay_receipts(
         (changed, prim)
     };
 
+    //--- Forget pairs that stopped reporting; this map has no other eviction path.
+    //--- L-01 / ISSUE-08: Run periodic prune and emergency cap check before potential early return on empty accepted.
+    const MAX_RCPT_RELAYED_KEYS: usize = 4096;
+    if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
+        *last_rcpt_prune = Instant::now();
+        last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(600));
+        // H-01 / H-DOS-01 / L-01: Hard emergency cap against flood of spurious accounts/senders
+        if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
+            last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
+            if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
+                // Rather than clear() (which causes all receivers to re-send duplicate receipts),
+                // retain the newest half of entries to eliminate thundering herd.
+                let mut entries: Vec<_> = last_rcpt_relayed.drain().collect();
+                entries.sort_by_key(|(_, (_, t))| *t);
+                let keep_from = entries.len().saturating_sub(MAX_RCPT_RELAYED_KEYS / 2);
+                for (k, v) in entries.into_iter().skip(keep_from) {
+                    last_rcpt_relayed.insert(k, v);
+                }
+            }
+        }
+    }
+
     if accepted.is_empty() {
         //--- rate-limited: a misconfigured receiver emits one STAT a second, and a
         //--- line a second buries everything else.
@@ -1085,20 +1107,6 @@ fn relay_receipts(
             );
         }
         return changed;
-    }
-
-    //--- Forget pairs that stopped reporting; this map has no other eviction path.
-    const MAX_RCPT_RELAYED_KEYS: usize = 4096;
-    if last_rcpt_prune.elapsed() >= Duration::from_secs(60) {
-        *last_rcpt_prune = Instant::now();
-        last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(600));
-    }
-    // H-01 / H-DOS-01: Hard emergency cap against flood of spurious accounts/senders
-    if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
-        last_rcpt_relayed.retain(|_, (_, t)| t.elapsed() < Duration::from_secs(60));
-        if last_rcpt_relayed.len() > MAX_RCPT_RELAYED_KEYS {
-            last_rcpt_relayed.clear();
-        }
     }
 
     for (sid, h) in accepted {
