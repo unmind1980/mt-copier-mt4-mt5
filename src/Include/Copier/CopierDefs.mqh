@@ -532,6 +532,18 @@ long CopierNowMs()
    return (long)(GetMicrosecondCount()/1000);
   }
 
+#import "kernel32.dll"
+void Sleep(uint dwMilliseconds);
+#import
+
+// True OS-level sleep replacement. MQL Sleep() is silently ignored in OnTimer(),
+// which turns loops into 100% CPU busy-spin. Calling kernel32::Sleep yields OS time slice with 0% CPU.
+void CopierWaitMs(const int waitMs)
+  {
+   if(waitMs<=0) return;
+   kernel32::Sleep((uint)waitMs);
+  }
+
 // Broker server time in seconds. This is the only timestamp we ever
 // put on the wire - VPS wall clocks are not to be trusted.
 long CopierServerTime()

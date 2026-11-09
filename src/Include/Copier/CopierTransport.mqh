@@ -655,17 +655,22 @@ public:
          if(m0.more())
            {
             ZmqMsg m1;
-            //--- a first frame that promised more but delivered nothing is a
-            //--- torn message: drop it rather than act on half of one
-            if(!m_sub.recv(m1,true))
+            //--- R1-X01: When m0.more() is true, the payload frame is already in transit.
+            //--- Wait briefly (up to 20ms) for the payload frame rather than immediately
+            //--- breaking on transient EAGAIN, which would invert socket frame boundaries.
+            bool gotM1=false;
+            for(int attempt=0; attempt<20; attempt++)
               {
-               // L6 fix: Drain remaining multipart frames if any to prevent socket misalignment
-               bool hasM0=m0.more();
-               while(hasM0)
+               if(m_sub.recv(m1,true)) { gotM1=true; break; }
+               CopierWaitMs(1);
+              }
+            if(!gotM1)
+              {
+               // Drain remaining multipart frames if any to prevent socket misalignment
+               while(m0.more())
                  {
                   ZmqMsg extra;
                   if(!m_sub.recv(extra,true)) break;
-                  hasM0=extra.more();
                  }
                break;
               }

@@ -1238,6 +1238,7 @@ public:
       int i=Find(key);
       if(i<0) return false;
       long now=CopierNowMs();
+      if(m_n[i]==0) return (now<m_u[i]); // R1-M03: Respect explicit Park() duration
       if(now>=m_u[i]) return false;
       long exitWait=CopierExitBackoffMs(m_n[i]);
       return (now-m_t[i]<exitWait);
@@ -1250,6 +1251,7 @@ public:
       int i=Find(key);
       if(i<0) return false;
       long now=CopierNowMs();
+      if(m_n[i]==0) return (now<m_u[i]); // R1-M03: Respect explicit Park() duration
       if(now>=m_u[i]) return false;
       long modWait=CopierModifyBackoffMs(m_n[i]);
       return (now-m_t[i]<modWait);
@@ -1274,8 +1276,9 @@ public:
          //--- problem, not a continuation of the old one. Without this, a
          //--- single blip yesterday would put today's unrelated failure
          //--- straight onto a 24-hour ladder.
+         //--- R1-M03: Cap reset threshold to 120s so high backoff tiers reset on silence.
          long prev=CopierBackoffMs(m_n[i]);
-         n=((now-m_t[i])>prev*2)?1:(m_n[i]+1);
+         n=((now-m_t[i])>MathMin(prev*2,120000))?1:(m_n[i]+1);
         }
       else
          i=FreeSlot();

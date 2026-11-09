@@ -29,10 +29,13 @@
 //! consistency guarantee that this process does not actually need.
 
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::{Duration, Instant};
 
 /// Take a lock, recovering the guard if the mutex was poisoned.
 pub trait LockExt<T> {
     fn lock_or_recover(&self) -> MutexGuard<'_, T>;
+    #[allow(dead_code)]
+    fn lock_timeout(&self, timeout: Duration) -> Option<MutexGuard<'_, T>>;
 }
 
 impl<T> LockExt<T> for Mutex<T> {
@@ -42,6 +45,23 @@ impl<T> LockExt<T> for Mutex<T> {
             //--- the guard is still valid; only the "somebody panicked"
             //--- flag is set. `into_inner` hands back the data as-is.
             Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn lock_timeout(&self, timeout: Duration) -> Option<MutexGuard<'_, T>> {
+        let start = Instant::now();
+        loop {
+            match self.try_lock() {
+                Ok(g) => return Some(g),
+                Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if start.elapsed() >= timeout {
+                        eprintln!("[hub] WARN: Mutex lock acquisition timed out after {:?}", timeout);
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
         }
     }
 }
@@ -65,5 +85,44 @@ impl<T> RwLockExt<T> for RwLock<T> {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lock_or_recover_recovers_poisoned() {
+        let m = std::sync::Arc::new(Mutex::new(42));
+        let m_clone = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = m_clone.lock().unwrap();
+            panic!("deliberate panic to poison mutex");
+        }).join();
+
+        assert!(m.is_poisoned());
+        let g = m.lock_or_recover();
+        assert_eq!(*g, 42);
+    }
+
+    #[test]
+    fn test_lock_timeout_success_and_timeout() {
+        let m = std::sync::Arc::new(Mutex::new(100));
+        let g1 = m.lock_timeout(Duration::from_millis(50));
+        assert!(g1.is_some());
+
+        // Contended lock should timeout
+        let m_clone = m.clone();
+        let handle = std::thread::spawn(move || {
+            let g2 = m_clone.lock_timeout(Duration::from_millis(20));
+            assert!(g2.is_none());
+        });
+        handle.join().unwrap();
+        drop(g1);
+
+        // Now should succeed again
+        let g3 = m.lock_timeout(Duration::from_millis(50));
+        assert!(g3.is_some());
     }
 }

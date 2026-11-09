@@ -25,9 +25,6 @@
 int timeBeginPeriod(uint uPeriod);
 int timeEndPeriod(uint uPeriod);
 #import
-#import "kernel32.dll"
-void Sleep(uint dwMilliseconds);
-#import
 
 #include <Copier/CopierDefs.mqh>
 #include <Copier/CopierCodec.mqh>
@@ -3335,14 +3332,6 @@ void RemapQueueSenders(const string &beforeSid[],const int beforeN)
    if(g_qn<=0) g_qHead=0;
   }
 
-// OPT-01 / M-02: True OS-level sleep replacement. MQL Sleep() is silently ignored in OnTimer(),
-// which turns loops into 100% CPU busy-spin. Calling kernel32::Sleep yields OS time slice with 0% CPU.
-void CopierWaitMs(const int waitMs)
-  {
-   if(waitMs<=0) return;
-   kernel32::Sleep((uint)waitMs);
-  }
-
 double PipSize(const CopierSymInfo &si)
   {
    //--- the digits-based pip rule used to live here; it is now the single
@@ -5969,9 +5958,9 @@ void ConvergeSender(const int si)
          //--- hasQueued strictly guards seen-key clearing, NEVER suppressing lot calculation.
          double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
 
-         // BUG-04 & SEC-01: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
-         // Do NOT skip stops & trim: while close is pending or retrying with broker, local position
-         // MUST still converge protective stops (SL/TP) and volume trimming to avoid naked risk.
+         // BUG-04 & SEC-01 & R1-M02: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
+         // While close is pending or retrying with broker, local position MUST still converge protective stops (SL/TP)
+         // to avoid naked risk. Do NOT call QueueTrimIfNeeded here to avoid conflicting simultaneous CLOSE + TRIM actions.
          if(g_manualClosed.Has(d.uid))
            {
             if(!SymbolMarketClosed(g_locScratch[li].sym))
@@ -5981,7 +5970,6 @@ void ConvergeSender(const int si)
                           0,"",0.0,0.0,g_locScratch[li].kind);
               }
             QueueModifyIfNeeded(si,d,g_locScratch[li]);
-            QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
             continue;
            }
 
@@ -9511,20 +9499,29 @@ void OnTimer()
             int idx=g_qHead+i;
             int k=g_q[idx].kind;
             string s=g_q[idx].sym;
+            string boKey = ActionBackoffKey(g_q[idx]);
             if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
               {
-               if(!g_backoff.BlockedExit(g_q[idx].key))
+               if(!g_backoff.BlockedExit(boKey))
                  {
                   wake=true;
                   wokeReason="unblocked exit action on "+s;
                   break;
                  }
               }
+            else if(k==CP_ACT_MODIFY)
+              {
+               if(!g_backoff.BlockedModify(boKey))
+                 {
+                  wake=true;
+                  wokeReason="unblocked modify action on "+s;
+                  break;
+                 }
+              }
             else
               {
                int dummyWarmup=0;
-               string boKey = ActionBackoffKey(g_q[idx]);
-               bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(boKey) : g_backoff.Blocked(boKey);
+               bool isBlocked = g_backoff.Blocked(boKey);
                if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
                  {
                   wake=true;
@@ -9876,20 +9873,29 @@ void OnTick()
          int idx=g_qHead+i;
          int k=g_q[idx].kind;
          string s=g_q[idx].sym;
+         string boKey = ActionBackoffKey(g_q[idx]);
          if(k==CP_ACT_CLOSE || k==CP_ACT_TRIM || k==CP_ACT_DEDUP)
            {
-            if(!g_backoff.BlockedExit(g_q[idx].key))
+            if(!g_backoff.BlockedExit(boKey))
               {
                wake=true;
                wokeReason="unblocked exit action on "+s;
                break;
               }
            }
+         else if(k==CP_ACT_MODIFY)
+           {
+            if(!g_backoff.BlockedModify(boKey))
+              {
+               wake=true;
+               wokeReason="unblocked modify action on "+s;
+               break;
+              }
+           }
          else
            {
             int dummyWarmup=0;
-            string boKey = ActionBackoffKey(g_q[idx]);
-            bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(boKey) : g_backoff.Blocked(boKey);
+            bool isBlocked = g_backoff.Blocked(boKey);
             if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
               {
                wake=true;

@@ -2228,7 +2228,7 @@ void OnTimer()
          if(g_prev.CheckSlot(slot,stopsDiff,lotsDiff,kindDiff,otherDiff,
                              prevLots,prevKind,prevTicket,g_curScratch[i],ppriceDiff,pstopDiff,pexpireDiff))
            {
-            if(stopsDiff || lotsDiff || kindDiff || otherDiff) g_rowStamp[i]=g_stampGen;
+            if(stopsDiff || lotsDiff || kindDiff || otherDiff || ppriceDiff || pstopDiff || pexpireDiff) g_rowStamp[i]=g_stampGen;
             if(otherDiff) MarkSnapshotDirty();
 
             //--- STOPS OR PENDING PRICE CHANGED: emit real-time MODIFY event (DEF-63-05 & BUG-05)
