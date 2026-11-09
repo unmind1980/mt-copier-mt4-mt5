@@ -1189,6 +1189,7 @@ void CheckPeers()
       he.seq=++g_seq;
       he.ts=CopierServerTime();
       he.ms=now;
+      he.gts=(long)TimeGMT();
       he.type=CP_T_PING;
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
@@ -1490,12 +1491,16 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- to "" - everything. So the repair is a broadcast. That is the right
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
-      // P2-25 fix: direct mode repair transmits only on direct channel, do not spam central hub
-      string snapPayload=(StringLen(g_latestSnapPayload)>0)?g_latestSnapPayload:g_snapPayload;
+      // P2-25 & M-03 fix: direct mode repair transmits only on direct channel.
+      // Re-send the last broadcast snapshot (g_snapPayload) so g_snapHash stays aligned with the central network.
+      string snapPayload=(StringLen(g_snapPayload)>0)?g_snapPayload:g_latestSnapPayload;
       Emit(CP_T_SNAP,snapPayload,true,false);
-      g_snapPayload=snapPayload;
-      g_snapHash=CopierSnapshotHash(snapPayload);
-      NoteRecentSnapHash(g_snapHash);
+      if(StringLen(g_snapPayload)==0)
+        {
+         g_snapPayload=snapPayload;
+         g_snapHash=CopierSnapshotHash(snapPayload);
+         NoteRecentSnapHash(g_snapHash);
+        }
       // BUG-07: Do not overwrite global g_lastSnapMs to prevent delaying Central Hub periodic broadcasts
       static long s_lastDirectSnapMs=0;
       s_lastDirectSnapMs=now;
@@ -1718,7 +1723,19 @@ void RebuildSnapshotPayload()
   {
    static CopierPos dense[];
    static int slots[];
+   static int prevDn=0;
    int dn=g_prev.CopyToWithSlots(dense,slots);
+   // MQL-05: Clean up string buffers for slots freed by position shrinkage
+   if(dn<prevDn)
+     {
+      for(int k=dn;k<prevDn;k++)
+        {
+         dense[k].uid="";
+         dense[k].sym="";
+         dense[k].cmt="";
+        }
+     }
+   prevDn=dn;
    int valid=0;
    for(int i=0;i<dn;i++)
      {
@@ -1946,10 +1963,13 @@ void HandleHubSubFrame(const CopierEnv &he)
      }
    if(he.type==CP_T_CMD)
      {
-      string id="",op="",args="";
+      string to="",id="",op="",args="";
+      CopierKvGet(he.payload,"TO",to);
       CopierKvGet(he.payload,"ID",id);
       CopierKvGet(he.payload,"OP",op);
       CopierKvGet(he.payload,"ARGS",args);
+      // MQL-04: TO routing validation matching Receiver
+      if(StringLen(to)>0 && to!=g_ssid && to!=(string)g_nid) return;
       if(op=="reqpos" || op=="refreshpos" || op=="refresh")
         {
          g_forcePosReport=true;
@@ -1963,12 +1983,30 @@ void HandleHubSubFrame(const CopierEnv &he)
             ae.seq=++g_seq;
             ae.ts=CopierServerTime();
             ae.ms=CopierNowMs();
+            ae.gts=(long)TimeGMT();
             ae.type=CP_T_ACK;
             ae.payload=ack;
             g_tp.SendUp("@hub",CopierEncodeEnv(ae));
            }
          g_log.Info("CMD "+id+": sender position table update requested by WebUI");
          return;
+        }
+      // MQL-04: Reject unsupported commands with NACK so Hub does not retry for 82s
+      if(StringLen(id)>0)
+        {
+         string nack="ID="+id+";OK=0;ERR=unsupported on sender: "+op;
+         CopierEnv ne;
+         ne.v=CP_PROTO_V;
+         ne.sid=(string)g_nid;
+         ne.ssid=g_ssid;
+         ne.seq=++g_seq;
+         ne.ts=CopierServerTime();
+         ne.ms=CopierNowMs();
+         ne.gts=(long)TimeGMT();
+         ne.type=CP_T_ACK;
+         ne.payload=nack;
+         g_tp.SendUp("@hub",CopierEncodeEnv(ne));
+         g_log.Warn("CMD "+id+": rejected unsupported command '"+op+"' on sender node");
         }
       return;
      }

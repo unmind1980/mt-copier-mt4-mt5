@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-MT4%20%7C%20MT5%20%7C%20Windows%20%7C%20Linux%20(Wine)-green.svg)]()
 [![Rust Backend](https://img.shields.io/badge/Rust-1.80%2B%20(Tokio%20%26%20ZeroMQ)-orange.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-161%2F161%20Rust%20PASS%20%7C%2022%20Python%20Suites-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-179%2F179%20Rust%20PASS%20%7C%20743%20MQL%20Assertions-brightgreen.svg)]()
 [![MQL Build](https://img.shields.io/badge/MQL%20Matrix-16%2F16%20Binaries%20ALL%20GREEN-success.svg)]()
 
 **[ English ](README.md) | [ 简体中文 ](README.zh-CN.md)**
@@ -13,6 +13,19 @@
 *An institutional-grade, ultra-low-latency (<10ms) trade replication and centralized risk management platform for MetaTrader 4 and MetaTrader 5, powered by ZeroMQ and Rust.*
 
 </div>
+
+---
+
+## 📥 Downloads & Official Releases
+
+Choose the edition that best matches your trading topology:
+
+| Edition | Primary Use Case | Components Included | Setup Complexity |
+| :--- | :--- | :--- | :--- |
+| **[Direct P2P Edition](#mode-1-direct-p2p-edition)**<br>`mt-copier-direct-v1.0.0.zip` | Single PC / Single VPS local replication between MT4 and MT5. | • Precompiled MT4 EAs (`.ex4`) & MT5 EAs (`.ex5`)<br>• Standalone 32-bit & 64-bit `libzmq.dll`<br>• Automated batch deploy script | **Zero Configuration**<br>(No external server or VC++ runtime needed) |
+| **[Complete Hub Suite](#mode-2-centralized-hub-suite)**<br>`mt-copier-hub-suite-v1.0.0.zip` | Fleet management, remote copy across VPS, Web Cockpit, HA Cluster, mobile alerts. | • Rust async Central Hub (`copier-hub.exe`)<br>• Real-time Web Cockpit & REST API<br>• Windows Service background daemons<br>• Multi-language packs & Client Terminals | **Enterprise Grade**<br>(1-Click background service install) |
+
+> 💡 **Notice for Windows Users**: The included ZeroMQ native binaries are built with MinGW-w64 with statically linked libsodium. **No Microsoft Visual C++ Redistributable (VC++ Runtime) is required** on your machine or VPS.
 
 ---
 
@@ -212,9 +225,9 @@ Every release is validated against an exhaustive multi-layered regression test s
 | Test Suite | Scope | Passing Threshold |
 | :--- | :--- | :--- |
 | **MQL Matrix Build** | 4 Terminals (MT4 & MT5, 32-bit & 64-bit), 16 target binaries | **16 / 16 ALL GREEN (0 errors, 0 warnings)** |
-| **Rust Hub Unit Tests** | Protocol codec, HA election, journal recovery, SSRF, TLS | **172 / 172 Passed (0 failed)** |
+| **Rust Hub Unit Tests** | Protocol codec, HA election, journal compaction, SSRF, TLS | **179 / 179 Passed (0 failed)** |
 | **Python Contract Suites** | 24 comprehensive test suites (E2E protocol, chaos, failover) | **445+ Assertions ALL GREEN** |
-| **MQL Self-Test** | `CopierSelfTest` in a headless portable MT5, automated | **712 / 712 Passed (0 failed)** |
+| **MQL Self-Test** | `CopierSelfTest` in a headless portable MT5, automated | **743 / 743 Passed (0 failed)** |
 | **Static Linter & i18n** | `dash_check.py` (252 DOM IDs, 138 JS functions), `i18n_check.py` | **100% ID Match & 435 Keys per Locale Validated** |
 
 To execute the full verification suite locally:

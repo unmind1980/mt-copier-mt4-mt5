@@ -144,6 +144,8 @@ pub struct HandoverResponse {
     pub error: Option<String>,
 }
 
+pub type JournalCache = Option<(std::time::SystemTime, u64, (usize, u64), std::time::Instant, String)>;
+
 /// Runtime cluster manager held inside `Shared`.
 pub struct ClusterManager {
     pub state_path: PathBuf,
@@ -159,6 +161,8 @@ pub struct ClusterManager {
     pub last_sync_at: Option<Instant>,
     pub sync_status: String, // "synced", "syncing", "lagging", "disconnected", "conflict", "standalone"
     pub last_sync_err: String,
+    pub api_cfg_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
+    pub api_cmd_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
 }
 
 /// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
@@ -180,10 +184,11 @@ pub fn file_sha256(path: &Path) -> String {
 }
 
 /// MTC_SYNC / H7-01: Cached file SHA-256 for large journals (`commands.jsonl` and `config_revisions.jsonl`).
-/// Uses `fs::metadata` `(mtime, len)` fast path. If unchanged and checked within last 30s, returns cached hash.
+/// Uses `fs::metadata` `(mtime, len)` and `ver: (usize, u64)` fast path. If unchanged and checked within last 30s, returns cached hash.
 pub fn cached_journal_sha256(
     path: &Path,
-    cache: &mut Option<(std::time::SystemTime, u64, std::time::Instant, String)>,
+    ver: (usize, u64),
+    cache: &mut JournalCache,
 ) -> String {
     let meta = match fs::metadata(path) {
         Ok(m) => m,
@@ -193,14 +198,14 @@ pub fn cached_journal_sha256(
     let len = meta.len();
     let now = std::time::Instant::now();
 
-    if let Some((c_mtime, c_len, c_inst, ref c_hash)) = cache {
-        if *c_mtime == mtime && *c_len == len && now.duration_since(*c_inst) < std::time::Duration::from_secs(30) {
+    if let Some((c_mtime, c_len, c_ver, c_inst, ref c_hash)) = cache {
+        if *c_ver == ver && *c_mtime == mtime && *c_len == len && now.duration_since(*c_inst) < std::time::Duration::from_secs(30) {
             return c_hash.clone();
         }
     }
 
     let hash = file_sha256(path);
-    *cache = Some((mtime, len, now, hash.clone()));
+    *cache = Some((mtime, len, ver, now, hash.clone()));
     hash
 }
 
@@ -309,6 +314,8 @@ impl ClusterManager {
             last_sync_at: None,
             sync_status: if effective_peer_url.is_empty() { "standalone".to_string() } else { "disconnected".to_string() },
             last_sync_err: String::new(),
+            api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
 
         cm.save().map_err(|e| format!("cannot save {}: {}", state_path.display(), e))?;
@@ -419,6 +426,8 @@ impl ClusterManager {
             last_sync_at: None,
             sync_status: "standalone".to_string(),
             last_sync_err: String::new(),
+            api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -468,10 +477,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
         let mut force_full_cfg_resync = false;
         let mut force_full_cmd_resync = false;
-        let mut cfg_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
-        let mut cmd_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
-        let mut primary_cfg_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
-        let mut primary_cmd_cache: Option<(std::time::SystemTime, u64, Instant, String)> = None;
+        let mut cfg_cache: JournalCache = None;
+        let mut cmd_cache: JournalCache = None;
+        let mut primary_cfg_cache: JournalCache = None;
+        let mut primary_cmd_cache: JournalCache = None;
 
         loop {
             tokio::time::sleep(check_interval).await;
@@ -685,8 +694,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (String::new(), String::new())
                 } else {
                     (
-                        cached_journal_sha256(&cfg_path, &mut cfg_cache),
-                        cached_journal_sha256(&cmd_path, &mut cmd_cache),
+                        cached_journal_sha256(&cfg_path, (cfg_lines_count, 0), &mut cfg_cache),
+                        cached_journal_sha256(&cmd_path, (cmd_lines_count, local_max_cmd_seq), &mut cmd_cache),
                     )
                 };
 
@@ -1169,8 +1178,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
                 let (my_cfg_h, my_cmd_h) = if lines_match {
                     (
-                        cached_journal_sha256(&cfg_p, &mut primary_cfg_cache),
-                        cached_journal_sha256(&cmd_p, &mut primary_cmd_cache),
+                        cached_journal_sha256(&cfg_p, (my_cfg, 0), &mut primary_cfg_cache),
+                        cached_journal_sha256(&cmd_p, (my_cmd, my_seq), &mut primary_cmd_cache),
                     )
                 } else {
                     (String::new(), String::new())

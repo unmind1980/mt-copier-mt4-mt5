@@ -287,7 +287,20 @@ fn node_json(n: &Node, now: Instant) -> Value {
                 "magic": p.magic,
                 "managed": p.managed,
                 "comment": p.comment,
-                "uid": if n.role == Role::Sender { p.comment.clone() } else { String::new() },
+                "uid": if n.role == Role::Sender {
+                    p.comment.clone()
+                } else if n.role == Role::Receiver && p.comment.starts_with("tc|") {
+                    let sub = &p.comment[3..];
+                    if let Some(idx) = sub.find('|') {
+                        sub[..idx].to_string()
+                    } else if sub.len() >= 8 {
+                        sub[..8].to_string()
+                    } else {
+                        sub.to_string()
+                    }
+                } else {
+                    String::new()
+                },
                 "profit": p.profit,
                 "swap": p.swap,
                 "open_time": p.open_time,
@@ -3209,8 +3222,11 @@ fn default_notif_severity() -> String {
 async fn notifications_list(
     State(st): State<SharedState>,
 ) -> Json<Value> {
-    let s = st.lock_or_recover();
-    let channels = s.notif_store.lock_or_recover().list_safe();
+    let notif_store = {
+        let s = st.lock_or_recover();
+        s.notif_store.clone()
+    };
+    let channels = notif_store.lock_or_recover().list_safe();
     Json(json!({ "channels": Value::Array(channels) }))
 }
 
@@ -3560,7 +3576,7 @@ async fn cluster_status(
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path, cfg_path, cmd_path) = {
+    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path, cfg_path, cmd_path, api_cfg_cache, api_cmd_cache) = {
         let s = st.lock_or_recover();
         let cfg_lines = s.cfg.total_lines();
         let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
@@ -3569,6 +3585,8 @@ async fn cluster_status(
         let curve_p = s.cluster.curve_clients_path.clone();
         let cfg_p = s.cfg.path().to_path_buf();
         let cmd_p = s.cmds.path().to_path_buf();
+        let api_cfg_c = s.cluster.api_cfg_cache.clone();
+        let api_cmd_c = s.cluster.api_cmd_cache.clone();
         (
             s.cluster.state.cluster_id.clone(),
             s.cluster.state.hub_id.clone(),
@@ -3585,14 +3603,22 @@ async fn cluster_status(
             curve_p,
             cfg_p,
             cmd_p,
+            api_cfg_c,
+            api_cmd_c,
         )
     };
     // N87-02 & BUG-03: Compute file hashes strictly OUTSIDE SharedState lock so 1Hz polling does not block forwarding thread
     let users_hash = crate::cluster::file_sha256(&users_path);
     let notif_hash = crate::cluster::file_sha256(&notif_path);
     let curve_clients_hash = crate::cluster::file_sha256(&curve_clients_path);
-    let cfg_hash = crate::cluster::file_sha256(&cfg_path);
-    let cmd_hash = crate::cluster::file_sha256(&cmd_path);
+    let cfg_hash = {
+        let mut c = api_cfg_cache.lock().unwrap_or_else(|p| p.into_inner());
+        crate::cluster::cached_journal_sha256(&cfg_path, (cfg_lines, 0), &mut *c)
+    };
+    let cmd_hash = {
+        let mut c = api_cmd_cache.lock().unwrap_or_else(|p| p.into_inner());
+        crate::cluster::cached_journal_sha256(&cmd_path, (cmd_lines, max_cmd_seq), &mut *c)
+    };
 
     let resp = crate::cluster::ClusterStatusResponse {
         ok: true,

@@ -71,6 +71,9 @@ hub/%SystemDrive%/
 third_party/zmq-prefix/
 third_party/zmq-prefix.4.2.1.bak/
 
+# ---- Release zip packages ----
+releases/
+
 # ---- Test / tool output artifacts ----
 *.out
 

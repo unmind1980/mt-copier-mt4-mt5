@@ -171,6 +171,24 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                 if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
                     return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
+                // Fallback: if pad was implicitly 0 on legacy MQL frames, retry trimming 1..=3 trailing zeroes
+                if pad == 0 {
+                    for trim in 1..=3 {
+                        if raw_bytes.len() > trim && raw_bytes[raw_bytes.len() - trim..].iter().all(|&b| b == 0) {
+                            let trimmed = &raw_bytes[..raw_bytes.len() - trim];
+                            buf.clear();
+                            let mut z = flate2::read::ZlibDecoder::new(trimmed).take(MAX_DECOMPRESSED_LEN + 1);
+                            if z.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                                return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
+                            }
+                            buf.clear();
+                            let mut d = flate2::read::DeflateDecoder::new(trimmed).take(MAX_DECOMPRESSED_LEN + 1);
+                            if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                                return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
+                            }
+                        }
+                    }
+                }
             }
         }
     } else if field_bytes.starts_with(b"0:") {

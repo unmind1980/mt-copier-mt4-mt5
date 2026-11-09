@@ -50,6 +50,7 @@ if /i "%CMD%"=="status"   set "SCRIPT=status.sh"      & goto :runsh
 if /i "%CMD%"=="build"    set "SCRIPT=build.sh"       & goto :runsh
 if /i "%CMD%"=="deploy"   set "SCRIPT=deploy.sh"      & goto :runsh
 if /i "%CMD%"=="compile"  set "SCRIPT=compile.sh"     & goto :runsh
+if /i "%CMD%"=="package"  goto :package
 if /i "%CMD%"=="clean"    set "SCRIPT=clean.sh"       & goto :runsh
 if /i "%CMD%"=="cleanlogs" goto :cleanlogs
 if /i "%CMD%"=="pilot"    set "SCRIPT=pilot-setup.sh" & goto :runsh
@@ -94,6 +95,10 @@ goto :end
 
 :logcheck
 call "%HERE%logcheck.bat"%ARGS%
+goto :end
+
+:package
+call "%HERE%package.bat"%ARGS%
 goto :end
 
 :sniff

@@ -1128,6 +1128,11 @@ fn relay_receipts(
             None => true,
         };
         if !should_relay || !is_primary_or_takeover {
+            // HUB-04: If Standby was previously in takeover and Primary has now recovered,
+            // clear the takeover receipt cache so Standby does not throttle relays on any future takeover.
+            if !is_primary_or_takeover && !last_rcpt_relayed.is_empty() {
+                last_rcpt_relayed.clear();
+            }
             continue;
         }
         match send_receipt(sock, &sid, login, &h, state) {
@@ -3222,6 +3227,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     }
                     if let Ok(Some(n)) = cmds.compact_if_needed(crate::commands::COMMAND_JOURNAL_COMPACT_BYTES) {
                         println!("[hub] command journal compacted at runtime: {} live command(s)", n);
+                    }
+                    if let Ok(Some(n)) = cfg.compact_if_needed(crate::config::CONFIG_JOURNAL_COMPACT_BYTES, 10) {
+                        println!("[hub] config journal compacted at runtime: {} retained revision(s)", n);
                     }
                     crate::service::win_service::maybe_rotate_service_log();
                 }

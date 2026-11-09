@@ -53,6 +53,8 @@ use crate::lockx::LockExt;
 
 use serde_json::{json, Value};
 
+pub const CONFIG_JOURNAL_COMPACT_BYTES: u64 = 8 * 1024 * 1024;
+
 /// One applied (or attempted) configuration change.
 #[derive(Clone, Debug)]
 pub struct Revision {
@@ -328,6 +330,42 @@ impl ConfigStore {
             inner.torn = torn;
         }
         Ok(lines.len())
+    }
+
+    /// OPT-01 / HUB-01: Compact the on-disk config journal if its size exceeds `max_bytes`.
+    /// Retains up to `keep_per_node` most recent revisions for each node.
+    pub fn compact_if_needed(&self, max_bytes: u64, keep_per_node: usize) -> std::io::Result<Option<usize>> {
+        if !self.enabled {
+            return Ok(None);
+        }
+        let size = match std::fs::metadata(&self.path) {
+            Ok(m) => m.len(),
+            Err(_) => return Ok(None),
+        };
+        if size < max_bytes {
+            return Ok(None);
+        }
+
+        let mut inner = self.inner.lock_or_recover();
+        // Drop file handle so Windows allows replacing the open file
+        inner.file = None;
+
+        let res = compact_journal(&self.path, keep_per_node);
+
+        // Ensure file handle is always reopened even on replace errors
+        let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
+        inner.file = reopen_res.ok();
+
+        let n = res?;
+        if inner.file.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "failed to reopen config journal file after runtime compact",
+            ));
+        }
+        inner.count = n as u64;
+        inner.torn = 0;
+        Ok(Some(n))
     }
 
     /// Append a new revision. Returns it, or None if the store is disabled.
@@ -648,6 +686,66 @@ impl Inner {
 /// revision. A billion pushes is far beyond any real deployment, so anything
 /// above this is treated as "no usable base" and numbering starts at 1.
 const MAX_WIRE_BASE_REV: u64 = 1_000_000_000;
+
+pub fn compact_journal(path: &Path, keep_per_node: usize) -> std::io::Result<usize> {
+    use std::io::BufRead;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    let reader = std::io::BufReader::new(file);
+
+    // node -> Vec<(rev, line_idx, raw_line)>
+    let mut by_node: HashMap<String, Vec<(u64, usize, String)>> = HashMap::new();
+    let mut line_idx = 0usize;
+
+    for line_res in reader.lines() {
+        let line = match line_res {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            let node = v["node"].as_str().unwrap_or("").to_string();
+            let rev = v["rev"].as_u64().unwrap_or(0);
+            if !node.is_empty() && rev > 0 {
+                by_node.entry(node).or_default().push((rev, line_idx, trimmed.to_string()));
+                line_idx += 1;
+            }
+        }
+    }
+
+    let mut keep_lines: Vec<(usize, String)> = Vec::new();
+    for (_, mut revs) in by_node {
+        revs.sort_by_key(|(rev, _, _)| *rev);
+        let start = if revs.len() > keep_per_node {
+            revs.len() - keep_per_node
+        } else {
+            0
+        };
+        for (_, idx, line) in revs.into_iter().skip(start) {
+            keep_lines.push((idx, line));
+        }
+    }
+    // Sort by original file order
+    keep_lines.sort_by_key(|(idx, _)| *idx);
+
+    let tmp = path.with_extension(format!("compact.{}.tmp", std::process::id()));
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        for (_, line) in &keep_lines {
+            f.write_all(line.as_bytes())?;
+            f.write_all(b"\n")?;
+        }
+        f.sync_data()?;
+    }
+    crate::cluster::atomic_replace_file(&tmp, path)?;
+    Ok(keep_lines.len())
+}
 
 fn load(path: &Path) -> std::io::Result<(HashMap<String, Revision>, u64, u64)> {
     let mut current: HashMap<String, Revision> = HashMap::new();
@@ -1315,6 +1413,42 @@ mod tests {
         assert_eq!(c.current("receiver:1").unwrap().ini, "a=2\n");
         assert_eq!(c.current("receiver:2").unwrap().rev, 1);
         assert_eq!(c.nodes(), vec![("receiver:1".into(), 2), ("receiver:2".into(), 1)]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn runtime_compact_if_needed_works_without_restarting() {
+        let p = tmp("compact_config");
+        let _ = std::fs::remove_file(&p);
+        let c = ConfigStore::open(&p).unwrap();
+        for i in 1..=5 {
+            c.put("receiver:1", &format!("k={}\n", i), "op", "127.0.0.1", "push", 0).unwrap();
+        }
+        for i in 1..=3 {
+            c.put("receiver:2", &format!("x={}\n", i), "op", "127.0.0.1", "push", 0).unwrap();
+        }
+        assert_eq!(c.total_lines(), 8);
+
+        // Huge threshold does nothing
+        assert_eq!(c.compact_if_needed(100 * 1024 * 1024, 2).unwrap(), None);
+        assert_eq!(c.total_lines(), 8);
+
+        // Low threshold triggers compaction, keeping 2 per node (2 for recv1 + 2 for recv2 = 4)
+        let compacted = c.compact_if_needed(50, 2).unwrap();
+        assert_eq!(compacted, Some(4));
+        assert_eq!(c.total_lines(), 4);
+
+        // Current revisions remain correct
+        assert_eq!(c.current("receiver:1").unwrap().rev, 5);
+        assert_eq!(c.current("receiver:1").unwrap().ini, "k=5\n");
+        assert_eq!(c.current("receiver:2").unwrap().rev, 3);
+        assert_eq!(c.current("receiver:2").unwrap().ini, "x=3\n");
+
+        // Reopening sees the compacted file
+        let reopened = ConfigStore::open(&p).unwrap();
+        assert_eq!(reopened.total_lines(), 4);
+        assert_eq!(reopened.current("receiver:1").unwrap().rev, 5);
+        assert_eq!(reopened.current("receiver:2").unwrap().rev, 3);
         let _ = std::fs::remove_file(&p);
     }
 }

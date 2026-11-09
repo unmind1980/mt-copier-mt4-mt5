@@ -53,6 +53,7 @@ private:
    string            m_mMsg[CP_LOG_MERGE_SLOTS];
    int               m_mLvl[CP_LOG_MERGE_SLOTS];
    long              m_mMs[CP_LOG_MERGE_SLOTS];
+   long              m_mFirstMs[CP_LOG_MERGE_SLOTS];
    int               m_mRep[CP_LOG_MERGE_SLOTS];
    int               m_mNext;
 
@@ -172,10 +173,30 @@ public:
          m_mMsg[i]="";
          m_mLvl[i]=-1;
          m_mMs[i]=0;
+         m_mFirstMs[i]=0;
          m_mRep[i]=0;
         }
      }
-                    ~CopierLog() { if(m_handle!=INVALID_HANDLE) FileClose(m_handle); }
+                    ~CopierLog() { FlushPending(); if(m_handle!=INVALID_HANDLE) FileClose(m_handle); }
+
+   void              FlushPending()
+     {
+      for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
+        {
+         if(m_mRep[i]>0)
+           {
+            Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
+            m_mRep[i]=0;
+            m_mMsg[i]="";
+            m_mLvl[i]=-1;
+           }
+        }
+      if(m_dirty && m_handle!=INVALID_HANDLE)
+        {
+         FileFlush(m_handle);
+         m_dirty=false;
+        }
+     }
 
    void              Init(const string tag,const int minLevel=CP_LOG_WARN)
      {
@@ -201,7 +222,8 @@ public:
       for(int i=0;i<CP_LOG_MERGE_SLOTS;i++)
         {
          if(m_mRep[i]<=0) continue;
-         if(now-m_mMs[i]<=5000) continue;
+         // M-01: Flush if repeats stopped (>=1s silence) OR if >=5s continuous stream has elapsed
+         if(now-m_mMs[i]<1000 && now-m_mFirstMs[i]<5000) continue;
          Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
          m_mRep[i]=0;
          m_mMsg[i]="";
@@ -227,6 +249,13 @@ public:
          if(now-m_mMs[i]>=1000) continue;
          m_mRep[i]++;
          m_mMs[i]=now;
+         // M-01: Periodic flush during continuous burst (<1s interval) after 5 seconds
+         if(now-m_mFirstMs[i]>=5000)
+           {
+            Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
+            m_mRep[i]=0;
+            m_mFirstMs[i]=now;
+           }
          return;
         }
       Emit(level,msg);
@@ -243,6 +272,7 @@ public:
       m_mMsg[i]=msg;
       m_mLvl[i]=level;
       m_mMs[i]=now;
+      m_mFirstMs[i]=now;
      }
 
    void              Error(const string m) { Write(CP_LOG_ERR,m);   }

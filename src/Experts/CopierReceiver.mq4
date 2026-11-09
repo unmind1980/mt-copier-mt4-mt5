@@ -25,6 +25,9 @@
 int timeBeginPeriod(uint uPeriod);
 int timeEndPeriod(uint uPeriod);
 #import
+#import "kernel32.dll"
+void Sleep(uint dwMilliseconds);
+#import
 
 #include <Copier/CopierDefs.mqh>
 #include <Copier/CopierCodec.mqh>
@@ -1905,6 +1908,7 @@ void SendCurrentConfigReport()
    e.seq = ++g_statusSeq;
    e.ts = CopierServerTime();
    e.ms = CopierNowMs();
+   e.gts = (long)TimeGMT();
    e.type = CP_T_CFGREPORT;
    e.payload = "REV=" + (string)g_cfgRev + ";ROLE=receiver;ACC=" + (string)CopierAccountLogin()
                + ";INI=" + CopierIniEscape(SerializeCurrentConfigToIni());
@@ -3377,6 +3381,18 @@ void RotateQueue()
    g_qHead++;
   }
 
+// MQL-01: Action backoff key consistency. MODIFY actions with ticket!=0 are keyed
+// by `#t<ticket>` to prevent micro stop adjustments from bypassing backoff.
+string ActionBackoffKey(const CopierAction &a)
+  {
+   if(a.kind==CP_ACT_MODIFY && a.ticket!=0)
+     {
+      string sname=SenderLabel(a.senderIdx);
+      return sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)a.ticket;
+     }
+   return a.key;
+  }
+
 void ExecuteQueue()
   {
    int done=0;
@@ -4071,7 +4087,7 @@ void ExecuteQueue()
             if(err==10016 || err==130) CopierInvalidateSymbolInfo(a.sym);
            }
          string sname=SenderLabel(a.senderIdx);
-         string boKey=(a.kind==CP_ACT_MODIFY && a.ticket!=0) ? (sname+":"+(string)CP_ACT_MODIFY+":#t"+(string)a.ticket) : a.key;
+         string boKey=ActionBackoffKey(a);
          fails=1;
          if(CopierIsTradeDisabled(err))
            {
@@ -7711,6 +7727,7 @@ void CopierSendStatus(const string type,const string payload)
    //--- monotonic ms, so the sender can estimate the link from this message
    //--- alone: see the header of CopierPeers.mqh
    se.ms=CopierNowMs();
+   se.gts=(long)TimeGMT();
    se.type=type;
    se.payload=payload;
    string msg=CopierEncodeEnv(se);
@@ -8176,6 +8193,13 @@ int OnInit()
    g_onceFail.SetRepeatMs(60000);
    g_onceHbt.SetRepeatMs(60000);
    g_onceHour.SetRepeatMs(60*60*1000);
+   // MQL-02: Reset stop override tables on re-init so parameter changes don't inherit stale in-memory overrides.
+   // Legitimate persisted overrides are restored cleanly by LoadStates() below.
+   for(int i=0;i<g_stCount;i++) g_stUid[i]="";
+   g_stCount=0;
+   ArrayInitialize(g_stHasOv,false);
+   ArrayInitialize(g_stLastMs,0);
+   g_stOvEpoch++;
    StopsRebuildUidIndex();
 
    //--- risk switches. Every one defaults to off, so this is a no-op unless
@@ -8640,6 +8664,7 @@ void CheckPeersPing(const long now)
       he.seq=++g_statusSeq;
       he.ts=CopierServerTime();
       he.ms=now;
+      he.gts=(long)TimeGMT();
       he.type=CP_T_PING;
       he.payload=CopierPayloadPing(now,(string)g_nid);
       g_tp.SendUp("@hub",CopierEncodeEnv(he));
@@ -9497,7 +9522,8 @@ void OnTimer()
             else
               {
                int dummyWarmup=0;
-               bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(g_q[idx].key) : g_backoff.Blocked(g_q[idx].key);
+               string boKey = ActionBackoffKey(g_q[idx]);
+               bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(boKey) : g_backoff.Blocked(boKey);
                if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
                  {
                   wake=true;
@@ -9861,7 +9887,8 @@ void OnTick()
          else
            {
             int dummyWarmup=0;
-            bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(g_q[idx].key) : g_backoff.Blocked(g_q[idx].key);
+            string boKey = ActionBackoffKey(g_q[idx]);
+            bool isBlocked = (k==CP_ACT_MODIFY) ? g_backoff.BlockedModify(boKey) : g_backoff.Blocked(boKey);
             if(!g_cmdPaused && !isBlocked && !SymbolMarketClosed(s) && !SymbolInOpenWarmup(s, dummyWarmup) && g_qBackoffMs >= 60000)
               {
                wake=true;

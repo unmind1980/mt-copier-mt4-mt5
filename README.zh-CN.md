@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-MT4%20%7C%20MT5%20%7C%20Windows%20%7C%20Linux%20(Wine)-green.svg)]()
 [![Rust Backend](https://img.shields.io/badge/Rust-1.80%2B%20(Tokio%20%26%20ZeroMQ)-orange.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-161%2F161%20Rust%20PASS%20%7C%2022%20Python%20Suites-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-179%2F179%20Rust%20PASS%20%7C%20743%20MQL%20Assertions-brightgreen.svg)]()
 [![MQL Build](https://img.shields.io/badge/MQL%20Matrix-16%2F16%20Binaries%20ALL%20GREEN-success.svg)]()
 
 **[ English ](README.md) | [ 简体中文 ](README.zh-CN.md)**
@@ -13,6 +13,19 @@
 *基于 ZeroMQ 与 Rust 构建的机构级、超低延迟（<10ms）跨平台 MetaTrader 4 / MetaTrader 5 跟单与集中式风控平台。*
 
 </div>
+
+---
+
+## 📥 版本下载与官方发行包 (Official Releases)
+
+根据您的交易场景选择最合适的分发版本：
+
+| 发行版本 | 核心适用场景 | 包含核心组件 | 部署复杂度 |
+| :--- | :--- | :--- | :--- |
+| **[极简直连版 (Direct P2P Edition)](#模式-1p2p-直连模式轻量化无需中心服务)**<br>`mt-copier-direct-v1.0.0.zip` | 单电脑 / 单 VPS 本地终端极简互跟（MT4 ↔ MT5）。 | • 预编译 MT4 EA (`.ex4`) 与 MT5 EA (`.ex5`)<br>• 独立 MinGW 32位与64位 `libzmq.dll`<br>• 一键本地多终端自动部署批处理脚本 | **零配置 / 开箱即用**<br>(无需运行中心服务，无需 VC++ 运行库) |
+| **[旗舰完全版 (Complete Hub Suite)](#模式-2中央-hub-模式集中监控统一配置与管理)**<br>`mt-copier-hub-suite-v1.0.0.zip` | 跨 VPS 跨机房远程跟单、多对多船队监控、Web 大屏、双机热备 HA、手机告警。 | • Rust 异步高性能服务端 (`copier-hub.exe`)<br>• 实时 Web 交易驾驶舱与 REST API<br>• Windows 原生后台静默服务安装套件<br>• 外部国际化语言包与全套客户端终端 | **工业级全套方案**<br>(一键注册为 Windows 后台保活服务) |
+
+> 💡 **特别说明（免运行库依赖）**：软件包内包含的 ZeroMQ 动态链接库使用 MinGW-w64 独立编译并静态内嵌 libsodium，**无需在宿主机器或云 VPS 上安装任何微软 Visual C++ Redistributable (VC++ 运行库)**，解压即用。
 
 ---
 
@@ -212,8 +225,9 @@ http://127.0.0.1:6010
 | 测试维度 | 覆盖范围 | 通过标准 |
 | :--- | :--- | :--- |
 | **MQL 终端编译矩阵** | 4 个独立终端（MT4 / MT5，32位与64位），16 个目标二进制 | **16 / 16 全部通过（0 errors, 0 warnings）** |
-| **Rust Hub 单元测试** | 通信协议编解码、HA 集群仲裁选举、日志持久化恢复、SSRF、TLS 等 | **161 / 161 项测试全部通过（0 失败）** |
+| **Rust Hub 单元测试** | 通信协议编解码、HA 集群仲裁选举、日志运行时压缩、SSRF、TLS 等 | **179 / 179 项测试全部通过（0 失败）** |
 | **Python 协议契约套件** | 22 个大型端到端测试套件（含长跑混沌故障注入、主备快速接管） | **445+ 断言全部通过 (ALL GREEN)** |
+| **MQL 自动化自检** | `CopierSelfTest` 运行在便携式 MT5 容器中，全协议状态机断言 | **743 / 743 项断言全部通过（0 失败）** |
 | **静态检查与多语言** | `dash_check.py`（252 个 DOM ID 与 138 个函数）、`i18n_check.py` | **100% ID 匹配，6 种语言各 435 键全量校验** |
 
 在本地执行全量测试与静态检查命令：
