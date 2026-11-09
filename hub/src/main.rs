@@ -1719,12 +1719,6 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         s.curve_public = pubkey.clone();
         s.curve_learn = *learn;
     }
-    //--- Wake signal for the WebSocket clients. Created by the API, held by
-    //--- the ZMQ thread, and used ONLY after a state change - never on a
-    //--- timer. A timer would mean a push per second per node for no new
-    //--- information, and "the dashboard woke up again to tell me nothing" is
-    //--- how a page gets closed and left closed.
-    let mut poke_tx: Option<tokio::sync::broadcast::Sender<std::sync::Arc<String>>> = None;
     let started = Instant::now();
     let mut last_stats = Instant::now();
     let mut last_alerts = Instant::now();
@@ -1761,9 +1755,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     //--- than after - and so that `--http none` really means off, with no
     //--- runtime built and no port touched.
     if !args.http.is_empty() {
-        match api::spawn(args.http.clone(), shared.clone()) {
-            Ok(tx) => poke_tx = Some(tx),
-            Err(e) => eprintln!("[hub] cannot start the API: {}", e),
+        if let Err(e) = api::spawn(args.http.clone(), shared.clone()) {
+            eprintln!("[hub] cannot start the API: {}", e);
         }
     }
     //--- Notify the dashboards.
@@ -1781,8 +1774,6 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     //--- not "the change". A dashboard that misses an intermediate frame is
     //--- looking at a newer truth, not a stale one.
     let mut poke_pending = false;
-    let mut last_poke = Instant::now() - Duration::from_secs(1);
-    const POKE_MIN_MS: u64 = 200;
 
     //--- The restart marker. Without it a gap in the log is indistinguishable
     //--- from a gap in the record-keeping, and an audit whose silences cannot
@@ -1897,7 +1888,6 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
     let snap_shared = shared.clone();
     let snap_audit = audit.clone();
-    let snap_poke = poke_tx.clone();
     std::thread::Builder::new()
         .name("snap-worker".to_string())
         .spawn(move || {
@@ -1970,19 +1960,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             );
                         }
                     }
-                    // P1-8: Throttle snap worker broadcast by 200ms window to eliminate CPU spikes
-                    static LAST_SNAP_POKE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                    let now_ms = unix_millis();
-                    let last_ms = LAST_SNAP_POKE.load(Ordering::Relaxed);
-                    if now_ms.saturating_sub(last_ms) >= POKE_MIN_MS {
-                        LAST_SNAP_POKE.store(now_ms, Ordering::Relaxed);
-                        if let Some(tx) = &snap_poke {
-                            if tx.receiver_count() > 0 {
-                                let body = std::sync::Arc::new(api::snapshot_text(&snap_shared));
-                                let _ = tx.send(body);
-                            }
-                        }
-                    }
+                    // P1-8 & H-02: Non-blocking poke notification. Serialization happens on background Tokio worker.
+                    api::poke();
                     }
                 }));
             }
@@ -3403,19 +3382,11 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         }
     }
 
-        //--- One serialisation per change window, shared by every dashboard.
-        //--- Placed at the very end of the iteration so it covers a poke raised
-        //--- anywhere above it, including the maintenance blocks.
-        if poke_pending && last_poke.elapsed() >= Duration::from_millis(POKE_MIN_MS) {
+        //--- H-02: Non-blocking dashboard poke. Defer serialization & lock acquisition
+        //--- to background Tokio worker, keeping ZMQ core loop latency sub-millisecond.
+        if poke_pending {
             poke_pending = false;
-            last_poke = Instant::now();
-            if let Some(tx) = &poke_tx {
-                // HUB-08: Only serialize snapshot JSON if there are active WebSocket dashboard listeners
-                if tx.receiver_count() > 0 {
-                    let body = std::sync::Arc::new(api::snapshot_text(&shared));
-                    let _ = tx.send(body);
-                }
-            }
+            api::poke();
         }
 
         if args.duration > 0.0 && started.elapsed().as_secs_f64() >= args.duration {

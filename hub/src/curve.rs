@@ -41,10 +41,10 @@
 //!
 //! WHAT THIS DOES NOT DO
 //!
-//! Key ROTATION (the plan's G15, P2) is not implemented: rotating a client
+//! Key ROTATION (the plan's G15, P2) is manual: rotating a client
 //! key is "stop that node, delete its key file, restart it, add the new
-//! public key here, reload the hub". Reloading the allow-list without a
-//! restart is not implemented either - the file is read once at startup.
+//! public key to curve_clients.txt". Allow-list file watching and dynamic
+//! hot-reload without restart is supported via background watcher (N56-08).
 
 use std::collections::HashSet;
 use std::path::Path;

@@ -105,6 +105,37 @@ pub fn latin1(b: &[u8]) -> String {
 
 const MAX_DECOMPRESSED_LEN: u64 = 4 * 1024 * 1024; // 4 MiB protection against Zip bombs
 
+fn decode_pkzip(raw_bytes: &[u8]) -> Option<String> {
+    if raw_bytes.starts_with(b"PK\x03\x04") && raw_bytes.len() >= 30 {
+        let comp_size = u32::from_le_bytes(raw_bytes[18..22].try_into().unwrap_or([0; 4])) as usize;
+        let name_len = u16::from_le_bytes(raw_bytes[26..28].try_into().unwrap_or([0; 2])) as usize;
+        let extra_len = u16::from_le_bytes(raw_bytes[28..30].try_into().unwrap_or([0; 2])) as usize;
+        let data_start = 30 + name_len + extra_len;
+        if data_start <= raw_bytes.len() {
+            let data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
+                data_start + comp_size
+            } else {
+                let mut end = raw_bytes.len();
+                for sig in [b"PK\x01\x02", b"PK\x07\x08", b"PK\x05\x06"] {
+                    if let Some(pos) = raw_bytes[data_start..end].windows(4).position(|w| w == sig) {
+                        end = data_start + pos;
+                    }
+                }
+                end
+            };
+            if data_start <= data_end && data_end <= raw_bytes.len() {
+                let compressed_slice = &raw_bytes[data_start..data_end];
+                let mut buf = Vec::new();
+                let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);
+                if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
+                    return Some(String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes())));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Decompress a field payload with adaptive "0:" (raw) or "1:" (Z85-encoded Zlib/Deflate/PKZIP).
 pub fn decompress_field(field_bytes: &[u8]) -> String {
     if field_bytes.starts_with(b"1:") {
@@ -128,36 +159,13 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
         };
         if let Ok(z85_str) = std::str::from_utf8(z85_slice) {
             if let Ok(mut raw_bytes) = zmq::z85_decode(z85_str.trim()) {
+                // X-01: Truncate explicit pad bytes unconditionally, matching MQL CopierCodec.mqh:414
                 if pad > 0 && pad <= 3 && raw_bytes.len() >= pad {
-                    if raw_bytes[raw_bytes.len() - pad..].iter().all(|&b| b == 0) {
-                        raw_bytes.truncate(raw_bytes.len() - pad);
-                    }
+                    raw_bytes.truncate(raw_bytes.len() - pad);
                 }
                 // Check if this is a PKZIP container (MQL CryptEncode CRYPT_ARCH_ZIP output)
-                if raw_bytes.starts_with(b"PK\x03\x04") && raw_bytes.len() >= 30 {
-                    let comp_size = u32::from_le_bytes(raw_bytes[18..22].try_into().unwrap_or([0; 4])) as usize;
-                    let name_len = u16::from_le_bytes(raw_bytes[26..28].try_into().unwrap_or([0; 2])) as usize;
-                    let extra_len = u16::from_le_bytes(raw_bytes[28..30].try_into().unwrap_or([0; 2])) as usize;
-                    let data_start = 30 + name_len + extra_len;
-                    if data_start <= raw_bytes.len() {
-                        let data_end = if comp_size > 0 && data_start + comp_size <= raw_bytes.len() {
-                            data_start + comp_size
-                        } else {
-                            let mut end = raw_bytes.len();
-                            for sig in [b"PK\x01\x02", b"PK\x07\x08", b"PK\x05\x06"] {
-                                if let Some(pos) = raw_bytes[data_start..end].windows(4).position(|w| w == sig) {
-                                    end = data_start + pos;
-                                }
-                            }
-                            end
-                        };
-                        let compressed_slice = &raw_bytes[data_start..data_end];
-                        let mut buf = Vec::new();
-                        let mut d = flate2::read::DeflateDecoder::new(compressed_slice).take(MAX_DECOMPRESSED_LEN + 1);
-                        if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
-                            return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
-                        }
-                    }
+                if let Some(s) = decode_pkzip(&raw_bytes) {
+                    return s;
                 }
                 // Try zlib first
                 let mut buf = Vec::new();
@@ -171,11 +179,15 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                 if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
                     return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
-                // Fallback: if pad was implicitly 0 on legacy MQL frames, retry trimming 1..=3 trailing zeroes
+                // Fallback: if pad was implicitly 0 on legacy MQL frames (1:<z85>), retry trimming 1..=3 trailing bytes
+                // including PKZIP streams (X-01)
                 if pad == 0 {
                     for trim in 1..=3 {
-                        if raw_bytes.len() > trim && raw_bytes[raw_bytes.len() - trim..].iter().all(|&b| b == 0) {
+                        if raw_bytes.len() > trim {
                             let trimmed = &raw_bytes[..raw_bytes.len() - trim];
+                            if let Some(s) = decode_pkzip(trimmed) {
+                                return s;
+                            }
                             buf.clear();
                             let mut z = flate2::read::ZlibDecoder::new(trimmed).take(MAX_DECOMPRESSED_LEN + 1);
                             if z.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
@@ -363,5 +375,41 @@ mod tests {
         let z85 = zmq::z85_encode(&pkzip).unwrap();
         let wire = format!("1:{}:{}", pad, z85);
         assert_eq!(decompress_field(wire.as_bytes()), "UID99999,GBPUSD,0.5,1.25000");
+    }
+
+    #[test]
+    fn decompress_field_legacy_pkzip_no_pad_prefix() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let src = b"N=1;R=EURUSD,1.0;H=A1B2";
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(src).unwrap();
+        let comp_data = enc.finish().unwrap();
+
+        let mut pkzip = Vec::new();
+        pkzip.extend_from_slice(b"PK\x03\x04");
+        pkzip.extend_from_slice(&[20, 0]); // version needed
+        pkzip.extend_from_slice(&[0, 0]);  // flags
+        pkzip.extend_from_slice(&[8, 0]);  // compression method (deflate)
+        pkzip.extend_from_slice(&[0, 0, 0, 0]); // mtime/mdate
+        pkzip.extend_from_slice(&[0, 0, 0, 0]); // crc32
+        pkzip.extend_from_slice(&(comp_data.len() as u32).to_le_bytes()); // comp_size
+        pkzip.extend_from_slice(&(src.len() as u32).to_le_bytes()); // uncomp_size
+        let fname = b"payload";
+        pkzip.extend_from_slice(&(fname.len() as u16).to_le_bytes()); // name_len
+        pkzip.extend_from_slice(&[0, 0]); // extra_len
+        pkzip.extend_from_slice(fname);
+        pkzip.extend_from_slice(&comp_data);
+
+        // Add 2 zero padding bytes to make total len multiple of 4 for Z85
+        let pad = (4 - (pkzip.len() % 4)) % 4;
+        pkzip.resize(pkzip.len() + pad, 0);
+
+        // Legacy format without pad prefix: "1:<z85>"
+        let z85 = zmq::z85_encode(&pkzip).unwrap();
+        let legacy_wire = format!("1:{}", z85);
+        assert_eq!(decompress_field(legacy_wire.as_bytes()), "N=1;R=EURUSD,1.0;H=A1B2");
     }
 }

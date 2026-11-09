@@ -833,7 +833,8 @@ async fn handle_socket(
 ) {
     // Everything the page needs on arrival, so it can render before it has
     // made a single HTTP call of its own.
-    if socket.send(Message::Text(snapshot_text(&st))).await.is_err() {
+    let snap = snapshot_text(&st);
+    if socket.send(Message::Text(snap)).await.is_err() {
         return;
     }
 
@@ -857,10 +858,9 @@ async fn handle_socket(
                 }
             }
             // State changed somewhere else. The payload is ALREADY the JSON
-            // text: the ZMQ thread serialises once per change and shares it
-            // through the Arc, so N dashboards cost one serialisation instead
-            // of N (that used to be N full passes over every node and every
-            // position, each taking the shared lock).
+            // text: the background worker serialises once per change window and
+            // shares it through Arc, so N dashboards cost one serialization
+            // without blocking the main ZMQ routing loop.
             changed = rx.recv() => {
                 match changed {
                     Ok(s) => {
@@ -1906,6 +1906,17 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
 /// one kind, one process - and Ctrl-C still lands on the ZMQ thread's flag,
 /// which exits the process and takes this one with it.
 ///
+static DASHBOARD_POKE_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static DASHBOARD_POKE_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub const POKE_MIN_MS: u64 = 200;
+
+/// H-02: Non-blocking dashboard poke notification.
+/// Does not lock shared state or serialize JSON on caller thread.
+pub fn poke() {
+    DASHBOARD_POKE_FLAG.store(true, std::sync::atomic::Ordering::Relaxed);
+    DASHBOARD_POKE_NOTIFY.notify_one();
+}
+
 /// The channel is created HERE and returned to the caller, because the ZMQ
 /// thread is the thing that knows when state changed. Handing the sender out
 /// is what makes "changed" mean "changed" rather than "somebody polled".
@@ -1916,6 +1927,8 @@ pub fn spawn(
     // (the audit reaches this thread through `st`, which already holds it)
     let (tx, _rx) = tokio::sync::broadcast::channel::<std::sync::Arc<String>>(64);
     let tx_out = tx.clone();
+    let tx_poke = tx.clone();
+    let st_poke = st.clone();
     std::thread::Builder::new()
         .name("api".to_string())
         .spawn(move || {
@@ -1930,6 +1943,22 @@ pub fn spawn(
                 }
             };
             rt.block_on(async move {
+                // H-02: Asynchronous throttle worker for WebSocket dashboard pushes.
+                // Serializes snapshot JSON outside the ZMQ routing thread, and shares
+                // via Arc<String> across connected WebSocket clients.
+                tokio::spawn(async move {
+                    let mut throttle = tokio::time::interval(std::time::Duration::from_millis(POKE_MIN_MS));
+                    throttle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        DASHBOARD_POKE_NOTIFY.notified().await;
+                        throttle.tick().await;
+                        if tx_poke.receiver_count() > 0 && DASHBOARD_POKE_FLAG.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                            let snap = snapshot_text(&st_poke);
+                            let _ = tx_poke.send(std::sync::Arc::new(snap));
+                        }
+                    }
+                });
+
                 let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel::<crate::alerts::Alert>();
                 let http_client = reqwest::Client::builder()
                     .redirect(reqwest::redirect::Policy::none())
@@ -3576,10 +3605,12 @@ async fn cluster_status(
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, users_path, notif_path, curve_clients_path, cfg_path, cmd_path, api_cfg_cache, api_cmd_cache) = {
+    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, cfg_dirty, cmd_dirty, users_path, notif_path, curve_clients_path, cfg_path, cmd_path, api_cfg_cache, api_cmd_cache) = {
         let s = st.lock_or_recover();
         let cfg_lines = s.cfg.total_lines();
         let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
+        let cfg_dirty = s.cfg.dirty_seq();
+        let cmd_dirty = s.cmds.dirty_seq();
         let users_p = s.users.path().to_path_buf();
         let notif_p = s.notif_store.lock_or_recover().path().to_path_buf();
         let curve_p = s.cluster.curve_clients_path.clone();
@@ -3598,6 +3629,8 @@ async fn cluster_status(
             cfg_lines,
             cmd_lines,
             max_cmd_seq,
+            cfg_dirty,
+            cmd_dirty,
             users_p,
             notif_p,
             curve_p,
@@ -3613,11 +3646,11 @@ async fn cluster_status(
     let curve_clients_hash = crate::cluster::file_sha256(&curve_clients_path);
     let cfg_hash = {
         let mut c = api_cfg_cache.lock().unwrap_or_else(|p| p.into_inner());
-        crate::cluster::cached_journal_sha256(&cfg_path, (cfg_lines, 0), &mut *c)
+        crate::cluster::cached_journal_sha256(&cfg_path, (cfg_lines, cfg_dirty), &mut *c)
     };
     let cmd_hash = {
         let mut c = api_cmd_cache.lock().unwrap_or_else(|p| p.into_inner());
-        crate::cluster::cached_journal_sha256(&cmd_path, (cmd_lines, max_cmd_seq), &mut *c)
+        crate::cluster::cached_journal_sha256(&cmd_path, (cmd_lines, cmd_dirty), &mut *c)
     };
 
     let resp = crate::cluster::ClusterStatusResponse {

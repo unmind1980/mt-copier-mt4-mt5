@@ -200,6 +200,8 @@ struct Inner {
     line_count: usize,
     /// Highest op sequence recorded globally
     max_seq: u64,
+    /// Monotonically increasing mutation counter for cache invalidation (H-01)
+    dirty_seq: u64,
 }
 
 pub struct CommandStore {
@@ -231,6 +233,7 @@ impl CommandStore {
             torn,
             line_count,
             max_seq,
+            dirty_seq: 1,
         };
         inner.commands = std::mem::take(&mut commands);
         inner.prune_terminal(now, COMMAND_KEEP_SECS);
@@ -294,6 +297,7 @@ impl CommandStore {
                 torn: 0,
                 line_count: 0,
                 max_seq: 0,
+                dirty_seq: 1,
             }),
             path: PathBuf::new(),
             enabled: false,
@@ -317,6 +321,14 @@ impl CommandStore {
         }
         let inner = self.inner.lock_or_recover();
         (inner.line_count, inner.max_seq)
+    }
+
+    /// Monotonically increasing mutation counter for cache invalidation (H-01).
+    pub fn dirty_seq(&self) -> u64 {
+        if !self.enabled {
+            return 0;
+        }
+        self.inner.lock_or_recover().dirty_seq
     }
 
     /// Read lines from path starting from line index `from_line` without holding the inner lock.
@@ -515,6 +527,7 @@ impl CommandStore {
             inner.prune_terminal(now, COMMAND_KEEP_SECS);
             inner.seq = seq;
             inner.torn = torn;
+            inner.dirty_seq += 1;
             let pending_ids: Vec<String> = inner
                 .commands
                 .iter()
@@ -585,6 +598,7 @@ impl CommandStore {
             ));
         }
         inner.line_count = n;
+        inner.dirty_seq += 1;
         Ok(Some(n))
     }
 
@@ -1135,7 +1149,10 @@ impl Inner {
         // "What did we tell that node to do" must survive the machine losing
         // power - so the fsync is still there, just not once per line.
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.dirty_seq += 1;
+                Ok(())
+            }
             Err(e) => {
                 eprintln!("[hub] COMMAND JOURNAL WRITE FAILED: {}", e);
                 // Keep the in-memory line counter honest: the lines did not land.
@@ -1190,7 +1207,10 @@ impl Inner {
         self.line_count += written;
         self.max_seq = self.max_seq.max(max_seq_seen);
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.dirty_seq += 1;
+                Ok(())
+            }
             Err(e) => {
                 eprintln!("[hub] COMMAND JOURNAL RAW WRITE FAILED: {}", e);
                 self.line_count -= written;

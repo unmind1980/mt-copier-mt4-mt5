@@ -3335,16 +3335,12 @@ void RemapQueueSenders(const string &beforeSid[],const int beforeN)
    if(g_qn<=0) g_qHead=0;
   }
 
-// OPT-01 / P-03: Microsecond-precision wait replacement for Sleep(), which is silently ignored in OnTimer().
-// Yields CPU to the OS scheduler via Sleep(1) in OnTick/non-timer contexts.
+// OPT-01 / M-02: True OS-level sleep replacement. MQL Sleep() is silently ignored in OnTimer(),
+// which turns loops into 100% CPU busy-spin. Calling kernel32::Sleep yields OS time slice with 0% CPU.
 void CopierWaitMs(const int waitMs)
   {
    if(waitMs<=0) return;
-   long start=CopierNowMs();
-   while(CopierNowMs()-start<waitMs)
-     {
-      Sleep(1);
-     }
+   kernel32::Sleep((uint)waitMs);
   }
 
 double PipSize(const CopierSymInfo &si)
@@ -5963,18 +5959,6 @@ void ConvergeSender(const int si)
       int li=g_locIdx.Find(g_locScratch,d.uid);
       if(li>=0)
         {
-         // BUG-04: If operator manually closed this UID from WebUI/CMD, retry closing it until gone
-         if(g_manualClosed.Has(d.uid))
-           {
-            if(!SymbolMarketClosed(g_locScratch[li].sym))
-              {
-               PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
-                          g_locScratch[li].lots,g_locScratch[li].ticket,
-                          0,"",0.0,0.0,g_locScratch[li].kind);
-              }
-            continue;
-           }
-
          //--- Clear seen keys only when there is NO in-flight close/trim queued,
          //--- and for TRIM only when volume has actually converged to the desired level.
          //--- Otherwise, clearing the seen key while an action is still queued or pending broker fill
@@ -5984,6 +5968,23 @@ void ConvergeSender(const int si)
          //--- N80-01: targetLots is unconditionally computed once per matched position.
          //--- hasQueued strictly guards seen-key clearing, NEVER suppressing lot calculation.
          double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
+
+         // BUG-04 & SEC-01: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
+         // Do NOT skip stops & trim: while close is pending or retrying with broker, local position
+         // MUST still converge protective stops (SL/TP) and volume trimming to avoid naked risk.
+         if(g_manualClosed.Has(d.uid))
+           {
+            if(!SymbolMarketClosed(g_locScratch[li].sym))
+              {
+               PushAction(si,CP_ACT_CLOSE,d.uid,g_locScratch[li].sym,g_locScratch[li].side,
+                          g_locScratch[li].lots,g_locScratch[li].ticket,
+                          0,"",0.0,0.0,g_locScratch[li].kind);
+              }
+            QueueModifyIfNeeded(si,d,g_locScratch[li]);
+            QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
+            continue;
+           }
+
          if(!hasQueued)
            {
             if(targetLots>0.0 && g_locScratch[li].lots<=targetLots+CP_LOT_EPS)

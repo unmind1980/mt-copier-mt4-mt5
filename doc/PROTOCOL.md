@@ -21,7 +21,7 @@ untouched.
 ## Envelope
 
 ```
-V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE>|P=<payload>
+V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|GTS=<gmt unix seconds>|T=<TYPE>|P=<payload>
 ```
 
 `P=` is always last and is parsed by finding the **first** occurrence of  
@@ -35,6 +35,7 @@ V=1|SID=<sender>|SSID=<session>|SEQ=<n>|TS=<broker unix seconds>|MS=<mm>|T=<TYPE
 | `SEQ`  | monotonic per session. Idempotency key is `SID:SSID:SEQ`. The receiver keeps **one `last_seq` per sender** — never a shared counter, or one sender's sequence would poison another's. `SEQ <= last_seq` is dropped. |
 | `TS`   | **broker server time**, never wall clock. VPS clocks drift; nothing is ever ordered by timestamp. Latency is measured by round trip instead.                                                                        |
 | `MS`   | the sender's **monotonic** millisecond clock (`GetTickCount`). `TS` is whole seconds — far too coarse for a link that is usually sub-millisecond — so this rides along on messages that are being sent anyway. Two machines' tick counters differ by an arbitrary constant, so it is **not** comparable across hosts on its own: the receiver derives the offset from the best round trip it has ever seen (`CopierPeers.mqh`). |
+| `GTS`  | GMT Unix seconds (`TimeGMT()`), providing an absolute wall-clock reference across broker timezones.                                                                                                                 |
 | `T`    | message type.                                                                                                                                                                                                       |
 
 ## Message types

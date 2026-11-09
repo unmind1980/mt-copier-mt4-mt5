@@ -249,11 +249,14 @@ public:
          if(now-m_mMs[i]>=1000) continue;
          m_mRep[i]++;
          m_mMs[i]=now;
-         // M-01: Periodic flush during continuous burst (<1s interval) after 5 seconds
+         // M-01 & M-04: Periodic flush during continuous burst (<1s interval) after 5 seconds.
+         // Fully reset slot message & level to avoid off-by-one duplicate counts on subsequent arrival.
          if(now-m_mFirstMs[i]>=5000)
            {
             Emit(m_mLvl[i],m_mMsg[i]+" [x"+(string)(m_mRep[i]+1)+"]");
             m_mRep[i]=0;
+            m_mMsg[i]="";
+            m_mLvl[i]=-1;
             m_mFirstMs[i]=now;
            }
          return;

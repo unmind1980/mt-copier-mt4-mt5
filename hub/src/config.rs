@@ -88,6 +88,8 @@ struct Inner {
     /// Set when a line in the file could not be parsed. Not fatal: a torn tail
     /// is a crash, and the revisions before it are still true.
     torn: u64,
+    /// Monotonically increasing mutation counter for cache invalidation (H-01)
+    dirty_seq: u64,
 }
 
 /// Why a revision could not be stored.
@@ -129,6 +131,22 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn open(path: &Path) -> std::io::Result<ConfigStore> {
+        // H-04: Compact the journal on startup if it has grown past the threshold, matching CommandStore
+        if let Ok(md) = std::fs::metadata(path) {
+            if md.len() > CONFIG_JOURNAL_COMPACT_BYTES {
+                match compact_journal(path, 10) {
+                    Ok(n) => {
+                        println!(
+                            "[hub] config journal compacted on open: {} -> {} revision(s), {} bytes",
+                            md.len(),
+                            n,
+                            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                        );
+                    }
+                    Err(e) => eprintln!("[hub] config journal compaction failed on open: {}", e),
+                }
+            }
+        }
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -145,6 +163,7 @@ impl ConfigStore {
                 current,
                 count,
                 torn,
+                dirty_seq: 1,
             }),
             path: path.to_path_buf(),
             enabled: true,
@@ -158,6 +177,7 @@ impl ConfigStore {
                 current: HashMap::new(),
                 count: 0,
                 torn: 0,
+                dirty_seq: 1,
             }),
             path: PathBuf::new(),
             enabled: false,
@@ -181,6 +201,14 @@ impl ConfigStore {
     /// Fast memory accessor for total lines in config journal (zero disk I/O).
     pub fn total_lines(&self) -> usize {
         self.inner.lock_or_recover().count as usize
+    }
+
+    /// Monotonically increasing mutation counter for cache invalidation (H-01).
+    pub fn dirty_seq(&self) -> u64 {
+        if !self.enabled {
+            return 0;
+        }
+        self.inner.lock_or_recover().dirty_seq
     }
 
     /// The current revision for a node, if it has ever had one.
@@ -328,6 +356,7 @@ impl ConfigStore {
             inner.current = current;
             inner.count = count;
             inner.torn = torn;
+            inner.dirty_seq += 1;
         }
         Ok(lines.len())
     }
@@ -365,6 +394,7 @@ impl ConfigStore {
         }
         inner.count = n as u64;
         inner.torn = 0;
+        inner.dirty_seq += 1;
         Ok(Some(n))
     }
 
@@ -594,6 +624,7 @@ impl Inner {
             }
         }
         self.count += 1;
+        self.dirty_seq += 1;
         Ok(())
     }
 
@@ -632,6 +663,7 @@ impl Inner {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "config journal file handle is not open"));
         }
         self.count += revs.len() as u64;
+        self.dirty_seq += 1;
         Ok(())
     }
 
@@ -673,6 +705,7 @@ impl Inner {
             return Err(io::Error::new(io::ErrorKind::NotConnected, "config journal file handle is not open"));
         }
         self.count += n as u64;
+        self.dirty_seq += 1;
         Ok(())
     }
 }

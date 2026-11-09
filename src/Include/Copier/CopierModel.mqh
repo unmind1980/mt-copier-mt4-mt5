@@ -756,14 +756,25 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
    ticket=0;
    isPending=false;
 #ifdef __MQL5__
+   //--- M-03 fast path: In >95% of positions without partial fills, ticket == identifier.
+   //--- Test directly via PositionSelectByTicket to avoid looping over PositionsTotal().
+   if(identifier>0 && PositionSelectByTicket((ulong)identifier))
+     {
+      if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
+        {
+         ticket=identifier;
+         return true;
+        }
+     }
+
    //--- positions first: POSITION_IDENTIFIER is stable, and it is what a
-   //--- filled pending order's identifier becomes
+   //--- filled pending order's identifier becomes. PositionGetTicket(i) already
+   //--- selects the position into terminal cache.
    int total=PositionsTotal();
    for(int i=0;i<total;i++)
      {
       ulong tk=PositionGetTicket(i);
       if(tk==0) continue;
-      if(!PositionSelectByTicket(tk)) continue;
       if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
         {
          ticket=(long)tk;

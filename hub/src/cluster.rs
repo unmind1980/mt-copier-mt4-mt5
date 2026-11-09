@@ -669,16 +669,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 // preventing unsynced Standby from claiming equal epoch and causing split-brain/data-loss on handover.
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
-                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
+                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, cfg_dirty, cmd_dirty, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
                     let s = st.lock_or_recover();
                     let cfg_tot = s.cfg.total_lines();
                     let (cmd_tot, max_seq) = s.cmds.sync_stats();
+                    let c_dirty = s.cfg.dirty_seq();
+                    let m_dirty = s.cmds.dirty_seq();
                     let u_p = s.users.path().to_path_buf();
                     let n_p = s.notif_store.lock_or_recover().path().to_path_buf();
                     let c_p = s.cluster.curve_clients_path.clone();
                     let cfg_p = s.cfg.path().to_path_buf();
                     let cmd_p = s.cmds.path().to_path_buf();
-                    (cfg_tot, cmd_tot, max_seq, u_p, n_p, c_p, cfg_p, cmd_p)
+                    (cfg_tot, cmd_tot, max_seq, c_dirty, m_dirty, u_p, n_p, c_p, cfg_p, cmd_p)
                 };
 
                 // H-03 / H-PERF-01: When journal lines differ, sync is already required;
@@ -694,8 +696,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (String::new(), String::new())
                 } else {
                     (
-                        cached_journal_sha256(&cfg_path, (cfg_lines_count, 0), &mut cfg_cache),
-                        cached_journal_sha256(&cmd_path, (cmd_lines_count, local_max_cmd_seq), &mut cmd_cache),
+                        cached_journal_sha256(&cfg_path, (cfg_lines_count, cfg_dirty), &mut cfg_cache),
+                        cached_journal_sha256(&cmd_path, (cmd_lines_count, cmd_dirty), &mut cmd_cache),
                     )
                 };
 
@@ -1153,13 +1155,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 }
             } else {
                 // BUG-02 & BUG-03 / H7-05: Primary node verifies if Standby peer has caught up with our journals and hashes
-                let (my_cfg, my_cmd, my_seq, cfg_p, cmd_p, u_p, c_p, n_p) = {
+                let (my_cfg, my_cmd, my_seq, my_cfg_dirty, my_cmd_dirty, cfg_p, cmd_p, u_p, c_p, n_p) = {
                     let s = st.lock_or_recover();
                     let n_path = s.notif_store.lock_or_recover().path().to_path_buf();
                     (
                         s.cfg.total_lines(),
                         s.cmds.sync_stats().0,
                         s.cmds.sync_stats().1,
+                        s.cfg.dirty_seq(),
+                        s.cmds.dirty_seq(),
                         s.cfg.path().to_path_buf(),
                         s.cmds.path().to_path_buf(),
                         s.users.path().to_path_buf(),
@@ -1178,8 +1182,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
                 let (my_cfg_h, my_cmd_h) = if lines_match {
                     (
-                        cached_journal_sha256(&cfg_p, (my_cfg, 0), &mut primary_cfg_cache),
-                        cached_journal_sha256(&cmd_p, (my_cmd, my_seq), &mut primary_cmd_cache),
+                        cached_journal_sha256(&cfg_p, (my_cfg, my_cfg_dirty), &mut primary_cfg_cache),
+                        cached_journal_sha256(&cmd_p, (my_cmd, my_cmd_dirty), &mut primary_cmd_cache),
                     )
                 } else {
                     (String::new(), String::new())
@@ -1355,6 +1359,30 @@ mod tests {
             Err(e) => assert!(e.contains("exhausted")),
             Ok(_) => panic!("must reject exhausted epoch state"),
         }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cached_journal_sha256_invalidates_on_same_size_rewrite() {
+        let dir = std::env::temp_dir().join(format!("mtc_test_cache_{}", crate::users::random_token()));
+        let _ = fs::create_dir_all(&dir);
+        let file_path = dir.join("commands.jsonl");
+        let mut cache = None;
+
+        // Initial content: state is pending (7 bytes)
+        let content_v1 = b"{\"id\":1001,\"state\":\"pending\"}\n";
+        fs::write(&file_path, content_v1).unwrap();
+        let hash_v1 = cached_journal_sha256(&file_path, (1, 0), &mut cache);
+
+        // Same-size rewrite: state becomes unknown (also 7 bytes, identical file length)
+        let content_v2 = b"{\"id\":1001,\"state\":\"unknown\"}\n";
+        assert_eq!(content_v1.len(), content_v2.len());
+        fs::write(&file_path, content_v2).unwrap();
+
+        // With updated mutation version (dirty_seq incremented from 0 to 1), hash must invalidate!
+        let hash_v2 = cached_journal_sha256(&file_path, (1, 1), &mut cache);
+        assert_ne!(hash_v1, hash_v2, "CRITICAL: Cached hash returned stale SHA-256 on same-size rewrite!");
 
         let _ = fs::remove_dir_all(&dir);
     }
