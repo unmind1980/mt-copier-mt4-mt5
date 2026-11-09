@@ -242,6 +242,8 @@ python tools/i18n_check.py
 
 ## 📖 Documentation Index
 
+- **[User Manual (English)](doc/USER_MANUAL.en.md)** — Comprehensive operating guide, Input parameter breakdown, sizing models, and FAQ.
+- **[用户使用手册 (简体中文)](doc/USER_MANUAL.zh-CN.md)** — 全功能使用说明书、输入参数深度解析、跨券商映射与风控配置。
 - [doc/PROTOCOL.md](doc/PROTOCOL.md) — Comprehensive wire protocol, envelope format, and framing specifications.
 - [doc/HANDOFF.md](doc/HANDOFF.md) — Complete engineering history, operational runbook, and architectural decisions (ADR).
 - [locales/README.md](locales/README.md) — Guide for creating and customizing language translation packs.

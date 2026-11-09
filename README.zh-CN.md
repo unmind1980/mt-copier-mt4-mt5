@@ -242,6 +242,8 @@ python tools/i18n_check.py
 
 ## 📖 技术文档与参考索引
 
+- **[用户使用手册 (简体中文)](doc/USER_MANUAL.zh-CN.md)** — 全功能使用说明书、输入参数深度解析、跨券商映射与风控配置。
+- **[User Manual (English)](doc/USER_MANUAL.en.md)** — 英文版使用手册与全参数技术参考。
 - [doc/PROTOCOL.md](doc/PROTOCOL.md) — 网络通信协议、封包格式与信封设计规范白皮书。
 - [doc/HANDOFF.md](doc/HANDOFF.md) — 核心系统架构演进历史、运维操作手册与架构决策记录（ADR）。
 - [locales/README.md](locales/README.md) — 多语言扩展指南与本地化翻译字典编写规范。
