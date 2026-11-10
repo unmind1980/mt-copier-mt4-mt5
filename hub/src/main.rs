@@ -187,8 +187,8 @@ mod sig {
 /// the hub keeps one queue for every connected node. At a few hundred nodes a
 /// 1024-deep queue each is a lot of retained memory for headroom that will not
 /// be used; 256 matches the EAs, which is the only bound that has been measured.
-/// R6-D6-03: Aligned with CP_SNDHWM/CP_RCVHWM (1024) in CopierTransport.mqh to absorb multi-order bursts.
-const HWM: i32 = 1024;
+/// R6-D6-03: Aligned with CP_SNDHWM/CP_RCVHWM (256) in CopierTransport.mqh to absorb multi-order bursts while bounding queue memory.
+const HWM: i32 = 256;
 
 /// The largest frame this hub will accept, matching the EAs' CP_MAXMSGSIZE
 /// (1 MB) so a frame the hub forwards can never be one a node would refuse.
@@ -848,7 +848,14 @@ fn send_cmd(
     let nid = copier_nid(acc);
     let mut p = format!("ID={};OP={};TO={}", id, op, acc);
     if !args.is_empty() {
-        p.push_str(&format!(";ARGS={}", args));
+        let clean_args: String = args
+            .chars()
+            .filter(|&c| c != ';' && c != '|' && c != '\n' && c != '\r')
+            .take(128)
+            .collect();
+        if !clean_args.is_empty() {
+            p.push_str(&format!(";ARGS={}", clean_args));
+        }
     }
     let now_sec = unix_secs();
     let env = format!(
@@ -1907,7 +1914,12 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         .spawn(move || {
             let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
                 std::collections::HashMap::new();
+            let mut last_throttle_prune = Instant::now();
             while let Some((sid, payload, pos_now)) = snap_rx.blocking_recv() {
+                if last_throttle_prune.elapsed() >= Duration::from_secs(60) {
+                    last_throttle_prune = Instant::now();
+                    wire_audit_throttle.retain(|_, t| t.elapsed() < Duration::from_secs(60));
+                }
                 // OPT-85-02: Protect snap-worker loop against panics so malformed payloads cannot kill the thread
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let view = parse_snap(&payload);
@@ -3179,8 +3191,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         state.last_topo_sent.remove(acc);
                         if role == "sender" {
                             last_known_receipt.remove(acc);
+                            last_snap_touch.remove(acc);
                             if acc.len() > 9 {
                                 last_known_receipt.remove(&copier_nid(acc));
+                                last_snap_touch.remove(&copier_nid(acc));
                             }
                         }
                     }

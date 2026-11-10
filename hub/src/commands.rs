@@ -1293,7 +1293,9 @@ impl Inner {
                 return true;
             }
             if keep_ids.contains(id) {
-                return true;
+                // DEF-C04: Even for watermark / latest_cfg commands, if the node has been dead for > 30 days (2,592,000s),
+                // prune it so decommissioned or ephemeral nodes do not stay in memory forever.
+                return now.saturating_sub(c.ts) <= 2592000;
             }
             now.saturating_sub(c.ts) <= max_age_secs
         });

@@ -315,9 +315,13 @@ long CopierHash32(const string s)
 string CopierHashHex(const long h)
   {
    string hex="0123456789abcdef";
-   string out="";
-   for(int shift=28;shift>=0;shift-=4)
-      out+=StringSubstr(hex,(int)((h>>shift)&0xF),1);
+   string out;
+   StringInit(out,8,'0');
+   for(int i=0;i<8;i++)
+     {
+      int shift=(7-i)*4;
+      StringSetCharacter(out,i,(ushort)StringGetCharacter(hex,(int)((h>>shift)&0xF)));
+     }
    return out;
   }
 
@@ -414,8 +418,9 @@ string CopierDecompressField(const string field)
       uchar comp[];
       if(Z85::decode(z85Str,comp))
         {
-         if(pad>0 && ArraySize(comp)>=pad)
+         if(pad>0)
            {
+            if(ArraySize(comp)<pad) return "";
             // SEC-P1-01: Ensure explicit pad bytes are strictly zero
             bool padZero=true;
             int cSize=ArraySize(comp);
@@ -493,11 +498,13 @@ string CopierDecompressField(const string field)
 //=====================================================================
 string CopierHex8(const uint v)
   {
-   string out="";
-   for(int i=7;i>=0;i--)
+   string out;
+   StringInit(out,8,'0');
+   for(int i=0;i<8;i++)
      {
-      uint nib=(v>>(4*i)) & 15;
-      out+=ShortToString((ushort)((nib<10)?('0'+nib):('a'+nib-10)));
+      int shift=(7-i)*4;
+      uint nib=(v>>shift) & 15;
+      StringSetCharacter(out,i,(ushort)((nib<10)?('0'+nib):('a'+nib-10)));
      }
    return out;
   }

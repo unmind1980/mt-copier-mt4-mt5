@@ -449,7 +449,19 @@ impl Audit {
         ));
         let _ = fs::remove_file(&rotating_path);
 
-        if let Err(e) = fs::rename(&self.path, &rotating_path) {
+        // Retry rename up to 5 times on Windows to handle transient locks by search indexer or AV
+        let mut rename_res = fs::rename(&self.path, &rotating_path);
+        if rename_res.is_err() {
+            for _ in 0..5 {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                rename_res = fs::rename(&self.path, &rotating_path);
+                if rename_res.is_ok() {
+                    break;
+                }
+            }
+        }
+
+        if let Err(e) = rename_res {
             eprintln!(
                 "[hub] AUDIT ROTATE: cannot rename {} to {}: {}",
                 self.path.display(),

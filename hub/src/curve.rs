@@ -444,6 +444,11 @@ pub fn spawn_zap_handler(
                 last = cur;
                 match AllowList::load(&path) {
                     Ok(l) => {
+                        // SEC-03: If allow-list file was truncated to 0 or empty, do NOT overwrite in-memory allow-list unless in learn mode
+                        if l.is_empty() && !learn {
+                            eprintln!("[hub] allow-list reload warning: {} is empty, keeping existing allow-list", path.display());
+                            continue;
+                        }
                         let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
                         *g = l;
                         eprintln!("[hub] allow-list reloaded: {}", path.display());
@@ -481,6 +486,10 @@ pub fn spawn_zap_handler(
             };
             let version = req.first().cloned().unwrap_or_else(|| b"1.0".to_vec());
             let request_id = req.get(1).cloned().unwrap_or_default();
+            let address = req
+                .get(3)
+                .map(|b| String::from_utf8_lossy(b).to_string())
+                .unwrap_or_else(|| "unknown".to_string());
             let mechanism = req
                 .get(5)
                 .map(|b| String::from_utf8_lossy(b).to_string())
@@ -496,8 +505,9 @@ pub fn spawn_zap_handler(
                 suppressed_denies += 1;
                 if last_deny_log.elapsed() >= std::time::Duration::from_secs(2) {
                     println!(
-                        "[hub] ZAP DENY  a {} client tried to connect to a CURVE hub ({} denied in window, {} total)",
+                        "[hub] ZAP DENY  a {} client from {} tried to connect to a CURVE hub ({} denied in window, {} total)",
                         if mechanism.is_empty() { "plaintext" } else { mechanism.as_str() },
+                        address,
                         suppressed_denies, denied
                     );
                     last_deny_log = std::time::Instant::now();
@@ -550,8 +560,8 @@ pub fn spawn_zap_handler(
                     suppressed_denies += 1;
                     if last_deny_log.elapsed() >= std::time::Duration::from_secs(2) {
                         println!(
-                            "[hub] ZAP DENY  unknown client key {} ({} denied in window, {} total)",
-                            key, suppressed_denies, denied
+                            "[hub] ZAP DENY  unknown client key {} from {} ({} denied in window, {} total)",
+                            key, address, suppressed_denies, denied
                         );
                         last_deny_log = std::time::Instant::now();
                         suppressed_denies = 0;
@@ -569,8 +579,11 @@ pub fn spawn_zap_handler(
                 user,
                 Vec::new(), // metadata
             ];
-            if sock.send_multipart(reply, 0).is_err() {
-                break;
+            if let Err(e) = sock.send_multipart(reply, 0) {
+                eprintln!("[hub] ZAP send_multipart error: {}", e);
+                if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
             }
         }
     })

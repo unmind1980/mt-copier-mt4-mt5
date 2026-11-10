@@ -546,6 +546,12 @@ bool CopierSymbolExists(const string sym)
       SymbolSelect(profCcy+acctCcy, true);
       SymbolSelect(acctCcy+profCcy, true);
      }
+   string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
+   if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
+     {
+      SymbolSelect(marginCcy+acctCcy, true);
+      SymbolSelect(acctCcy+marginCcy, true);
+     }
    return CopierSymbolReady(sym);
 #else
    //--- MT4 DOES have SymbolSelect, and it is required here.
@@ -569,6 +575,12 @@ bool CopierSymbolExists(const string sym)
      {
       SymbolSelect(profCcy+acctCcy, true);
       SymbolSelect(acctCcy+profCcy, true);
+     }
+   string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
+   if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
+     {
+      SymbolSelect(marginCcy+acctCcy, true);
+      SymbolSelect(acctCcy+marginCcy, true);
      }
    return CopierSymbolReady(sym);
 #endif

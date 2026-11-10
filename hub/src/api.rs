@@ -1339,8 +1339,13 @@ async fn login(
             };
             // R47-14: Equalize timing with dummy hash when user is absent/disabled to prevent enumeration
             let dummy_hash = format!("dummy_salt_timing${}${}", crate::users::HASH_ROUNDS, "0".repeat(64));
-            let target_hash = stored.as_deref().unwrap_or(&dummy_hash);
-            let verified = crate::users::verify_password(pwd, target_hash) && stored.is_some();
+            let target_hash = stored.as_deref().unwrap_or(&dummy_hash).to_string();
+            let pwd_clone = pwd.clone();
+            let verified = tokio::task::spawn_blocking(move || {
+                crate::users::verify_password(&pwd_clone, &target_hash)
+            })
+            .await
+            .unwrap_or(false) && stored.is_some();
             if verified {
                 //--- Re-check under the lock: the user may have been
                 //--- disabled or password changed while hashing.
@@ -1923,6 +1928,7 @@ pub fn router(st: SharedState, tx: tokio::sync::broadcast::Sender<std::sync::Arc
         .route("/api/v1/tls/renew", axum::routing::post(tls_renew))
         .route("/api/v1/locales", get(locales_list))
         .route("/api/v1/locales/:code", get(locale_get))
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .layer(axum::extract::Extension(tx))
         .layer(axum::middleware::from_fn_with_state(st.clone(), require_session))
         .with_state(st)

@@ -133,10 +133,15 @@ kill_all() {
 #--- still works, it is just visible on screen.
 find_python() {
   local c
-  for c in python3 python "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+  for c in "${PYTHON:-}" python3 python \
+           "C:/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+           "/c/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+           "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
            "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"; do
+    [[ -n "$c" ]] || continue
     if command -v "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
     [[ -x "$c" ]] && { printf '%s' "$c"; return 0; }
+    [[ -f "$c" ]] && { printf '%s' "$c"; return 0; }
   done
   return 1
 }

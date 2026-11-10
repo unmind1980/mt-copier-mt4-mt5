@@ -179,6 +179,7 @@
 // Receiver trade-action kinds. They live here rather than in the
 // receiver so the self-test can reach CopierSeenRingApplies() below.
 //=====================================================================
+#define CP_ACT_NONE   0   // neutralized / cancelled action
 #define CP_ACT_OPEN   1
 #define CP_ACT_CLOSE  2
 #define CP_ACT_TRIM   3   // reduce a position to match the sender's size
@@ -440,6 +441,21 @@ int CopierPendingSide(const int t)
    if(t==CP_PEND_BUYLIMIT || t==CP_PEND_BUYSTOP || t==CP_PEND_BUYSTOPLIMIT)
       return CP_SIDE_BUY;
    return CP_SIDE_SELL;
+  }
+
+//--- DEF-B03: Invert pending order type geometrically for inverted copier mode
+int CopierInvertPendingType(const int t)
+  {
+   switch(t)
+     {
+      case CP_PEND_BUYLIMIT:      return CP_PEND_SELLLIMIT;
+      case CP_PEND_SELLLIMIT:     return CP_PEND_BUYLIMIT;
+      case CP_PEND_BUYSTOP:       return CP_PEND_SELLSTOP;
+      case CP_PEND_SELLSTOP:      return CP_PEND_BUYSTOP;
+      case CP_PEND_BUYSTOPLIMIT:  return CP_PEND_SELLSTOPLIMIT;
+      case CP_PEND_SELLSTOPLIMIT: return CP_PEND_BUYSTOPLIMIT;
+      default:                    return t;
+     }
   }
 
 // UID: 8 chars of Crockford base32 (no i/l/o/u), written into the
@@ -1097,11 +1113,13 @@ string CopierNewUid()
    uint h = (uint)CopierHash32((string)mix+"|"+(string)t+"|"+(string)s_seq+"|"+(string)acc);
    uint h2 = (uint)CopierHash32((string)h+"|uid_salt_2");
 
-   string s="";
+   // MEM-01: Zero intermediate heap allocations via preallocated StringInit + StringSetCharacter
+   string s;
+   StringInit(s, CP_UID_LEN, ' ');
    for(int i=0;i<CP_UID_LEN;i++)
      {
       uint nib = (h >> (i*4)) ^ (h2 >> (i*3)) ^ (uint)(mix >> (i*7));
-      s += StringSubstr(CP_UID_ALPHA, (int)(nib & 31), 1);
+      StringSetCharacter(s, i, (ushort)StringGetCharacter(CP_UID_ALPHA, (int)(nib & 31)));
      }
    return s;
   }

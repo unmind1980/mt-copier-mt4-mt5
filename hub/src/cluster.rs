@@ -466,15 +466,18 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
             Err(rename_err) => {
                 // Fallback: preserve backup before overwriting target to prevent 0-byte truncation
                 if let Ok(mut src) = File::open(tmp) {
-                    let bak = PathBuf::from(format!("{}.bak", target.display()));
-                    let _ = fs::copy(target, &bak);
-                    if let Ok(mut dst) = OpenOptions::new().write(true).truncate(true).create(true).open(target) {
-                        if std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok() {
-                            let _ = fs::remove_file(tmp);
-                            let _ = fs::remove_file(&bak);
-                            return Ok(());
-                        } else {
-                            let _ = fs::copy(&bak, target);
+                    let tmp_len = src.metadata().map(|m| m.len()).unwrap_or(0);
+                    if tmp_len > 0 {
+                        let bak = PathBuf::from(format!("{}.bak", target.display()));
+                        let _ = fs::copy(target, &bak);
+                        if let Ok(mut dst) = OpenOptions::new().write(true).truncate(true).create(true).open(target) {
+                            if std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok() {
+                                let _ = fs::remove_file(tmp);
+                                let _ = fs::remove_file(&bak);
+                                return Ok(());
+                            } else {
+                                let _ = fs::copy(&bak, target);
+                            }
                         }
                     }
                     // DEF-05: Preserve .bak on fallback error so restart can recover

@@ -542,12 +542,12 @@ double CopierRealizedToday(const long dayStart,bool &outOk)
 #else
    if(!IsConnected()) { outOk=false; return 0.0; }
    int total=OrdersHistoryTotal();
-   for(int i=0;i<total;i++)
+   for(int i=total-1;i>=0;i--)
      {
       if(!OrderSelect(i,SELECT_BY_POS,MODE_HISTORY)) continue;
       int otype=OrderType();
       if(otype!=OP_BUY && otype!=OP_SELL) continue;
-      if((long)OrderCloseTime()<dayStart) continue;
+      if((long)OrderCloseTime()<dayStart) break; // Chronological order: older than dayStart means done
       sum+=OrderProfit()+OrderSwap()+OrderCommission();
      }
 #endif
@@ -1205,6 +1205,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    int cmd=(side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
    int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
    int ticket=-1;
+   double initialPx=px;
+   double pointVal=MarketInfo(sym,MODE_POINT);
    for(int attempt=0;attempt<3;attempt++)
      {
       ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),sl,tp,comment,safeMagic,0,clrNONE);
@@ -1215,6 +1217,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          CopierWaitMs(10);
          RefreshRates();
          if(!CopierGetPrice(sym,side,px)) break;
+         // DEF-B04: Hard cap on cumulative slippage across retries to prevent runaway market chase
+         if(pointVal>0.0 && MathAbs(px-initialPx)/pointVal > MathMax(30,(deviationPoints>0?deviationPoints:30))) break;
          continue;
         }
       break;
@@ -1503,8 +1507,14 @@ bool CopierModifyStops(const long identifier,const string sym,
    //--- the broker already holds, and the wanted state is reached either way
    if(res.retcode==TRADE_RETCODE_DONE
       || res.retcode==TRADE_RETCODE_PLACED
-      || res.retcode==TRADE_RETCODE_NO_CHANGES)
+      || res.retcode==TRADE_RETCODE_NO_CHANGES
+      || res.retcode==10009
+      || res.retcode==10025
+      || res.retcode==10036)
+     {
+      outErr=0;
       return true;
+     }
    outErr=(int)res.retcode;
    return false;
 #else
@@ -1775,7 +1785,7 @@ int CopierAccountMode()
   {
 #ifdef __MQL5__
    if(!TerminalInfoInteger(TERMINAL_CONNECTED) || AccountInfoInteger(ACCOUNT_LOGIN)<=0)
-      return 0; // Unknown / connecting: do not assume netting
+      return -1; // Unknown / connecting: do not assume netting
    long mode=AccountInfoInteger(ACCOUNT_MARGIN_MODE);
    if(mode==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)  return 1;   // hedging
    return 2;                                                  // netting/exchange
@@ -1851,9 +1861,16 @@ bool CopierIsTicketClosedInHistory(const long ticket)
      {
       // HistorySelectByPosition only caches orders with POSITION_IDENTIFIER == ticket.
       // Cancelled/expired pending orders have ORDER_POSITION_ID == 0; populate history cache to query them.
-      datetime hFrom=(datetime)(CopierServerTime()-86400*3);
-      datetime hTo=(datetime)(CopierServerTime()+86400);
-      HistorySelect(hFrom,hTo);
+      // DEF-09-07: Throttle HistorySelect to at most once per 500ms to prevent UI / communication thread freezing
+      static long s_lastHistSelectMs=0;
+      long nowMs=CopierNowMs();
+      if(nowMs-s_lastHistSelectMs>=500)
+        {
+         s_lastHistSelectMs=nowMs;
+         datetime hFrom=(datetime)(CopierServerTime()-86400*3);
+         datetime hTo=(datetime)(CopierServerTime()+86400);
+         HistorySelect(hFrom,hTo);
+        }
      }
    if(HistoryOrderSelect((ulong)ticket))
      {

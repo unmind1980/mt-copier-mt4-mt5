@@ -749,6 +749,14 @@ bool CopierIniReadAll(const string path,string &out)
      }
    int h=FileOpen(actualPath,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h==INVALID_HANDLE) return false;
+   // DEF-09-04: If primary file is 0 bytes, immediately try falling back to .tmp
+   if(actualPath==path && FileSize(h)==0 && FileIsExist(path+".tmp"))
+     {
+      FileClose(h);
+      actualPath=path+".tmp";
+      h=FileOpen(actualPath,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+      if(h==INVALID_HANDLE) return false;
+     }
    //--- chunked: this reads a whole config, and `out += line` per line is
    //--- O(n^2) on a 100-sender file
    CopierStrBuilder sb;
@@ -790,6 +798,7 @@ bool CopierIniReadAll(const string path,string &out)
             CopierIniWriteAll(path,out);
             return true;
            }
+         return false;
         }
      }
    return true;

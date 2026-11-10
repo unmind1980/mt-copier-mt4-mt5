@@ -659,6 +659,7 @@ int BuildCurrent()
    //--- Writes directly into pre-allocated static g_rawScratch, zero ArrayResize.
    int rn=CopierReadPositions(g_rawScratch,CP_MAX_POSITIONS,false);
    int n=0;
+   int projectedCount=g_prev.Count();
 
    //--- Rebuild ticket index only when table mutations actually occurred.
    //--- In steady state (99.9% of ticks), positions do not change, so the hash
@@ -700,8 +701,8 @@ int BuildCurrent()
         }
       if(idx>=0 && g_prev.At(idx,q))
         {
-         // R6-D1-01: Verify openTime matches to prevent adopting stale UID on MT4 ticket recycling
-         if(q.sym==p.sym && (q.openTime==p.openTime || q.openTime<=0 || p.openTime<=0))
+         // R6-D1-01 & DEF-09-06: Strictly verify openTime matches to prevent adopting stale UID on MT4 ticket recycling
+         if(q.sym==p.sym && q.openTime>0 && p.openTime>0 && q.openTime==p.openTime)
            {
             uid=q.uid;
             slot=idx;
@@ -779,7 +780,8 @@ int BuildCurrent()
       //--- once rather than as a stream of phantom opens.
       if(StringLen(uid)==0)
         {
-         if(g_prev.IsFull())
+         // DEF-09-03: Enforce strict capacity limit before minting UID to prevent flapping storms
+         if(g_prev.IsFull() || projectedCount>=CP_MAX_POSITIONS || n>=CP_MAX_POSITIONS)
            {
             if(g_once.ShouldEmit("prevfull"))
                g_log.Error("position table is full ("+(string)CP_MAX_POSITIONS
@@ -789,6 +791,7 @@ int BuildCurrent()
             continue;
            }
          uid=CopierNewUid();
+         projectedCount++;
          slot=-1;
         }
 
@@ -829,6 +832,8 @@ int OnInit()
       Alert("Copier SENDER: Cannot run on a NETTING account. Hedging account required.");
       return INIT_FAILED;
      }
+   if(CopierAccountMode()<0)
+      g_log.Warn("Account not connected during init; hedging mode verification deferred to runtime.");
 #endif
    g_magicFilter.Set(IncludeMagicNumbers);
    if(g_magicFilter.StrayBangs()>0)

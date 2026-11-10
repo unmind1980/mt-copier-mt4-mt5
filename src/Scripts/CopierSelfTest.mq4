@@ -3305,6 +3305,57 @@ void TestAuditRound110()
    OkDbl("initlots: reversed order preserves AAAA peak lots",des[1].initLots,2.0,1e-9);
   }
 
+void TestRound9Enhancements()
+  {
+   // 1) Test CopierInvertPendingType
+   OkInt("invert_pend: BuyLimit -> SellLimit", CopierInvertPendingType(CP_PEND_BUYLIMIT), CP_PEND_SELLLIMIT);
+   OkInt("invert_pend: SellLimit -> BuyLimit", CopierInvertPendingType(CP_PEND_SELLLIMIT), CP_PEND_BUYLIMIT);
+   OkInt("invert_pend: BuyStop -> SellStop", CopierInvertPendingType(CP_PEND_BUYSTOP), CP_PEND_SELLSTOP);
+   OkInt("invert_pend: SellStop -> BuyStop", CopierInvertPendingType(CP_PEND_SELLSTOP), CP_PEND_BUYSTOP);
+   OkInt("invert_pend: BuyStopLimit -> SellStopLimit", CopierInvertPendingType(CP_PEND_BUYSTOPLIMIT), CP_PEND_SELLSTOPLIMIT);
+   OkInt("invert_pend: SellStopLimit -> BuyStopLimit", CopierInvertPendingType(CP_PEND_SELLSTOPLIMIT), CP_PEND_BUYSTOPLIMIT);
+   OkInt("invert_pend: Unknown type unchanged", CopierInvertPendingType(99), 99);
+
+   // 2) Test CopierMirrorStopInverted
+   // Normal loss SL: Sender target 1.1100 (100 pips away from 1.1000). Local trade is SELL at 1.1000.
+   // Local SL should be placed at 1.1100 (100 pips loss for SELL).
+   double slNormal = CopierMirrorStopInverted(1.1100, 1.1000, 1.1000, CP_SIDE_SELL, true);
+   OkDbl("inverted_sl: loss SL mirrors magnitude", slNormal, 1.1100, 1e-6);
+
+   // Local BUY at 1.1000: SL lands below entry at 1.0900
+   double slBuy = CopierMirrorStopInverted(1.1100, 1.1000, 1.1000, CP_SIDE_BUY, true);
+   OkDbl("inverted_sl: BUY SL lands below entry", slBuy, 1.0900, 1e-6);
+
+   // TP for SELL lands below entry
+   double tpNormal = CopierMirrorStopInverted(1.0950, 1.1000, 1.1000, CP_SIDE_SELL, false);
+   OkDbl("inverted_tp: TP normal mirror preserves distance", tpNormal, 1.0950, 1e-6);
+
+   // 3) Zero-allocation Hex formatting tests
+   OkStr("hash_hex: format 0x1234abcd", CopierHashHex(0x1234abcd), "1234abcd");
+   OkStr("hash_hex: zero padding", CopierHashHex(0x5a), "0000005a");
+   OkStr("hex8: format 0xdeadbeef", CopierHex8(0xdeadbeef), "deadbeef");
+   OkStr("hex8: zero padding", CopierHex8(0x7), "00000007");
+
+   // 4) CopierNewUid output length and character validity
+   string uid1 = CopierNewUid();
+   OkInt("new_uid: length is CP_UID_LEN (8)", StringLen(uid1), CP_UID_LEN);
+   bool uidAlphaOk = true;
+   for(int i=0; i<StringLen(uid1); i++)
+     {
+      string chStr = StringSubstr(uid1, i, 1);
+      if(StringFind(CP_UID_ALPHA, chStr) < 0) { uidAlphaOk = false; break; }
+     }
+   Ok("new_uid: chars belong to Crockford base32", uidAlphaOk);
+
+   // 5) CopierManualClosedRing sender ticket scoping
+   CopierManualClosedRing mc;
+   mc.Add("UID1", 1001, "sender1");
+   mc.Add("UID2", 1002, "sender2");
+   Ok("manual_closed: finds ticket for matching sender", mc.HasSenderTicket("sender1", 1001));
+   Ok("manual_closed: ignores ticket for different sender", !mc.HasSenderTicket("sender2", 1001));
+   Ok("manual_closed: wildcard empty sid matches", mc.HasSenderTicket("", 1001));
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3368,6 +3419,7 @@ void OnStart()
    TestTradingTimes();
    TestR47R48Regressions();
    TestAuditRound110();
+   TestRound9Enhancements();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

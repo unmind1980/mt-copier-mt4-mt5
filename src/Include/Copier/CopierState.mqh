@@ -710,9 +710,12 @@ public:
       //--- occupied one being overwritten is already in the list
       if(StringLen(m_k[m_head])==0)
         {
-         m_occ[m_occN]=m_head;
-         m_occN++;
-         m_used=m_occN;
+         if(m_occN<CP_SEEN_RING)
+           {
+            m_occ[m_occN]=m_head;
+            m_occN++;
+            m_used=m_occN;
+           }
         }
       m_k[m_head]=key;
       //--- F-03: Ensure timestamp is strictly positive (>=1) so GetTime()
@@ -1505,6 +1508,17 @@ public:
          return false;
         }
 
+      // DEF-09-04: If file was opened but has 0 bytes (e.g. truncated during crash), close and fallback to .tmp
+      if(FileSize(h)<=0)
+        {
+         FileClose(h);
+         if(StringFind(path,".tmp")<0 && FileIsExist(path+".tmp"))
+           {
+            return Load(path+".tmp",header,pos,count,openLots);
+           }
+         return false;
+        }
+
       int expected=-1;
       int got=0;
       while(!FileIsEnding(h) && (got<CP_STATE_MAX_LINES || expected<0))
@@ -1763,6 +1777,18 @@ public:
       for(int i=0;i<m_n;i++)
         {
          if(m_ticket[i]==ticket) return true;
+        }
+      return false;
+     }
+
+   // DEF-09-05: Sender-scoped ticket matching to prevent multi-sender ticket collisions
+   bool HasSenderTicket(const string sid, const long ticket) const
+     {
+      if(m_n<=0 || ticket<=0) return false;
+      for(int i=0;i<m_n;i++)
+        {
+         if(m_ticket[i]==ticket && (StringLen(m_sid[i])==0 || StringLen(sid)==0 || m_sid[i]==sid))
+            return true;
         }
       return false;
      }

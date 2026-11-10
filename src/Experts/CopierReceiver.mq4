@@ -3218,6 +3218,34 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) { g_pushReject="unsupported"; return false; }
+   // DEF-B01 & DEF-B05: If a full CLOSE or DEDUP is being queued, cancel any pending OPEN or MODIFY in the queue for this UID
+   if(kind==CP_ACT_CLOSE || kind==CP_ACT_DEDUP)
+     {
+      bool openCancelled=false;
+      for(int qi=0; qi<g_qn; qi++)
+        {
+         int qidx=g_qHead+qi;
+         if(g_q[qidx].uid==uid && g_q[qidx].senderIdx==si)
+           {
+            if(g_q[qidx].kind==CP_ACT_OPEN)
+              {
+               g_q[qidx].kind=CP_ACT_NONE;
+               openCancelled=true;
+              }
+            else if(g_q[qidx].kind==CP_ACT_MODIFY)
+              {
+               g_q[qidx].kind=CP_ACT_NONE;
+              }
+           }
+        }
+      if(openCancelled)
+        {
+         // Open was cancelled in queue before ever reaching the broker.
+         // The position does not exist locally; close is already satisfied.
+         g_pushReject="open_cancelled_in_queue";
+         return false;
+        }
+     }
    // D1-M02: Suppress MODIFY and TRIM if a full CLOSE or DEDUP action is already queued for this position
    if(kind==CP_ACT_MODIFY || kind==CP_ACT_TRIM)
      {
@@ -3549,6 +3577,11 @@ void ExecuteQueue()
    while(g_qn>0 && done<maxActions && skipped<g_qn)
      {
       CopierAction a=g_q[g_qHead];
+      if(a.kind<=CP_ACT_NONE)
+        {
+         ShiftQueue();
+         continue;
+        }
       int err=0;
       bool ok=false;
       bool asyncMode=false;
@@ -3621,18 +3654,22 @@ void ExecuteQueue()
            }
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
            {
-            double minSp = GetSymbolMinSpread(a.sym);
-            if(minSp<=0.0) minSp = 15.0; // conservative 1.5 pip baseline before warmup completes
-            bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
-            if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
+            // D-04: If risk close-all is pending or emergency close active, never hold exit actions due to spread!
+            if(!g_riskCloseAllPending && !g_cmdCloseAllActive && !g_risk.AnyTripped())
               {
-               if(g_once.ShouldEmit("warmup_close|"+a.sym))
-                  g_log.Info("wide spread ("+DoubleToString(curSp,1)+" vs normal "+DoubleToString(minSp,1)
-                             +") on "+a.sym+" during market open - holding CLOSE (timeout in "
-                             +IntegerToString(MarketOpenCloseMaxWaitSec - warmupElapsed)+"s)");
-               RotateQueue();
-               skipped++;
-               continue;
+               double minSp = GetSymbolMinSpread(a.sym);
+               if(minSp<=0.0) minSp = 15.0; // conservative 1.5 pip baseline before warmup completes
+               bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
+               if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
+                 {
+                  if(g_once.ShouldEmit("warmup_close|"+a.sym))
+                     g_log.Info("wide spread ("+DoubleToString(curSp,1)+" vs normal "+DoubleToString(minSp,1)
+                                +") on "+a.sym+" during market open - holding CLOSE (timeout in "
+                                +IntegerToString(MarketOpenCloseMaxWaitSec - warmupElapsed)+"s)");
+                  RotateQueue();
+                  skipped++;
+                  continue;
+                 }
               }
            }
          // Note: a.kind == CP_ACT_MODIFY does NOT cross spread; it proceeds immediately to protect stops!
@@ -6246,11 +6283,11 @@ void ConvergeSender(const int si)
          //--- hasQueued strictly guards seen-key clearing, NEVER suppressing lot calculation.
          double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
 
-         // BUG-04 & SEC-01 & R1-M02 & DEF-A03: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
+         // BUG-04 & SEC-01 & R1-M02 & DEF-A03 & DEF-09-05: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
          // While close is pending or retrying with broker, local position MUST still converge protective stops (SL/TP)
          // to avoid naked risk. Do NOT call QueueTrimIfNeeded here to avoid conflicting simultaneous CLOSE + TRIM actions.
-         // Check both UID and ticket to prevent broker comment mangling from bypassing manual close.
-         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket) || g_manualClosed.HasTicket(d.ticket))
+         // Check both UID and ticket (scoped to sender ID) to prevent cross-sender ticket collision.
+         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket) || g_manualClosed.HasSenderTicket(g_sid[si],d.ticket))
            {
             if(!SymbolMarketClosed(g_locScratch[li].sym))
               {
@@ -6377,8 +6414,8 @@ void ConvergeSender(const int si)
       //--- If operator manually closed this position, NEVER reopen it while sender still holds it.
       //--- Placed here after li>=0 check so if manual close is still pending or delayed by broker,
       //--- the existing local position continues to have SL/TP/Trim managed normally.
-      // DEF-A03: Check both UID and ticket
-      if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(d.ticket)) continue;
+      // DEF-A03 & DEF-09-05: Check both UID and ticket scoped to sender ID
+      if(g_manualClosed.Has(d.uid) || g_manualClosed.HasSenderTicket(g_sid[si],d.ticket)) continue;
 
       // D2-M02: Prevent opening new positions if local account position table is full
       if(g_acctAllPosCount>=CP_MAX_POSITIONS)
@@ -8493,6 +8530,8 @@ int OnInit()
       Alert("Copier RECEIVER: Cannot run on a NETTING account. Hedging account required.");
       return INIT_FAILED;
      }
+   if(CopierAccountMode()<0)
+      g_log.Warn("Account not connected during init; hedging mode verification deferred to runtime.");
 #endif
    if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
@@ -8682,6 +8721,13 @@ int OnInit()
                      +" this receiver. See the lines above for the reason.");
          return INIT_FAILED;
         }
+      if(kr==CP_KEY_REPLACED)
+        {
+         g_log.Error("CRITICAL: Receiver CURVE key was corrupt/replaced with a fresh keypair! "
+                     +"All upstream Senders and Hubs will reject this receiver until updated. Refusing to start automatically.");
+         Alert("Copier RECEIVER: CURVE key regenerated! Senders/Hub must be updated with the new public key.");
+         return INIT_FAILED;
+        }
       mySecret=g_key.SecretKey();
       g_myPublicKey=g_key.PublicKey();
       if(StringLen(mySecret)!=CP_KEY_LEN || StringLen(g_myPublicKey)!=CP_KEY_LEN)
@@ -8827,7 +8873,10 @@ int OnInit()
             g_log.Error("Direct mode: SenderServerKey must be exactly "+IntegerToString(CP_KEY_LEN)+" characters (got "+IntegerToString(StringLen(trimmedKey))+"). Check for extra spaces or truncated paste.");
             return INIT_FAILED;
            }
-         g_serverKey[0]=trimmedKey;
+         for(int k=0;k<g_nSenders && k<CP_MAX_SENDERS;k++)
+           {
+            if(StringLen(g_serverKey[k])==0) g_serverKey[k]=trimmedKey;
+           }
         }
 
       if(!g_tp.ConnectReceiver(evEnd,g_nSenders,
