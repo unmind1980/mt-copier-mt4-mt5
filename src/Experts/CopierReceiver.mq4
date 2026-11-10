@@ -2543,7 +2543,14 @@ void RiskPeakLoad()
   {
    int h=FileOpen(RiskPeakPath(),FILE_READ|FILE_TXT|FILE_ANSI
                   |FILE_SHARE_READ|FILE_SHARE_WRITE);
-   if(h==INVALID_HANDLE) return;              // first run: no peak yet
+   if(h==INVALID_HANDLE || FileSize(h)==0)
+     {
+      if(h!=INVALID_HANDLE) FileClose(h);
+      // D-03: Fallback to .tmp successor if target file is missing or corrupted 0-byte
+      string tmpPath=RiskPeakPath()+".tmp";
+      h=FileOpen(tmpPath,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+      if(h==INVALID_HANDLE) return;
+     }
    double peak=0.0;
    long savedDay=0;
    double savedDayEquity=0.0;
@@ -2613,13 +2620,16 @@ void RiskPeakSave(const bool force)
 
    int rh=FileOpen(tmpPath,FILE_READ|FILE_TXT|FILE_ANSI);
    int wh=FileOpen(targetPath,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   bool copyOk=false;
    if(rh!=INVALID_HANDLE && wh!=INVALID_HANDLE)
      {
       while(!FileIsEnding(rh)) FileWriteString(wh,FileReadString(rh)+"\r\n");
+      copyOk=true;
      }
    if(rh!=INVALID_HANDLE) FileClose(rh);
    if(wh!=INVALID_HANDLE) FileClose(wh);
-   FileDelete(tmpPath);
+   // D-03: Only delete tmp if copy succeeded, preserving backup if write failed
+   if(copyOk) FileDelete(tmpPath);
   }
 
 //--- Terminal-wide mutual exclusion for Receiver instances on the same account.
@@ -3788,7 +3798,7 @@ void ExecuteQueue()
            }
          else
            {
-            // R6-D4-03 & R7-D3-01: Fallback calculation if OrderCalcMargin fails, converting margin currency to account currency
+            // R6-D4-03 & R7-D3-01 & D-04: Fallback calculation if OrderCalcMargin fails, converting margin currency to account currency
             double cs=SymbolInfoDouble(a.sym,SYMBOL_TRADE_CONTRACT_SIZE);
             long lev=AccountInfoInteger(ACCOUNT_LEVERAGE);
             if(cs>0.0 && lev>0)
@@ -3797,10 +3807,13 @@ void ExecuteQueue()
                if(StringLen(marginCcy)==0) marginCcy=SymbolInfoString(a.sym,SYMBOL_CURRENCY_BASE);
                string accCcy=CopierAccountCurrency();
                double crossRate=(marginCcy==accCcy)?1.0:CopierGetCurrencyCrossRate(marginCcy,accCcy);
+               ENUM_SYMBOL_CALC_MODE calcMode=(ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(a.sym,SYMBOL_TRADE_CALC_MODE);
+               bool needsPrice = (calcMode!=SYMBOL_CALC_MODE_FOREX && calcMode!=SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE);
+               double nominal = (needsPrice && checkPx>0.0) ? (a.lots*cs*checkPx) : (a.lots*cs);
                if(crossRate>0.0)
-                  reqMargin=((a.lots*cs)/(double)lev)*crossRate;
+                  reqMargin=(nominal/(double)lev)*crossRate;
                else if(checkPx>0.0)
-                  reqMargin=(a.lots*cs*checkPx)/(double)lev;
+                  reqMargin=(nominal)/(double)lev;
                else
                   reqMargin=0.0;
               }
@@ -4286,9 +4299,11 @@ void ExecuteQueue()
            }
          else
            {
-            // R2-M03: Transient broker volatility errors (requote, off quotes, context busy, price changed)
+            // R2-M03 & DEF-A01: Transient broker volatility errors (requote, off quotes, context busy, price changed)
             bool isTransientErr = (err==138 || err==136 || err==137 || err==146 || 
-                                   err==10004 || err==10015 || err==10021 || err==10012);
+                                   err==2 || err==6 || err==128 || err==135 || err==141 ||
+                                   err==10004 || err==10006 || err==10011 || err==10012 || 
+                                   err==10015 || err==10020 || err==10021 || err==10024);
             isTransientRequote = (err==138 || err==10004 || err==10015);
             bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && isTransientRequote);
             if(err==146)
@@ -4303,12 +4318,20 @@ void ExecuteQueue()
               }
             else if(isTransientErr)
               {
-               // R5-D1-01: Allow up to 3 fast 1.5s retries before escalating into backoff ladder and operator alerts
-               fails=g_backoff.NotePark(boKey,1500,3);
+               // R5-D1-01 & DEF-A01: Allow fast 1.5s retries. For CP_ACT_OPEN, cap escalation so momentary blips never lock out for 24h
+               fails=g_backoff.NotePark(boKey,1500,5);
+               if(a.kind==CP_ACT_OPEN && fails>5)
+                 {
+                  g_backoff.Park(boKey,30000); // Cap open backoff to 30s max
+                 }
               }
             else
               {
                fails=g_backoff.Note(boKey);
+               if(a.kind==CP_ACT_OPEN && fails>4)
+                 {
+                  g_backoff.Park(boKey,60000); // Cap open backoff to 60s max
+                 }
               }
            }
          // ISSUE-05 / N-04: If modify failed for an order that currently has NO stop loss (naked position),
@@ -5060,8 +5083,13 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
      {
       if(dPPrice>0.0 && MathAbs(local.pprice-dPPrice)>si2.point*0.5) pendingDiff=true;
       if(dPStop>0.0 && MathAbs(local.pstop-dPStop)>si2.point*0.5) pendingDiff=true;
-      if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
-      else if(dPExp==0 && local.pexpire!=0) pendingDiff=true;
+      // DEF-A04: If desired.pexpire > 0 but dPExp == 0, clock offset is temporarily uncalibrated.
+      // Do NOT wipe local.pexpire in this case. Only wipe if sender explicitly set pexpire == 0.
+      if(desired.pexpire>0)
+        {
+         if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
+        }
+      else if(desired.pexpire==0 && local.pexpire!=0) pendingDiff=true;
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -5834,13 +5862,9 @@ void RefreshRisk()
          if(rOk)
            {
             // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
-            // R6-D4-01: During 00:00-00:05 rollover spread blowout, ignore negative floating spike
-            MqlDateTime sdt;
-            TimeCurrent(sdt);
+            // D-02: Pre-existing floating losses MUST be preserved across rollover to prevent baseline inflation at midnight!
             double curEq=CopierAccountEquity();
             double floatingOffset=curEq-curBal;
-            if(sdt.hour==0 && sdt.min<5 && floatingOffset<0.0)
-               floatingOffset=0.0;
             g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
            }
         }
@@ -6222,10 +6246,11 @@ void ConvergeSender(const int si)
          //--- hasQueued strictly guards seen-key clearing, NEVER suppressing lot calculation.
          double targetLots=ComputeTargetLotsForMirror(si,d,g_locScratch[li].sym);
 
-         // BUG-04 & SEC-01 & R1-M02: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
+         // BUG-04 & SEC-01 & R1-M02 & DEF-A03: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
          // While close is pending or retrying with broker, local position MUST still converge protective stops (SL/TP)
          // to avoid naked risk. Do NOT call QueueTrimIfNeeded here to avoid conflicting simultaneous CLOSE + TRIM actions.
-         if(g_manualClosed.Has(d.uid))
+         // Check both UID and ticket to prevent broker comment mangling from bypassing manual close.
+         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket) || g_manualClosed.HasTicket(d.ticket))
            {
             if(!SymbolMarketClosed(g_locScratch[li].sym))
               {
@@ -6352,7 +6377,8 @@ void ConvergeSender(const int si)
       //--- If operator manually closed this position, NEVER reopen it while sender still holds it.
       //--- Placed here after li>=0 check so if manual close is still pending or delayed by broker,
       //--- the existing local position continues to have SL/TP/Trim managed normally.
-      if(g_manualClosed.Has(d.uid)) continue;
+      // DEF-A03: Check both UID and ticket
+      if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(d.ticket)) continue;
 
       // D2-M02: Prevent opening new positions if local account position table is full
       if(g_acctAllPosCount>=CP_MAX_POSITIONS)
@@ -8242,6 +8268,12 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
                        +g_sid[si]+": event seq="
                        +(string)g_lastSeq[si][CP_STREAM_EVENTS]
                        +" is already applied, so this snapshot predates it");
+      return false;
+     }
+   // P1-NET-01: An incremental event older than the latest authoritative snapshot is obsolete
+   if(stream==CP_STREAM_EVENTS && g_lastSeq[si][CP_STREAM_SNAP]>=0
+      && e.seq<g_lastSeq[si][CP_STREAM_SNAP])
+     {
       return false;
      }
    //--- per-stream watermark: a snapshot must never invalidate an event

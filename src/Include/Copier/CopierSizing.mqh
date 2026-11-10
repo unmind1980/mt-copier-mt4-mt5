@@ -157,9 +157,17 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
    if(v>si.maxLot)
      {
       //--- floor the cap to a whole number of steps too, otherwise we
-      //--- hand the broker a volume that is not on its lot grid
-      double capSteps=MathFloor(si.maxLot/si.lotStep+CP_LOT_EPS);
-      v=NormalizeDouble(capSteps*si.lotStep,digits);
+      //--- hand the broker a volume that is not on its lot grid (D-06)
+      if(si.minLot>0.0 && si.maxLot>=si.minLot)
+        {
+         double capSteps=MathFloor((si.maxLot-si.minLot)/si.lotStep+CP_LOT_EPS);
+         v=NormalizeDouble(si.minLot+capSteps*si.lotStep,digits);
+        }
+      else
+        {
+         double capSteps=MathFloor(si.maxLot/si.lotStep+CP_LOT_EPS);
+         v=NormalizeDouble(capSteps*si.lotStep,digits);
+        }
      }
    return v;
   }

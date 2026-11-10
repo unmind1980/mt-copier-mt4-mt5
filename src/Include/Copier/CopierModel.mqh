@@ -52,11 +52,15 @@ struct CopierSymInfo
 //--- quoting, which is exactly why it lives in exactly one place now.
 double CopierPipOf(const CopierSymInfo &si)
   {
-   // R6-D3-03: Commodities (Gold/Silver) & Crypto/Indices pip scaling
+   // R6-D3-03 & D-07: Commodities (Gold/Silver) & Crypto/Indices pip scaling
    if(StringFind(si.sym,"XAU")>=0 || StringFind(si.sym,"GOLD")>=0)
       return (si.digits==3) ? si.point*100.0 : (si.digits==2 ? si.point*10.0 : 0.10);
    if(StringFind(si.sym,"XAG")>=0 || StringFind(si.sym,"SILVER")>=0)
       return (si.digits==3) ? si.point*10.0 : si.point;
+   // Indices & Crypto: 1 pip = 1.0 price unit
+   if(StringFind(si.sym,"BTC")>=0 || StringFind(si.sym,"ETH")>=0 ||
+      StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || StringFind(si.sym,"DJ")>=0)
+      return (si.point>0.0 ? 1.0 : 1.0);
    if(si.digits<=1) return (si.point>0.0 ? si.point : 1.0);
    return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
   }
@@ -68,7 +72,7 @@ double CopierRoundToTick(const double price, const CopierSymInfo &si)
    return NormalizeDouble(MathRound(price / si.tickSize) * si.tickSize, si.digits);
   }
 
-// R7-D1-02: Normalize deviation points across 2/3/4/5-digit symbols
+// R7-D1-02 & D-10: Normalize deviation points across 2/3/4/5-digit symbols
 int CopierScaleDeviationPoints(const string sym,const int devPoints)
   {
    CopierSymInfo si;
@@ -76,7 +80,7 @@ int CopierScaleDeviationPoints(const string sym,const int devPoints)
    double pipSize=CopierPipOf(si);
    if(pipSize<=0.0 || si.point<=0.0) return MathMax(0,devPoints);
    int pointsPerPip=(int)MathRound(pipSize/si.point);
-   if(pointsPerPip<=1) return MathMax(0,devPoints/10);
+   if(pointsPerPip<=1) return MathMax(1,(int)MathRound((double)devPoints/10.0));
    return MathMax(0,devPoints);
   }
 
@@ -1208,7 +1212,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
       outErr=GetLastError();
       if(outErr==135 || outErr==136 || outErr==138) // ERR_PRICE_CHANGED, ERR_OFF_QUOTES, ERR_REQUOTE
         {
-         Sleep(10);
+         CopierWaitMs(10);
          RefreshRates();
          if(!CopierGetPrice(sym,side,px)) break;
          continue;
@@ -1538,14 +1542,18 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    outErr=0;
    long ticket=0;
    bool pending=false;
-   if(!CopierResolveCloseTicket(identifier,ticket,pending))
+   // DEF-A02: Search for pending order first to prevent partially filled MT5 positions hijacking the modify
+   if(!CopierResolveCloseTicket(identifier,ticket,pending,CP_ORD_PENDING))
      {
+      // INC-02: If no working pending order exists, check if it filled into a market position
+      if(CopierResolveCloseTicket(identifier,ticket,pending,CP_ORD_MARKET) && !pending)
+        {
+         return CopierModifyStops(identifier,sym,sl,tp,outErr);
+        }
       outErr=0;
       return true;
      }
 
-   // INC-02: If the pending order has already filled and turned into an open market position,
-   // fallback to modifying stops on the market position instead of failing with 10013 / Invalid Request.
    if(!pending)
      {
       return CopierModifyStops(identifier,sym,sl,tp,outErr);

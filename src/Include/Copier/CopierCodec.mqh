@@ -416,7 +416,15 @@ string CopierDecompressField(const string field)
         {
          if(pad>0 && ArraySize(comp)>=pad)
            {
-            ArrayResize(comp,ArraySize(comp)-pad);
+            // SEC-P1-01: Ensure explicit pad bytes are strictly zero
+            bool padZero=true;
+            int cSize=ArraySize(comp);
+            for(int pi=0;pi<pad;pi++)
+              {
+               if(comp[cSize-1-pi]!=0) { padZero=false; break; }
+              }
+            if(!padZero) return "";
+            ArrayResize(comp,cSize-pad);
            }
          uchar key[];
          ArrayResize(key,0);

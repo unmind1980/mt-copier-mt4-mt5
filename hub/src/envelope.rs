@@ -140,28 +140,35 @@ fn decode_pkzip(raw_bytes: &[u8]) -> Option<String> {
 pub fn decompress_field(field_bytes: &[u8]) -> String {
     if field_bytes.starts_with(b"1:") {
         let rest = &field_bytes[2..];
-        // R47-27: Resolve z85 pad prefix ambiguity.
-        // If rest is already a multiple of 5, it cannot have a 2-byte prefix.
-        let (pad, z85_slice) = {
+        // R47-27 & SEC-P1-02: Resolve z85 pad prefix ambiguity.
+        // explicit_pad: Some(0..=3) means explicit "1:<pad>:<z85>", None means legacy "1:<z85>" without pad prefix
+        let (explicit_pad, z85_slice) = {
             let s_raw = std::str::from_utf8(rest).map(|s| s.trim()).unwrap_or("");
             if s_raw.len() % 5 == 0 {
-                (0, rest)
+                (None, rest)
             } else if rest.len() >= 2 && rest[1] == b':' && rest[0] >= b'0' && rest[0] <= b'3' {
                 let s_prefixed = std::str::from_utf8(&rest[2..]).map(|s| s.trim()).unwrap_or("");
                 if s_prefixed.len() % 5 == 0 {
-                    ((rest[0] - b'0') as usize, &rest[2..])
+                    (Some((rest[0] - b'0') as usize), &rest[2..])
                 } else {
-                    (0, rest)
+                    (None, rest)
                 }
             } else {
-                (0, rest)
+                (None, rest)
             }
         };
         if let Ok(z85_str) = std::str::from_utf8(z85_slice) {
             if let Ok(mut raw_bytes) = zmq::z85_decode(z85_str.trim()) {
-                // X-01: Truncate explicit pad bytes unconditionally, matching MQL CopierCodec.mqh:414
-                if pad > 0 && pad <= 3 && raw_bytes.len() >= pad {
-                    raw_bytes.truncate(raw_bytes.len() - pad);
+                // SEC-P1-01: Truncate explicit pad bytes and verify they are all 0
+                if let Some(pad) = explicit_pad {
+                    if pad > 0 && pad <= 3 && raw_bytes.len() >= pad {
+                        let pad_start = raw_bytes.len() - pad;
+                        if raw_bytes[pad_start..].iter().all(|&b| b == 0) {
+                            raw_bytes.truncate(pad_start);
+                        } else {
+                            return String::new(); // Frame corruption: non-zero pad
+                        }
+                    }
                 }
                 // Check if this is a PKZIP container (MQL CryptEncode CRYPT_ARCH_ZIP output)
                 if let Some(s) = decode_pkzip(&raw_bytes) {
@@ -179,9 +186,9 @@ pub fn decompress_field(field_bytes: &[u8]) -> String {
                 if d.read_to_end(&mut buf).is_ok() && (buf.len() as u64) <= MAX_DECOMPRESSED_LEN {
                     return String::from_utf8(buf).unwrap_or_else(|e| latin1(e.as_bytes()));
                 }
-                // Fallback: if pad was implicitly 0 on legacy MQL frames (1:<z85>), retry trimming 1..=3 trailing bytes
-                // including PKZIP streams (X-01)
-                if pad == 0 {
+                // Fallback: ONLY if pad was implicitly None on legacy MQL frames (1:<z85>), retry trimming 1..=3 trailing bytes
+                // including PKZIP streams (X-01, SEC-P1-02)
+                if explicit_pad.is_none() {
                     for trim in 1..=3 {
                         if raw_bytes.len() > trim {
                             let trimmed = &raw_bytes[..raw_bytes.len() - trim];

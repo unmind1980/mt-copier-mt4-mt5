@@ -250,6 +250,17 @@ impl UserStore {
     /// losing the admin list to a typo is losing the only door.
 
     pub fn load_at(path: &std::path::Path) -> Result<Self, String> {
+        // DEF-05: Recover from .bak if users.json is 0-byte from an interrupted write
+        let bak = std::path::PathBuf::from(format!("{}.bak", path.display()));
+        let is_empty = std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(false);
+        if is_empty && bak.exists() {
+            if let Ok(m) = std::fs::metadata(&bak) {
+                if m.len() > 0 {
+                    eprintln!("[hub] RECOVERY: Restoring {} from backup {}", path.display(), bak.display());
+                    let _ = std::fs::copy(&bak, path);
+                }
+            }
+        }
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 if text.trim().is_empty() {

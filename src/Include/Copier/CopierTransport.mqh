@@ -676,11 +676,10 @@ public:
             if(!m_sub.recv(discard,true)) break;
             if(!discard.more()) { m_midInboundMultipart=false; drained=true; break; }
            }
-         // R2-D5-X01 & R5-D5-01: If no remaining frames were pending in the pipe, libzmq cleared the broken frame on disconnect.
-         // Clear latch so the next valid message after reconnect is not discarded!
+         // P0-NET-01: If recv returned false (EAGAIN), the trailing frames are still in-flight.
+         // Do NOT clear m_midInboundMultipart on momentary EAGAIN; wait for next tick.
          if(!drained)
            {
-            m_midInboundMultipart=false;
             return 0;
            }
         }
@@ -824,13 +823,13 @@ public:
       m_connectedHubs=0;
       m_midMultipart=false;
       m_midInboundMultipart=false;
-      if(CheckPointer(m_ctx)!=POINTER_INVALID) m_ctx.shutdown();
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
       for(int i=0;i<CP_MAX_XSUB_SUBS;i++) { m_subPrefixes[i]=""; m_subSent[i]=0; }
+      // P1-NET-04: Sockets first, context last.
       if(CheckPointer(m_pub)!=POINTER_INVALID) { m_pub.setLinger(0); delete m_pub; m_pub=NULL; }
       if(CheckPointer(m_sub)!=POINTER_INVALID) { m_sub.setLinger(0); delete m_sub; m_sub=NULL; }
-      if(CheckPointer(m_ctx)!=POINTER_INVALID) { delete m_ctx; m_ctx=NULL; }
+      if(CheckPointer(m_ctx)!=POINTER_INVALID) { m_ctx.shutdown(); delete m_ctx; m_ctx=NULL; }
      }
   };
 

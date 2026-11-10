@@ -221,6 +221,17 @@ impl ClusterManager {
         failback_hours: f64,
         failback_lock: bool,
     ) -> Result<Self, String> {
+        // DEF-05: Recover from .bak if state_path is 0-byte from an interrupted write
+        let bak = PathBuf::from(format!("{}.bak", state_path.display()));
+        let is_empty = std::fs::metadata(state_path).map(|m| m.len() == 0).unwrap_or(false);
+        if is_empty && bak.exists() {
+            if let Ok(m) = std::fs::metadata(&bak) {
+                if m.len() > 0 {
+                    eprintln!("[hub] RECOVERY: Restoring {} from backup {}", state_path.display(), bak.display());
+                    let _ = std::fs::copy(&bak, state_path);
+                }
+            }
+        }
         let mut state: ClusterStateFile = if state_path.exists() {
             let data = fs::read_to_string(state_path)
                 .map_err(|e| format!("cannot read {}: {}", state_path.display(), e))?;
@@ -328,7 +339,8 @@ impl ClusterManager {
         save_state_to_file(&self.state_path, &self.state)
     }
 
-    pub fn set_peer(&mut self, peer_url: String, peer_zmq: String) -> io::Result<()> {
+    // DEF-02: Returns save_info so caller can persist to disk OUTSIDE SharedState lock
+    pub fn set_peer(&mut self, peer_url: String, peer_zmq: String) -> (PathBuf, ClusterStateFile) {
         let is_empty = peer_url.is_empty();
         self.peer_url = peer_url.clone();
         self.peer_zmq = peer_zmq.clone();
@@ -345,7 +357,7 @@ impl ClusterManager {
         } else {
             self.sync_status = "connecting".to_string();
         }
-        self.save()
+        self.save_info()
     }
 
     pub fn is_primary(&self) -> bool {
@@ -465,7 +477,7 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
                             let _ = fs::copy(&bak, target);
                         }
                     }
-                    let _ = fs::remove_file(&bak);
+                    // DEF-05: Preserve .bak on fallback error so restart can recover
                 }
                 return Err(rename_err);
             }
@@ -576,7 +588,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             drop(s);
                             audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
                             println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
-                            let _ = save_state_to_file(&p, &st_file);
+                            if let Err(err) = save_state_to_file(&p, &st_file) {
+                                eprintln!("[hub] ORPHAN RECOVERY ERR: Failed to persist state: {}", err);
+                            }
                         }
                     }
                     continue;
@@ -607,7 +621,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             drop(s);
                             audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
                             println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
-                            let _ = save_state_to_file(&p, &st_file);
+                            if let Err(err) = save_state_to_file(&p, &st_file) {
+                                eprintln!("[hub] ORPHAN RECOVERY ERR: Failed to persist state: {}", err);
+                            }
                         }
                     }
                     continue;
@@ -1299,11 +1315,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let my_n_h = file_sha256(&n_p);
                 let my_c_h = file_sha256(&c_p);
 
-                let cmd_in_sync = if my_seq > 0 {
-                    remote_st.max_cmd_seq == my_seq
-                } else {
-                    remote_st.cmd_lines == my_cmd
-                };
+                // DEF-01: cmd_in_sync strictly requires both max_seq AND total line count
+                let cmd_in_sync = remote_st.cmd_lines == my_cmd && (my_seq == 0 || remote_st.max_cmd_seq == my_seq);
                 let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
                 let (my_cfg_h, my_cmd_h) = if lines_match {
                     (
@@ -1321,7 +1334,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     && (remote_st.curve_clients_hash.is_empty() || my_c_h.is_empty() || remote_st.curve_clients_hash == my_c_h);
 
                 let mut s = st.lock_or_recover();
-                if !cmd_in_sync || remote_st.cfg_lines != my_cfg || !hashes_ok {
+                if !cmd_in_sync || remote_st.cmd_lines != my_cmd || remote_st.cfg_lines != my_cfg || !hashes_ok {
                     s.cluster.sync_status = "lagging".to_string();
                     s.cluster.last_sync_err = format!(
                         "standby lagging behind (cmd: {}/{} seq: {}/{} cfg: {}/{} hashes_ok: {})",

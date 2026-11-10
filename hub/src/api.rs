@@ -3938,11 +3938,8 @@ async fn cluster_handover_request(
     // R2-D7-H02 & R4-D7-02: Verify Standby has fully replicated local journals before stepping down
     let (my_cfg, (my_cmd, my_seq)) = (s.cfg.total_lines(), s.cmds.sync_stats());
     if let Some(peer) = s.cluster.peer_status.as_ref() {
-        let cmd_behind = if my_seq > 0 {
-            peer.max_cmd_seq < my_seq
-        } else {
-            peer.cmd_lines < my_cmd
-        };
+        // DEF-01: Both cmd_lines and max_cmd_seq must have caught up before handover agreement
+        let cmd_behind = peer.cmd_lines < my_cmd || (my_seq > 0 && peer.max_cmd_seq < my_seq);
         if cmd_behind || peer.cfg_lines < my_cfg {
             return (
                 axum::http::StatusCode::CONFLICT,
@@ -3980,6 +3977,11 @@ async fn cluster_handover_request(
     drop(s);
     if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
         eprintln!("[hub] CLUSTER ERR: handover step-down state save failed: {}", e);
+        // DEF-06: Rollback in-memory demotion to avoid leaving cluster with zero Primaries
+        let mut s = st.lock_or_recover();
+        s.cluster.state.role = "primary".to_string();
+        s.writes = s.writes_allowed;
+        s.cluster.handover_lease_until = None;
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "agreed": false, "error": format!("failed to persist step-down state: {}", e) })),
@@ -4350,15 +4352,17 @@ async fn cluster_set_peer(
     }
 
     let mut s = st.lock_or_recover();
-    if let Err(e) = s.cluster.set_peer(new_url.clone(), new_zmq.clone()) {
+    let (state_path, state) = s.cluster.set_peer(new_url.clone(), new_zmq.clone());
+    let audit_rec = Arc::clone(&s.audit);
+    drop(s);
+
+    if let Err(e) = crate::cluster::save_state_to_file(&state_path, &state) {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Failed to save cluster state: {}", e) })),
         )
             .into_response();
     }
-    let audit_rec = Arc::clone(&s.audit);
-    drop(s);
 
     audit_rec.record(
         &sess.user_id,

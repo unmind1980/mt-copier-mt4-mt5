@@ -716,12 +716,14 @@ struct HubState {
 fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> zmq::Result<()> {
     state.seq += 1;
     let from_tag = format!("hub:{}", state.role);
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=PONG|P=MS={};FROM={};TO={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=PONG|P=MS={};FROM={};TO={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis() % 2147483647,
+        now_sec,
         ms,
         from_tag,
         nid
@@ -763,12 +765,14 @@ fn send_topology(
     state: &mut HubState,
 ) -> zmq::Result<()> {
     state.seq += 1;
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=TOPOLOGY|P=PRIMARY={};STANDBY={};EPOCH={};ACTIVE={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=TOPOLOGY|P=PRIMARY={};STANDBY={};EPOCH={};ACTIVE={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis(),
+        now_sec,
         primary_ep,
         standby_ep,
         epoch,
@@ -810,12 +814,14 @@ fn send_cfg(
     // The node key is `ROLE:ACC`; the topic is the NID alone, matching the node's @<nid> subscription
     let acc = node.split_once(':').map(|(_, a)| a).unwrap_or(node);
     let nid = copier_nid(acc);
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CFG|P=ID={};REV={};TO={};INI={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=CFG|P=ID={};REV={};TO={};INI={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis(),
+        now_sec,
         id,
         rev,
         acc,
@@ -844,12 +850,14 @@ fn send_cmd(
     if !args.is_empty() {
         p.push_str(&format!(";ARGS={}", args));
     }
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=CMD|P={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=CMD|P={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis(),
+        now_sec,
         p
     );
     sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
@@ -857,12 +865,14 @@ fn send_cmd(
 
 fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result<()> {
     state.seq += 1;
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=WHO|P=NONCE={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=WHO|P=NONCE={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis(),
+        now_sec,
         nonce
     );
     sock.send_multipart(vec![b"@all".to_vec(), env.into_bytes()], zmq::DONTWAIT)
@@ -903,12 +913,14 @@ fn send_receipt(
     state: &mut HubState,
 ) -> zmq::Result<()> {
     state.seq += 1;
+    let now_sec = unix_secs();
     let env = format!(
-        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|T=RCPT|P=LOGIN={};SID={};H={}",
+        "V=1|SID=hub|SSID={}|SEQ={}|TS={}|MS={}|GTS={}|T=RCPT|P=LOGIN={};SID={};H={}",
         HUB_SSID,
         state.seq,
-        unix_secs(),
+        now_sec,
         unix_millis() % 2147483647,
+        now_sec,
         login,
         sid,
         h
@@ -2899,7 +2911,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         // turn the repair into a drop - a correctness cost for no real
                         // security gain, because the identity problem here (A1) is that a
                         // node can name any SID at all, not which topic it picks.
-                        if !skip_frame && !env_sid.is_empty() && topic_str != env_sid {
+                        // P1-NET-03: Validate that topic is non-empty and matches SID
+                        if !skip_frame && (topic_str.is_empty() || (!env_sid.is_empty() && topic_str != env_sid)) {
                             let topic_is_nid = !topic_str.is_empty()
                                 && topic_str.len() <= 11
                                 && topic_str.bytes().all(|b| b.is_ascii_digit());
@@ -3212,11 +3225,15 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if dropped > 0 {
                         println!("[hub] command journal: {} terminal command(s) aged out", dropped);
                     }
-                    if let Ok(Some(n)) = cmds.compact_if_needed(crate::commands::COMMAND_JOURNAL_COMPACT_BYTES) {
-                        println!("[hub] command journal compacted at runtime: {} live command(s)", n);
-                    }
-                    if let Ok(Some(n)) = cfg.compact_if_needed(crate::config::CONFIG_JOURNAL_COMPACT_BYTES, 10) {
-                        println!("[hub] config journal compacted at runtime: {} retained revision(s)", n);
+                    // DEF-03: Only Primary performs on-disk journal compaction. Standby aligns via HTTP replace_all.
+                    let is_primary = shared.lock_or_recover().cluster.is_primary();
+                    if is_primary {
+                        if let Ok(Some(n)) = cmds.compact_if_needed(crate::commands::COMMAND_JOURNAL_COMPACT_BYTES) {
+                            println!("[hub] command journal compacted at runtime: {} live command(s)", n);
+                        }
+                        if let Ok(Some(n)) = cfg.compact_if_needed(crate::config::CONFIG_JOURNAL_COMPACT_BYTES, 10) {
+                            println!("[hub] config journal compacted at runtime: {} retained revision(s)", n);
+                        }
                     }
                     crate::service::win_service::maybe_rotate_service_log();
                 }
