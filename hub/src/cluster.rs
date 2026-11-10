@@ -8,7 +8,7 @@
 //! - ADR-09: Cluster token authentication over internal HTTP sync endpoints.
 //! - ADR-10: Two-Phase Handover for graceful auto-failback to Primary after continuous online stabilization.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -442,15 +442,27 @@ pub fn next_epoch(base: u64) -> u64 {
     base.checked_add(1).unwrap_or(u64::MAX)
 }
 
-/// Replace target file atomically with retry loop to handle Windows file locks.
+/// Replace target file atomically with retry loop and copy fallback to handle Windows file locks.
 pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
-    for attempt in 0..5 {
+    for attempt in 0..10 {
         match fs::rename(tmp, target) {
             Ok(()) => return Ok(()),
-            Err(_e) if attempt < 4 => std::thread::sleep(Duration::from_millis(10 * (1 << attempt))),
-            Err(e) => {
+            Err(_) if attempt < 9 => {
+                let delay = if attempt < 4 { 15 * (1 << attempt) } else { 150 };
+                std::thread::sleep(Duration::from_millis(delay));
+            }
+            Err(rename_err) => {
+                // Fallback: overwrite target directly with sync_all
+                if let Ok(mut src) = File::open(tmp) {
+                    if let Ok(mut dst) = OpenOptions::new().write(true).truncate(true).create(true).open(target) {
+                        if std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok() {
+                            let _ = fs::remove_file(tmp);
+                            return Ok(());
+                        }
+                    }
+                }
                 let _ = fs::remove_file(tmp);
-                return Err(e);
+                return Err(rename_err);
             }
         }
     }
@@ -689,18 +701,25 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false)
             };
 
-            // P1-2 & D7-H02: Dual Standby recovery - deterministic tie breaker considering data lineage
+            // P1-2, D7-H02 & R4-D7-01: Dual Standby recovery - total lexicographical ordering to prevent election deadlock
             if current_role == "standby" && remote_st.role == "standby" && !handover_in_flight {
-                let (my_cfg, my_cmd) = {
+                let (my_cfg, (my_cmd, my_seq)) = {
                     let s = st.lock_or_recover();
-                    (s.cfg.total_lines(), s.cmds.sync_stats().0)
+                    (s.cfg.total_lines(), s.cmds.sync_stats())
                 };
-                let data_ahead = my_cmd > remote_st.cmd_lines || my_cfg > remote_st.cfg_lines || epoch > remote_st.epoch;
-                let data_behind = remote_st.cmd_lines > my_cmd || remote_st.cfg_lines > my_cfg || remote_st.epoch > epoch;
-                let should_recover = if is_cfg_primary != remote_st.is_configured_primary {
-                    if data_behind { false } else { is_cfg_primary || data_ahead }
-                } else {
-                    if data_behind { false } else if data_ahead { true } else { my_hub_id < remote_st.hub_id }
+                use std::cmp::Ordering;
+                let my_data = (epoch, my_seq, my_cmd, my_cfg);
+                let remote_data = (remote_st.epoch, remote_st.max_cmd_seq, remote_st.cmd_lines, remote_st.cfg_lines);
+                let should_recover = match my_data.cmp(&remote_data) {
+                    Ordering::Greater => true,
+                    Ordering::Less => false,
+                    Ordering::Equal => {
+                        if is_cfg_primary != remote_st.is_configured_primary {
+                            is_cfg_primary
+                        } else {
+                            my_hub_id < remote_st.hub_id
+                        }
+                    }
                 };
                 if should_recover {
                     let (new_ep, current_writes, save_info, audit_rec) = {
@@ -1254,6 +1273,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let my_n_h = file_sha256(&n_p);
                 let my_c_h = file_sha256(&c_p);
 
+                let cmd_in_sync = if my_seq > 0 {
+                    remote_st.max_cmd_seq == my_seq
+                } else {
+                    remote_st.cmd_lines == my_cmd
+                };
                 let lines_match = remote_st.cmd_lines == my_cmd && remote_st.max_cmd_seq == my_seq && remote_st.cfg_lines == my_cfg;
                 let (my_cfg_h, my_cmd_h) = if lines_match {
                     (
@@ -1271,7 +1295,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     && (remote_st.curve_clients_hash.is_empty() || my_c_h.is_empty() || remote_st.curve_clients_hash == my_c_h);
 
                 let mut s = st.lock_or_recover();
-                if remote_st.cmd_lines != my_cmd || remote_st.max_cmd_seq != my_seq || remote_st.cfg_lines != my_cfg || !hashes_ok {
+                if !cmd_in_sync || remote_st.cfg_lines != my_cfg || !hashes_ok {
                     s.cluster.sync_status = "lagging".to_string();
                     s.cluster.last_sync_err = format!(
                         "standby lagging behind (cmd: {}/{} seq: {}/{} cfg: {}/{} hashes_ok: {})",

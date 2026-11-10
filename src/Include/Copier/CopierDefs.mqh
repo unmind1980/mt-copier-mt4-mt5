@@ -862,6 +862,13 @@ double CopierKvGetDouble(const string payload,const string key,const double defl
    return StringToDouble(v);
   }
 
+string CopierKvGetString(const string payload,const string key,const string deflt="")
+  {
+   string v;
+   if(!CopierKvGet(payload,key,v)) return deflt;
+   return v;
+  }
+
 //+------------------------------------------------------------------+
 // Decimal string -> 64-bit long, by hand.
 //

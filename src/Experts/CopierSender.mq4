@@ -2484,7 +2484,7 @@ void OnTimer()
       double bal=CopierAccountBalance();
       double eq=CopierAccountEquity();
       Emit(CP_T_HBT,CopierPayloadHeartbeat(bal,eq,0.0,0.0,g_prev.Count(),
-                                           CopierAccountLogin()),false);
+                                           CopierAccountLogin(),CopierAccountCurrency()),false);
      }
 
    //--- 8) persist UID map only when it actually changed (debounced to at most once per 250ms)

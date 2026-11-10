@@ -11,7 +11,7 @@ pub mod win_service {
     use std::ffi::OsString;
     use std::fs::OpenOptions;
     use std::os::windows::io::AsRawHandle;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -141,9 +141,9 @@ pub mod win_service {
             }
         }
 
-        // Rename current log to .1
-        let backup1 = format!("{}.1", path.display());
-        let _ = std::fs::rename(path, &backup1);
+        // Rename current log to .1 using atomic replace to handle Windows file contention
+        let backup1 = PathBuf::from(format!("{}.1", path.display()));
+        crate::cluster::atomic_replace_file(path, &backup1)?;
 
         Ok(true)
     }
@@ -550,7 +550,7 @@ pub mod win_service {
 
 #[cfg(not(windows))]
 pub mod win_service {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     pub fn run_as_service(_name: &str) -> Result<(), String> {
         Err("Windows Service mode is only supported on Windows.".to_string())

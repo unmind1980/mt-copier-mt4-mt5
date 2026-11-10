@@ -805,14 +805,15 @@ string CopierPayloadClose(const string uid,const long ticket,const double lots,c
 //--- supplied" so an older sender still parses.
 string CopierPayloadHeartbeat(const double bal,const double eq,const double mgn,
                               const double frm,const int npos,
-                              const long acc=0)
+                              const long acc=0,const string ccy="")
   {
    return "BAL="+CopierFmtDouble(bal,2)
          +CP_SEP_KV+"EQ="+CopierFmtDouble(eq,2)
          +CP_SEP_KV+"MGN="+CopierFmtDouble(mgn,2)
          +CP_SEP_KV+"FRM="+CopierFmtDouble(frm,2)
          +CP_SEP_KV+"NPOS="+(string)npos
-         +CP_SEP_KV+"ACC="+(string)acc;
+         +CP_SEP_KV+"ACC="+(string)acc
+         +(StringLen(ccy)>0?(CP_SEP_KV+"CCY="+ccy):"");
   }
 
 //--- PING / PONG.

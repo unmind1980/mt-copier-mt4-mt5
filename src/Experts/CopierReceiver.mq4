@@ -319,6 +319,7 @@ long    g_magic[CP_MAX_SENDERS];
 int     g_lotMode[CP_MAX_SENDERS];
 double  g_lotParam[CP_MAX_SENDERS];
 double  g_senderEquity[CP_MAX_SENDERS];
+string  g_senderCurrency[CP_MAX_SENDERS];
 //--- One sequence watermark PER STREAM, not per sender.
 //---
 //--- The sender numbers both sockets from a single counter, and the
@@ -1231,7 +1232,8 @@ void TrackSymbolSpread(const string sym,const double curSpread,const bool inWarm
       if(StringLen(g_spreadSym[s])==0)
         {
          g_spreadSym[s]=sym;
-         g_spreadMin[s]=inWarmup ? 0.0 : curSpread;
+         double defSp=CopierGetSpreadPoints(sym);
+         g_spreadMin[s]=inWarmup ? (defSp>0.0 ? defSp : 0.0) : curSpread;
          return;
         }
      }
@@ -3461,6 +3463,7 @@ void ExecuteQueue()
    ArrayInitialize(sHeldBase,0);
    ArrayInitialize(sHeldBaseLots,0.0);
    ArrayInitialize(sHeldBaseKnown,false);
+   double drainedReqMargin=0.0;
 
    //--- Assess if this is a Batch Close or Batch Modify operation (e.g. Martingale/Grid basket exit, or closeall, or >8 queued)
    int closeCount=0;
@@ -3587,6 +3590,7 @@ void ExecuteQueue()
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
            {
             double minSp = GetSymbolMinSpread(a.sym);
+            if(minSp<=0.0) minSp = CopierGetSpreadPoints(a.sym);
             bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
             if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
               {
@@ -3735,21 +3739,23 @@ void ExecuteQueue()
            }
         }
 
+      double reqMargin=0.0;
       if(a.kind==CP_ACT_OPEN)
         {
          // Pre-trade Margin Validation (D2-02)
          bool marginOk=true;
-         double reqMargin=0.0;
 #ifdef __MQL5__
          ENUM_ORDER_TYPE otype=(a.side==CP_SIDE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
-         if(OrderCalcMargin(otype,a.sym,a.lots,SymbolInfoDouble(a.sym,SYMBOL_ASK),reqMargin))
+         double checkPx=(a.side==CP_SIDE_BUY)?SymbolInfoDouble(a.sym,SYMBOL_ASK):SymbolInfoDouble(a.sym,SYMBOL_BID);
+         if(OrderCalcMargin(otype,a.sym,a.lots,checkPx,reqMargin))
            {
             double freeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-            if(freeMargin<reqMargin) marginOk=false;
+            if(freeMargin - drainedReqMargin < reqMargin) marginOk=false;
            }
 #else
          int cmd=(a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
-         if(AccountFreeMarginCheck(a.sym,cmd,a.lots)<=0.0)
+         double fmCheck=AccountFreeMarginCheck(a.sym,cmd,a.lots);
+         if(fmCheck<=0.0 || (fmCheck - drainedReqMargin <= 0.0))
             marginOk=false;
 #endif
          if(!marginOk)
@@ -3939,6 +3945,7 @@ void ExecuteQueue()
          //--- suffix the action's own key carries.
          if(a.kind==CP_ACT_OPEN)
            {
+            drainedReqMargin+=reqMargin;
             g_ourCount++;
             g_ourLots+=a.lots;
             //--- F-10: keep granular order/position counters aligned on successful OPEN
@@ -4500,8 +4507,15 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    //--- The per-position cap is maxLotsPerPosition, applied below.
    double symMult=GetSymbolMultiplier(si,sym);
    double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
+   double convSenderEq=g_senderEquity[si];
+   string recCcy=CopierAccountCurrency();
+   if(convSenderEq>0.0 && StringLen(g_senderCurrency[si])>0 && g_senderCurrency[si]!=recCcy)
+     {
+      double rate=CopierGetCurrencyCrossRate(g_senderCurrency[si],recCcy);
+      if(rate>0.0) convSenderEq*=rate;
+     }
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
-                                 0.0,0.0,rejected,g_senderEquity[si],myEq);
+                                 0.0,0.0,rejected,convSenderEq,myEq);
    if(rejected || lots<=0.0) return 0.0;
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
@@ -4542,7 +4556,7 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
      {
       targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
      }
-   if(rejected || targetLots<=0.0 || targetLots<si2.minLot-CP_LOT_EPS)
+   if(rejected || targetLots<=0.0)
      {
       rejected=true;
       return 0.0;
@@ -5656,6 +5670,10 @@ void RefreshRisk()
    long now=CopierNowMs();
    long dayStart=CopierServerDayStart();
    if(dayStart<=0) return; // Prevent state corruption on uninitialized or disconnected clock
+   static double s_lastCheckedBalance=0.0;
+   double curBalRisk=CopierAccountBalance();
+   if(s_lastCheckedBalance==0.0) s_lastCheckedBalance=curBalRisk;
+   bool balChanged=(MathAbs(curBalRisk-s_lastCheckedBalance)>0.01);
    if(dayStart!=g_riskDay)
      {
       //--- L1: a COLD start is not a day rollover.
@@ -5731,12 +5749,11 @@ void RefreshRisk()
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
      }
-   // ISSUE-04 / N-02: Never storm history on every 100ms slow tick. Throttle to 10s when baseline
-   // is pending derivation, and 60s once established. Abort immediately if disconnected.
-   // Recalibrate immediately on balance change (cash flow or deal execution) or periodic 60s
-   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || MathAbs(CopierAccountBalance()-g_riskDayStartBalance)>0.01)))
+   // R4-D4-01: Throttle history scan to 60s once established, only breaking out when balance changes.
+   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || balChanged)))
      {
       g_lastRealizedMs=now;
+      s_lastCheckedBalance=curBalRisk;
       if(!CopierIsConnected()) return;
       // N49-01 & N49-13: Recalibrate baseline dynamically on intraday cash flow
       // Guarded by rOk so history fetch failures keep existing baseline instead of wiping to 0.
@@ -7994,6 +8011,8 @@ void HandleHeartbeat(const int si,const CopierEnv &e)
    LearnSenderClock(si,e.ts);
    double eq=CopierKvGetDouble(e.payload,"EQ",0.0);
    if(eq>0.0) g_senderEquity[si]=eq;
+   string sCcy=CopierKvGetString(e.payload,"CCY","");
+   if(StringLen(sCcy)>0) g_senderCurrency[si]=sCcy;
    int npos=CopierKvGetInt(e.payload,"NPOS",-1);
 
    //--- The sender's ACCOUNT NUMBER, so the panel can name it. Falls back to
@@ -9396,8 +9415,8 @@ void OnTimer()
          int closeFailed=0, closeTotal=0;
          int cn=CloseAllOurs("",closeFailed,closeTotal);
          ExecuteQueue();
-         // BUG-03: Deactivate closeall/risk-close ONLY when all matching positions are verified closed on the account
-         if(closeTotal==0 && g_ourCount==0)
+         // BUG-03 & R4-D4-02: Deactivate closeall/risk-close when all matching actionable positions are confirmed closed
+         if(closeTotal==0 && closeFailed==0)
            {
             s_closeAllPasses=0;
             if(g_cmdCloseAllActive && StringLen(g_cmdCloseAllId)>0)

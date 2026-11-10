@@ -269,6 +269,41 @@ bool CopierIsConnected()
   }
 
 //=====================================================================
+// R4-D3-01: Cross-currency conversion rate between two account currencies.
+// Returns multiplier: valueInToCcy = valueInFromCcy * rate.
+//=====================================================================
+double CopierGetCurrencyCrossRate(const string fromCcy,const string toCcy)
+  {
+   if(fromCcy==toCcy || StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 1.0;
+
+   // Direct pair: fromCcy + toCcy (e.g. USDJPY -> 1 USD = px JPY)
+   string direct=fromCcy+toCcy;
+   if(CopierSymbolEnsure(direct))
+     {
+      double px=0.0;
+      if(CopierGetPrice(direct,CP_SIDE_SELL,px) && px>0.0) return px;
+     }
+
+   // Inverted pair: toCcy + fromCcy (e.g. EURUSD -> 1 EUR = px USD -> 1 USD = 1/px EUR)
+   string inverted=toCcy+fromCcy;
+   if(CopierSymbolEnsure(inverted))
+     {
+      double px=0.0;
+      if(CopierGetPrice(inverted,CP_SIDE_BUY,px) && px>0.0) return 1.0/px;
+     }
+
+   // Intermediate via USD
+   if(fromCcy!="USD" && toCcy!="USD")
+     {
+      double r1=CopierGetCurrencyCrossRate(fromCcy,"USD");
+      double r2=CopierGetCurrencyCrossRate("USD",toCcy);
+      if(r1>0.0 && r2>0.0) return r1*r2;
+     }
+
+   return 1.0;
+  }
+
+//=====================================================================
 // MT5: POSITION_IDENTIFIER is stable but PositionClose needs the
 // CURRENT position ticket. Resolve at execution time - never cache it.
 //=====================================================================
@@ -277,7 +312,7 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
    ticket=0;
    isPending=false;
 #ifdef __MQL5__
-   // If caller explicitly requested a pending order, search OrdersTotal() first
+   // If caller explicitly requested a pending order, search OrdersTotal() ONLY
    if(preferredKind==CP_ORD_PENDING)
      {
       int ot=OrdersTotal();
@@ -293,6 +328,32 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
          isPending=true;
          return true;
         }
+      return false; // Strict match: do NOT fall through to positions!
+     }
+
+   // If caller explicitly requested a market position, search positions ONLY
+   if(preferredKind==CP_ORD_MARKET)
+     {
+      if(identifier>0 && PositionSelectByTicket((ulong)identifier))
+        {
+         if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
+           {
+            ticket=identifier;
+            return true;
+           }
+        }
+      int total=PositionsTotal();
+      for(int i=0;i<total;i++)
+        {
+         ulong tk=PositionGetTicket(i);
+         if(tk==0) continue;
+         if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
+           {
+            ticket=(long)tk;
+            return true;
+           }
+        }
+      return false; // Strict match: do NOT fall through to working orders!
      }
 
    //--- M-03 fast path: In >95% of positions without partial fills, ticket == identifier.
@@ -343,9 +404,11 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
    if(!OrderSelect((int)(uint)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
    // R47-01: OrderSelect by ticket ignores pool in MT4; closed orders in history must return false
    if(OrderCloseTime()!=0) return false;
-   ticket=identifier;
    int t=(int)OrderType();
    isPending=(t!=OP_BUY && t!=OP_SELL);
+   if(preferredKind==CP_ORD_PENDING && !isPending) return false;
+   if(preferredKind==CP_ORD_MARKET && isPending) return false;
+   ticket=identifier;
    return true;
 #endif
   }
@@ -856,10 +919,12 @@ string CopierReadCommentByTicket(const CopierPos &p)
 
 
 //=====================================================================
-// MT4 partial close: the broker CLOSES the old order and opens the
-// remainder as a NEW ticket, with the comment set to "from #<old>".
-// Recovering that chain is the only way to keep the UID alive across
-// a partial close on MT4.
+// MT4 partial close / rollover / split ticket renumbering:
+// The broker closes the old order and opens the remainder as a new
+// ticket, annotating the comment (e.g. "from #<old>", "from#<old>",
+// "split #<old>", "roll #<old>", "from <old>").
+// Robust token & delimiter parsing ensures the UID is tracked across
+// diverse MT4 broker bridges without string allocations.
 //=====================================================================
 long CopierMt4FromTicket(const string comment)
   {
@@ -867,18 +932,47 @@ long CopierMt4FromTicket(const string comment)
    string low=comment;
    //--- StringToLower modifies the string in-place by reference in MQL4/MQL5.
    StringToLower(low);
-   int p=StringFind(low,"from #");
-   if(p<0) return 0;
-   int start=p+6;
-   string digits="";
-   for(int i=start;i<StringLen(comment);i++)
+
+   // Search for broker ticket inheritance keywords
+   int p=-1;
+   int kwLen=0;
+   int pFrom=StringFind(low,"from");
+   int pSplit=StringFind(low,"split");
+   int pRoll=StringFind(low,"roll");
+
+   if(pFrom>=0)       { p=pFrom;  kwLen=4; }
+   else if(pSplit>=0) { p=pSplit; kwLen=5; }
+   else if(pRoll>=0)
      {
-      string c=StringSubstr(comment,i,1);
-      if(c<"0" || c>"9") break;
-      digits+=c;
+      p=pRoll;
+      kwLen=(StringFind(low,"rollover")==pRoll)?8:4;
      }
-   if(StringLen(digits)==0) return 0;
-   return CopierParseLong(digits);
+   if(p<0) return 0;
+
+   int i=p+kwLen;
+   int n=StringLen(comment);
+
+   // Skip whitespace
+   while(i<n && (StringGetCharacter(comment,i)==' ' || StringGetCharacter(comment,i)=='\t')) i++;
+
+   // Skip optional '#' or ':'
+   if(i<n && (StringGetCharacter(comment,i)=='#' || StringGetCharacter(comment,i)==':'))
+     {
+      i++;
+      while(i<n && (StringGetCharacter(comment,i)==' ' || StringGetCharacter(comment,i)=='\t')) i++;
+     }
+
+   // Extract contiguous digits
+   int startDigits=i;
+   while(i<n)
+     {
+      ushort c=StringGetCharacter(comment,i);
+      if(c<'0' || c>'9') break;
+      i++;
+     }
+   if(i<=startDigits) return 0;
+
+   return CopierParseLongRange(comment,startDigits,i);
   }
 
 //=====================================================================
@@ -1610,6 +1704,14 @@ bool CopierIsTicketClosedInHistory(const long ticket)
       //--- sender still holds. Below one 8-decimal step, sum noise cannot reach it.
       if(inVol>0.0 && outVol>=inVol-0.000000001)
          return true;
+     }
+   if(!HistoryOrderSelect((ulong)ticket))
+     {
+      // HistorySelectByPosition only caches orders with POSITION_IDENTIFIER == ticket.
+      // Cancelled/expired pending orders have ORDER_POSITION_ID == 0; populate history cache to query them.
+      datetime hFrom=(datetime)(CopierServerTime()-86400*3);
+      datetime hTo=(datetime)(CopierServerTime()+86400);
+      HistorySelect(hFrom,hTo);
      }
    if(HistoryOrderSelect((ulong)ticket))
      {

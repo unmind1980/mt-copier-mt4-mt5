@@ -593,13 +593,17 @@ impl CommandStore {
         }
 
         let mut inner = self.inner.lock_or_recover();
-        // Prune memory first before writing out surviving snapshot
-        inner.prune_terminal(unix_secs(), COMMAND_KEEP_SECS);
+        // R4-D8-02: Stage surviving commands on temporary map; only prune memory if compaction succeeds
+        let surviving_cmds = {
+            let mut clone = inner.commands.clone();
+            clone.retain(|_, c| c.state == STATE_PENDING || unix_secs().saturating_sub(c.ts) <= COMMAND_KEEP_SECS);
+            clone
+        };
 
         // Drop file handle so Windows allows replacing the open file
         inner.file = None;
 
-        let res = compact_journal(&self.path, &inner.commands);
+        let res = compact_journal(&self.path, &surviving_cmds);
 
         // Ensure file handle is always reopened
         let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
@@ -612,6 +616,8 @@ impl CommandStore {
                 "failed to reopen command journal file after runtime compact",
             ));
         }
+        inner.in_flight.retain(|id| surviving_cmds.contains_key(id));
+        inner.commands = surviving_cmds;
         inner.line_count = n;
         inner.dirty_seq += 1;
         Ok(Some(n))

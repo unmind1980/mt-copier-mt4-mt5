@@ -3923,17 +3923,22 @@ async fn cluster_handover_request(
         }
     }
 
-    // R2-D7-H02: Verify Standby has fully replicated local journals before stepping down
+    // R2-D7-H02 & R4-D7-02: Verify Standby has fully replicated local journals before stepping down
     let (my_cfg, (my_cmd, my_seq)) = (s.cfg.total_lines(), s.cmds.sync_stats());
     if let Some(peer) = s.cluster.peer_status.as_ref() {
-        if peer.cmd_lines < my_cmd || peer.max_cmd_seq < my_seq || peer.cfg_lines < my_cfg {
+        let cmd_behind = if my_seq > 0 {
+            peer.max_cmd_seq < my_seq
+        } else {
+            peer.cmd_lines < my_cmd
+        };
+        if cmd_behind || peer.cfg_lines < my_cfg {
             return (
                 axum::http::StatusCode::CONFLICT,
                 Json(json!({
                     "ok": false,
                     "agreed": false,
                     "new_epoch": s.cluster.epoch(),
-                    "error": format!("Handover rejected: Standby is lagging behind (cmd: {}/{}, cfg: {}/{})", peer.cmd_lines, my_cmd, peer.cfg_lines, my_cfg)
+                    "error": format!("Handover rejected: Standby is lagging behind (cmd seq: {}/{}, lines: {}/{}, cfg: {}/{})", peer.max_cmd_seq, my_seq, peer.cmd_lines, my_cmd, peer.cfg_lines, my_cfg)
                 })),
             )
                 .into_response();

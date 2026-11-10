@@ -200,7 +200,7 @@ impl ArchiveShift {
             }
 
             let target = self.archive_path(1);
-            let _ = fs::rename(&gz_tmp, &target);
+            crate::cluster::atomic_replace_file(&gz_tmp, &target)?;
         } else {
             let _ = fs::remove_file(&gz_tmp);
         }
@@ -889,6 +889,18 @@ fn last_seq_from_file(f: &mut File, len: u64) -> Option<u64> {
         end = start;
     }
     None
+}
+
+impl Drop for Audit {
+    fn drop(&mut self) {
+        self.wait_for_rotation();
+        if let Ok(mut inner) = self.inner.lock() {
+            if let Some(mut f) = inner.file.take() {
+                let _ = f.flush();
+                let _ = f.sync_all();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
