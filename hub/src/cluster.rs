@@ -528,6 +528,22 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.continuous_online_start = None;
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, r.status());
+
+                    // R2-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    let role = s.cluster.state.role.clone();
+                    let is_cfg_primary = s.cluster.state.is_configured_primary;
+                    if role == "standby" && is_cfg_primary {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                        if outage >= 30 {
+                            let ep = s.cluster.promote(None);
+                            s.writes = s.writes_allowed;
+                            let audit_rec = Arc::clone(&s.audit);
+                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, s.writes), None, None, "ok");
+                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, s.writes);
+                            let (p, st_file) = s.cluster.save_info();
+                            let _ = save_state_to_file(&p, &st_file);
+                        }
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -536,6 +552,22 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.continuous_online_start = None;
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
+
+                    // R2-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    let role = s.cluster.state.role.clone();
+                    let is_cfg_primary = s.cluster.state.is_configured_primary;
+                    if role == "standby" && is_cfg_primary {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                        if outage >= 30 {
+                            let ep = s.cluster.promote(None);
+                            s.writes = s.writes_allowed;
+                            let audit_rec = Arc::clone(&s.audit);
+                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, s.writes), None, None, "ok");
+                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, s.writes);
+                            let (p, st_file) = s.cluster.save_info();
+                            let _ = save_state_to_file(&p, &st_file);
+                        }
+                    }
                     continue;
                 }
             };

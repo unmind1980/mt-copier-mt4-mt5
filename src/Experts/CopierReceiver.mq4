@@ -4111,13 +4111,25 @@ void ExecuteQueue()
            }
          else
            {
-            // Transient requotes (138, 10004, 10015) in batch closes are retried immediately in Sweeper Pass 2
+            // R2-M03: Transient broker volatility errors (requote, off quotes, context busy, price changed)
+            bool isTransientErr = (err==138 || err==136 || err==137 || err==146 || 
+                                   err==10004 || err==10015 || err==10021 || err==10012);
             isTransientRequote = (err==138 || err==10004 || err==10015);
             bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && isTransientRequote);
-            if(!queuedForSweep)
-               fails=g_backoff.Note(boKey);
-            else
+            if(queuedForSweep)
+              {
                fails=1;
+              }
+            else if(isTransientErr)
+              {
+               // Park for a brief 1.5s cooldown instead of climbing the multi-minute exponential ladder
+               fails=1;
+               g_backoff.Park(boKey,1500);
+              }
+            else
+              {
+               fails=g_backoff.Note(boKey);
+              }
            }
          // ISSUE-05 / N-04: If modify failed for an order that currently has NO stop loss (naked position),
          // park for only 2 seconds so safety SL protection can be retried without long delay.

@@ -259,6 +259,18 @@ impl CommandStore {
             }
         }
 
+        // Ensure file ends with newline so subsequent appends do not fuse with torn line tails
+        if path.exists() {
+            if let Ok(data) = std::fs::read(path) {
+                if !data.is_empty() && data.last() != Some(&b'\n') {
+                    if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
+                        use std::io::Write;
+                        let _ = f.write_all(b"\n");
+                    }
+                }
+            }
+        }
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)

@@ -679,11 +679,11 @@ int BuildCurrent()
       string cleanSym=CopierSanitizeSymbol(p.sym);
       if(StringLen(cleanSym)==0) continue;
 
-      //--- 1) identity carried over from the previous tick (ticket match)
+      //--- 1) identity carried over from the previous tick (ticket & kind match)
       string uid="";
       int slot=-1;
       CopierPos q;
-      int idx=g_prev.FindByTicket(p.ticket);
+      int idx=g_prev.FindByTicket(p.ticket,p.kind);
       if(idx>=0 && g_prev.At(idx,q))
         {
          uid=q.uid;
@@ -701,7 +701,7 @@ int BuildCurrent()
          long from=CopierMt4FromTicket(cmt);
          if(from>0)
            {
-            int j=g_prev.FindByTicket(from);
+            int j=g_prev.FindByTicket(from,p.kind);
             if(j>=0 && g_prev.At(j,q))
               {
                uid=q.uid;
@@ -716,7 +716,7 @@ int BuildCurrent()
                   if(curFrom<=0 || curFrom>2147483647 || !OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
                   long prevFrom=CopierMt4FromTicket(OrderComment());
                   if(prevFrom<=0) break;
-                  j=g_prev.FindByTicket(prevFrom);
+                  j=g_prev.FindByTicket(prevFrom,p.kind);
                   if(j>=0 && g_prev.At(j,q))
                     {
                      uid=q.uid;
@@ -729,21 +729,21 @@ int BuildCurrent()
                   g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket+"; minting fresh UID");
               }
            }
-         //--- N67-01 fix: Check UID uniqueness ONLY when inherited from MT4 "from #" chain
-         //--- Eliminates O(N^2) loop on the 99.9% hot path where uid is matched 1:1 by ticket.
-         if(StringLen(uid)>0)
+#endif
+        }
+
+      //--- R2-M01: Ensure UID uniqueness across both market and pending orders in all environments
+      if(StringLen(uid)>0)
+        {
+         for(int k=0;k<n;k++)
            {
-            for(int k=0;k<n;k++)
+            if(g_curScratch[k].uid==uid)
               {
-               if(g_curScratch[k].uid==uid)
-                 {
-                  uid="";
-                  slot=-1;
-                  break;
-                 }
+               uid="";
+               slot=-1;
+               break;
               }
            }
-#endif
         }
 
       //--- 3) genuinely new

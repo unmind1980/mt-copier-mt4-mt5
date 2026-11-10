@@ -216,7 +216,7 @@ public:
       return m_p[i].uid;
      }
 
-   int               FindByTicket(const long ticket) const
+   int               FindByTicket(const long ticket,const int kind=-1) const
      {
       if(ticket==0) return -1;
       //--- indexed when one has been built this tick, linear otherwise
@@ -228,14 +228,14 @@ public:
            {
             int k=(int)((s+p)&m_tkMask);
             if(m_tkSlot[k]==0) return -1;
-            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==ticket)
+            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==ticket && (kind<0 || m_p[m_tkSlot[k]-1].kind==kind))
                return m_tkSlot[k]-1;
            }
          return -1;
         }
       for(int i=0;i<CP_MAX_POSITIONS;i++)
         {
-         if(SlotValid(i) && m_p[i].ticket==ticket) return i;
+         if(SlotValid(i) && m_p[i].ticket==ticket && (kind<0 || m_p[i].kind==kind)) return i;
         }
       return -1;
      }

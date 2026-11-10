@@ -1607,12 +1607,19 @@ pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
                     LETS_ENCRYPT_PRODUCTION_DIR.to_string()
                 };
                 let client = AcmeClient::new(dir_url);
+                let mut renew_err = false;
                 if let Err(e) = client.enroll_certificate(&tls_mgr, &domain, email.as_deref()).await {
                     eprintln!("[hub] TLS ERR: Automatic renewal failed for {}: {}", domain, e);
                     let mut c = tls_mgr.config.lock_or_recover();
                     c.status.in_progress = false;
                     c.status.last_error = Some(e);
                     let _ = save_config(&tls_mgr.config_path, &c);
+                    renew_err = true;
+                }
+                if renew_err {
+                    // Retry in 15 minutes instead of 12 hours on renewal failure
+                    tokio::time::sleep(Duration::from_secs(900)).await;
+                    continue;
                 }
             }
             //--- the steady-state cadence; the first pass above ran after 60s

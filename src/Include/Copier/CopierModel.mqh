@@ -563,7 +563,11 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       ulong tk=PositionGetTicket(i);
       if(tk==0) continue;
       if(!PositionSelectByTicket(tk)) continue;
-      if(n>=maxOut) break;
+      if(n>=maxOut)
+        {
+         Print("[copier] CRITICAL: Terminal positions exceed max capacity (",maxOut,"); table saturated, truncation occurred!");
+         break;
+        }
 
       CopierPos p;
       p.uid="";
@@ -606,7 +610,11 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
       int pt=CopierPendFromPlatformType((long)OrderGetInteger(ORDER_TYPE));
       if(pt==0) continue;
-      if(n>=maxOut) break;
+      if(n>=maxOut)
+        {
+         Print("[copier] CRITICAL: Terminal positions exceed max capacity (",maxOut,"); table saturated, truncation occurred!");
+         break;
+        }
 
       CopierPos p;
       p.uid="";
@@ -650,7 +658,11 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
       if(OrderCloseTime()!=0) continue;              // already in history
       int type=(int)OrderType();
-      if(n>=maxOut) break;
+      if(n>=maxOut)
+        {
+         Print("[copier] CRITICAL: Terminal positions exceed max capacity (",maxOut,"); table saturated, truncation occurred!");
+         break;
+        }
 
       CopierPos p;
       p.uid="";
