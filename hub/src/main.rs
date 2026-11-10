@@ -3085,7 +3085,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                 {
                     let s = shared.lock_or_recover();
                     if let Some(tx) = &s.notif_tx {
-                        let _ = tx.send(a.clone());
+                        let _ = tx.try_send(a.clone());
                     }
                 }
                 //--- Wake the dashboards: an alert is exactly the state
@@ -3487,6 +3487,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             }
         }
     }
+
+    // R10-C04: Wait for any background audit log rotation thread to cleanly finish
+    audit.wait_for_rotation();
 
     //--- LINGER is 0, so this returns immediately instead of waiting for
     //--- undelivered messages that a hub has no reason to hold on to.

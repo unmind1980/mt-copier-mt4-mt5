@@ -774,6 +774,14 @@ int CopierParseEndpoints(const string inputStr,string &outEndpoints[],const int 
    int count=0;
    string s=CopierTrim(inputStr);
    if(StringLen(s)==0 || maxEndpoints<=0) return 0;
+   int cap=ArraySize(outEndpoints);
+   if(ArrayIsDynamic(outEndpoints) && cap<maxEndpoints)
+     {
+      ArrayResize(outEndpoints,maxEndpoints);
+      cap=maxEndpoints;
+     }
+   int limit=(maxEndpoints<cap)?maxEndpoints:cap;
+   if(limit<=0) return 0;
 
    int semiPos=StringFind(s,";");
    if(semiPos<0)
@@ -794,7 +802,7 @@ int CopierParseEndpoints(const string inputStr,string &outEndpoints[],const int 
         {
          if(outEndpoints[k]==norm) { dup=true; break; }
         }
-      if(!dup && count<maxEndpoints)
+      if(!dup && count<limit)
         {
          outEndpoints[count++]=norm;
         }
@@ -814,7 +822,7 @@ string CopierSanitize(string s,const int maxLen)
    for(int i=0;i<n;i++)
      {
       ushort c=StringGetCharacter(s,i);
-      if(c=='|' || c==';' || c=='~' || c==',' || c=='=') { need=true; break; }
+      if(c=='|' || c==';' || c=='~' || c==',' || c=='=' || c<' ') { need=true; break; }
      }
    if(!need && n<=maxLen) return s;
    if(need)
@@ -824,6 +832,13 @@ string CopierSanitize(string s,const int maxLen)
       s=CopierReplaceAll(s,CP_SEP_REC,"_");
       s=CopierReplaceAll(s,CP_SEP_ITEM,"_");
       s=CopierReplaceAll(s,"=","_");
+      s=CopierReplaceAll(s,"\r","_");
+      s=CopierReplaceAll(s,"\n","_");
+      int curLen=StringLen(s);
+      for(int j=0;j<curLen;j++)
+        {
+         if(StringGetCharacter(s,j)<' ') StringSetCharacter(s,j,'_');
+        }
      }
    if(StringLen(s)>maxLen) s=StringSubstr(s,0,maxLen);
    return s;
@@ -1005,7 +1020,9 @@ long CopierParseLong(const string s)
    bool neg=false;
    int n=StringLen(s);
    int i=0;
-   if(n>0 && StringGetCharacter(s,0)=='-') { neg=true; i=1; }
+   while(i<n && (StringGetCharacter(s,i)==' ' || StringGetCharacter(s,i)=='\t')) i++;
+   if(i<n && StringGetCharacter(s,i)=='-') { neg=true; i++; }
+   else if(i<n && StringGetCharacter(s,i)=='+') { i++; }
    for(;i<n;i++)
      {
       int c=StringGetCharacter(s,i);
@@ -1026,12 +1043,16 @@ long CopierParseLong(const string s)
 //=====================================================================
 long CopierParseLongRange(const string s,const int start,const int end)
   {
-   if(start<0 || end<=start) return 0;
+   int sLen=StringLen(s);
+   if(start<0 || end<=start || start>=sLen) return 0;
+   int limit=(end>sLen)?sLen:end;
    long v=0;
    bool neg=false;
    int i=start;
-   if(i<end && StringGetCharacter(s,i)=='-') { neg=true; i++; }
-   for(;i<end;i++)
+   while(i<limit && (StringGetCharacter(s,i)==' ' || StringGetCharacter(s,i)=='\t')) i++;
+   if(i<limit && StringGetCharacter(s,i)=='-') { neg=true; i++; }
+   else if(i<limit && StringGetCharacter(s,i)=='+') { i++; }
+   for(;i<limit;i++)
      {
       int c=StringGetCharacter(s,i);
       if(c<'0' || c>'9') break;
@@ -1072,6 +1093,7 @@ int CopierKvGetInt(const string payload,const string key,const int deflt)
 //=====================================================================
 string CopierFmtDouble(const double v,const int digits)
   {
+   if(!MathIsValidNumber(v)) return "0";
    if(MathAbs(v)<0.000000001) return "0";
    string s=DoubleToString(v,digits);
    int dot=StringFind(s,".");

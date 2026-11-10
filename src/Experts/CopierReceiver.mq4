@@ -1265,6 +1265,7 @@ bool CopierTradeAllowed()
    if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)) return false;
 #ifdef __MQL5__
    if(!MQLInfoInteger(MQL_TRADE_ALLOWED) || !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return false;
+   if(!CopierIsHedgingAccount()) return false;
 #else
    if(!IsTradeAllowed()) return false;
 #endif
@@ -3255,6 +3256,27 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
          return false;
         }
      }
+   // R10-A04: In-place coalescing for CP_ACT_MODIFY:
+   // If a MODIFY action for this sender and UID is already queued, coalesce it in place
+   // with the latest requested sl/tp/pprice/pstop/pexpire rather than creating queue duplicate storms.
+   if(kind==CP_ACT_MODIFY)
+     {
+      for(int qi=0; qi<g_qn; qi++)
+        {
+         int qidx=g_qHead+qi;
+         if(g_q[qidx].senderIdx==si && g_q[qidx].kind==CP_ACT_MODIFY && g_q[qidx].uid==uid)
+           {
+            g_q[qidx].sl      = sl;
+            g_q[qidx].tp      = tp;
+            g_q[qidx].pprice  = pprice;
+            g_q[qidx].pstop   = pstop;
+            g_q[qidx].pexpire = pexpire;
+            g_q[qidx].key     = key;
+            g_qRetryAtMs      = 0;
+            return true;
+           }
+        }
+     }
    if(ActionQueued(si,kind,uid,keyExtra))
      {
       // BUG-01: If an exit action (CLOSE/TRIM/DEDUP) is already in the queue, do not leave it
@@ -4659,10 +4681,13 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
                                  0.0,0.0,rejected,convSenderEq,myEq);
    if(rejected || lots<=0.0) return 0.0;
-   if(si2.maxLot>0.0 && lots>si2.maxLot)
+   double rawEstimate = (g_lotMode[si]==CP_SIZE_FIXED) ? (g_lotParam[si]*symMult) :
+                        (g_lotMode[si]==CP_SIZE_EQUITY_RATIO && convSenderEq>0.0) ? (senderLots*(myEq/convSenderEq)*g_lotParam[si]*symMult) :
+                        (senderLots*g_lotParam[si]*symMult);
+   if(si2.maxLot>0.0 && rawEstimate>si2.maxLot)
      {
       if(g_once.ShouldEmit("maxlotclamp|"+g_sid[si]+"|"+sym))
-         g_log.Warn("sender "+g_sid[si]+" symbol "+sym+" computed lots "+DoubleToString(lots,2)+" exceeds broker maxLot "+DoubleToString(si2.maxLot,2)+"; clamped to maxLot");
+         g_log.Warn("sender "+g_sid[si]+" symbol "+sym+" computed lots "+DoubleToString(rawEstimate,2)+" exceeds broker maxLot "+DoubleToString(si2.maxLot,2)+"; clamped to maxLot");
      }
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
@@ -5208,6 +5233,20 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double actPPrice = (local.kind==CP_ORD_PENDING && dPPrice>0.0) ? dPPrice : local.pprice;
    double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
    long   actPExp   = (local.kind==CP_ORD_PENDING) ? dPExp : local.pexpire;
+
+   // DEF-10-03: If existing stops are within broker freezeLevel, modifications will be rejected (10016 / 145 / 130)
+   if(si2.freezeLevel>0.0)
+     {
+      double curClosePx=0.0;
+      if(CopierGetClosePrice(local.sym,local.side,curClosePx) && curClosePx>0.0)
+        {
+         if((local.sl>0.0 && MathAbs(curClosePx-local.sl)<=si2.freezeLevel) ||
+            (local.tp>0.0 && MathAbs(curClosePx-local.tp)<=si2.freezeLevel))
+           {
+            return;
+           }
+        }
+     }
 
    bool pushed=PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
                           0.0,local.ticket,0,
@@ -5907,11 +5946,11 @@ void RefreshRisk()
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
      }
-   // R4-D4-01: Throttle history scan to 60s once established, only breaking out when balance changes.
-   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || balChanged)))
+   // R4-D4-01 & R10-D02: Throttle history scan to 60s once established, only breaking out when balance changes.
+   // Evaluated unconditionally (not else-if) so weekend/day-change cash flows adjust HWM before ObserveAt!
+   if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || balChanged)))
      {
       g_lastRealizedMs=now;
-      s_lastCheckedBalance=curBalRisk;
       if(!CopierIsConnected()) return;
       // N49-01 & N49-13: Recalibrate baseline dynamically on intraday cash flow
       // Guarded by rOk so history fetch failures keep existing baseline instead of wiping to 0.
@@ -5924,6 +5963,7 @@ void RefreshRisk()
 #endif
       if(rOk)
         {
+         s_lastCheckedBalance=curBalRisk; // R10-D02: Commit balance cache ONLY when history fetch succeeded
          double curBal=CopierAccountBalance();
          //--- N56-01: g_riskDayStartBalance MUST hold the day-start balance,
          //--- i.e. the live balance with today's realized P/L stripped out.
@@ -8298,7 +8338,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    //--- BEFORE an event we have already acted on is discarded, and that
    //--- snapshot is stale by definition.
    if(stream==CP_STREAM_SNAP && g_lastSeq[si][CP_STREAM_EVENTS]>=0
-      && e.seq<g_lastSeq[si][CP_STREAM_EVENTS])
+      && (long)(e.seq - g_lastSeq[si][CP_STREAM_EVENTS])<0)
      {
       if(g_once.ShouldEmit("stalesnap|"+g_sid[si]))
          g_log.Verbose("discarded snapshot seq="+(string)e.seq+" from sender "
@@ -8309,13 +8349,13 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
      }
    // P1-NET-01: An incremental event older than the latest authoritative snapshot is obsolete
    if(stream==CP_STREAM_EVENTS && g_lastSeq[si][CP_STREAM_SNAP]>=0
-      && e.seq<g_lastSeq[si][CP_STREAM_SNAP])
+      && (long)(e.seq - g_lastSeq[si][CP_STREAM_SNAP])<0)
      {
       return false;
      }
    //--- per-stream watermark: a snapshot must never invalidate an event
    //--- that was emitted before it on the other socket
-   if(e.seq<=g_lastSeq[si][stream]) return false;
+   if((long)(e.seq - g_lastSeq[si][stream])<=0) return false;
    g_lastSeq[si][stream]=e.seq;
    return true;
   }

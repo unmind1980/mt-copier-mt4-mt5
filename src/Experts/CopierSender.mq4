@@ -2378,6 +2378,25 @@ void OnTimer()
         }
       CopierPos q;
       if(!g_prev.At(k,q)) continue;
+      // R10-A02: If a pending order vanished because it fully filled into an active market position
+      // with the same ticket, do not emit a false CLOSE! The position continues alive as CP_ORD_MARKET.
+      if(q.kind==CP_ORD_PENDING)
+        {
+         bool filledToMarket=false;
+         for(int ci=0; ci<n; ci++)
+           {
+            if(g_curScratch[ci].ticket==q.ticket && g_curScratch[ci].kind==CP_ORD_MARKET)
+              { filledToMarket=true; break; }
+           }
+         if(filledToMarket)
+           {
+            g_slotMissCount[k]=0;
+            g_slotMissMs[k]=0;
+            g_prev.RemoveAt(k);
+            g_openLots[k]=0.0;
+            continue;
+           }
+        }
       // BUG-08: If we already exhausted our 8 probes for this tick and this slot has never been probed
       // (g_slotMissCount[k] == 0), don't increment its miss count now! Leave it at 0 so it gets probed
       // with g_slotMissCount <= 1 on the very next 5ms tick!

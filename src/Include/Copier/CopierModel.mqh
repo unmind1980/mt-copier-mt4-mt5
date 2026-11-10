@@ -34,9 +34,24 @@ struct CopierSymInfo
    double            maxLot;
    double            lotStep;
    double            stopLevel;   // in price units, not points
+   double            freezeLevel; // in price units, not points
    double            tickSize;
    double            contractSize;
    string            sym;
+
+   void CopierSymInfo()
+     {
+      point=0.0;
+      digits=0;
+      minLot=0.0;
+      maxLot=0.0;
+      lotStep=0.0;
+      stopLevel=0.0;
+      freezeLevel=0.0;
+      tickSize=0.0;
+      contractSize=0.0;
+      sym="";
+     }
   };
 
 //--- The pip size, in price units.
@@ -135,6 +150,9 @@ bool CopierGetSymbolInfo(const string sym,CopierSymInfo &si)
    long lvl=0;
    SymbolInfoInteger(sym,SYMBOL_TRADE_STOPS_LEVEL,lvl);
    si.stopLevel=(double)lvl*si.point;
+   long fLvl=0;
+   SymbolInfoInteger(sym,SYMBOL_TRADE_FREEZE_LEVEL,fLvl);
+   si.freezeLevel=(double)fLvl*si.point;
    SymbolInfoDouble(sym,SYMBOL_TRADE_TICK_SIZE,si.tickSize);
    SymbolInfoDouble(sym,SYMBOL_TRADE_CONTRACT_SIZE,si.contractSize);
 #else
@@ -144,6 +162,7 @@ bool CopierGetSymbolInfo(const string sym,CopierSymInfo &si)
    si.maxLot=MarketInfo(sym,MODE_MAXLOT);
    si.lotStep=MarketInfo(sym,MODE_LOTSTEP);
    si.stopLevel=MarketInfo(sym,MODE_STOPLEVEL)*si.point;
+   si.freezeLevel=MarketInfo(sym,MODE_FREEZELEVEL)*si.point;
    si.tickSize=MarketInfo(sym,MODE_TICKSIZE);
    si.contractSize=MarketInfo(sym,MODE_LOTSIZE);
 #endif
@@ -153,6 +172,8 @@ bool CopierGetSymbolInfo(const string sym,CopierSymInfo &si)
    if(si.minLot<=0.0)     si.minLot=0.01;
    if(si.maxLot<=0.0)     si.maxLot=100.0;
    if(si.lotStep<=0.0)    si.lotStep=0.01;
+   if(si.stopLevel<0.0)   si.stopLevel=0.0;
+   if(si.freezeLevel<0.0) si.freezeLevel=0.0;
    if(si.tickSize<=0.0)   si.tickSize=si.point;
    if(si.contractSize<=0.0) si.contractSize=100000.0;
 
@@ -1794,6 +1815,7 @@ int CopierAccountMode()
 #endif
   }
 
+bool CopierIsHedgingAccount() { return CopierAccountMode()==1; }
 bool CopierIsNettingAccount() { return CopierAccountMode()==2; }
 
 //=====================================================================

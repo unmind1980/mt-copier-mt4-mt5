@@ -156,7 +156,7 @@ pub struct Shared {
     pub auth_enabled: bool,
     /// External notification channels (Telegram, WeCom, DingTalk, Webhook).
     pub notif_store: Arc<Mutex<NotificationStore>>,
-    pub notif_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::alerts::Alert>>,
+    pub notif_tx: Option<tokio::sync::mpsc::Sender<crate::alerts::Alert>>,
     pub cluster: crate::cluster::ClusterManager,
     pub writes_allowed: bool,
     pub tls: Arc<crate::tls::TlsManager>,
@@ -1994,7 +1994,7 @@ pub fn spawn(
                     }
                 });
 
-                let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel::<crate::alerts::Alert>();
+                let (alert_tx, mut alert_rx) = tokio::sync::mpsc::channel::<crate::alerts::Alert>(1024);
                 let http_client = reqwest::Client::builder()
                     .redirect(reqwest::redirect::Policy::none())
                     .timeout(std::time::Duration::from_secs(crate::notifications::HTTP_TIMEOUT_SECS))

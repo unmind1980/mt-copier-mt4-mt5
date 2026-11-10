@@ -263,7 +263,7 @@ public:
      {
       if(i<0 || i>=CP_MAX_POSITIONS || !SlotValid(i)) return false;
       stopsDiff=(MathAbs(m_p[i].sl-cur.sl)>0.0000001 || MathAbs(m_p[i].tp-cur.tp)>0.0000001);
-      lotsDiff =(MathAbs(m_p[i].lots-cur.lots)>0.0000001);
+      lotsDiff =(MathAbs(m_p[i].lots-cur.lots)>CP_LOT_EPS);
       kindDiff =(m_p[i].kind!=cur.kind || m_p[i].ticket!=cur.ticket);
       ppriceDiff=(cur.kind==CP_ORD_PENDING && MathAbs(m_p[i].pprice-cur.pprice)>0.0000001);
       pstopDiff =(cur.kind==CP_ORD_PENDING && MathAbs(m_p[i].pstop-cur.pstop)>0.0000001);
@@ -544,7 +544,8 @@ public:
       int touchedCount=0;
 
       int mask=CP_UIDIDX_SLOTS-1;
-      for(int k=0;k<desiredCount;k++)
+      int dCount=(desiredCount>ArraySize(desired))?ArraySize(desired):desiredCount;
+      for(int k=0;k<dCount;k++)
         {
          if(StringLen(desired[k].uid)!=CP_UID_LEN) continue;
          uint hf=2166136261;
@@ -696,9 +697,13 @@ public:
    //--- themselves, so they must NOT advance j after calling this.
    void              DropAt(const int j)
      {
+      if(j<0 || j>=m_occN || m_occN<=0) return;
       int i=m_occ[j];
-      m_k[i]="";
-      m_t[i]=0;
+      if(i>=0 && i<CP_SEEN_RING)
+        {
+         m_k[i]="";
+         m_t[i]=0;
+        }
       m_occN--;
       if(j<m_occN) m_occ[j]=m_occ[m_occN];
       m_used=m_occN;
@@ -891,7 +896,11 @@ public:
    void              Build(const CopierPos &arr[],const int base,const int count)
      {
       Clear();
-      for(int i=0;i<count;i++)
+      int arrSize=ArraySize(arr);
+      if(base<0 || base>=arrSize || count<=0) return;
+      int limit=count;
+      if(base+limit>arrSize) limit=arrSize-base;
+      for(int i=0;i<limit;i++)
         {
          string uid=arr[base+i].uid;
          if(StringLen(uid)!=CP_UID_LEN) continue;
@@ -937,7 +946,9 @@ public:
    void              BuildFromStrings(const string &arr[],const int count)
      {
       Clear();
-      for(int i=0;i<count;i++)
+      int arrSize=ArraySize(arr);
+      int limit=(count>arrSize)?arrSize:count;
+      for(int i=0;i<limit;i++)
         {
          string uid=arr[i];
          if(StringLen(uid)!=CP_UID_LEN) continue;
@@ -967,7 +978,7 @@ public:
    //--- must already hold the uid.
    bool              InsertString(const string &arr[],const int idx)
      {
-      if(idx<0) return false;
+      if(idx<0 || idx>=ArraySize(arr)) return false;
       string uid=arr[idx];
       if(StringLen(uid)!=CP_UID_LEN) return false;
       uint hf=HashOf(uid);
@@ -1143,6 +1154,7 @@ private:
    //--- Fills the hole at bucket `i` by shifting entries along the cyclic probe chain.
    void              EraseHashSlot(int i)
      {
+      if(i<0 || i>=CP_BACKOFF_SLOTS) return;
       int mask=CP_BACKOFF_SLOTS-1;
       int j=i;
       while(true)
@@ -1419,7 +1431,10 @@ public:
       if(FileWrite(h,CP_STATE_TAG_HDR+header)<=0) writeOk=false;
       int written=0;
       int n=count;
+      int posCount=ArraySize(pos);
+      if(n>posCount) n=posCount;
       if(n>CP_STATE_MAX_LINES) n=CP_STATE_MAX_LINES;
+      if(n<0) n=0;
       int openLotsCount=ArraySize(openLots);
       for(int i=0;i<n && writeOk;i++)
         {
@@ -1521,8 +1536,11 @@ public:
 
       int expected=-1;
       int got=0;
+      int linesRead=0;
+      int maxLines=CP_STATE_MAX_LINES*3+10;
       while(!FileIsEnding(h) && (got<CP_STATE_MAX_LINES || expected<0))
         {
+         if(++linesRead>maxLines) break;
          string line=FileReadString(h);
          if(StringLen(line)==0) continue;
          if(StringFind(line,CP_STATE_TAG_HDR)==0)
@@ -1533,6 +1551,7 @@ public:
          if(StringFind(line,CP_STATE_TAG_END)==0)
            {
             expected=(int)StringToInteger(StringSubstr(line,StringLen(CP_STATE_TAG_END)));
+            if(expected<0 || expected>CP_STATE_MAX_LINES) break;
             continue;
            }
          if(StringFind(line,CP_STATE_TAG_POS)==0)
@@ -1721,7 +1740,8 @@ public:
       if(StringLen(uid)==0 && ticket<=0) return;
       for(int i=0;i<m_n;i++)
         {
-         if((StringLen(uid)>0 && m_uid[i]==uid) || (ticket>0 && m_ticket[i]==ticket))
+         bool sidCompatible=(StringLen(m_sid[i])==0 || StringLen(sid)==0 || m_sid[i]==sid);
+         if((StringLen(uid)>0 && m_uid[i]==uid) || (ticket>0 && m_ticket[i]==ticket && sidCompatible))
            {
             //--- L2/C: back-fill whichever half of the identity was missing.
             //--- The same position is first recorded by ticket (a broker-mangled

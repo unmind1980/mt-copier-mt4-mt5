@@ -1149,6 +1149,7 @@ void TestMirrorStop()
 void TestFitStop()
   {
    CopierSymInfo si;
+   ZeroMemory(si);
    si.point=0.00001; si.digits=5; si.stopLevel=0.00010;   // 10 points
    bool cl=false;
 
@@ -3356,6 +3357,143 @@ void TestRound9Enhancements()
    Ok("manual_closed: wildcard empty sid matches", mc.HasSenderTicket("", 1001));
   }
 
+void TestAuditRound10()
+  {
+   // 1) CopierInvertPendingType: all branches coverage
+   OkInt("r10_invert: BuyLimit -> SellLimit", CopierInvertPendingType(CP_PEND_BUYLIMIT), CP_PEND_SELLLIMIT);
+   OkInt("r10_invert: SellLimit -> BuyLimit", CopierInvertPendingType(CP_PEND_SELLLIMIT), CP_PEND_BUYLIMIT);
+   OkInt("r10_invert: BuyStop -> SellStop", CopierInvertPendingType(CP_PEND_BUYSTOP), CP_PEND_SELLSTOP);
+   OkInt("r10_invert: SellStop -> BuyStop", CopierInvertPendingType(CP_PEND_SELLSTOP), CP_PEND_BUYSTOP);
+   OkInt("r10_invert: BuyStopLimit -> SellStopLimit", CopierInvertPendingType(CP_PEND_BUYSTOPLIMIT), CP_PEND_SELLSTOPLIMIT);
+   OkInt("r10_invert: SellStopLimit -> BuyStopLimit", CopierInvertPendingType(CP_PEND_SELLSTOPLIMIT), CP_PEND_BUYSTOPLIMIT);
+   OkInt("r10_invert: Market/0 unchanged", CopierInvertPendingType(0), 0);
+   OkInt("r10_invert: Negative -1 unchanged", CopierInvertPendingType(-1), -1);
+   OkInt("r10_invert: Out of range 99 unchanged", CopierInvertPendingType(99), 99);
+
+   // 2) CopierPendingTypeKnown, CopierPendingSide, CopierPendingNeedsStop
+   Ok("r10_pend: buylimit known", CopierPendingTypeKnown(CP_PEND_BUYLIMIT));
+   Ok("r10_pend: sellstoplimit known", CopierPendingTypeKnown(CP_PEND_SELLSTOPLIMIT));
+   Ok("r10_pend: market 0 unknown", !CopierPendingTypeKnown(0));
+   Ok("r10_pend: 7 unknown", !CopierPendingTypeKnown(7));
+   Ok("r10_pend: -1 unknown", !CopierPendingTypeKnown(-1));
+   OkInt("r10_pend: buylimit is buy", CopierPendingSide(CP_PEND_BUYLIMIT), CP_SIDE_BUY);
+   OkInt("r10_pend: buystop is buy", CopierPendingSide(CP_PEND_BUYSTOP), CP_SIDE_BUY);
+   OkInt("r10_pend: buystoplimit is buy", CopierPendingSide(CP_PEND_BUYSTOPLIMIT), CP_SIDE_BUY);
+   OkInt("r10_pend: selllimit is sell", CopierPendingSide(CP_PEND_SELLLIMIT), CP_SIDE_SELL);
+   OkInt("r10_pend: sellstop is sell", CopierPendingSide(CP_PEND_SELLSTOP), CP_SIDE_SELL);
+   OkInt("r10_pend: sellstoplimit is sell", CopierPendingSide(CP_PEND_SELLSTOPLIMIT), CP_SIDE_SELL);
+   Ok("r10_pend: buystoplimit needs stop", CopierPendingNeedsStop(CP_PEND_BUYSTOPLIMIT));
+   Ok("r10_pend: sellstoplimit needs stop", CopierPendingNeedsStop(CP_PEND_SELLSTOPLIMIT));
+   Ok("r10_pend: buylimit does not need stop", !CopierPendingNeedsStop(CP_PEND_BUYLIMIT));
+   Ok("r10_pend: buystop does not need stop", !CopierPendingNeedsStop(CP_PEND_BUYSTOP));
+
+   // 3) CopierHashHex and CopierHex8: special inputs (0, negative, all-F, high-bits)
+   OkStr("r10_hashhex: 0", CopierHashHex(0), "00000000");
+   OkStr("r10_hashhex: 0xFFFFFFFF", CopierHashHex(0xFFFFFFFF), "ffffffff");
+   OkStr("r10_hashhex: -1", CopierHashHex(-1), "ffffffff");
+   OkStr("r10_hashhex: -2", CopierHashHex(-2), "fffffffe");
+   OkStr("r10_hashhex: 1", CopierHashHex(1), "00000001");
+   OkStr("r10_hashhex: masks high 32-bits", CopierHashHex(0x100000000), "00000000");
+   OkStr("r10_hashhex: low 32-bits preserved", CopierHashHex(0x123456789), "23456789");
+
+   OkStr("r10_hex8: 0", CopierHex8(0), "00000000");
+   OkStr("r10_hex8: 0xFFFFFFFF", CopierHex8(0xFFFFFFFF), "ffffffff");
+   OkStr("r10_hex8: 0x80000000", CopierHex8(0x80000000), "80000000");
+   OkStr("r10_hex8: 0x0F0F0F0F", CopierHex8(0x0F0F0F0F), "0f0f0f0f");
+
+   // 4) CopierHash32 empty string and determinism
+   long hEmpty = CopierHash32("");
+   Ok("r10_hash32: empty is FNV basis", hEmpty == 2166136261);
+   OkStr("r10_hash32: empty formatted", CopierHashHex(hEmpty), "811c9dc5");
+
+   // 5) CopierFmtDouble float extreme values
+   OkStr("r10_fmtdbl: zero", CopierFmtDouble(0.0, 8), "0");
+   OkStr("r10_fmtdbl: neg zero", CopierFmtDouble(-0.0, 8), "0");
+   OkStr("r10_fmtdbl: sub threshold positive", CopierFmtDouble(1e-10, 8), "0");
+   OkStr("r10_fmtdbl: sub threshold negative", CopierFmtDouble(-1e-10, 8), "0");
+   OkStr("r10_fmtdbl: min encodable 1e-8", CopierFmtDouble(0.00000001, 8), "0.00000001");
+   OkStr("r10_fmtdbl: neg min encodable -1e-8", CopierFmtDouble(-0.00000001, 8), "-0.00000001");
+   OkStr("r10_fmtdbl: integer strip dot", CopierFmtDouble(100.0, 2), "100");
+   OkStr("r10_fmtdbl: trailing zero strip", CopierFmtDouble(1.23000000, 8), "1.23");
+   OkStr("r10_fmtdbl: negative normal", CopierFmtDouble(-50.5000, 4), "-50.5");
+   double dblNan = MathSqrt(-1.0);
+   OkStr("r10_fmtdbl: NaN safely formats to 0", CopierFmtDouble(dblNan, 8), "0");
+
+   // CopierLotEncodable
+   Ok("r10_lotenc: 0 is false", !CopierLotEncodable(0.0));
+   Ok("r10_lotenc: negative is false", !CopierLotEncodable(-1.0));
+   Ok("r10_lotenc: 1e-10 is false", !CopierLotEncodable(1e-10));
+   Ok("r10_lotenc: 1e-8 is true", CopierLotEncodable(1e-8));
+   Ok("r10_lotenc: 0.01 is true", CopierLotEncodable(0.01));
+   Ok("r10_lotenc: NaN is false", !CopierLotEncodable(dblNan));
+
+   // 6) HasSenderTicket under multi-sender collisions
+   CopierManualClosedRing mcColl;
+   mcColl.Add("UID_A", 5000, "senderA");
+   mcColl.Add("UID_B", 5000, "senderB"); // same ticket 5000 from different sender!
+   OkInt("r10_mc_coll: both senders preserved (count=2)", mcColl.Count(), 2);
+   Ok("r10_mc_coll: Has UID_A", mcColl.Has("UID_A"));
+   Ok("r10_mc_coll: Has UID_B", mcColl.Has("UID_B"));
+   Ok("r10_mc_coll: HasSenderTicket senderA 5000", mcColl.HasSenderTicket("senderA", 5000));
+   Ok("r10_mc_coll: HasSenderTicket senderB 5000", mcColl.HasSenderTicket("senderB", 5000));
+   Ok("r10_mc_coll: HasSenderTicket senderC 5000 false", !mcColl.HasSenderTicket("senderC", 5000));
+   // Test back-fill when initial sid is empty
+   mcColl.Add("UID_C", 6000, "");
+   mcColl.Add("UID_C", 6000, "senderC"); // back-fill sid
+   OkInt("r10_mc_coll: back-fill does not duplicate (count=3)", mcColl.Count(), 3);
+   Ok("r10_mc_coll: HasSenderTicket senderC 6000", mcColl.HasSenderTicket("senderC", 6000));
+
+   // 7) CopierSeenRing DropAt boundary and underflow safety
+   CopierSeenRing rDrop;
+   rDrop.DropAt(-1);
+   rDrop.DropAt(0);
+   rDrop.DropAt(9999);
+   OkInt("r10_seen_drop: invalid DropAt does not corrupt used", rDrop.UsedCount(), 0);
+   rDrop.Add("test_key_1");
+   OkInt("r10_seen_drop: Add works normally after drop attempts", rDrop.UsedCount(), 1);
+   Ok("r10_seen_drop: Has key_1", rDrop.Has("test_key_1"));
+   rDrop.DropAt(0);
+   OkInt("r10_seen_drop: DropAt valid slot frees it", rDrop.UsedCount(), 0);
+
+   // 8) CopierStateFile::Save bounds check (count > ArraySize(pos))
+   CopierPos posSmall[2];
+   posSmall[0] = MakePos("AAAA1111", 101, "EURUSD", CP_SIDE_BUY, 0.10, 1.0850, 1.0800, 1.0900, 100, 1700000000);
+   posSmall[1] = MakePos("BBBB2222", 102, "GBPUSD", CP_SIDE_SELL, 0.20, 1.2500, 1.2550, 1.2450, 100, 1700000000);
+   bool saveOk = CopierStateFile::Save("test_state_r10.st", "TEST_HDR", posSmall, 10);
+   Ok("r10_state: Save with count > ArraySize does not crash", saveOk);
+   string loadHdr="";
+   CopierPos loadPos[];
+   int loadCount=0;
+   bool loadOk = CopierStateFile::Load("test_state_r10.st", loadHdr, loadPos, loadCount);
+   Ok("r10_state: Load clamped saved state", loadOk && loadCount == 2);
+   FileDelete("test_state_r10.st");
+   FileDelete("test_state_r10.st.tmp");
+
+   // 9) CopierParseEndpoints dynamic array and edge cases
+   string epsDyn[];
+   int nDyn = CopierParseEndpoints("tcp://127.0.0.1:5555;tcp://127.0.0.1:5556", epsDyn, 2);
+   OkInt("r10_parse_ep: dynamic array resized and parsed 2 eps", nDyn, 2);
+   OkStr("r10_parse_ep: ep 0", epsDyn[0], "tcp://127.0.0.1:5555");
+   OkStr("r10_parse_ep: ep 1", epsDyn[1], "tcp://127.0.0.1:5556");
+
+   // 10) CopierSanitize with control chars
+   string dirtySym = "EUR\r\nUSD\x01\x1F|;";
+   string cleanSym = CopierSanitize(dirtySym, 24);
+   OkStr("r10_sanitize: control chars & separators replaced with _", cleanSym, "EUR__USD____");
+
+   // 11) CopierParseLong & CopierParseLongRange with whitespace and +/-
+   Ok("r10_parselong: leading space and positive sign", CopierParseLong("  +12345") == 12345);
+   Ok("r10_parselong: leading space and negative sign", CopierParseLong(" \t -67890") == -67890);
+   string rangeStr = "abc -123 def";
+   Ok("r10_parselongrange: extracts signed integer with space", CopierParseLongRange(rangeStr, 3, 9) == -123);
+   Ok("r10_parselongrange: out of bounds start returns 0", CopierParseLongRange(rangeStr, 50, 60) == 0);
+
+   // 12) CopierPayloadModifyParse with NaN / invalid float values rejected
+   string payloadNan = "UID=ABCDEFGH;OPN=1.1000;SL=nan;TP=1.2000";
+   CopierPos pMod;
+   Ok("r10_modparse: rejects NaN in SL", !CopierPayloadModifyParse(payloadNan, pMod));
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3420,6 +3558,7 @@ void OnStart()
    TestR47R48Regressions();
    TestAuditRound110();
    TestRound9Enhancements();
+   TestAuditRound10();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

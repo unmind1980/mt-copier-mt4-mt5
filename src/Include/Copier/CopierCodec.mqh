@@ -800,13 +800,15 @@ bool CopierPayloadModifyParse(const string payload,CopierPos &p)
    p.sl    =StringToDouble(slStr);
    p.tp    =StringToDouble(tpStr);
    p.initLots=0.0;   // N-03: not part of a MODIFY; the caller keeps its own
-   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
+   if(!MathIsValidNumber(p.openPx) || p.openPx<0.0 || !MathIsValidNumber(p.sl) || p.sl<0.0 || !MathIsValidNumber(p.tp) || p.tp<0.0) return false;
    string ppStr="";
    if(CopierKvGet(payload,"PPRICE",ppStr)) p.pprice=StringToDouble(ppStr);
    else                                    p.pprice=0.0;
+   if(!MathIsValidNumber(p.pprice) || p.pprice<0.0) return false;
    string pstopStr="";
    if(CopierKvGet(payload,"PSTOP",pstopStr)) p.pstop=StringToDouble(pstopStr);
    else                                      p.pstop=0.0;
+   if(!MathIsValidNumber(p.pstop) || p.pstop<0.0) return false;
    string expStr="";
    if(CopierKvGet(payload,"PEXP",expStr))    p.pexpire=CopierParseLong(expStr);
    else                                      p.pexpire=0;

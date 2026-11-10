@@ -60,9 +60,9 @@ FRESH=1
 #--- Raise it DELIBERATELY when you add assertions; never lower it to make a
 #--- build pass. (MT4 reports a few less: the platforms differ by ifdef'd
 #--- assertions, which is why this is a constant here rather than derived.)
-#--- 715 = 708 (2026-11-06 baseline) + 7 added by round 110: three UTF-8 byte
-#--- counts, the everOpened TTL floor, and the three peak-lots cases (N-03).
-BASELINE=715
+#--- 840 = 764 + 76 added by round 10 deep audit (Agent E): pending types,
+#--- hex formatting, float extremes/NaN, sender collision, seen ring, state file.
+BASELINE=840
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
