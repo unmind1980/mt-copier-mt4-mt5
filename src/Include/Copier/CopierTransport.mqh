@@ -134,6 +134,7 @@ private:
    //--- frame instead of N good ones. Tracked so the next SendUp can try to close
    //--- it before writing anything new.
    bool              m_midMultipart;
+   bool              m_midInboundMultipart;
 
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
@@ -210,7 +211,8 @@ private:
 
 public:
                      CopierTransport():m_ctx(NULL),m_pub(NULL),m_sub(NULL),
-                     m_errno(0),m_nSubPrefixes(0),m_connectedHubs(0),m_midMultipart(false) {}
+                     m_errno(0),m_nSubPrefixes(0),m_connectedHubs(0),m_midMultipart(false),
+                     m_midInboundMultipart(false) {}
 
                     ~CopierTransport() { Close(); }
 
@@ -334,11 +336,6 @@ public:
               }
            }
         }
-      //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
-      //--- send the subscription itself: one byte, 0x01 for "everything",
-      //--- 0x00 to unsubscribe. setsockopt(ZMQ_SUBSCRIBE) is documented for
-      //--- SUB only, so it is not used here.
-      m_sub.send("\x01",true);
       for(int i=0;i<nEndpoints;i++)
         {
          if(StringLen(endpoints[i])==0) continue;
@@ -365,6 +362,12 @@ public:
            }
          m_sub.connect(endpoints[i]);
         }
+      //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
+      //--- send the subscription itself: one byte, 0x01 for "everything",
+      //--- 0x00 to unsubscribe. setsockopt(ZMQ_SUBSCRIBE) is documented for
+      //--- SUB only, so it is not used here.
+      //--- Connect endpoints first so the subscription is routed across the active pipe.
+      m_sub.send("\x01",true);
       return true;
      }
 
@@ -645,6 +648,23 @@ public:
          return 0;
         }
 
+      // D5-X02: If previous tick aborted mid-multipart, drain remaining frames first
+      if(m_midInboundMultipart)
+        {
+         while(true)
+           {
+            ZmqMsg discard;
+            if(!m_sub.recv(discard,true)) break;
+            if(!discard.more()) { m_midInboundMultipart=false; break; }
+           }
+         if(m_midInboundMultipart)
+           {
+            if(ArrayIsDynamic(topics))   ArrayResize(topics,0);
+            if(ArrayIsDynamic(payloads)) ArrayResize(payloads,0);
+            return 0;
+           }
+        }
+
       int got=0;
       for(int i=0;i<limit;i++)
         {
@@ -680,6 +700,7 @@ public:
                   if(!gotExtra) break;
                   hasMoreFrames=extra.more();
                  }
+               m_midInboundMultipart=hasMoreFrames;
                break;
               }
             topic=first;
@@ -693,6 +714,7 @@ public:
                if(!m_sub.recv(extra,true)) break;
                hasMore=extra.more();
               }
+            m_midInboundMultipart=hasMore;
            }
          if(got>=ArraySize(topics) || got>=ArraySize(payloads)) break;
          topics[got]=topic;
@@ -773,6 +795,7 @@ public:
      {
       m_connectedHubs=0;
       m_midMultipart=false;
+      m_midInboundMultipart=false;
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
       for(int i=0;i<CP_MAX_XSUB_SUBS;i++) { m_subPrefixes[i]=""; m_subSent[i]=0; }

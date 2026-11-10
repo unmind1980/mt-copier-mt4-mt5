@@ -875,11 +875,11 @@ void TestDedup()
   {
    //--- a: readable comment, LARGER than the sender holds
    CopierPos a;
-   a.uid="AAAA1111"; a.sym="EURUSD"; a.lots=0.20; a.openTime=100; a.ticket=11;
+   a.kind=CP_ORD_MARKET; a.uid="AAAA1111"; a.sym="EURUSD"; a.lots=0.20; a.openTime=100; a.ticket=11;
    a.cmt=CopierCommentForUid(a.uid,11);
    //--- b: no comment, exactly the sender's size
    CopierPos b;
-   b.uid="AAAA1111"; b.sym="EURUSD"; b.lots=0.10; b.openTime=200; b.ticket=22;
+   b.kind=CP_ORD_MARKET; b.uid="AAAA1111"; b.sym="EURUSD"; b.lots=0.10; b.openTime=200; b.ticket=22;
    b.cmt="";
 
    //--- 1. agreement with the sender outranks a readable comment, so a
@@ -893,20 +893,28 @@ void TestDedup()
 
    //--- 3. both unreadable -> keep the original, remove the copy we added
    CopierPos c;
-   c.uid="BBBB2222"; c.sym="EURUSD"; c.lots=0.10; c.openTime=500; c.ticket=33; c.cmt="";
+   c.kind=CP_ORD_MARKET; c.uid="BBBB2222"; c.sym="EURUSD"; c.lots=0.10; c.openTime=500; c.ticket=33; c.cmt="";
    CopierPos d;
-   d.uid="BBBB2222"; d.sym="EURUSD"; d.lots=0.10; d.openTime=900; d.ticket=44; d.cmt="";
+   d.kind=CP_ORD_MARKET; d.uid="BBBB2222"; d.sym="EURUSD"; d.lots=0.10; d.openTime=900; d.ticket=44; d.cmt="";
    Ok("dedup: older position survives",CopierPreferSurvivor(c,d,-1.0));
    Ok("dedup: newer position is removed",!CopierPreferSurvivor(d,c,-1.0));
 
    //--- 4. same age -> decide on the identifier, so the outcome never
    //---    depends on the order the terminal enumerates positions in
    CopierPos e;
-   e.uid="CCCC3333"; e.sym="EURUSD"; e.lots=0.10; e.openTime=700; e.ticket=55; e.cmt="";
+   e.kind=CP_ORD_MARKET; e.uid="CCCC3333"; e.sym="EURUSD"; e.lots=0.10; e.openTime=700; e.ticket=55; e.cmt="";
    CopierPos f;
-   f.uid="CCCC3333"; f.sym="EURUSD"; f.lots=0.10; f.openTime=700; f.ticket=66; f.cmt="";
+   f.kind=CP_ORD_MARKET; f.uid="CCCC3333"; f.sym="EURUSD"; f.lots=0.10; f.openTime=700; f.ticket=66; f.cmt="";
    Ok("dedup: lower ticket survives",CopierPreferSurvivor(e,f,-1.0));
    Ok("dedup: higher ticket is removed",!CopierPreferSurvivor(f,e,-1.0));
+
+   //--- 4b. D2-M01: market position beats resting pending order on partial fill / duplicate
+   CopierPos mp;
+   mp.kind=CP_ORD_MARKET; mp.uid="DDDD4444"; mp.sym="EURUSD"; mp.lots=0.10; mp.openTime=800; mp.ticket=77; mp.cmt="";
+   CopierPos po;
+   po.kind=CP_ORD_PENDING; po.uid="DDDD4444"; po.sym="EURUSD"; po.lots=0.10; po.openTime=800; po.ticket=78; po.cmt="";
+   Ok("dedup: market position beats pending order",CopierPreferSurvivor(mp,po,-1.0));
+   Ok("dedup: pending order loses to market position",!CopierPreferSurvivor(po,mp,-1.0));
 
    //--- 5. ANTI-SYMMETRY. The caller picks a survivor by folding this
    //---    predicate over the group, so if P(x,y) and P(y,x) could both be

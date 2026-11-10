@@ -684,10 +684,22 @@ int BuildCurrent()
       int slot=-1;
       CopierPos q;
       int idx=g_prev.FindByTicket(p.ticket,p.kind);
+      if(idx<0 && p.kind==CP_ORD_MARKET)
+        {
+         // D1-M01: Pending order triggered into market position with same ticket
+         idx=g_prev.FindByTicket(p.ticket,CP_ORD_PENDING);
+        }
       if(idx>=0 && g_prev.At(idx,q))
         {
-         uid=q.uid;
-         slot=idx;
+         if(q.sym==p.sym)
+           {
+            uid=q.uid;
+            slot=idx;
+           }
+         else
+           {
+            idx=-1;
+           }
         }
 
       //--- 2) MT4 partial close: broker re-opens the remainder under a

@@ -1277,6 +1277,8 @@ long CopierSenderTicketFromComment(const string comment)
 //=====================================================================
 bool CopierPreferSurvivor(const CopierPos &a,const CopierPos &b,const double want)
   {
+   if(a.kind!=b.kind && (a.kind==CP_ORD_MARKET || a.kind==CP_ORD_PENDING) && (b.kind==CP_ORD_MARKET || b.kind==CP_ORD_PENDING))
+      return (a.kind==CP_ORD_MARKET);
    if(want>0.0)
      {
       bool am=(MathAbs(a.lots-want)<0.0000001);

@@ -508,6 +508,16 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
       if(sent && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED))
          return true;
 
+      // 10022 (TRADE_RETCODE_INVALID_EXPIRATION): retry as GTC if broker rejects specified expiration
+      if(res.retcode==10022 && req.type_time!=ORDER_TIME_GTC)
+        {
+         req.type_time=ORDER_TIME_GTC;
+         req.expiration=0;
+         sent=OrderSend(req,res);
+         if(sent && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED))
+            return true;
+        }
+
       // 10030 (TRADE_RETCODE_INVALID_FILL): try next candidate
       if(res.retcode==10030 && attempt+1<nCand)
          continue;

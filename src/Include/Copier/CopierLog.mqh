@@ -104,11 +104,12 @@ private:
    //--- the log - not tail, not the log checker, not an editor. That
    //--- defeats the entire point of logging during a live test, and it is
    //--- exactly when you most want to look.
-   bool              TryOpen()
+   bool              TryOpen(const bool fresh=true)
      {
-      m_handle=FileOpen(PathOf(m_gen),
-                        FILE_WRITE|FILE_TXT|FILE_ANSI
-                        |FILE_SHARE_READ|FILE_SHARE_WRITE);
+      int flags=FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE;
+      if(fresh) flags|=(int)FILE_WRITE;
+      else      flags|=(int)(FILE_READ|FILE_WRITE);
+      m_handle=FileOpen(PathOf(m_gen),flags);
       return m_handle!=INVALID_HANDLE;
      }
 
@@ -119,7 +120,7 @@ private:
      {
       if(m_handle!=INVALID_HANDLE) { FileClose(m_handle); m_handle=INVALID_HANDLE; }
       if(fresh) FileDelete(PathOf(m_gen));
-      TryOpen();
+      TryOpen(fresh);
 
       if(m_handle==INVALID_HANDLE)
         {
@@ -133,7 +134,7 @@ private:
            {
             m_gen=(start+t)%CP_LOG_GENERATIONS;
             FileDelete(PathOf(m_gen));
-            if(TryOpen())
+            if(TryOpen(true))
               {
                WriteGen(m_gen);      // keep the sidecar honest
                break;

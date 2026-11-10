@@ -21,9 +21,8 @@
 // the array rather than at the missing constant.
 //=====================================================================
 #define CP_UIDIDX_SLOTS 4096      // power of two; 2048 entries fit at 50% load
-//--- Ticket index. Half the size is enough: tickets are 64-bit integers, so
-//--- collisions are rarer, and the sender's table is already keyed on uid.
-#define CP_TICKIDX_SLOTS 2048     // power of two
+//--- Ticket index. 4096 slots allows 2048 entries at 50% load without probe degradation.
+#define CP_TICKIDX_SLOTS 4096     // power of two
 
 //=====================================================================
 // Fixed-size table of currently open positions.
@@ -153,8 +152,8 @@ public:
                placed=true;
                break;
               }
-            //--- same ticket twice: keep the FIRST, like the linear scan
-            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==m_p[i].ticket)
+            //--- same ticket and kind twice: keep the FIRST, like the linear scan
+            if(m_tkHash[k]==h && m_p[m_tkSlot[k]-1].ticket==m_p[i].ticket && m_p[m_tkSlot[k]-1].kind==m_p[i].kind)
               { placed=true; break; }
            }
          if(!placed) return;                  // table full - cannot happen

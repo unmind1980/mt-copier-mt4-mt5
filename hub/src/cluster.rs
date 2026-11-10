@@ -437,21 +437,19 @@ pub fn next_epoch(base: u64) -> u64 {
     base.checked_add(1).unwrap_or(u64::MAX)
 }
 
-/// Replace target file atomically, with Windows file-lock fallback (copy + delete tmp).
+/// Replace target file atomically with retry loop to handle Windows file locks.
 pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
-    match fs::rename(tmp, target) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Attempt fallback copy on Windows in case target file is locked against rename
-            if fs::copy(tmp, target).is_ok() {
+    for attempt in 0..5 {
+        match fs::rename(tmp, target) {
+            Ok(()) => return Ok(()),
+            Err(_e) if attempt < 4 => std::thread::sleep(Duration::from_millis(10 * (1 << attempt))),
+            Err(e) => {
                 let _ = fs::remove_file(tmp);
-                Ok(())
-            } else {
-                let _ = fs::remove_file(tmp);
-                Err(e)
+                return Err(e);
             }
         }
     }
+    Ok(())
 }
 
 /// N72-03: Save cluster state to path atomically without holding SharedState mutex.
@@ -471,7 +469,7 @@ pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::
 pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
@@ -529,18 +527,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, r.status());
 
-                    // R2-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                    if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                         if outage >= 30 {
                             let ep = s.cluster.promote(None);
                             s.writes = s.writes_allowed;
+                            let writes = s.writes;
                             let audit_rec = Arc::clone(&s.audit);
-                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, s.writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, s.writes);
                             let (p, st_file) = s.cluster.save_info();
+                            drop(s);
+                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
+                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
                             let _ = save_state_to_file(&p, &st_file);
                         }
                     }
@@ -553,18 +553,20 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
 
-                    // R2-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                    if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                         if outage >= 30 {
                             let ep = s.cluster.promote(None);
                             s.writes = s.writes_allowed;
+                            let writes = s.writes;
                             let audit_rec = Arc::clone(&s.audit);
-                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, s.writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, s.writes);
                             let (p, st_file) = s.cluster.save_info();
+                            drop(s);
+                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
+                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
                             let _ = save_state_to_file(&p, &st_file);
                         }
                     }
@@ -666,17 +668,24 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.state.role.clone()
             };
 
-            // P1-2: Dual Standby recovery - deterministic tie breaker (configured primary or lower hub_id)
+            // P1-2 & D7-H02: Dual Standby recovery - deterministic tie breaker considering data lineage
             if current_role == "standby" && remote_st.role == "standby" {
+                let (my_cfg, my_cmd) = {
+                    let s = st.lock_or_recover();
+                    (s.cfg.total_lines(), s.cmds.sync_stats().0)
+                };
+                let data_ahead = my_cmd > remote_st.cmd_lines || my_cfg > remote_st.cfg_lines || epoch > remote_st.epoch;
+                let data_behind = remote_st.cmd_lines > my_cmd || remote_st.cfg_lines > my_cfg || remote_st.epoch > epoch;
                 let should_recover = if is_cfg_primary != remote_st.is_configured_primary {
-                    is_cfg_primary
+                    if data_behind { false } else { is_cfg_primary || data_ahead }
                 } else {
-                    my_hub_id < remote_st.hub_id
+                    if data_behind { false } else if data_ahead { true } else { my_hub_id < remote_st.hub_id }
                 };
                 if should_recover {
                     let (new_ep, current_writes, save_info) = {
                         let mut s = st.lock_or_recover();
-                        let ep = s.cluster.promote(None);
+                        let target = Some(next_epoch(remote_st.epoch.max(s.cluster.epoch())));
+                        let ep = s.cluster.promote(target);
                         s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
                         let writes = s.writes;
                         let audit_rec = Arc::clone(&s.audit);
@@ -1038,7 +1047,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     //--- Primary's epoch, so a later promote or takeover
                                     //--- would carry stale state into the highest epoch -
                                     //--- exactly the rollback HUB-02 exists to prevent.
-                                    let sync_clean = file_sync_err.is_none();
+                                    let batch_incomplete = (req_from_cmd_line + data.cmd_delta_lines.len() < data.total_cmd_lines)
+                                        || (req_from_cfg_line + data.cfg_delta_lines.len() < data.total_cfg_lines);
+                                    let sync_clean = file_sync_err.is_none() && !batch_incomplete;
                                     let save_info = if sync_clean && data.epoch > s.cluster.epoch() {
                                         s.cluster.state.epoch = data.epoch;
                                         (true, s.cluster.state.clone(), s.cluster.state_path.clone())
@@ -1049,6 +1060,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     if let Some(err) = file_sync_err {
                                         s.cluster.sync_status = "sync_err".to_string();
                                         s.cluster.last_sync_err = err;
+                                    } else if batch_incomplete {
+                                        s.cluster.sync_status = "syncing".to_string();
+                                        s.cluster.last_sync_err = format!("catching up: batch received, {}/{} cmds, {}/{} cfgs", req_from_cmd_line + data.cmd_delta_lines.len(), data.total_cmd_lines, req_from_cfg_line + data.cfg_delta_lines.len(), data.total_cfg_lines);
                                     } else {
                                         s.cluster.sync_status = "synced".to_string();
                                         s.cluster.last_sync_at = Some(Instant::now());

@@ -135,7 +135,7 @@ int CopierLotDigits(const double step)
 //--- belongs to CopierComputeLots(), which can still see the shortfall.
 double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
   {
-   if(lots<=0.0) return 0.0;
+   if(lots<=0.0 || !MathIsValidNumber(lots) || si.lotStep<=0.0) return 0.0;
    int digits=CopierLotDigits(si.lotStep);
    double steps=MathFloor(lots/si.lotStep+0.0000001);
    double v=NormalizeDouble(steps*si.lotStep,digits);
@@ -176,7 +176,7 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
    rejected=false;
    double raw=0.0;
    if(mode==CP_SIZE_FIXED)               raw=param*symMultiplier;
-   else if(mode==CP_SIZE_OFF)            raw=senderLots;
+   else if(mode==CP_SIZE_OFF)            raw=senderLots*symMultiplier;
    else                                  raw=senderLots*param*symMultiplier;
    if(raw<=0.0) { rejected=true; return 0.0; }
 

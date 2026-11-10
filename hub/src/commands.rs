@@ -350,12 +350,15 @@ impl CommandStore {
             return Ok((Vec::new(), 0, 0));
         }
         let file = std::fs::File::open(path)?;
-        let reader = std::io::BufReader::new(file);
+        let mut reader = std::io::BufReader::new(file);
         let mut lines = Vec::new();
         let mut total = 0;
         let mut max_seq = 0u64;
-        for line_res in reader.lines() {
-            let line = line_res?;
+        let mut buf = Vec::new();
+        while let Ok(n) = reader.read_until(b'\n', &mut buf) {
+            if n == 0 { break; }
+            let line = String::from_utf8_lossy(&buf).to_string();
+            buf.clear();
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;

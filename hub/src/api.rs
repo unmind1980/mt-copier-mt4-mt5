@@ -818,11 +818,23 @@ async fn dashboard() -> axum::response::Response {
 /// would need `futures-util` for one `select!`, and `select!` is already here.
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
     State(st): State<SharedState>,
     axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::broadcast::Sender<std::sync::Arc<String>>>,
     axum::extract::Extension(tok): axum::extract::Extension<Token>,
 ) -> impl axum::response::IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, st, tx, tok.0))
+    use axum::response::IntoResponse;
+    // D9-H03: Validate Origin header against Host to prevent CSWSH
+    if let Some(origin) = headers.get(axum::http::header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if let Some(host) = headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()) {
+            let expected_http = format!("http://{}", host);
+            let expected_https = format!("https://{}", host);
+            if origin != expected_http && origin != expected_https {
+                return (axum::http::StatusCode::FORBIDDEN, "Invalid WebSocket Origin").into_response();
+            }
+        }
+    }
+    ws.on_upgrade(move |socket| handle_socket(socket, st, tx, tok.0)).into_response()
 }
 
 async fn handle_socket(
@@ -3915,6 +3927,11 @@ async fn cluster_handover_request(
     drop(s);
     if let Err(e) = crate::cluster::save_state_to_file(&save_info.0, &save_info.1) {
         eprintln!("[hub] CLUSTER ERR: handover step-down state save failed: {}", e);
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "agreed": false, "error": format!("failed to persist step-down state: {}", e) })),
+        )
+            .into_response();
     }
 
     audit_rec.record(
@@ -4245,6 +4262,23 @@ async fn cluster_set_peer(
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(json!({ "error": format!("Invalid peer URL: {}", e) })),
+            )
+                .into_response();
+        }
+    }
+
+    if !new_zmq.is_empty() {
+        if new_zmq.contains(';') || new_zmq.contains('\n') || new_zmq.contains('\r') {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "peer_zmq contains forbidden delimiters" })),
+            )
+                .into_response();
+        }
+        if !new_zmq.starts_with("tcp://") && !new_zmq.starts_with("ipc://") {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "peer_zmq must start with tcp:// or ipc://" })),
             )
                 .into_response();
         }

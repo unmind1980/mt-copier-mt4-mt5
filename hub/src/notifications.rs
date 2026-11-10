@@ -1093,7 +1093,9 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
             if (segs[0] & 0xffc0) == 0xfe80 || (segs[0] == 0xfd00 && segs[1] == 0xec2 && segs[7] == 0x254) {
                 return Err("URL points to prohibited cloud metadata or link-local IPv6".to_string());
             }
-            if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
+            let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
+            let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);
+            if is_v4_mapped || is_v4_compat {
                 let v4 = std::net::Ipv4Addr::new(
                     (segs[6] >> 8) as u8,
                     (segs[6] & 0xff) as u8,
@@ -1133,7 +1135,9 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
             if (segs[0] & 0xfe00) == 0xfc00 {
                 return Err("URL points to prohibited private IPv6".to_string());
             }
-            if segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff {
+            let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
+            let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);
+            if is_v4_mapped || is_v4_compat {
                 let v4 = std::net::Ipv4Addr::new(
                     (segs[6] >> 8) as u8,
                     (segs[6] & 0xff) as u8,
@@ -1144,7 +1148,7 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
                 if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
                     || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
                     || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
-                    return Err("URL points to prohibited IPv4-mapped private or loopback".to_string());
+                    return Err("URL points to prohibited IPv4-mapped or IPv4-compatible private/loopback".to_string());
                 }
             }
         }

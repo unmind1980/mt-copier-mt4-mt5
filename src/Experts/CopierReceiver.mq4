@@ -1290,23 +1290,35 @@ CopierSeenRing  g_fillGraceRing;
 //=====================================================================
 void MapAdd(const int si,const string from,const string to)
   {
-   string cleanTo=to;
+   string cleanFrom=CopierTrim(from);
+   string cleanTo=CopierTrim(to);
    double mult=1.0;
    int multIdx=StringFind(cleanTo,"*");
    if(multIdx<0) multIdx=StringFind(cleanTo,":");
    if(multIdx>0)
      {
-      string mStr=StringSubstr(cleanTo,multIdx+1);
-      cleanTo=StringSubstr(cleanTo,0,multIdx);
-      mult=StringToDouble(mStr);
+      string mStr=CopierTrim(StringSubstr(cleanTo,multIdx+1));
+      cleanTo=CopierTrim(StringSubstr(cleanTo,0,multIdx));
+      int slashIdx=StringFind(mStr,"/");
+      if(slashIdx<0) slashIdx=StringFind(mStr,":");
+      if(slashIdx>0)
+        {
+         double num=StringToDouble(StringSubstr(mStr,0,slashIdx));
+         double den=StringToDouble(StringSubstr(mStr,slashIdx+1));
+         mult=(den>0.0)?(num/den):1.0;
+        }
+      else
+        {
+         mult=StringToDouble(mStr);
+        }
       if(mult<=0.0) mult=1.0;
      }
 
    for(int i=0;i<g_nMap;i++)
      {
-      //--- (si,from) is the key: two senders may map the same symbol
+      //--- (si,cleanFrom) is the key: two senders may map the same symbol
       //--- differently, and that is deliberate.
-      if(g_mapSender[i]==si && g_mapFrom[i]==from)
+      if(g_mapSender[i]==si && g_mapFrom[i]==cleanFrom)
         {
          g_mapTo[i]=cleanTo;
          g_mapMult[i]=mult;
@@ -3175,6 +3187,15 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
    //--- and a longer park for something this platform cannot place at all,
    //--- for the same reason - the key keeps it from touching anything else.
    if(g_unsupported.Has(key)) { g_pushReject="unsupported"; return false; }
+   // D1-M02: Suppress MODIFY and TRIM if a full CLOSE or DEDUP action is already queued for this position
+   if(kind==CP_ACT_MODIFY || kind==CP_ACT_TRIM)
+     {
+      if(ActionQueued(si,CP_ACT_CLOSE,uid) || ActionQueued(si,CP_ACT_DEDUP,uid))
+        {
+         g_pushReject="close_already_queued";
+         return false;
+        }
+     }
    if(ActionQueued(si,kind,uid,keyExtra))
      {
       // BUG-01: If an exit action (CLOSE/TRIM/DEDUP) is already in the queue, do not leave it
@@ -4509,7 +4530,7 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
 
    int digits=CopierLotDigits(step);
    double trim=NormalizeDouble(MathFloor(diff/step+0.0000001)*step,digits);
-   if(trim<=0.0) return;
+   if(trim<=0.0 || trim<si2.minLot-0.0000001) return;
 
    double remaining=NormalizeDouble(local.lots-trim,digits);
    if(remaining<si2.minLot-0.0000001)
@@ -5552,6 +5573,8 @@ string EncodeReceiverWaitList()
 
 void RefreshRisk()
   {
+   // D4-M04: Disconnected terminal returns 0 equity; avoid false blowout shutdown while offline
+   if(!CopierIsConnected()) return;
    int an=ScanAndResolveAccountPositions();
    int cnt=0;
    int orphan=0;
@@ -6138,6 +6161,14 @@ void ConvergeSender(const int si)
       //--- Placed here after li>=0 check so if manual close is still pending or delayed by broker,
       //--- the existing local position continues to have SL/TP/Trim managed normally.
       if(g_manualClosed.Has(d.uid)) continue;
+
+      // D2-M02: Prevent opening new positions if local account position table is full
+      if(g_acctAllPosCount>=CP_MAX_POSITIONS)
+        {
+         if(g_once.ShouldEmit("acct_pos_table_full"))
+            g_log.Warn("D2-M02: account position count reached CP_MAX_POSITIONS ("+(string)CP_MAX_POSITIONS+"); skipping new open for uid "+d.uid);
+         continue;
+        }
 
       //--- Desired but not mirrored = an OPEN. This is the one half the
       //--- stale gate holds back: with the sender silent there is no fresh
