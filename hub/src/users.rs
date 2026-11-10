@@ -43,6 +43,7 @@ pub const USERS_PATH: &str = "users.json";
 /// Sessions live this long, measured from the last request that touched
 /// them. A hub restart forgets every session: log in again.
 pub const SESSION_IDLE_SECS: u64 = 12 * 3600;
+pub const SESSION_MAX_SECS: u64 = 7 * 24 * 3600; // Absolute max session lifetime (7 days)
 
 /// PBKDF2 rounds for the password hash. Cheap enough at login (4096 SHA-256
 /// blocks is sub-millisecond) and 4096x the work for an offline guesser.
@@ -91,6 +92,7 @@ pub struct Session {
     pub user_id: String,
     pub role: Role,
     pub seen: u64,
+    pub created_at: u64,
     /// H4: Password hash fingerprint when session was minted, allowing instant revocation on password change
     pub pass_hash: String,
 }
@@ -431,6 +433,7 @@ impl UserStore {
             user_id,
             role,
             seen: now,
+            created_at: now,
             pass_hash,
         };
         self.sessions.insert(token.clone(), s.clone());
@@ -553,6 +556,7 @@ impl UserStore {
             user_id: u.id.clone(),
             role: u.role,
             seen: now,
+            created_at: now,
             pass_hash: u.pass.clone(),
         };
         self.sessions.insert(token.clone(), s.clone());
@@ -728,7 +732,8 @@ impl UserStore {
     pub fn session(&mut self, token: &str, now: u64) -> Option<Session> {
         let (expired, pass_mismatch) = {
             if let Some(s) = self.sessions.get(token) {
-                let is_exp = now.saturating_sub(s.seen) >= SESSION_IDLE_SECS;
+                let is_exp = now.saturating_sub(s.seen) >= SESSION_IDLE_SECS
+                    || now.saturating_sub(s.created_at) >= SESSION_MAX_SECS;
                 let is_mismatch = match self.users.iter().find(|u| u.id == s.user_id) {
                     Some(u) => u.disabled || u.role != s.role || (!s.pass_hash.is_empty() && s.pass_hash != u.pass),
                     None => true,
@@ -962,16 +967,17 @@ pub fn random_password() -> String {
     //--- the rest. Rejecting the incomplete tail (256 - 56*4 = 32 values) makes
     //--- the draw uniform; the loop is bounded because each byte is independent.
     const LIMIT: u8 = 255 - (255 % 56);
-    let mut rand_bytes = [0u8; 24];
-    if os_random_bytes(&mut rand_bytes) {
-        let mut out = String::new();
-        for &b in &rand_bytes {
-            if b >= LIMIT {
-                continue;
-            }
-            out.push(ALPHA[(b as usize) % ALPHA.len()] as char);
-            if out.len() == 12 {
-                return out;
+    let mut out = String::new();
+    let mut rand_bytes = [0u8; 32];
+    for _ in 0..10 {
+        if os_random_bytes(&mut rand_bytes) {
+            for &b in &rand_bytes {
+                if b < LIMIT {
+                    out.push(ALPHA[(b as usize) % ALPHA.len()] as char);
+                    if out.len() == 12 {
+                        return out;
+                    }
+                }
             }
         }
     }

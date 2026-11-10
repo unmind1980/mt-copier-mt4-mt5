@@ -810,6 +810,16 @@ int OnInit()
    g_log.Init("sender_"+SenderId(),LogLevel);
 
    g_symFilter.Set(IncludeSymbols);
+#ifdef __MQL5__
+   for(int cWait=0; cWait<20 && (!TerminalInfoInteger(TERMINAL_CONNECTED) || AccountInfoInteger(ACCOUNT_LOGIN)<=0); cWait++)
+      CopierWaitMs(100);
+   if(CopierIsNettingAccount())
+     {
+      g_log.Error("CRITICAL: CopierSender cannot run on a NETTING account. MT5 Netting merges positions and distorts volume tracking. A Hedging account is required.");
+      Alert("Copier SENDER: Cannot run on a NETTING account. Hedging account required.");
+      return INIT_FAILED;
+     }
+#endif
    g_magicFilter.Set(IncludeMagicNumbers);
    if(g_magicFilter.StrayBangs()>0)
       g_log.Warn("IncludeMagicNumbers: '!' on individual item was stripped. A leading '!' excludes the whole list.");
@@ -1873,7 +1883,25 @@ void HandleSenderStat(const CopierEnv &se)
     CopierKvGet(se.payload,"H",sh);
     CopierKvGet(se.payload,"LOGIN",swho);
     CopierKvGet(se.payload,"SID",ssid);
-    if(SenderAnswersTo(ssid))
+    string rh="";
+    CopierKvGet(se.payload,"RH",rh);
+    bool matched=false;
+    if(StringLen(rh)>0)
+      {
+       string pairs[];
+       int np=StringSplit(rh,',',pairs);
+       for(int p=0;p<np;p++)
+         {
+          string kv[];
+          if(StringSplit(pairs[p],':',kv)==2 && SenderAnswersTo(kv[0]))
+            {
+             SnapTrack(swho,kv[1],false);
+             matched=true;
+             break;
+            }
+         }
+      }
+    if(!matched && SenderAnswersTo(ssid))
        SnapTrack(swho,sh,false);
    }
 
@@ -2249,6 +2277,7 @@ void OnTimer()
                // A2: MODIFY already delivers the new levels; only refresh the in-memory
                // latest payload (used by bootstrap / targeted repair). No full broadcast.
                MarkLatestDirty();
+               MarkSnapshotDirty();
                string extraLog = "";
                if(ppriceDiff) extraLog += " pprice="+DoubleToString(g_curScratch[i].pprice,5);
                if(pstopDiff)  extraLog += " pstop="+DoubleToString(g_curScratch[i].pstop,5);

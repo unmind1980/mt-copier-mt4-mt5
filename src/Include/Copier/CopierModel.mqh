@@ -684,7 +684,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.tp=OrderTakeProfit();
       p.profit=OrderProfit();
       p.swap=OrderSwap();
-      p.ticket=(long)OrderTicket();
+      p.ticket=(long)(uint)OrderTicket();
       p.magic=(long)OrderMagicNumber();
       p.openTime=(long)OrderOpenTime();
       p.kind=CP_ORD_MARKET;
@@ -763,8 +763,8 @@ string CopierReadCommentByTicket(const CopierPos &p)
    if(OrderSelect((ulong)p.ticket)) return OrderGetString(ORDER_COMMENT);
    return "";
 #else
-   if(p.ticket<=0 || p.ticket>2147483647) return "";
-   if(OrderSelect((int)p.ticket,SELECT_BY_TICKET)) return OrderComment();
+   if(p.ticket<=0 || (ulong)p.ticket>0xFFFFFFFF) return "";
+   if(OrderSelect((int)(uint)p.ticket,SELECT_BY_TICKET) && OrderCloseTime()==0) return OrderComment();
    return "";
 #endif
   }
@@ -822,8 +822,8 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
      }
    return false;
 #else
-   if(identifier<=0 || identifier>2147483647) return false;
-   if(!OrderSelect((int)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
+   if(identifier<=0 || (ulong)identifier>0xFFFFFFFF) return false;
+   if(!OrderSelect((int)(uint)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
    // R47-01: OrderSelect by ticket ignores pool in MT4; closed orders in history must return false
    if(OrderCloseTime()!=0) return false;
    ticket=identifier;
@@ -929,6 +929,23 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    bool ok;
    if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
    else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
+   // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
+   if(!ok && trade.ResultRetcode()==10030)
+     {
+      long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
+      ENUM_ORDER_TYPE_FILLING candidates[3];
+      int nCand=0;
+      if((fillMode&SYMBOL_FILLING_FOK)!=0) candidates[nCand++]=ORDER_FILLING_FOK;
+      if((fillMode&SYMBOL_FILLING_IOC)!=0) candidates[nCand++]=ORDER_FILLING_IOC;
+      candidates[nCand++]=ORDER_FILLING_RETURN;
+      for(int a=0; a<nCand; a++)
+        {
+         trade.SetTypeFilling(candidates[a]);
+         if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
+         else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
+         if(ok || trade.ResultRetcode()!=10030) break;
+        }
+     }
    if(!ok)
      {
       outErr=(int)trade.ResultRetcode();
@@ -1147,27 +1164,47 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
    trade.SetDeviationInPoints((ulong)MathMax(0,deviationPoints));
    trade.SetAsyncMode(asyncMode);
    bool ok=trade.PositionClose((ulong)ticket);
+   // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
+   if(!ok && trade.ResultRetcode()==10030)
+     {
+      string sym=PositionGetString(POSITION_SYMBOL);
+      long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
+      ENUM_ORDER_TYPE_FILLING candidates[3];
+      int nCand=0;
+      if((fillMode&SYMBOL_FILLING_FOK)!=0) candidates[nCand++]=ORDER_FILLING_FOK;
+      if((fillMode&SYMBOL_FILLING_IOC)!=0) candidates[nCand++]=ORDER_FILLING_IOC;
+      candidates[nCand++]=ORDER_FILLING_RETURN;
+      for(int a=0; a<nCand; a++)
+        {
+         trade.SetTypeFilling(candidates[a]);
+         ok=trade.PositionClose((ulong)ticket);
+         if(ok || trade.ResultRetcode()!=10030) break;
+        }
+     }
    if(!ok) outErr=(int)trade.ResultRetcode();
    return ok;
 #else
-   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
-   if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES)) { outErr=0; return true; }
+   if(ticket<=0 || (ulong)ticket>0xFFFFFFFF) { outErr=ERR_INVALID_TICKET; return false; }
+   if(!OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_TRADES) || OrderCloseTime()!=0) { outErr=0; return true; }
    if(pending)
      {
-      bool del=OrderDelete((int)ticket,clrNONE);
+      bool del=OrderDelete((int)(uint)ticket,clrNONE);
       if(!del) outErr=GetLastError();
       return del;
      }
-   double closePx=px;
-   if(closePx<=0.0)
+   double lots=OrderLots();
+   bool ok=false;
+   for(int attempt=0; attempt<3; attempt++)
      {
       RefreshRates();
       int type=(int)OrderType();
-      closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
+      double closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
+      ok=OrderClose((int)(uint)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
+      if(ok) break;
+      outErr=GetLastError();
+      if(outErr!=138 && outErr!=135 && outErr!=136) break;
+      CopierWaitMs(10);
      }
-   double lots=OrderLots();
-   bool ok=OrderClose((int)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
-   if(!ok) outErr=GetLastError();
    return ok;
 #endif
   }
@@ -1259,8 +1296,8 @@ bool CopierModifyStops(const long identifier,const string sym,
    outErr=(int)res.retcode;
    return false;
 #else
-   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
-   if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
+   if(ticket<=0 || (ulong)ticket>0xFFFFFFFF) { outErr=ERR_INVALID_TICKET; return false; }
+   if(!OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_TRADES) || OrderCloseTime()!=0)
      {
       outErr=0;
       return true;
@@ -1335,8 +1372,8 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    outErr=(int)res.retcode;
    return false;
 #else
-   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
-   if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
+   if(ticket<=0 || (ulong)ticket>0xFFFFFFFF) { outErr=ERR_INVALID_TICKET; return false; }
+   if(!OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_TRADES) || OrderCloseTime()!=0)
      {
       outErr=0;
       return true;
@@ -1462,8 +1499,8 @@ bool CopierClosePartial(const long identifier,const double lots,
      }
    return false;
 #else
-   if(ticket<=0 || ticket>2147483647) { outErr=ERR_INVALID_TICKET; return false; }
-   if(!OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_TRADES))
+   if(ticket<=0 || (ulong)ticket>0xFFFFFFFF) { outErr=ERR_INVALID_TICKET; return false; }
+   if(!OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_TRADES) || OrderCloseTime()!=0)
      {
       outErr=0;
       return true;
@@ -1492,6 +1529,8 @@ bool CopierClosePartial(const long identifier,const double lots,
 int CopierAccountMode()
   {
 #ifdef __MQL5__
+   if(!TerminalInfoInteger(TERMINAL_CONNECTED) || AccountInfoInteger(ACCOUNT_LOGIN)<=0)
+      return 0; // Unknown / connecting: do not assume netting
    long mode=AccountInfoInteger(ACCOUNT_MARGIN_MODE);
    if(mode==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)  return 1;   // hedging
    return 2;                                                  // netting/exchange

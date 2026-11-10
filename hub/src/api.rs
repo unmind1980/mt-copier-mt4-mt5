@@ -824,6 +824,9 @@ async fn ws_handler(
     axum::extract::Extension(tok): axum::extract::Extension<Token>,
 ) -> impl axum::response::IntoResponse {
     use axum::response::IntoResponse;
+    static ACTIVE_WS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    const MAX_WS_CONNS: usize = 128;
+
     // D9-H03: Validate Origin header against Host to prevent CSWSH
     if let Some(origin) = headers.get(axum::http::header::ORIGIN).and_then(|v| v.to_str().ok()) {
         if let Some(host) = headers.get(axum::http::header::HOST).and_then(|v| v.to_str().ok()) {
@@ -834,7 +837,20 @@ async fn ws_handler(
             }
         }
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, st, tx, tok.0)).into_response()
+    if ACTIVE_WS.load(std::sync::atomic::Ordering::Relaxed) >= MAX_WS_CONNS {
+        return (axum::http::StatusCode::TOO_MANY_REQUESTS, "Max WebSocket connections reached").into_response();
+    }
+    ACTIVE_WS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ws.on_upgrade(move |socket| async move {
+        struct WsGuard;
+        impl Drop for WsGuard {
+            fn drop(&mut self) {
+                ACTIVE_WS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _guard = WsGuard;
+        handle_socket(socket, st, tx, tok.0).await
+    }).into_response()
 }
 
 async fn handle_socket(
@@ -1105,6 +1121,7 @@ async fn require_session(
                     user_id: "cluster".to_string(),
                     role: UserRole::Admin,
                     seen: unix_secs(),
+                    created_at: unix_secs(),
                     pass_hash: String::new(),
                 });
                 req.extensions_mut().insert(Token(cluster_token));
@@ -1129,6 +1146,7 @@ async fn require_session(
             user_id: "anonymous".to_string(),
             role: UserRole::Viewer,
             seen: unix_secs(),
+            created_at: unix_secs(),
             pass_hash: String::new(),
         });
         req.extensions_mut().insert(Token(String::new()));
@@ -3900,6 +3918,23 @@ async fn cluster_handover_request(
                     "agreed": false,
                     "new_epoch": s.cluster.epoch(),
                     "error": format!("Handover rejected: from_hub_id {} does not match registered peer {}", req.from_hub_id, peer.hub_id)
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // R2-D7-H02: Verify Standby has fully replicated local journals before stepping down
+    let (my_cfg, (my_cmd, my_seq)) = (s.cfg.total_lines(), s.cmds.sync_stats());
+    if let Some(peer) = s.cluster.peer_status.as_ref() {
+        if peer.cmd_lines < my_cmd || peer.max_cmd_seq < my_seq || peer.cfg_lines < my_cfg {
+            return (
+                axum::http::StatusCode::CONFLICT,
+                Json(json!({
+                    "ok": false,
+                    "agreed": false,
+                    "new_epoch": s.cluster.epoch(),
+                    "error": format!("Handover rejected: Standby is lagging behind (cmd: {}/{}, cfg: {}/{})", peer.cmd_lines, my_cmd, peer.cfg_lines, my_cfg)
                 })),
             )
                 .into_response();

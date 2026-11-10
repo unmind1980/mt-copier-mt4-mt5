@@ -69,7 +69,7 @@ bool CopierLossExceeded(const double equity,const double baseline,const double p
    if(pct<=0.0)      return false;   // switch off
    if(baseline<=0.0) return false;   // nothing to measure from
    if(pct>=100.0)    return (equity<=0.0); // complete wipeout
-   return (equity<=CopierLossTripLevel(baseline,pct));
+   return (equity<=CopierLossTripLevel(baseline,pct)+0.00001);
   }
 
 //=====================================================================
@@ -83,7 +83,7 @@ bool CopierRiskAllowsOpen(const CopierRiskLimits &lim,const double lots,
                           string &why)
   {
    why="";
-   if(lim.maxLotsPerPosition>0.0 && lots>lim.maxLotsPerPosition+0.0000001)
+   if(lim.maxLotsPerPosition>0.0 && lots>lim.maxLotsPerPosition+CP_LOT_EPS)
      {
       why="this position is "+DoubleToString(lots,2)+" lots and"
           +" MaxLotsPerPosition is "+DoubleToString(lim.maxLotsPerPosition,2);
@@ -95,7 +95,7 @@ bool CopierRiskAllowsOpen(const CopierRiskLimits &lim,const double lots,
           +" MaxOpenPositions is "+(string)lim.maxOpenPositions;
       return false;
      }
-   if(lim.maxTotalLots>0.0 && totalLots+lots>lim.maxTotalLots+0.0000001)
+   if(lim.maxTotalLots>0.0 && totalLots+lots>lim.maxTotalLots+CP_LOT_EPS)
      {
       why="adding "+DoubleToString(lots,2)+" would take total volume to "
           +DoubleToString(totalLots+lots,2)+" and MaxTotalLots is "
@@ -320,6 +320,8 @@ public:
      {
       if(cashFlow<0.0 && m_peakEquity>0.0)
          m_peakEquity=MathMax(0.0,m_peakEquity+cashFlow);
+      else if(cashFlow>0.0 && m_peakEquity>0.0)
+         m_peakEquity+=cashFlow;
      }
 
    double            DayStartEquity() const { return m_dayStartEquity; }

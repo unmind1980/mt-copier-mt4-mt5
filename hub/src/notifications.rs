@@ -987,6 +987,11 @@ pub async fn send_to_channel(
     }
 }
 
+async fn read_response_body_bounded(resp: reqwest::Response, max_bytes: usize) -> String {
+    let bytes = resp.bytes().await.unwrap_or_default();
+    String::from_utf8_lossy(&bytes[..bytes.len().min(max_bytes)]).to_string()
+}
+
 async fn send_telegram(
     client: &reqwest::Client,
     channel: &NotificationChannel,
@@ -1065,7 +1070,7 @@ async fn send_telegram(
         })?;
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_response_body_bounded(resp, 65536).await;
     if status.is_success() {
         Ok(format!("Telegram sent: HTTP {}", status))
     } else {
@@ -1456,7 +1461,7 @@ async fn send_wecom(
         })?;
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_response_body_bounded(resp, 65536).await;
     if status.is_redirection() {
         return Err(format!("WeCom request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
     }
@@ -1555,7 +1560,7 @@ async fn send_dingtalk(
         })?;
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_response_body_bounded(resp, 65536).await;
     if status.is_redirection() {
         return Err(format!("DingTalk request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
     }
@@ -1656,7 +1661,7 @@ async fn send_webhook(
         })?;
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_response_body_bounded(resp, 65536).await;
     if status.is_redirection() {
         return Err(format!("Webhook request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));
     }
@@ -1745,7 +1750,7 @@ async fn send_wechat(
         })?;
 
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
+    let body = read_response_body_bounded(resp, 65536).await;
 
     if status.is_redirection() {
         return Err(format!("WeChat (Xtuis) request failed: HTTP {} (redirect blocked by SSRF policy; please configure target HTTPS URL directly)", status));

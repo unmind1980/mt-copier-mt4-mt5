@@ -533,7 +533,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
                         let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                         if outage >= 30 {
-                            let ep = s.cluster.promote(None);
+                            let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
+                            let ep = s.cluster.promote(target_ep);
                             s.writes = s.writes_allowed;
                             let writes = s.writes;
                             let audit_rec = Arc::clone(&s.audit);
@@ -559,7 +560,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
                         let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                         if outage >= 30 {
-                            let ep = s.cluster.promote(None);
+                            let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
+                            let ep = s.cluster.promote(target_ep);
                             s.writes = s.writes_allowed;
                             let writes = s.writes;
                             let audit_rec = Arc::clone(&s.audit);
@@ -602,7 +604,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
             // 2. Check split-brain conflict and resolve (H-10 & P1-5 & P0-2)
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
-                let (should_demote, save_cmd) = {
+                let (should_demote, save_cmd, audit_rec_opt) = {
                     let mut s = st.lock_or_recover();
                     let should = !s.cluster.state.is_configured_primary
                         || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
@@ -611,14 +613,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         s.cluster.demote(epoch);
                         s.writes = false;
                         s.cluster.sync_status = "conflict_demoted".to_string();
+                        force_full_cfg_resync = true;
+                        force_full_cmd_resync = true;
                         let audit_rec = Arc::clone(&s.audit);
-                        audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
-                        (true, Some(s.cluster.save_info()))
+                        (true, Some(s.cluster.save_info()), Some(audit_rec))
                     } else {
                         s.cluster.sync_status = "conflict_master".to_string();
-                        (false, None)
+                        (false, None, None)
                     }
                 };
+                if let Some(audit_rec) = audit_rec_opt {
+                    audit_rec.record("cluster", "", "cluster.split_brain_demoted", &format!("demoted to Standby against peer {}", remote_st.hub_id), None, None, "ok");
+                }
                 if let Some((p, st_file)) = save_cmd {
                     // N80-04: Check save_state_to_file result and record error if write fails
                     if let Err(e) = save_state_to_file(&p, &st_file) {
@@ -640,6 +646,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     "[hub] Peer {} has higher epoch ({} > {}). Demoting local Primary to Standby.",
                     peer_url, remote_st.epoch, epoch
                 );
+                force_full_cfg_resync = true;
+                force_full_cmd_resync = true;
                 let (audit_rec, save_info) = {
                     let mut s = st.lock_or_recover();
                     s.cluster.demote(remote_st.epoch);
@@ -682,16 +690,16 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     if data_behind { false } else if data_ahead { true } else { my_hub_id < remote_st.hub_id }
                 };
                 if should_recover {
-                    let (new_ep, current_writes, save_info) = {
+                    let (new_ep, current_writes, save_info, audit_rec) = {
                         let mut s = st.lock_or_recover();
                         let target = Some(next_epoch(remote_st.epoch.max(s.cluster.epoch())));
                         let ep = s.cluster.promote(target);
                         s.writes = s.writes_allowed; // P1-3: Respect CLI --writes configuration
                         let writes = s.writes;
                         let audit_rec = Arc::clone(&s.audit);
-                        audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", ep, writes), None, None, "ok");
-                        (ep, writes, s.cluster.save_info())
+                        (ep, writes, s.cluster.save_info(), audit_rec)
                     };
+                    audit_rec.record("cluster", "", "cluster.zero_primary_recovered", &format!("recovered Primary role with epoch {} (writes={})", new_ep, current_writes), None, None, "ok");
                     if let Err(e) = save_state_to_file(&save_info.0, &save_info.1) {
                         eprintln!("[hub] CLUSTER ERR: failed to save state after dual standby recovery: {}", e);
                         let mut s = st.lock_or_recover();

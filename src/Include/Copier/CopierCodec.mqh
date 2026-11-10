@@ -292,15 +292,16 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
 long CopierHash32(const string s)
   {
    long h=(long)CP_FNV_OFFSET;
-   int n=StringLen(s);
-   for(int i=0;i<n;i++)
+   uchar data[];
+   int got=StringToCharArray(s,data,0,-1,CP_UTF8);
+   if(got>0)
      {
-      //--- StringGetCharacter gives a code unit; FNV-1a is defined on bytes
-      //--- and every character in a snapshot is ASCII by construction
-      //--- (symbols and comments are sanitised on the way in), so the low
-      //--- byte IS the byte.
-      h=h^(long)(StringGetCharacter(s,i)&0xFF);
-      h=(h*(long)CP_FNV_PRIME)&CP_MASK32;
+      int nb=(data[got-1]==0 ? got-1 : got);
+      for(int i=0;i<nb;i++)
+        {
+         h=h^(long)data[i];
+         h=(h*(long)CP_FNV_PRIME)&CP_MASK32;
+        }
      }
    return h;
   }

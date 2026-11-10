@@ -3452,18 +3452,22 @@ void ExecuteQueue()
    ArrayInitialize(sHeldBaseLots,0.0);
    ArrayInitialize(sHeldBaseKnown,false);
 
-   //--- Assess if this is a Batch Close operation (e.g. Martingale/Grid basket exit, or closeall, or >1 close queued)
+   //--- Assess if this is a Batch Close or Batch Modify operation (e.g. Martingale/Grid basket exit, or closeall, or >8 queued)
    int closeCount=0;
+   int modifyCount=0;
    for(int qi=0; qi<g_qn; qi++)
      {
       int qk=g_q[g_qHead+qi].kind;
       if(qk==CP_ACT_CLOSE || qk==CP_ACT_TRIM || qk==CP_ACT_DEDUP)
          closeCount++;
+      else if(qk==CP_ACT_MODIFY)
+         modifyCount++;
      }
    bool isEmergencyExit=(g_cmdCloseAllActive || g_riskCloseAllPending);
    bool isBatchClose=(isEmergencyExit || closeCount>=8);
-   // M-10: Cap batch close to 64 actions per tick to avoid freezing event loop on huge backlogs
-   int maxActions=(isBatchClose ? 64 : MaxActionsPerTick);
+   bool isBatchModify=(modifyCount>=8);
+   // M-10: Cap batch operations to 64 actions per tick to avoid freezing event loop on huge backlogs
+   int maxActions=((isBatchClose || isBatchModify) ? 64 : MaxActionsPerTick);
 
    int sweepCount=0;
    int asyncBatchCount=0;
@@ -4479,7 +4483,7 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
 double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const string sym)
   {
    CopierSymInfo si2;
-   if(!CopierGetSymbolInfo(sym,si2)) return desired.lots;
+   if(!CopierGetSymbolInfo(sym,si2)) return 0.0;
    bool rejected=false;
    double targetLots=0.0;
    if(g_lotMode[si]==CP_SIZE_FIXED)
@@ -5661,9 +5665,10 @@ void RefreshRisk()
       else
         {
          g_lastRealizedMs=now;
-         //--- Day rolled over while running: capture exact opening equity and balance
-         g_riskDayStartEquity=CopierAccountEquity();
+         //--- Day rolled over while running: anchor baseline to opening balance (R2-D4-M01)
+         //--- to prevent rollover spread spikes from distorting or tripping daily drawdown.
          g_riskDayStartBalance=CopierAccountBalance();
+         g_riskDayStartEquity=g_riskDayStartBalance;
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
@@ -6885,6 +6890,11 @@ void HandleSnapshot(const int si,const CopierEnv &e)
      }
    g_desiredCount[si]=n;
    g_ready[si]=true;
+   if(g_stale[si])
+     {
+      g_stale[si]=false;
+      g_log.Info("sender "+g_sid[si]+" snapshot received -> stale cleared, mirror active");
+     }
    //--- P3: the desired set just changed - reconcile on the very next tick.
    g_convergeDirty[si]=true;
   }
@@ -8116,11 +8126,6 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
 
    g_lastMsgMs[si]=CopierNowMs();
    if(g_firstMsgMs[si]==0) g_firstMsgMs[si]=g_lastMsgMs[si];
-   if(g_stale[si])
-     {
-      g_stale[si]=false;
-      g_log.Info("sender "+g_sid[si]+" is back");
-     }
 
    //--- Anything at all from this sender proves it is alive. Before the
    //--- sequence guard, so a dropped sequence number cannot make a live link
@@ -8243,6 +8248,9 @@ int OnInit()
    //--- One log per instance, or two receivers in one terminal write the same
    //--- file and overwrite each other's history.
    g_log.Init("receiver"+InstanceSuffix(),LogLevel);
+#ifdef __MQL5__
+   for(int cWait=0; cWait<20 && (!TerminalInfoInteger(TERMINAL_CONNECTED) || AccountInfoInteger(ACCOUNT_LOGIN)<=0); cWait++)
+      CopierWaitMs(100);
    if(CopierIsNettingAccount())
      {
       g_log.Error("CRITICAL: this terminal is running on a NETTING account."
@@ -8253,6 +8261,7 @@ int OnInit()
       Alert("Copier RECEIVER: Cannot run on a NETTING account. Hedging account required.");
       return INIT_FAILED;
      }
+#endif
    if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
    g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode

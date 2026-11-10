@@ -96,8 +96,8 @@
 //--- queue. The receiver drains at PollMs, so in practice this never fills;
 //--- it exists so a peer that goes away cannot grow the queue without bound.
 //--- N49-12: Queue depth aligned with CP_MAX_ACTIONS 256 to absorb 74+ order bursts safely
-#define CP_SNDHWM 256
-#define CP_RCVHWM 256
+#define CP_SNDHWM 1024
+#define CP_RCVHWM 1024
 
 #import "libzmq.dll"
 int zmq_errno(void);
@@ -360,7 +360,12 @@ public:
                return false;
               }
            }
-         m_sub.connect(endpoints[i]);
+         if(!m_sub.connect(endpoints[i]))
+           {
+            m_errno=CopierZmqErrno();
+            delete m_sub; m_sub=NULL;
+            return false;
+           }
         }
       //--- XSUB DOES NOT AUTO-SUBSCRIBE, unlike SUB. The application must
       //--- send the subscription itself: one byte, 0x01 for "everything",
@@ -651,18 +656,16 @@ public:
       // D5-X02: If previous tick aborted mid-multipart, drain remaining frames first
       if(m_midInboundMultipart)
         {
+         bool drained=false;
          while(true)
            {
             ZmqMsg discard;
             if(!m_sub.recv(discard,true)) break;
-            if(!discard.more()) { m_midInboundMultipart=false; break; }
+            if(!discard.more()) { m_midInboundMultipart=false; drained=true; break; }
            }
-         if(m_midInboundMultipart)
-           {
-            if(ArrayIsDynamic(topics))   ArrayResize(topics,0);
-            if(ArrayIsDynamic(payloads)) ArrayResize(payloads,0);
-            return 0;
-           }
+         // R2-D5-X01: If no remaining frames were pending in the pipe, libzmq cleared the broken frame on disconnect.
+         // Clear latch so the next valid message after reconnect is not discarded!
+         if(!drained) m_midInboundMultipart=false;
         }
 
       int got=0;
@@ -714,7 +717,15 @@ public:
                if(!m_sub.recv(extra,true)) break;
                hasMore=extra.more();
               }
-            m_midInboundMultipart=hasMore;
+            if(hasMore)
+              {
+               m_midInboundMultipart=true;
+               break; // R2-D5-X01: Break message loop to avoid misinterpreting remainder frames as m0
+              }
+            else
+              {
+               m_midInboundMultipart=false;
+              }
            }
          if(got>=ArraySize(topics) || got>=ArraySize(payloads)) break;
          topics[got]=topic;

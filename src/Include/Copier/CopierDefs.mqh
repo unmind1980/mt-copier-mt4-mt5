@@ -843,7 +843,7 @@ bool CopierKvGet(const string payload,const string key,string &out)
    while(p>=0)
      {
       if(p==0) break;                                    // at the very start
-      if(StringSubstr(payload,p-1,1)==CP_SEP_KV) break;   // preceded by ';'
+      if(StringGetCharacter(payload,p-1)==';') break;   // preceded by ';' (zero-allocation)
       p=StringFind(payload,needle,p+1);                   // try the next match
      }
    if(p<0) return false;
