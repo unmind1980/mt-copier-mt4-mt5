@@ -3877,6 +3877,24 @@ void ExecuteQueue()
          if(fmCheck<=0.0 || (effectiveFree < reqMargin))
             marginOk=false;
 #endif
+         // R11-D04: Check projected margin level against broker stop-out level
+         double curMargin=0.0;
+         double curEquity=CopierAccountEquity();
+         double soLevel=0.0;
+#ifdef __MQL5__
+         curMargin=AccountInfoDouble(ACCOUNT_MARGIN);
+         soLevel=AccountInfoDouble(ACCOUNT_MARGIN_SO_SO);
+#else
+         curMargin=AccountMargin();
+         soLevel=AccountStopoutLevel();
+#endif
+         double projMargin = curMargin + drainedReqMargin + reqMargin;
+         if(projMargin > 0.0 && curEquity > 0.0)
+           {
+            double projLevel = (curEquity / projMargin) * 100.0;
+            double minSafe = (soLevel > 0.0) ? (soLevel + 20.0) : 100.0;
+            if(projLevel <= minSafe) marginOk=false;
+           }
          if(!marginOk)
            {
             g_log.Warn("insufficient free margin to open "+a.uid+" "+a.sym+" ("
@@ -5130,6 +5148,22 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
         }
       else if(desired.pexpire==0 && local.pexpire!=0) pendingDiff=true;
+     }
+
+   // R11-A02: Strict Ratchet Guard for market positions:
+   // Stop loss must never be pushed in the direction of widening loss!
+   if(local.kind==CP_ORD_MARKET && local.sl>0.0 && wantSl>0.0)
+     {
+      if(local.side==CP_SIDE_BUY && wantSl<local.sl)
+        {
+         wantSl=local.sl;
+         clampedSl=false;
+        }
+      else if(local.side==CP_SIDE_SELL && wantSl>local.sl)
+        {
+         wantSl=local.sl;
+         clampedSl=false;
+        }
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -8334,6 +8368,15 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    //--- per-stream watermark: a snapshot must never invalidate an event
    //--- that was emitted before it on the other socket
    if((long)(e.seq - g_lastSeq[si][stream])<=0) return false;
+   long gap = (e.seq - g_lastSeq[si][stream]) - 1;
+   if(g_lastSeq[si][stream] >= 0 && gap > 0)
+     {
+      if(g_once.ShouldEmit("net_gap|"+g_sid[si]+"|"+(string)stream))
+         g_log.Warn("NETWORK DROP: sender "+g_sid[si]+" stream "+(string)stream+
+                    " lost "+(string)gap+" frame(s) [expected "+
+                    (string)(g_lastSeq[si][stream]+1)+".."+(string)(e.seq-1)+
+                    ", got "+(string)e.seq+"]");
+     }
    g_lastSeq[si][stream]=e.seq;
    return true;
   }
@@ -9425,6 +9468,11 @@ bool IsTopicForReceiver(const string topic,const string envSid)
 
 void OnTimer()
   {
+   // R11-A05: Atomic reentrancy guard for OnTimer against nested OnChartEvent / pump triggers
+   static bool s_inTimer=false;
+   if(s_inTimer) return;
+   s_inTimer=true;
+
    //--- 1) drain the one socket: non-blocking, bounded per tick
    //---
    //--- Both streams arrive together and are told apart by the envelope's
@@ -9468,6 +9516,7 @@ void OnTimer()
          g_log.Error("CRITICAL: Terminal connected to a NETTING account at runtime! Netting accounts violate one-UID-one-position invariant. Emergency disarming receiver.");
          Alert("Copier RECEIVER: NETTING account detected at runtime! Emergency STOP.");
          ExpertRemove();
+         s_inTimer=false;
          return;
         }
      }
@@ -9626,6 +9675,8 @@ void OnTimer()
            }
          ExecuteQueue();
          g_lastConvergeSweepMs = now; // BUG-08: Stave off immediate redundant slow-lane sweep in the same invocation
+         g_convergeDirtyAll = false;
+         for(int k=0; k<g_nSenders; k++) g_convergeDirty[k]=false;
         }
 
       // N67-04 & N68-03: Clear string references on static conflate table to prevent dead string retention
@@ -9683,7 +9734,7 @@ void OnTimer()
    //    Periodic maintenance, full account reconciliation, and UI.
    //=================================================================
    static long s_lastSlowMs=0;
-   if(now-s_lastSlowMs<100) return;
+   if(now-s_lastSlowMs<100) { s_inTimer=false; return; }
    s_lastSlowMs=now;
 
    //--- 1b) REG/HBT2. The hub's node table is built from these and NOTHING
@@ -10317,6 +10368,7 @@ void OnTimer()
                   +" becomes writable again; if this line persists, restart the EA.");
 
    g_log.Tick();
+   s_inTimer=false;
   }
 
 void OnTick()

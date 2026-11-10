@@ -150,7 +150,7 @@ public:
               }
             continue;
            }
-         if(first==";" || first=="#") continue;   // comment
+         if(first==";" || (first=="#" && StringFind(line,"=")<0)) continue;   // comment
 
          int eq=StringFind(line,"=");
          if(eq<=0) continue;
@@ -652,7 +652,7 @@ bool CopierIniValidate(const string ini,string &err)
       string line=CopierTrim(lines[i]);
       if(StringLen(line)==0) continue;
       ushort c0=StringGetCharacter(line,0);
-      if(c0==';' || c0=='#') continue;
+      if(c0==';' || (c0=='#' && StringFind(line,"=")<0)) continue;
       if(c0=='[')
         {
          int last=StringLen(line)-1;

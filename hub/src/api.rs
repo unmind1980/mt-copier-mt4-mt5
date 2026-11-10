@@ -1243,14 +1243,15 @@ async fn auth_nonce(
         .unwrap_or(false);
     let client_ip = if trust_proxy {
         headers
-            .get("x-real-ip")
+            .get("cf-connecting-ip")
+            .or_else(|| headers.get("x-real-ip"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim().to_string())
             .or_else(|| {
                 headers
                     .get("x-forwarded-for")
                     .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.rsplit(',').next())
+                    .and_then(|s| s.split(',').next())
                     .map(|s| s.trim().to_string())
             })
             .unwrap_or_else(|| "direct".to_string())

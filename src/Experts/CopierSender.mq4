@@ -701,8 +701,11 @@ int BuildCurrent()
         }
       if(idx>=0 && g_prev.At(idx,q))
         {
-         // R6-D1-01 & DEF-09-06: Strictly verify openTime matches to prevent adopting stale UID on MT4 ticket recycling
-         if(q.sym==p.sym && q.openTime>0 && p.openTime>0 && q.openTime==p.openTime)
+         // R6-D1-01, DEF-09-06 & R11-A03: Strictly verify openTime matches.
+         // For pending orders triggered into market positions, execution time updates: p.openTime >= q.openTime.
+         // For same kind (market->market), exact match required to prevent adopting stale UID on MT4 ticket recycling.
+         bool timeMatch = (q.kind == CP_ORD_PENDING && p.kind == CP_ORD_MARKET) ? (p.openTime >= q.openTime) : (q.openTime == p.openTime);
+         if(q.sym==p.sym && q.openTime>0 && p.openTime>0 && timeMatch)
            {
             uid=q.uid;
             slot=idx;

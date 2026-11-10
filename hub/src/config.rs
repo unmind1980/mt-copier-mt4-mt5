@@ -1118,7 +1118,7 @@ pub fn validate_ini(ini: &str) -> Result<(), String> {
     for (n, raw) in ini.lines().enumerate() {
         line_count = n + 1;
         let line = raw.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+        if line.is_empty() || line.starts_with(';') || (line.starts_with('#') && !line.contains('=')) {
             continue;
         }
         if line.starts_with('[') {

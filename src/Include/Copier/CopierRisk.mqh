@@ -456,6 +456,7 @@ public:
    string            TripReason() const
      {
       double eq=CopierAccountEquity();
+      if(m_dailyTripped && m_ddTripped) return DailyWhy(eq) + " AND " + DrawdownWhy(eq);
       if(m_dailyTripped) return DailyWhy(eq);
       if(m_ddTripped)    return DrawdownWhy(eq);
       return "";

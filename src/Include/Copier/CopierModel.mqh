@@ -1119,7 +1119,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
    else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
    if(!ok && trade.ResultRetcode()==TRADE_RETCODE_DONE_PARTIAL) ok=true;
-   // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
+   // R2-D1-M02 & R11-A01: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback using native OrderSend
+   // Bypasses CTrade::PositionOpen's internal FillingCheck() which forcefully resets type_filling to FOK
    if(!ok && trade.ResultRetcode()==10030)
      {
       long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
@@ -1128,13 +1129,31 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
       if((fillMode&SYMBOL_FILLING_FOK)!=0) candidates[nCand++]=ORDER_FILLING_FOK;
       if((fillMode&SYMBOL_FILLING_IOC)!=0) candidates[nCand++]=ORDER_FILLING_IOC;
       candidates[nCand++]=ORDER_FILLING_RETURN;
+      MqlTradeRequest req;
+      MqlTradeResult  res;
       for(int a=0; a<nCand; a++)
         {
-         trade.SetTypeFilling(candidates[a]);
-         if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
-         else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
-         if(ok || trade.ResultRetcode()==TRADE_RETCODE_DONE_PARTIAL) { ok=true; break; }
-         if(trade.ResultRetcode()!=10030) break;
+         ZeroMemory(req);
+         ZeroMemory(res);
+         req.action       = TRADE_ACTION_DEAL;
+         req.symbol       = sym;
+         req.volume       = lots;
+         req.type         = (side==CP_SIDE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+         req.price        = (side==CP_SIDE_BUY)?SymbolInfoDouble(sym,SYMBOL_ASK):SymbolInfoDouble(sym,SYMBOL_BID);
+         req.sl           = sl;
+         req.tp           = tp;
+         req.deviation    = (deviationPoints > 0) ? (ulong)deviationPoints : 0;
+         req.magic        = (ulong)magic;
+         req.comment      = comment;
+         req.type_filling = candidates[a];
+
+         ok=OrderSend(req,res);
+         if(ok && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_DONE_PARTIAL || res.retcode==TRADE_RETCODE_PLACED))
+           {
+            ok=true;
+            break;
+           }
+         if(res.retcode!=10030) break;
         }
      }
    if(!ok)

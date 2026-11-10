@@ -710,6 +710,8 @@ public:
 
    void              Add(const string key)
      {
+      // R11-E01: Guard against empty key polluting occupancy tracking
+      if(StringLen(key)==0) return;
       //--- an empty slot becoming occupied is a new occupied index; an
       //--- occupied one being overwritten is already in the list
       if(StringLen(m_k[m_head])==0)
@@ -1519,21 +1521,31 @@ public:
                      |FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(h==INVALID_HANDLE)
         {
-         // A86-07: If main state file is missing/unopenable, fall back to .tmp successor if available
+         // A86-07 & R11-E02: If main state file is missing/unopenable, fall back to .tmp successor and heal path
          if(StringFind(path,".tmp")<0 && FileIsExist(path+".tmp"))
            {
-            return Load(path+".tmp",header,pos,count,openLots);
+            if(Load(path+".tmp",header,pos,count,openLots))
+              {
+               Save(path,header,pos,count,openLots);
+               return true;
+              }
+            return false;
            }
          return false;
         }
 
-      // DEF-09-04: If file was opened but has 0 bytes (e.g. truncated during crash), close and fallback to .tmp
+      // DEF-09-04 & R11-E02: If file was opened but has 0 bytes, close, fallback to .tmp, and heal path
       if(FileSize(h)<=0)
         {
          FileClose(h);
          if(StringFind(path,".tmp")<0 && FileIsExist(path+".tmp"))
            {
-            return Load(path+".tmp",header,pos,count,openLots);
+            if(Load(path+".tmp",header,pos,count,openLots))
+              {
+               Save(path,header,pos,count,openLots);
+               return true;
+              }
+            return false;
            }
          return false;
         }

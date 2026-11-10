@@ -203,7 +203,10 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
    else if(mode==CP_SIZE_EQUITY_RATIO)
      {
       if(senderEquity<=0.0 || receiverEquity<=0.0) { rejected=true; return 0.0; }
-      raw=senderLots*(receiverEquity/senderEquity)*param*symMultiplier;
+      double eqRatio=receiverEquity/senderEquity;
+      // R11-D01: Guard against hyperbolic ratio explosion when sender equity collapses
+      if(eqRatio>100.0) eqRatio=100.0;
+      raw=senderLots*eqRatio*param*symMultiplier;
      }
    else                                  raw=senderLots*param*symMultiplier;
    if(raw<=0.0) { rejected=true; return 0.0; }
