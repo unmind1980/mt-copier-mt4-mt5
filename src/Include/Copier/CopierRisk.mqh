@@ -330,6 +330,21 @@ public:
         {
          m_peakEquity=MathMax(0.0,m_peakEquity+cashFlow);
         }
+      // R5-D4-02: If deposit restored equity above risk thresholds, clear tripped latches
+      if(cashFlow>0.0)
+        {
+         double curEq=CopierAccountEquity();
+         if(m_lim.maxDrawdownPct>0.0 && m_peakEquity>0.0)
+           {
+            double ddPct=(m_peakEquity-curEq)/m_peakEquity*100.0;
+            if(ddPct<m_lim.maxDrawdownPct) m_ddTripped=false;
+           }
+         if(m_lim.dailyLossPct>0.0 && m_dayStartEquity>0.0)
+           {
+            double dPct=(m_dayStartEquity-curEq)/m_dayStartEquity*100.0;
+            if(dPct<m_lim.dailyLossPct) m_dailyTripped=false;
+           }
+        }
      }
 
    double            DayStartEquity() const { return m_dayStartEquity; }

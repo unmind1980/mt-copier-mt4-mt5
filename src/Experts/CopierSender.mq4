@@ -686,8 +686,17 @@ int BuildCurrent()
       int idx=g_prev.FindByTicket(p.ticket,p.kind);
       if(idx<0 && p.kind==CP_ORD_MARKET)
         {
-         // D1-M01: Pending order triggered into market position with same ticket
-         idx=g_prev.FindByTicket(p.ticket,CP_ORD_PENDING);
+         // D1-M01 & R5-D1-02: Pending order triggered into market position with same ticket.
+         // Only inherit UID if the pending order has completely disappeared (full fill).
+         // If pending order is still present in raw scan (partial fill), pending order keeps UID.
+         bool pendStillActive=false;
+         for(int r=0; r<rn; r++)
+           {
+            if(g_rawScratch[r].ticket==p.ticket && g_rawScratch[r].kind==CP_ORD_PENDING)
+              { pendStillActive=true; break; }
+           }
+         if(!pendStillActive)
+            idx=g_prev.FindByTicket(p.ticket,CP_ORD_PENDING);
         }
       if(idx>=0 && g_prev.At(idx,q))
         {
@@ -1598,6 +1607,9 @@ bool SenderAnswersTo(const string id)
    if(StringLen(id)==0) return true;
    if(id==SenderId()) return true;
    if(id==(string)g_nid) return true;
+   if(id==(string)CopierAccountLogin()) return true;
+   long parsed=CopierParseLong(id);
+   if(parsed>0 && CopierNid(parsed)==g_nid) return true;
    return false;
   }
 
@@ -2013,8 +2025,8 @@ void HandleHubSubFrame(const CopierEnv &he)
       CopierKvGet(he.payload,"ID",id);
       CopierKvGet(he.payload,"OP",op);
       CopierKvGet(he.payload,"ARGS",args);
-      // MQL-04: TO routing validation matching Receiver
-      if(StringLen(to)>0 && to!=g_ssid && to!=(string)g_nid) return;
+      // MQL-04 & R5-D5-02: TO routing validation matching Receiver
+      if(StringLen(to)>0 && to!=g_ssid && to!=(string)g_nid && to!=(string)CopierAccountLogin()) return;
       if(op=="reqpos" || op=="refreshpos" || op=="refresh")
         {
          g_forcePosReport=true;

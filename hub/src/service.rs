@@ -134,10 +134,10 @@ pub mod win_service {
 
         // Shift backups up: .4 -> .5, .3 -> .4, etc.
         for i in (1..max_backups).rev() {
-            let from = format!("{}.{}", path.display(), i);
-            let to = format!("{}.{}", path.display(), i + 1);
-            if std::path::Path::new(&from).exists() {
-                let _ = std::fs::rename(&from, &to);
+            let from = PathBuf::from(format!("{}.{}", path.display(), i));
+            let to = PathBuf::from(format!("{}.{}", path.display(), i + 1));
+            if from.exists() {
+                let _ = crate::cluster::atomic_replace_file(&from, &to);
             }
         }
 

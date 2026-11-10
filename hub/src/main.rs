@@ -2477,7 +2477,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                 //--- the source of truth does not make an
                                 //--- unexplained difference something to
                                 //--- erase.
-                                if role == "receiver" && node_rev > 0 {
+                                // R5-D5-05: Allow initial config push for receivers with REV=0
+                                if role == "receiver" {
                                     let key = format!("{}:{}", role, acc);
                                     let hub_rev = cfg.current(&key).map(|r| r.rev).unwrap_or(0);
                                     if hub_rev > 0 && node_rev > hub_rev {

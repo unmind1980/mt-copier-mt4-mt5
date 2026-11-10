@@ -870,6 +870,7 @@ string          g_drainMsgs[CP_DRAIN_MAX];
 //--- the tests all read the same numbers, and so the long end is visibly
 //--- deliberate rather than an arbitrary constant.
 CopierBackoff   g_backoff;   // escalating retry gap, keyed on the action key
+long            SenderTimeToOurs(const int si,const long senderTime);
 //--- Entries this platform can never PLACE, but which may still become
 //--- something it CAN mirror.
 //---
@@ -2436,6 +2437,9 @@ string ResolveUid(const CopierPos &p)
         {
          // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
          if(curFrom<=0 || (ulong)curFrom>0xFFFFFFFF || !OrderSelect((int)(uint)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+         // R5-D2-01: Check if root ticket carries original copier UID in comment
+         string histUid=CopierUidFromComment(OrderComment());
+         if(StringLen(histUid)>0) return histUid;
          long prevFrom=CopierMt4FromTicket(OrderComment());
          if(prevFrom<=0) break;
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
@@ -3590,7 +3594,7 @@ void ExecuteQueue()
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
            {
             double minSp = GetSymbolMinSpread(a.sym);
-            if(minSp<=0.0) minSp = CopierGetSpreadPoints(a.sym);
+            if(minSp<=0.0) minSp = 15.0; // conservative 1.5 pip baseline before warmup completes
             bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
             if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
               {
@@ -3754,8 +3758,17 @@ void ExecuteQueue()
            }
 #else
          int cmd=(a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
+         double curFree=AccountFreeMargin();
          double fmCheck=AccountFreeMarginCheck(a.sym,cmd,a.lots);
-         if(fmCheck<=0.0 || (fmCheck - drainedReqMargin <= 0.0))
+         if(curFree>fmCheck && fmCheck>0.0)
+            reqMargin=curFree-fmCheck;
+         else
+           {
+            double oneLotMargin=MarketInfo(a.sym,MODE_MARGINREQUIRED);
+            if(oneLotMargin>0.0) reqMargin=oneLotMargin*a.lots;
+           }
+         if(reqMargin<0.0) reqMargin=0.0;
+         if(fmCheck<=0.0 || (curFree - drainedReqMargin < reqMargin))
             marginOk=false;
 #endif
          if(!marginOk)
@@ -4226,9 +4239,8 @@ void ExecuteQueue()
               }
             else if(isTransientErr)
               {
-               // Park for a brief 1.5s cooldown instead of climbing the multi-minute exponential ladder
-               fails=1;
-               g_backoff.Park(boKey,1500);
+               // R5-D1-01: Allow up to 3 fast 1.5s retries before escalating into backoff ladder and operator alerts
+               fails=g_backoff.NotePark(boKey,1500,3);
               }
             else
               {
@@ -4513,6 +4525,11 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
      {
       double rate=CopierGetCurrencyCrossRate(g_senderCurrency[si],recCcy);
       if(rate>0.0) convSenderEq*=rate;
+      else
+        {
+         rejected=true;
+         return 0.0;
+        }
      }
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
                                  0.0,0.0,rejected,convSenderEq,myEq);
@@ -4538,19 +4555,13 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
    if(!CopierGetSymbolInfo(sym,si2)) return 0.0;
    bool rejected=false;
    double targetLots=0.0;
-   if(g_lotMode[si]==CP_SIZE_FIXED)
+   double origLots=(desired.initLots>0.0)
+                   ?desired.initLots
+                   :GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
+   if(origLots>0.0 && desired.lots<origLots)
      {
-      double baseLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
-      //--- N-03: the peak now lives on the desired row. The table lookup remains
-      //--- only as a fallback for a row stored before this field existed (it
-      //--- cannot be 0 on a snapshot-built row), so a miss cannot change sizing.
-      double origLots=(desired.initLots>0.0)
-                      ?desired.initLots
-                      :GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
-      if(origLots>0.0 && desired.lots<origLots)
-         targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
-      else
-         targetLots=baseLots;
+      double baseLots=ComputeReceiverLots(si,sym,origLots,rejected);
+      targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
      }
    else
      {
@@ -4750,7 +4761,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double dOpn=desired.openPx;
    double dPPrice=desired.pprice;
    double dPStop=desired.pstop;
-   long   dPExp=desired.pexpire;
+   long   dPExp=(desired.pexpire>0)?SenderTimeToOurs(si,desired.pexpire):0;
    int oi=StopsOvIndex(desired.uid,false);
    if(oi>=0 && g_stHasOv[oi])
      {
@@ -4974,7 +4985,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       if(dPPrice>0.0 && MathAbs(local.pprice-dPPrice)>si2.point*0.5) pendingDiff=true;
       if(dPStop>0.0 && MathAbs(local.pstop-dPStop)>si2.point*0.5) pendingDiff=true;
       if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
-      else if(dPExp==0 && desired.pexpire!=local.pexpire) pendingDiff=true;
+      else if(dPExp==0 && local.pexpire!=0) pendingDiff=true;
      }
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
@@ -5055,7 +5066,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- mirror would keep the first stop it ever saw.
    double actPPrice = (local.kind==CP_ORD_PENDING && dPPrice>0.0) ? dPPrice : local.pprice;
    double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
-   long   actPExp   = (local.kind==CP_ORD_PENDING) ? ((dPExp>0) ? dPExp : desired.pexpire) : local.pexpire;
+   long   actPExp   = (local.kind==CP_ORD_PENDING) ? dPExp : local.pexpire;
 
    bool pushed=PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
                           0.0,local.ticket,0,
@@ -5739,12 +5750,17 @@ void RefreshRisk()
            }
          else
            {
-            g_riskDayStartBalance=curBal;
+            g_riskDayStartBalance=0.0;
+            g_riskDayStartEquity=0.0;
+            g_lastRealizedMs=0;
            }
-         // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
-         double curEq=CopierAccountEquity();
-         double floatingOffset=curEq-curBal;
-         g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
+         if(rOk)
+           {
+            // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
+            double curEq=CopierAccountEquity();
+            double floatingOffset=curEq-curBal;
+            g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
+           }
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
@@ -6681,7 +6697,8 @@ void ConvergeSender(const int si)
 
       bool queued=PushAction(si,CP_ACT_OPEN,d.uid,rsym,d.side,lots,0,d.ticket,
                              ":"+(string)d.kind,osl,otp,
-                             d.kind,d.ptype,d.pprice,d.pstop,d.pexpire,d.openPx);
+                             d.kind,d.ptype,d.pprice,d.pstop,
+                             (d.pexpire>0)?SenderTimeToOurs(si,d.pexpire):0,d.openPx);
       if(queued)
         {
          pendCount++;

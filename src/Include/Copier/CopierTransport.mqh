@@ -669,9 +669,13 @@ public:
             if(!m_sub.recv(discard,true)) break;
             if(!discard.more()) { m_midInboundMultipart=false; drained=true; break; }
            }
-         // R2-D5-X01: If no remaining frames were pending in the pipe, libzmq cleared the broken frame on disconnect.
+         // R2-D5-X01 & R5-D5-01: If no remaining frames were pending in the pipe, libzmq cleared the broken frame on disconnect.
          // Clear latch so the next valid message after reconnect is not discarded!
-         if(!drained) return 0;
+         if(!drained)
+           {
+            m_midInboundMultipart=false;
+            return 0;
+           }
         }
 
       int got=0;

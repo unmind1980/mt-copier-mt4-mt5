@@ -1243,14 +1243,14 @@ async fn auth_nonce(
         .unwrap_or(false);
     let client_ip = if trust_proxy {
         headers
-            .get("x-forwarded-for")
+            .get("x-real-ip")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
             .map(|s| s.trim().to_string())
             .or_else(|| {
                 headers
-                    .get("x-real-ip")
+                    .get("x-forwarded-for")
                     .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.rsplit(',').next())
                     .map(|s| s.trim().to_string())
             })
             .unwrap_or_else(|| "direct".to_string())
@@ -4147,7 +4147,7 @@ async fn cluster_failback_now(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .unwrap_or_default();
 
@@ -4265,6 +4265,17 @@ async fn cluster_get_peer(
     Json(resp).into_response()
 }
 
+fn validate_peer_url(url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("peer URL scheme must be http or https".to_string());
+    }
+    if parsed.host_str().is_none() {
+        return Err("peer URL must include a valid host".to_string());
+    }
+    Ok(())
+}
+
 async fn cluster_set_peer(
     axum::extract::Extension(sess): axum::extract::Extension<Session>,
     State(st): State<SharedState>,
@@ -4300,7 +4311,7 @@ async fn cluster_set_peer(
             )
                 .into_response();
         }
-        if let Err(e) = crate::notifications::validate_outgoing_url(&new_url).await {
+        if let Err(e) = validate_peer_url(&new_url) {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(json!({ "error": format!("Invalid peer URL: {}", e) })),

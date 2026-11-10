@@ -272,21 +272,36 @@ bool CopierIsConnected()
 // R4-D3-01: Cross-currency conversion rate between two account currencies.
 // Returns multiplier: valueInToCcy = valueInFromCcy * rate.
 //=====================================================================
+//=====================================================================
+// Currency cross rate with broker suffix resolution
+//=====================================================================
+string CopierResolveCrossSymbol(const string pair)
+  {
+   if(CopierSymbolEnsure(pair)) return pair;
+   string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c"};
+   for(int i=0;i<ArraySize(sfx);i++)
+     {
+      string cand=pair+sfx[i];
+      if(CopierSymbolEnsure(cand)) return cand;
+     }
+   return "";
+  }
+
 double CopierGetCurrencyCrossRate(const string fromCcy,const string toCcy)
   {
    if(fromCcy==toCcy || StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 1.0;
 
    // Direct pair: fromCcy + toCcy (e.g. USDJPY -> 1 USD = px JPY)
-   string direct=fromCcy+toCcy;
-   if(CopierSymbolEnsure(direct))
+   string direct=CopierResolveCrossSymbol(fromCcy+toCcy);
+   if(StringLen(direct)>0)
      {
       double px=0.0;
       if(CopierGetPrice(direct,CP_SIDE_SELL,px) && px>0.0) return px;
      }
 
    // Inverted pair: toCcy + fromCcy (e.g. EURUSD -> 1 EUR = px USD -> 1 USD = 1/px EUR)
-   string inverted=toCcy+fromCcy;
-   if(CopierSymbolEnsure(inverted))
+   string inverted=CopierResolveCrossSymbol(toCcy+fromCcy);
+   if(StringLen(inverted)>0)
      {
       double px=0.0;
       if(CopierGetPrice(inverted,CP_SIDE_BUY,px) && px>0.0) return 1.0/px;
@@ -300,7 +315,7 @@ double CopierGetCurrencyCrossRate(const string fromCcy,const string toCcy)
       if(r1>0.0 && r2>0.0) return r1*r2;
      }
 
-   return 1.0;
+   return 0.0;
   }
 
 //=====================================================================
@@ -1689,11 +1704,10 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          if(entry==DEAL_ENTRY_IN)          inVol+=vol;
          else if(entry==DEAL_ENTRY_INOUT)
            {
-            // A reversal closes the existing inVol balance; any excess begins the new direction
+            // R5-D2-02: When evaluating whether position `ticket` is closed, only count the closing portion.
+            // Do NOT inflate inVol of the closed position with the opening portion of the new position.
             double closingVol = MathMin(vol, MathMax(0.0, inVol - outVol));
             outVol += closingVol;
-            double openingVol = vol - closingVol;
-            if(openingVol > 0.0) inVol += openingVol;
            }
          else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }

@@ -195,7 +195,7 @@ impl ArchiveShift {
                 let from = self.archive_path(idx);
                 let to = self.archive_path(idx + 1);
                 if from.exists() {
-                    let _ = fs::rename(&from, &to);
+                    let _ = crate::cluster::atomic_replace_file(&from, &to);
                 }
             }
 

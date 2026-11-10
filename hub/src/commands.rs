@@ -593,12 +593,8 @@ impl CommandStore {
         }
 
         let mut inner = self.inner.lock_or_recover();
-        // R4-D8-02: Stage surviving commands on temporary map; only prune memory if compaction succeeds
-        let surviving_cmds = {
-            let mut clone = inner.commands.clone();
-            clone.retain(|_, c| c.state == STATE_PENDING || unix_secs().saturating_sub(c.ts) <= COMMAND_KEEP_SECS);
-            clone
-        };
+        // R4-D8-02 & R5-D8-01: Stage surviving commands preserving quiet-node watermarks
+        let surviving_cmds = Inner::staged_prune_terminal(&inner.commands, unix_secs(), COMMAND_KEEP_SECS);
 
         // Drop file handle so Windows allows replacing the open file
         inner.file = None;
@@ -1247,20 +1243,10 @@ impl Inner {
     /// shrinks, so a hub that runs for months ends up holding every command it
     /// ever issued - and `stats()` walks all of them. PENDING commands are
     /// never dropped: they are the ones still owed an answer.
-    fn prune_terminal(&mut self, now_secs: u64, max_age_secs: u64) -> usize {
-        //--- H2: never prune away the highest-seq command of a node.
-        //--- `load()` rebuilds each node's `seq` (and the global `max_seq`) from
-        //--- the rows in the journal. Dropping every row a quiet node ever wrote
-        //--- therefore reset that node's sequence to 0 on the NEXT restart, and
-        //--- the ids it then minted (`<node>-<op>-1`, `-2`, ...) collided with ids
-        //--- the EA still remembered in its dedup ring - so brand-new commands were
-        //--- silently discarded as duplicates - while the cluster heartbeat saw
-        //--- `max_cmd_seq` go BACKWARDS.
-        //--- Keeping exactly one watermark row per node costs a line and makes the
-        //--- sequence monotonic across restarts and across compact_journal().
+    pub fn staged_prune_terminal(commands: &HashMap<String, Command>, now_secs: u64, max_age_secs: u64) -> HashMap<String, Command> {
         let mut watermark: HashMap<String, (String, u64)> = HashMap::new();
         let mut latest_cfg: HashMap<String, (String, u64)> = HashMap::new();
-        for (id, c) in self.commands.iter() {
+        for (id, c) in commands.iter() {
             if c.kind == KIND_CONFIG {
                 let ts = if c.ack_at > 0 { c.ack_at } else { c.ts };
                 match latest_cfg.get(&c.node) {
@@ -1285,9 +1271,9 @@ impl Inner {
             keep_ids.insert(id.clone());
         }
 
-        let before = self.commands.len();
         let now = now_secs;
-        self.commands.retain(|id, c| {
+        let mut surviving = commands.clone();
+        surviving.retain(|id, c| {
             if c.state == STATE_PENDING {
                 return true;
             }
@@ -1296,11 +1282,17 @@ impl Inner {
             }
             now.saturating_sub(c.ts) <= max_age_secs
         });
+        surviving
+    }
+
+    fn prune_terminal(&mut self, now_secs: u64, max_age_secs: u64) -> usize {
+        let before = self.commands.len();
+        self.commands = Self::staged_prune_terminal(&self.commands, now_secs, max_age_secs);
         self.in_flight.retain(|id| self.commands.contains_key(id));
         // Note: Do NOT prune self.seq - the per-node sequence counter must remain monotonic
         // across terminal command aging so newly minted command IDs never collide with
         // an ID the node still remembers, preventing false deduplication idempotency drops.
-        before - self.commands.len()
+        before.saturating_sub(self.commands.len())
     }
 }
 

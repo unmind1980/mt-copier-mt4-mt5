@@ -471,7 +471,9 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
 
 /// N72-03: Save cluster state to path atomically without holding SharedState mutex.
 pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::io::Result<()> {
-    let tmp = PathBuf::from(format!("{}.tmp.{}", path.display(), std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = PathBuf::from(format!("{}.tmp.{}.{}", path.display(), std::process::id(), seq));
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     {
@@ -485,9 +487,10 @@ pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::
 /// Spawns the background cluster replication and failback manager loop.
 pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
+        let worker_started_at = Instant::now();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .unwrap_or_default();
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
@@ -547,12 +550,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, r.status());
 
-                    // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    // R2-H01, D7-H01, R5-D7-01 & R5-D7-02: Autonomous recovery when orphaned in Standby
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                    let lease_expired = s.cluster.handover_lease_until.map(|t| Instant::now() >= t).unwrap_or(false);
+                    if role == "standby" && (is_cfg_primary || lease_expired) {
+                        let outage = match s.cluster.last_peer_contact {
+                            Some(t) => t.elapsed().as_secs(),
+                            None => worker_started_at.elapsed().as_secs(),
+                        };
                         if outage >= 30 {
+                            s.cluster.handover_lease_until = None;
                             let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
                             let ep = s.cluster.promote(target_ep);
                             s.writes = s.writes_allowed;
@@ -561,7 +569,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             let (p, st_file) = s.cluster.save_info();
                             drop(s);
                             audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
+                            println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
                             let _ = save_state_to_file(&p, &st_file);
                         }
                     }
@@ -574,12 +582,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
 
-                    // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
+                    // R2-H01, D7-H01, R5-D7-01 & R5-D7-02: Autonomous recovery when orphaned in Standby
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
+                    let lease_expired = s.cluster.handover_lease_until.map(|t| Instant::now() >= t).unwrap_or(false);
+                    if role == "standby" && (is_cfg_primary || lease_expired) {
+                        let outage = match s.cluster.last_peer_contact {
+                            Some(t) => t.elapsed().as_secs(),
+                            None => worker_started_at.elapsed().as_secs(),
+                        };
                         if outage >= 30 {
+                            s.cluster.handover_lease_until = None;
                             let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
                             let ep = s.cluster.promote(target_ep);
                             s.writes = s.writes_allowed;
@@ -588,7 +601,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                             let (p, st_file) = s.cluster.save_info();
                             drop(s);
                             audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Configured primary promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
+                            println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
                             let _ = save_state_to_file(&p, &st_file);
                         }
                     }
@@ -703,13 +716,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
             // P1-2, D7-H02 & R4-D7-01: Dual Standby recovery - total lexicographical ordering to prevent election deadlock
             if current_role == "standby" && remote_st.role == "standby" && !handover_in_flight {
-                let (my_cfg, (my_cmd, my_seq)) = {
+                let my_seq = {
                     let s = st.lock_or_recover();
-                    (s.cfg.total_lines(), s.cmds.sync_stats())
+                    s.cmds.sync_stats().1
                 };
                 use std::cmp::Ordering;
-                let my_data = (epoch, my_seq, my_cmd, my_cfg);
-                let remote_data = (remote_st.epoch, remote_st.max_cmd_seq, remote_st.cmd_lines, remote_st.cfg_lines);
+                let my_data = (epoch, my_seq);
+                let remote_data = (remote_st.epoch, remote_st.max_cmd_seq);
                 let should_recover = match my_data.cmp(&remote_data) {
                     Ordering::Greater => true,
                     Ordering::Less => false,

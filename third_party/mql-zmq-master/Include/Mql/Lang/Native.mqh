@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| Module: Lang/Native.mqh                                          |
 //| This file is part of the mql4-lib project:                       |
 //|     https://github.com/dingmaotu/mql4-lib                        |
@@ -143,8 +143,7 @@ string StringFromUtf8Pointer(intptr_t psz,int len)
    if(len < 0) return NULL;
    string res;
    int required=MultiByteToWideChar(CP_UTF8,0,psz,len,res,0);
-// need to include the NULL terminating character
-   StringInit(res,required+1);
+   StringInit(res,required);
    int rlen=MultiByteToWideChar(CP_UTF8,0,psz,len,res,required);
    return rlen != required ? NULL : res;
   }

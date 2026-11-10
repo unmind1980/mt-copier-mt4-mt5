@@ -1098,6 +1098,19 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
             if (segs[0] & 0xffc0) == 0xfe80 || (segs[0] == 0xfd00 && segs[1] == 0xec2 && segs[7] == 0x254) {
                 return Err("URL points to prohibited cloud metadata or link-local IPv6".to_string());
             }
+            if segs[0] == 0x2002 {
+                let v4 = std::net::Ipv4Addr::new(
+                    (segs[1] >> 8) as u8, (segs[1] & 0xff) as u8,
+                    (segs[2] >> 8) as u8, (segs[2] & 0xff) as u8,
+                );
+                let oct = v4.octets();
+                if v4.is_link_local()
+                    || (oct[0] == 169 && oct[1] == 254)
+                    || (oct[0] == 100 && oct[1] == 100 && oct[2] == 100 && oct[3] == 200)
+                {
+                    return Err("URL points to prohibited cloud metadata or link-local IPv4 via 6to4".to_string());
+                }
+            }
             let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
             let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);
             if is_v4_mapped || is_v4_compat {
@@ -1137,8 +1150,19 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
         }
         std::net::IpAddr::V6(v6) => {
             let segs = v6.segments();
-            if (segs[0] & 0xfe00) == 0xfc00 {
-                return Err("URL points to prohibited private IPv6".to_string());
+            if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xff00) == 0xff00 {
+                return Err("URL points to prohibited private or multicast IPv6".to_string());
+            }
+            if segs[0] == 0x2002 {
+                let v4 = std::net::Ipv4Addr::new(
+                    (segs[1] >> 8) as u8, (segs[1] & 0xff) as u8,
+                    (segs[2] >> 8) as u8, (segs[2] & 0xff) as u8,
+                );
+                let oct = v4.octets();
+                if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
+                    || (oct[0] == 100 && (oct[1] & 0xC0) == 64) || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                    return Err("URL points to prohibited private or reserved IPv4 via 6to4".to_string());
+                }
             }
             let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
             let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);

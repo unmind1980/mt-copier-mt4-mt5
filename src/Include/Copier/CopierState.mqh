@@ -1297,6 +1297,38 @@ public:
       return n;
      }
 
+   //--- Record a transient failure and park for fixed ms until maxFastRetries, then escalate to ladder
+   int               NotePark(const string key,const long parkMs,const int maxFastRetries=3)
+     {
+      long now=CopierNowMs();
+      int i=Find(key);
+      int n=1;
+      bool isNew=(i<0);
+      if(i>=0)
+        {
+         long prev=CopierBackoffMs(m_n[i]);
+         n=((now-m_t[i])>MathMin(prev*2,120000))?1:(m_n[i]+1);
+        }
+      else
+         i=FreeSlot();
+
+      if(n>8) n=8;
+      if(StringLen(m_k[i])>0 && m_k[i]!=key)
+        {
+         m_k[i]="";
+         EraseHash(i);
+        }
+      m_k[i]=key;
+      m_n[i]=n;
+      m_t[i]=now;
+      if(n<=maxFastRetries)
+         m_u[i]=now+parkMs;
+      else
+         m_u[i]=now+CopierBackoffMs(n);
+      if(isNew) InsertHash(i,HashOf(key));
+      return n;
+     }
+
    //--- Park the key WITHOUT touching the ladder.
    //---
    //--- For a failure that is not the broker refusing the ORDER - this
