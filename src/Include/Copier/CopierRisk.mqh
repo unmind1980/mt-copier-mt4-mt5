@@ -417,14 +417,20 @@ public:
                                string &why)
      {
       why="";
+      double curEq=CopierAccountEquity();
+      if(m_dailyTripped && m_ddTripped)
+        {
+         why=DailyWhy(curEq)+" AND "+DrawdownWhy(curEq);
+         return false;
+        }
       if(m_dailyTripped)
         {
-         why=DailyWhy(CopierAccountEquity());
+         why=DailyWhy(curEq);
          return false;
         }
       if(m_ddTripped)
         {
-         why=DrawdownWhy(CopierAccountEquity());
+         why=DrawdownWhy(curEq);
          return false;
         }
       return CopierRiskAllowsOpen(m_lim,lots,

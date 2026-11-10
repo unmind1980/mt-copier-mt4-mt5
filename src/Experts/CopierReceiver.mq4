@@ -2823,6 +2823,23 @@ void SaveReceiverMap()
       g_saveScratch.InsertEmpty(p);
      }
 
+   //--- Write-amplification guard: check if the position table has changed compared to g_recKnown
+   bool mapChanged = (g_saveScratch.Count() != g_recKnown.Count());
+   if(!mapChanged)
+     {
+      for(int i=0;i<g_acctAllPosCount;i++)
+        {
+         if(StringLen(g_acctAllPos[i].uid)==0) continue;
+         CopierPos prev;
+         if(!g_recKnown.GetByTicket(g_acctAllPos[i].ticket,prev) || prev.uid!=g_acctAllPos[i].uid)
+           {
+            mapChanged=true;
+            break;
+           }
+        }
+     }
+   if(!mapChanged && g_stateSaveOk) return; // Unchanged: avoid disk write amplification!
+
    g_recKnown.CopyFrom(g_saveScratch);
 
    CopierPos dense[];
@@ -3228,6 +3245,22 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
         {
          g_pushReject="close_already_queued";
          return false;
+        }
+     }
+   // R12-A01: In-place coalescing for CP_ACT_TRIM:
+   if(kind==CP_ACT_TRIM)
+     {
+      for(int qi=0; qi<g_qn; qi++)
+        {
+         int qidx=g_qHead+qi;
+         if(g_q[qidx].senderIdx==si && g_q[qidx].kind==CP_ACT_TRIM && g_q[qidx].uid==uid)
+           {
+            g_q[qidx].lots   = lots;
+            g_q[qidx].ticket = ticket;
+            g_q[qidx].key    = key;
+            g_qRetryAtMs     = 0;
+            return true;
+           }
         }
      }
    // R10-A04: In-place coalescing for CP_ACT_MODIFY:
@@ -3877,23 +3910,38 @@ void ExecuteQueue()
          if(fmCheck<=0.0 || (effectiveFree < reqMargin))
             marginOk=false;
 #endif
-         // R11-D04: Check projected margin level against broker stop-out level
+         // R11-D04 & R12-D02: Check projected margin level against broker stop-out level with mode awareness
          double curMargin=0.0;
          double curEquity=CopierAccountEquity();
          double soLevel=0.0;
+         bool isMoneyMode=false;
 #ifdef __MQL5__
          curMargin=AccountInfoDouble(ACCOUNT_MARGIN);
          soLevel=AccountInfoDouble(ACCOUNT_MARGIN_SO_SO);
+         isMoneyMode=(AccountInfoInteger(ACCOUNT_MARGIN_SO_MODE)==1);
 #else
          curMargin=AccountMargin();
          soLevel=AccountStopoutLevel();
+         isMoneyMode=(AccountStopoutMode()==1);
 #endif
          double projMargin = curMargin + drainedReqMargin + reqMargin;
-         if(projMargin > 0.0 && curEquity > 0.0)
+         if(curEquity <= 0.0)
            {
-            double projLevel = (curEquity / projMargin) * 100.0;
-            double minSafe = (soLevel > 0.0) ? (soLevel + 20.0) : 100.0;
-            if(projLevel <= minSafe) marginOk=false;
+            marginOk=false;
+           }
+         else if(projMargin > 0.0)
+           {
+            if(isMoneyMode)
+              {
+               double freeAfter = curEquity - projMargin;
+               if(freeAfter <= soLevel + 50.0) marginOk=false;
+              }
+            else
+              {
+               double projLevel = (curEquity / projMargin) * 100.0;
+               double minSafe = (soLevel > 0.0) ? (soLevel + 20.0) : 100.0;
+               if(projLevel <= minSafe) marginOk=false;
+              }
            }
          if(!marginOk)
            {
@@ -4017,8 +4065,10 @@ void ExecuteQueue()
          int dev = CopierScaleDeviationPoints(a.sym, rawDev);
          // NH-03: Exit Slippage Buffer is applied ONLY to emergency exits or true bulk martingale/grid exits (>=8 actions),
          // preventing routine 2-action closes from suffering 100 points (10 pips) slippage.
-         if((isEmergencyExit || closeCount>=8) && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
-            dev = MathMax(dev, 100);
+         // R12-D03: Exit operations (CLOSE, TRIM, DEDUP) are pure risk-reduction operations.
+         // Grant generous slippage (at least 300 points) to prevent unclosable lockout on gap opens
+         if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
+            dev = MathMax(dev, 300);
 
 #ifdef __MQL5__
          asyncMode = isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP);
@@ -4493,7 +4543,7 @@ void ExecuteQueue()
         }
 
       ShiftQueue();
-      done++;
+      if(ok) done++; // R12-A02: Only count successful operations so rejected actions engage queue backoff
      }
 
    //--- Two-Pass Sweeper: for batch close operations (Martingale/Grid exits),
@@ -8368,15 +8418,19 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    //--- per-stream watermark: a snapshot must never invalidate an event
    //--- that was emitted before it on the other socket
    if((long)(e.seq - g_lastSeq[si][stream])<=0) return false;
-   long gap = (e.seq - g_lastSeq[si][stream]) - 1;
-   if(g_lastSeq[si][stream] >= 0 && gap > 0)
+   // R12-B04: Sender sequence is global across all streams.
+   // Track drops against sender's global high watermark rather than stream watermark to avoid false alarms on stream interleaving.
+   static long s_lastSeqGlobal[CP_MAX_SENDERS]={0};
+   long globalGap = (e.seq - s_lastSeqGlobal[si]) - 1;
+   if(s_lastSeqGlobal[si] > 0 && globalGap > 0)
      {
-      if(g_once.ShouldEmit("net_gap|"+g_sid[si]+"|"+(string)stream))
-         g_log.Warn("NETWORK DROP: sender "+g_sid[si]+" stream "+(string)stream+
-                    " lost "+(string)gap+" frame(s) [expected "+
-                    (string)(g_lastSeq[si][stream]+1)+".."+(string)(e.seq-1)+
+      if(g_once.ShouldEmit("net_gap|"+g_sid[si]))
+         g_log.Warn("NETWORK DROP: sender "+g_sid[si]+
+                    " lost "+(string)globalGap+" frame(s) [expected "+
+                    (string)(s_lastSeqGlobal[si]+1)+".."+(string)(e.seq-1)+
                     ", got "+(string)e.seq+"]");
      }
+   if(e.seq > s_lastSeqGlobal[si]) s_lastSeqGlobal[si] = e.seq;
    g_lastSeq[si][stream]=e.seq;
    return true;
   }
@@ -8595,6 +8649,8 @@ int OnInit()
       g_log.Warn("Account not connected during init; hedging mode verification deferred to runtime.");
 #endif
    if(!AcquireInstanceLock()) return INIT_FAILED;
+   // R12-B03: Seed PRNG with salted entropy to avoid lock-step reconnect SYN storms across receiver fleet
+   MathSrand((int)(CopierNowMs() ^ (long)TimeLocal() ^ (long)CopierAccountLogin() ^ (long)g_nid));
    g_seen.SetTtlMs(600000);
    g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode
    g_inflight.Clear();
@@ -9078,7 +9134,7 @@ void OnDeinit(const int reason)
    g_tp.Close();
    ReleaseInstanceLock();
 
-   //--- Flush position scan, cache and hash index globals so hot reload doesn't inherit stale state
+   //--- Flush position scan, cache, hash index, idempotency and memory buffers so hot reload doesn't inherit stale state
    g_acctAllPosCount=0;
    g_acctScanned=false;
    g_posCacheCount=0;
@@ -9091,6 +9147,43 @@ void OnDeinit(const int reason)
    ArrayInitialize(s_posCacheTkSlot,0);
    ArrayInitialize(s_posCacheTkHash,0);
    ZeroMemory(g_stopSig);
+   g_seen.Clear();
+   g_inflight.Clear();
+   g_unsupported.Clear();
+   g_fillGraceRing.Clear();
+   g_mktClosed.Clear();
+   g_manualClosed.Clear();
+   g_backoff.Clear();
+   for(int i=0;i<CP_MAX_ACTIONS;i++)
+     {
+      g_sweepFailed[i].uid="";
+      g_sweepFailed[i].sym="";
+      g_sweepFailed[i].key="";
+      g_sweepFailed[i].ticket=0;
+     }
+   for(int i=0;i<CP_MAX_POSITIONS;i++)
+     {
+      g_rawScratch[i].uid=""; g_rawScratch[i].sym=""; g_rawScratch[i].cmt="";
+      g_scanScratch[i].uid=""; g_scanScratch[i].sym=""; g_scanScratch[i].cmt="";
+      g_locScratch[i].uid=""; g_locScratch[i].sym=""; g_locScratch[i].cmt="";
+      g_acctAllPos[i].uid=""; g_acctAllPos[i].sym=""; g_acctAllPos[i].cmt="";
+      g_posCache[i].uid=""; g_posCache[i].cmt="";
+      g_posCacheNext[i].uid=""; g_posCacheNext[i].cmt="";
+     }
+   ArrayFree(g_desired);
+   ArrayFree(g_scratch);
+   g_saveScratch.Clear();
+   g_peers.Clear();
+   g_permitted.Clear();
+   g_permittedMagic.Clear();
+   g_hours.Clear();
+   g_ignore.Clear();
+   g_once.Clear();
+   g_onceHbt.Clear();
+   g_onceNoSnap.Clear();
+   g_onceFail.Clear();
+   g_onceHour.Clear();
+   g_log.Close();
   }
 
 //--- Probe every sender, and say once when one goes quiet.
@@ -9927,7 +10020,7 @@ void OnTimer()
    //--- run on a tick that actually scanned. g_mapDirty stays set until then, so
    //--- the flush lands within one sweep instead of on the next tick - which is
    //--- still far inside the crash window this exists to close.
-   if(didScan && (g_mapDirty || now-g_lastMapSave>10000))
+   if(didScan && (now-g_lastMapSave>=250) && (g_mapDirty || now-g_lastMapSave>10000))
      {
       g_lastMapSave=now;
       g_mapDirty=false;

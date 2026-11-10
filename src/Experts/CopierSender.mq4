@@ -1155,7 +1155,7 @@ void OnDeinit(const int reason)
 
    g_tp.Close();          // sockets first, then context (LINGER=0 already set)
 
-   //--- Flush runtime globals on deinit
+   //--- Flush runtime globals and dynamic/table resources on deinit
    g_fillSnapshotDueMs=0;
    g_forcePosReport=false;
    g_stateDirty=false;
@@ -1164,6 +1164,21 @@ void OnDeinit(const int reason)
    ArrayInitialize(g_peerAlerted,0);
    ArrayInitialize(g_slotStamp,0);
    ArrayInitialize(g_rowStamp,0);
+   ArrayInitialize(g_openLots,0.0);
+   ArrayInitialize(g_slotMissCount,0);
+   ArrayInitialize(g_slotMissMs,0);
+   g_prev.Clear();
+   g_cur.Clear();
+   g_peers.Clear();
+   g_symFilter.Clear();
+   g_magicFilter.Clear();
+   g_once.Clear();
+   for(int i=0;i<CP_MAX_POSITIONS;i++)
+     {
+      g_rawScratch[i].uid=""; g_rawScratch[i].sym=""; g_rawScratch[i].cmt="";
+      g_curScratch[i].uid=""; g_curScratch[i].sym=""; g_curScratch[i].cmt="";
+     }
+   g_log.Close();
   }
 
 //--- Say once when a peer goes quiet, and once when it comes back.

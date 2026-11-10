@@ -179,7 +179,17 @@ public:
          m_mRep[i]=0;
         }
      }
-                    ~CopierLog() { FlushPending(); if(m_handle!=INVALID_HANDLE) FileClose(m_handle); }
+                    ~CopierLog() { Close(); }
+
+   void              Close()
+     {
+      FlushPending();
+      if(m_handle!=INVALID_HANDLE)
+        {
+         FileClose(m_handle);
+         m_handle=INVALID_HANDLE;
+        }
+     }
 
    void              FlushPending()
      {

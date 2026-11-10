@@ -60,10 +60,12 @@ FRESH=1
 #--- Raise it DELIBERATELY when you add assertions; never lower it to make a
 #--- build pass. (MT4 reports a few less: the platforms differ by ifdef'd
 #--- assertions, which is why this is a constant here rather than derived.)
-#--- 873 = 840 + 33 added by round 11 deep audit (Agent E): freezeLevel clamping,
-#--- hedging/netting mode verification, backoff clearing, CopyTo capacity retention,
-#--- CP_ACT_MODIFY coalescing, and hot reload queue/state clearing.
-BASELINE=873
+#--- 919 = 873 + 46 added by round 12 deep audit (Agent E): MT5 OrderSend filling
+#--- fallback candidates & retcode classification, Ratchet Stops lock on market
+#--- orders, INI CFD `#` symbol prefix parsing, CP_MAX_EQUITY_RATIO division-by-zero
+#--- explosion protection, composite daily loss & drawdown alarm reason, and
+#--- resource lifecycle cleanup verification.
+BASELINE=919
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

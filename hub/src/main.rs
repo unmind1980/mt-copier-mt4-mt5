@@ -3199,11 +3199,17 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         }
                     }
                 }
-                // H-07 & NL-04: Retain only senders currently registered instead of blunt clear()
+                // H-07, NL-04 & R12-C01: Retain only senders currently registered; collect active senders ONCE outside retain
                 if last_known_receipt.len() > 1024 {
+                    let mut active_senders: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for n in s.reg.nodes() {
+                        if n.role == crate::registry::Role::Sender {
+                            active_senders.insert(n.acc.clone());
+                            active_senders.insert(copier_nid(&n.acc));
+                        }
+                    }
                     last_known_receipt.retain(|acc, _| {
-                        s.reg.get(&format!("sender:{}", acc)).is_some()
-                            || s.reg.nodes().into_iter().any(|n| n.role == crate::registry::Role::Sender && (n.acc == *acc || copier_nid(&n.acc) == *acc))
+                        s.reg.get(&format!("sender:{}", acc)).is_some() || active_senders.contains(acc)
                     });
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry

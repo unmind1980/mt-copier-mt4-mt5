@@ -130,9 +130,16 @@ private:
      }
 
 public:
-                     CopierIgnore():m_n(0),m_badN(0),m_badShow(0),m_overN(0)
+                     CopierIgnore() { Clear(); }
+
+   void              Clear()
      {
+      for(int i=0;i<CP_MAX_IGNORE;i++) m_uid[i]="";
       for(int i=0;i<CP_IGNORE_BAD_SHOW;i++) m_bad[i]="";
+      m_n=0;
+      m_badN=0;
+      m_badShow=0;
+      m_overN=0;
      }
 
    int               Count()      const { return m_n; }

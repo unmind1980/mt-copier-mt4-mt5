@@ -509,7 +509,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
         let worker_started_at = Instant::now();
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .unwrap_or_default();

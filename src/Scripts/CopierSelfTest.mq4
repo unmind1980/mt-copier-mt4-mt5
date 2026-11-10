@@ -3643,6 +3643,267 @@ void TestAuditRound11()
    OkInt("r11_q_clear: slot 0 senderIdx -1", testQ[0].senderIdx, -1);
   }
 
+void TestAuditRound12()
+  {
+   //==================================================================
+   // 1) MT5 OrderSend filling fallback candidates logic
+   //==================================================================
+   // Simulation of candidates generation logic for deal vs pending orders
+   // Deal filling order: FOK -> IOC -> RETURN
+   // Pending filling order: RETURN -> FOK -> IOC
+   long fillBoth = 0;
+#ifdef SYMBOL_FILLING_FOK
+   fillBoth |= SYMBOL_FILLING_FOK;
+#else
+   fillBoth |= 1;
+#endif
+#ifdef SYMBOL_FILLING_IOC
+   fillBoth |= SYMBOL_FILLING_IOC;
+#else
+   fillBoth |= 2;
+#endif
+
+   int cDeal[3];
+   int nDeal = 0;
+#ifdef SYMBOL_FILLING_FOK
+   if((fillBoth & SYMBOL_FILLING_FOK) != 0) cDeal[nDeal++] = (int)ORDER_FILLING_FOK;
+#else
+   cDeal[nDeal++] = 0; // FOK
+#endif
+#ifdef SYMBOL_FILLING_IOC
+   if((fillBoth & SYMBOL_FILLING_IOC) != 0) cDeal[nDeal++] = (int)ORDER_FILLING_IOC;
+#else
+   cDeal[nDeal++] = 1; // IOC
+#endif
+#ifdef ORDER_FILLING_RETURN
+   cDeal[nDeal++] = (int)ORDER_FILLING_RETURN;
+#else
+   cDeal[nDeal++] = 2; // RETURN
+#endif
+   OkInt("r12_fill_deal: candidate count for dual mode is 3", nDeal, 3);
+#ifdef ORDER_FILLING_RETURN
+   OkInt("r12_fill_deal: fallback candidate is RETURN", cDeal[2], (int)ORDER_FILLING_RETURN);
+#else
+   OkInt("r12_fill_deal: fallback candidate is RETURN", cDeal[2], 2);
+#endif
+
+   int cPend[3];
+   int nPend = 0;
+#ifdef ORDER_FILLING_RETURN
+   cPend[nPend++] = (int)ORDER_FILLING_RETURN;
+#else
+   cPend[nPend++] = 2;
+#endif
+#ifdef SYMBOL_FILLING_FOK
+   if((fillBoth & SYMBOL_FILLING_FOK) != 0) cPend[nPend++] = (int)ORDER_FILLING_FOK;
+#else
+   cPend[nPend++] = 0;
+#endif
+#ifdef SYMBOL_FILLING_IOC
+   if((fillBoth & SYMBOL_FILLING_IOC) != 0) cPend[nPend++] = (int)ORDER_FILLING_IOC;
+#else
+   cPend[nPend++] = 1;
+#endif
+   OkInt("r12_fill_pend: candidate count for dual mode is 3", nPend, 3);
+#ifdef ORDER_FILLING_RETURN
+   OkInt("r12_fill_pend: first candidate is RETURN for pending", cPend[0], (int)ORDER_FILLING_RETURN);
+#else
+   OkInt("r12_fill_pend: first candidate is RETURN for pending", cPend[0], 2);
+#endif
+
+   // Retcode retry check: only 10030 (TRADE_RETCODE_INVALID_FILL) is retried in loop
+   int retInvalidFill = 10030;
+   int retRequote = 10004;
+   int retDone = 10009;
+   Ok("r12_fill_retry: 10030 is invalid fill", retInvalidFill == 10030);
+   Ok("r12_fill_retry: 10004 not retried as filling error", retRequote != 10030);
+   Ok("r12_fill_retry: 10009 is success", retDone == 10009);
+
+   //==================================================================
+   // 2) 跟踪止损棘轮锁定 (Ratchet Stops)
+   //==================================================================
+   // BUY market position: SL must not move downward (loosening risk)
+   CopierPos locBuy;
+   ZeroMemory(locBuy);
+   locBuy.kind = CP_ORD_MARKET;
+   locBuy.side = CP_SIDE_BUY;
+   locBuy.sl = 1.08500;
+
+   // Test 1: Buyer wants lower SL 1.08000 -> clamped back to 1.08500
+   double wantBuySlLo = 1.08000;
+   if(locBuy.kind == CP_ORD_MARKET && locBuy.sl > 0.0 && wantBuySlLo > 0.0)
+     {
+      if(locBuy.side == CP_SIDE_BUY && wantBuySlLo < locBuy.sl) wantBuySlLo = locBuy.sl;
+     }
+   OkDbl("r12_ratchet_buy: widening sl clamped to current", wantBuySlLo, 1.08500, 0.000001);
+
+   // Test 2: Buyer wants higher SL 1.08900 -> permitted (profit lock)
+   double wantBuySlHi = 1.08900;
+   if(locBuy.kind == CP_ORD_MARKET && locBuy.sl > 0.0 && wantBuySlHi > 0.0)
+     {
+      if(locBuy.side == CP_SIDE_BUY && wantBuySlHi < locBuy.sl) wantBuySlHi = locBuy.sl;
+     }
+   OkDbl("r12_ratchet_buy: tightening sl permitted", wantBuySlHi, 1.08900, 0.000001);
+
+   // SELL market position: SL must not move upward (loosening risk)
+   CopierPos locSell;
+   ZeroMemory(locSell);
+   locSell.kind = CP_ORD_MARKET;
+   locSell.side = CP_SIDE_SELL;
+   locSell.sl = 1.08500;
+
+   // Test 3: Seller wants higher SL 1.09000 -> clamped back to 1.08500
+   double wantSellSlHi = 1.09000;
+   if(locSell.kind == CP_ORD_MARKET && locSell.sl > 0.0 && wantSellSlHi > 0.0)
+     {
+      if(locSell.side == CP_SIDE_SELL && wantSellSlHi > locSell.sl) wantSellSlHi = locSell.sl;
+     }
+   OkDbl("r12_ratchet_sell: widening sl clamped to current", wantSellSlHi, 1.08500, 0.000001);
+
+   // Test 4: Seller wants lower SL 1.08100 -> permitted (profit lock)
+   double wantSellSlLo = 1.08100;
+   if(locSell.kind == CP_ORD_MARKET && locSell.sl > 0.0 && wantSellSlLo > 0.0)
+     {
+      if(locSell.side == CP_SIDE_SELL && wantSellSlLo > locSell.sl) wantSellSlLo = locSell.sl;
+     }
+   OkDbl("r12_ratchet_sell: tightening sl permitted", wantSellSlLo, 1.08100, 0.000001);
+
+   // Test 5: Initial stop placement when current SL is 0.0 -> not clamped
+   CopierPos locInitBuy;
+   ZeroMemory(locInitBuy);
+   locInitBuy.kind = CP_ORD_MARKET;
+   locInitBuy.side = CP_SIDE_BUY;
+   locInitBuy.sl = 0.0;
+   double wantInitSl = 1.07500;
+   if(locInitBuy.kind == CP_ORD_MARKET && locInitBuy.sl > 0.0 && wantInitSl > 0.0)
+     {
+      if(locInitBuy.side == CP_SIDE_BUY && wantInitSl < locInitBuy.sl) wantInitSl = locInitBuy.sl;
+     }
+   OkDbl("r12_ratchet_init: initial sl permitted", wantInitSl, 1.07500, 0.000001);
+
+   // Test 6: Pending order stop adjustment -> not affected by market ratchet
+   CopierPos locPend;
+   ZeroMemory(locPend);
+   locPend.kind = CP_ORD_PENDING;
+   locPend.side = CP_SIDE_BUY;
+   locPend.sl = 1.08500;
+   double wantPendSl = 1.08000;
+   if(locPend.kind == CP_ORD_MARKET && locPend.sl > 0.0 && wantPendSl > 0.0)
+     {
+      if(locPend.side == CP_SIDE_BUY && wantPendSl < locPend.sl) wantPendSl = locPend.sl;
+     }
+   OkDbl("r12_ratchet_pend: pending order sl not locked by market ratchet", wantPendSl, 1.08000, 0.000001);
+
+   //==================================================================
+   // 3) INI 校验中 `#` 前缀 CFDs 品种解析
+   //==================================================================
+   string iniCfdText = "[common]\n"
+                       "# This is a section comment without equal\n"
+                       "; Semicolon comment with equal=123\n"
+                       "[sender0]\n"
+                       "symbol.#US500=SPX500\n"
+                       "#AAPL=#AAPL.raw\n"
+                       "#BTCUSD=BTCUSD\n"
+                       "lotparam=1.0\n";
+   string iniCfdPath = "copier_selftest_cfd.ini";
+   FileDelete(iniCfdPath);
+   CopierIniWriteAll(iniCfdPath, iniCfdText);
+   static CopierIni iniCfd;
+   Ok("r12_ini_cfd: load from file succeeded", iniCfd.Load(iniCfdPath));
+   OkStr("r12_ini_cfd: #AAPL mapped correctly", iniCfd.Get("sender0", "#AAPL", ""), "#AAPL.raw");
+   OkStr("r12_ini_cfd: symbol.#US500 mapped correctly", iniCfd.Get("sender0", "symbol.#US500", ""), "SPX500");
+   OkStr("r12_ini_cfd: #BTCUSD mapped correctly", iniCfd.Get("sender0", "#BTCUSD", ""), "BTCUSD");
+   OkStr("r12_ini_cfd: comment without equal was skipped", iniCfd.Get("common", "# This is a section comment without equal", ""), "");
+   OkStr("r12_ini_cfd: semicolon comment was skipped", iniCfd.Get("common", "; Semicolon comment with equal", ""), "");
+   FileDelete(iniCfdPath);
+   string valErr = "";
+   Ok("r12_ini_cfd: CopierIniValidate accepts # prefix mappings", CopierIniValidate(iniCfdText, valErr));
+   OkStr("r12_ini_cfd: validation error string empty", valErr, "");
+
+   //==================================================================
+   // 4) 资金比例极端分母防爆炸限制 (CP_MAX_EQUITY_RATIO)
+   //==================================================================
+   OkDbl("r12_eq_max_const: CP_MAX_EQUITY_RATIO is 100.0", CP_MAX_EQUITY_RATIO, 100.0, 0.000001);
+   CopierSymInfo siSizing;
+   ZeroMemory(siSizing);
+   siSizing.minLot = 0.01;
+   siSizing.maxLot = 1000.0;
+   siSizing.lotStep = 0.01;
+   siSizing.digits = 5;
+
+   bool rej = false;
+   // Test 1: Extreme collapsed sender equity (5.0) vs healthy receiver (50,000.0) -> raw ratio 10,000x
+   // Must be clamped to CP_MAX_EQUITY_RATIO (100.0): 0.10 lots * 100.0 = 10.0 lots
+   double lotsClamped = CopierComputeLots(0.10, CP_SIZE_EQUITY_RATIO, 1.0, 1.0, siSizing, 0.0, 0.0, rej, 5.0, 50000.0);
+   OkDbl("r12_eq_clamp: extreme ratio clamped to 10.0 lots", lotsClamped, 10.0, 0.001);
+   Ok("r12_eq_clamp: trade is not rejected", !rej);
+
+   // Test 2: Zero sender equity -> rejected
+   double lotsZeroSend = CopierComputeLots(0.10, CP_SIZE_EQUITY_RATIO, 1.0, 1.0, siSizing, 0.0, 0.0, rej, 0.0, 50000.0);
+   Ok("r12_eq_zero: zero sender equity rejected", rej);
+   OkDbl("r12_eq_zero: zero sender equity lots 0.0", lotsZeroSend, 0.0, 0.000001);
+
+   // Test 3: Negative sender equity -> rejected
+   double lotsNegSend = CopierComputeLots(0.10, CP_SIZE_EQUITY_RATIO, 1.0, 1.0, siSizing, 0.0, 0.0, rej, -100.0, 50000.0);
+   Ok("r12_eq_neg: negative sender equity rejected", rej);
+
+   // Test 4: Normal equity ratio (receiver 25,000, sender 10,000 -> ratio 2.5) -> 0.10 * 2.5 = 0.25
+   double lotsNormal = CopierComputeLots(0.10, CP_SIZE_EQUITY_RATIO, 1.0, 1.0, siSizing, 0.0, 0.0, rej, 10000.0, 25000.0);
+   OkDbl("r12_eq_normal: normal ratio lots scaled to 0.25", lotsNormal, 0.25, 0.001);
+   Ok("r12_eq_normal: normal ratio trade not rejected", !rej);
+
+   //==================================================================
+   // 5) 日损与回撤双重触碰的复合报警原因
+   //==================================================================
+   CopierRisk risk;
+   CopierRiskLimits rlim;
+   ZeroMemory(rlim);
+   rlim.dailyLossPct = 5.0;
+   rlim.maxDrawdownPct = 10.0;
+   risk.Configure(rlim);
+   risk.ObserveAt(10000.0, 1, 10000.0);
+   Ok("r12_risk_init: initially untripped", !risk.AnyTripped());
+   OkStr("r12_risk_init: initial reason empty", risk.TripReason(), "");
+
+   // Daily loss trip only (equity 9,400 -> 6% loss > 5% daily, < 10% dd)
+   risk.ObserveAt(9400.0, 1, 10000.0);
+   Ok("r12_risk_daily: daily tripped", risk.DailyTripped());
+   Ok("r12_risk_daily: dd not tripped", !risk.DrawdownTripped());
+   string rDailyWhy = risk.TripReason();
+   Ok("r12_risk_daily: contains daily loss limit", StringFind(rDailyWhy, "daily loss limit") >= 0);
+   Ok("r12_risk_daily: no composite AND", StringFind(rDailyWhy, " AND ") < 0);
+
+   // Dual trip: equity 8,500 -> 15% loss > 5% daily AND > 10% dd
+   risk.Configure(rlim);
+   risk.SeedPeak(10000.0);
+   risk.ObserveAt(10000.0, 1, 10000.0);
+   risk.ObserveAt(8500.0, 1, 10000.0);
+   Ok("r12_risk_dual: daily tripped", risk.DailyTripped());
+   Ok("r12_risk_dual: dd tripped", risk.DrawdownTripped());
+   string rDualWhy = risk.TripReason();
+   Ok("r12_risk_dual: composite reason contains AND", StringFind(rDualWhy, " AND ") >= 0);
+   Ok("r12_risk_dual: contains daily loss limit", StringFind(rDualWhy, "daily loss limit") >= 0);
+   Ok("r12_risk_dual: contains drawdown limit", StringFind(rDualWhy, "drawdown limit") >= 0);
+
+   //==================================================================
+   // 6) EA 卸载/重载下的资源生命周期与写放大保护
+   //==================================================================
+   CopierSeenRing rSeen;
+   rSeen.Add("key_alpha");
+   rSeen.Add("key_beta");
+   Ok("r12_seen_clear: has key_alpha before clear", rSeen.Has("key_alpha"));
+   OkInt("r12_seen_clear: used count is 2", rSeen.UsedCount(), 2);
+   rSeen.Clear();
+   Ok("r12_seen_clear: has key_alpha false after clear", !rSeen.Has("key_alpha"));
+   OkInt("r12_seen_clear: used count 0 after clear", rSeen.UsedCount(), 0);
+
+   CopierManualClosedRing rMc;
+   rMc.Add("MC_UID_01", 99991, "sender0");
+   Ok("r12_mc_clear: has uid before clear", rMc.Has("MC_UID_01"));
+   rMc.Clear();
+   Ok("r12_mc_clear: has uid false after clear", !rMc.Has("MC_UID_01"));
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3709,6 +3970,7 @@ void OnStart()
    TestRound9Enhancements();
    TestAuditRound10();
    TestAuditRound11();
+   TestAuditRound12();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

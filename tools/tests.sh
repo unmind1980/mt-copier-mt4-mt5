@@ -124,6 +124,7 @@ for t in $PY_TESTS; do
     echo "$out" | tail -12
     rc=1
   fi
+  sleep 0.5
 done
 
 printf "   %-26s " "toolchain_check.py"

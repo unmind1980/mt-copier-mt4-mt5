@@ -656,10 +656,14 @@ int CopierDecodeSnapshot(const string payload,CopierPos &out[],const int maxOut)
    if(count>cap) count=cap;
 
    string recs="";
-   if(!CopierKvGet(payload,"R",recs) || StringLen(recs)==0) return -1;
+   if(!CopierKvGet(payload,"R",recs)) return -1;
+   // R12-B02: When sender has 0 open positions, recs is empty or "0:" / "1:". Return 0 records cleanly instead of -1 (corrupt).
+   if(count==0 && (recs=="0:" || recs=="1:" || StringLen(recs)==0)) return 0;
+   if(StringLen(recs)==0) return -1;
 
    recs=CopierDecompressField(recs);
-   if(StringLen(recs)==0) return -1;
+   if(count>0 && StringLen(recs)==0) return -1;
+   if(count==0 && StringLen(recs)==0) return 0;
 
    string arr[];
    int got=StringSplit(recs,StringGetCharacter(CP_SEP_REC,0),arr);

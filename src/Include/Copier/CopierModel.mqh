@@ -330,7 +330,7 @@ bool CopierIsConnected()
 string CopierResolveCrossSymbol(const string pair)
   {
    if(CopierSymbolEnsure(pair)) return pair;
-   string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c"};
+   string sfx[]={"m",".r","pro",".ecn","ecn","+","_i","c","i",".c"};
    for(int i=0;i<ArraySize(sfx);i++)
      {
       string cand=pair+sfx[i];
@@ -339,8 +339,12 @@ string CopierResolveCrossSymbol(const string pair)
    return "";
   }
 
-double CopierGetCurrencyCrossRate(const string fromCcy,const string toCcy)
+double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw)
   {
+   string fromCcy=CopierTrim(fromCcyRaw);
+   string toCcy=CopierTrim(toCcyRaw);
+   StringToUpper(fromCcy);
+   StringToUpper(toCcy);
    if(fromCcy==toCcy || StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 1.0;
 
    // Direct pair: fromCcy + toCcy (e.g. USDJPY -> 1 USD = px JPY)
@@ -364,6 +368,14 @@ double CopierGetCurrencyCrossRate(const string fromCcy,const string toCcy)
      {
       double r1=CopierGetCurrencyCrossRate(fromCcy,"USD");
       double r2=CopierGetCurrencyCrossRate("USD",toCcy);
+      if(r1>0.0 && r2>0.0) return r1*r2;
+     }
+
+   // Intermediate via EUR fallback
+   if(fromCcy!="EUR" && toCcy!="EUR" && fromCcy!="USD" && toCcy!="USD")
+     {
+      double r1=CopierGetCurrencyCrossRate(fromCcy,"EUR");
+      double r2=CopierGetCurrencyCrossRate("EUR",toCcy);
       if(r1>0.0 && r2>0.0) return r1*r2;
      }
 
@@ -1748,6 +1760,12 @@ bool CopierClosePartial(const long identifier,const double lots,
    if(lots>=have-0.000000001)
      {
       outErr=-3;
+      return false;
+     }
+   double minVol=SymbolInfoDouble(sym,SYMBOL_VOLUME_MIN);
+   if(minVol>0.0 && have-lots>0.000000001 && have-lots<minVol-0.000000001)
+     {
+      outErr=-6; // R12-A04: residual volume would violate broker minLot
       return false;
      }
 

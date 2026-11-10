@@ -30,6 +30,8 @@ public:
                      CopierList():m_exclude(false),m_active(false),
                                   m_strayBang(0) {}
 
+   void              Clear() { Set(""); }
+
    bool              Active() const { return m_active; }
 
    //--- Items that had their own leading "!". The list still works - the
@@ -256,8 +258,12 @@ private:
      }
 
 public:
-                     CopierTradingTimes():m_active(false),m_n(0)
+                     CopierTradingTimes() { Clear(); }
+
+   void              Clear()
      {
+      m_active=false;
+      m_n=0;
       for(int i=0;i<7;i++) { m_daySet[i]=false; m_dN[i]=0; }
       for(int i=0;i<7*CP_TT_MAX;i++) { m_dFrom[i]=0; m_dTo[i]=0; }
      }

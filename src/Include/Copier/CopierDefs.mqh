@@ -68,6 +68,9 @@
 #define CP_MAX_LOG_BYTES   1048576 // 1 MB per log file
 #define CP_LOG_GENERATIONS 3      // log.0 current, then .1 .2
 #define CP_STATE_MAX_LINES CP_MAX_POSITIONS // hard cap on state file (matches position capacity)
+//--- Hyperbolic ratio explosion ceiling for equity-ratio sizing mode.
+//--- Prevents massive multiplier blowout when sender equity collapses towards zero.
+#define CP_MAX_EQUITY_RATIO 100.0
 //--- Sized so the documented CP_MAX_POSITIONS capacity is actually
 //--- REACHABLE. 8192 was not: a market record is ~65 bytes and a pending
 //--- one ~90 (the pending fields are appended only for pending entries),

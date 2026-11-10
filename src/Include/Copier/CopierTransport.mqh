@@ -154,11 +154,13 @@ private:
          ZmqMsg msg;
          if(!s.recv(msg,true)) break;   // EAGAIN -> nothing pending
          string data=msg.getData();
-         // R6-D6-02: Drain any remaining frames if a multipart message arrived on single-frame socket
-         while(msg.more())
+         // R6-D6-02 & R12-B01: Drain any remaining frames of THIS multipart message without draining subsequent messages
+         bool hasMore=msg.more();
+         while(hasMore)
            {
             ZmqMsg discard;
             if(!s.recv(discard,true)) break;
+            hasMore=discard.more();
            }
          if(StringLen(data)==0) continue;
          if(got>=ArraySize(out)) break;
