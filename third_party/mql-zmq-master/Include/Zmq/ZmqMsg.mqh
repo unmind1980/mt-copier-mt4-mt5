@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| Module: ZmqMsg.mqh                                               |
 //| This file is part of the mql-zmq project:                        |
 //|     https://github.com/dingmaotu/mql-zmq                         |
@@ -52,7 +52,7 @@ int zmq_msg_move(zmq_msg_t &dest,zmq_msg_t &src);
 int zmq_msg_copy(zmq_msg_t &dest,zmq_msg_t &src);
 // uchar *
 intptr_t zmq_msg_data(zmq_msg_t &msg);
-int zmq_msg_size(zmq_msg_t &msg);
+size_t zmq_msg_size(zmq_msg_t &msg);
 int zmq_msg_more(zmq_msg_t &msg);
 int zmq_msg_get(zmq_msg_t &msg,int property);
 int zmq_msg_set(zmq_msg_t &msg,int property,int optval);

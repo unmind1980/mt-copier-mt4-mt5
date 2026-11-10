@@ -163,6 +163,7 @@ pub struct ClusterManager {
     pub last_sync_err: String,
     pub api_cfg_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
     pub api_cmd_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
+    pub handover_lease_until: Option<Instant>,
 }
 
 /// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
@@ -316,6 +317,7 @@ impl ClusterManager {
             last_sync_err: String::new(),
             api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            handover_lease_until: None,
         };
 
         cm.save().map_err(|e| format!("cannot save {}: {}", state_path.display(), e))?;
@@ -380,9 +382,11 @@ impl ClusterManager {
 
     pub fn promote(&mut self, target_epoch: Option<u64>) -> u64 {
         // F-02: Use next_epoch to prevent integer overflow wrapping to 0
-        let new_epoch = target_epoch.unwrap_or_else(|| next_epoch(self.state.epoch));
+        let candidate = target_epoch.unwrap_or_else(|| next_epoch(self.state.epoch));
+        let new_epoch = candidate.max(next_epoch(self.state.epoch));
         self.state.epoch = new_epoch;
         self.state.role = "primary".to_string();
+        self.handover_lease_until = None;
         self.state.last_promoted_at = unix_secs();
         new_epoch
     }
@@ -428,6 +432,7 @@ impl ClusterManager {
             last_sync_err: String::new(),
             api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            handover_lease_until: None,
         }
     }
 }
@@ -470,11 +475,14 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
         let mut last_users_warn = Instant::now() - Duration::from_secs(300);
         let mut force_full_cfg_resync = false;
         let mut force_full_cmd_resync = false;
+        let mut last_known_remote_cfg_lines = 0usize;
+        let mut last_known_remote_cmd_lines = 0usize;
         let mut cfg_cache: JournalCache = None;
         let mut cmd_cache: JournalCache = None;
         let mut primary_cfg_cache: JournalCache = None;
@@ -530,8 +538,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                    if role == "standby" && is_cfg_primary {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                         if outage >= 30 {
                             let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
                             let ep = s.cluster.promote(target_ep);
@@ -557,8 +565,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     // R2-H01 & D7-H01: Autonomous recovery when orphaned in Standby without an active Primary
                     let role = s.cluster.state.role.clone();
                     let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    if role == "standby" && is_cfg_primary && s.cluster.last_peer_contact.is_some() {
-                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                    if role == "standby" && is_cfg_primary {
+                        let outage = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs()).unwrap_or(u64::MAX);
                         if outage >= 30 {
                             let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
                             let ep = s.cluster.promote(target_ep);
@@ -676,8 +684,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.state.role.clone()
             };
 
+            let handover_in_flight = {
+                let s = st.lock_or_recover();
+                s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false)
+            };
+
             // P1-2 & D7-H02: Dual Standby recovery - deterministic tie breaker considering data lineage
-            if current_role == "standby" && remote_st.role == "standby" {
+            if current_role == "standby" && remote_st.role == "standby" && !handover_in_flight {
                 let (my_cfg, my_cmd) = {
                     let s = st.lock_or_recover();
                     (s.cfg.total_lines(), s.cmds.sync_stats().0)
@@ -825,8 +838,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         );
                     }
 
+                    // If Primary's line count shrank, Primary performed compaction: full resync required
+                    let cfg_compacted = remote_st.cfg_lines < last_known_remote_cfg_lines;
+                    let cmd_compacted = remote_st.cmd_lines < last_known_remote_cmd_lines;
+
                     let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
                         || cfg_diff
+                        || cfg_compacted
                         || std::mem::replace(&mut force_full_cfg_resync, false);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
@@ -834,6 +852,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     // or remote sequence differs, or delta sync stalled, request from line 0 and replace_all to resolve deadlock.
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
                         || cmd_diff
+                        || cmd_compacted
                         || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq != local_max_cmd_seq)
                         || std::mem::replace(&mut force_full_cmd_resync, false);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
@@ -1076,6 +1095,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         s.cluster.last_sync_at = Some(Instant::now());
                                         s.cluster.last_sync_err = String::new();
                                     }
+                                    last_known_remote_cfg_lines = remote_st.cfg_lines;
+                                    last_known_remote_cmd_lines = remote_st.cmd_lines;
                                     save_info
                                 };
 

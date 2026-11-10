@@ -737,50 +737,52 @@ const MAX_WIRE_BASE_REV: u64 = 1_000_000_000;
 
 pub fn compact_journal(path: &Path, keep_per_node: usize) -> std::io::Result<usize> {
     use std::io::BufRead;
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e),
-    };
-    let reader = std::io::BufReader::new(file);
-
-    // node -> Vec<(rev, line_idx, raw_line)>
-    let mut by_node: HashMap<String, Vec<(u64, usize, String)>> = HashMap::new();
-    let mut line_idx = 0usize;
-
-    for line_res in reader.lines() {
-        let line = match line_res {
-            Ok(l) => l,
-            Err(_) => continue,
+    let keep_lines = {
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e),
         };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-            let node = v["node"].as_str().unwrap_or("").to_string();
-            let rev = v["rev"].as_u64().unwrap_or(0);
-            if !node.is_empty() && rev > 0 {
-                by_node.entry(node).or_default().push((rev, line_idx, trimmed.to_string()));
-                line_idx += 1;
+        let reader = std::io::BufReader::new(file);
+
+        // node -> Vec<(rev, line_idx, raw_line)>
+        let mut by_node: HashMap<String, Vec<(u64, usize, String)>> = HashMap::new();
+        let mut line_idx = 0usize;
+
+        for line_res in reader.lines() {
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+                let node = v["node"].as_str().unwrap_or("").to_string();
+                let rev = v["rev"].as_u64().unwrap_or(0);
+                if !node.is_empty() && rev > 0 {
+                    by_node.entry(node).or_default().push((rev, line_idx, trimmed.to_string()));
+                    line_idx += 1;
+                }
             }
         }
-    }
 
-    let mut keep_lines: Vec<(usize, String)> = Vec::new();
-    for (_, mut revs) in by_node {
-        revs.sort_by_key(|(rev, _, _)| *rev);
-        let start = if revs.len() > keep_per_node {
-            revs.len() - keep_per_node
-        } else {
-            0
-        };
-        for (_, idx, line) in revs.into_iter().skip(start) {
-            keep_lines.push((idx, line));
+        let mut lines: Vec<(usize, String)> = Vec::new();
+        for (_, mut revs) in by_node {
+            revs.sort_by_key(|(rev, _, _)| *rev);
+            let start = if revs.len() > keep_per_node {
+                revs.len() - keep_per_node
+            } else {
+                0
+            };
+            for (_, idx, line) in revs.into_iter().skip(start) {
+                lines.push((idx, line));
+            }
         }
-    }
-    // Sort by original file order
-    keep_lines.sort_by_key(|(idx, _)| *idx);
+        lines.sort_by_key(|(idx, _)| *idx);
+        lines
+    }; // file and reader dropped here, freeing the Windows file lock before rename
 
     let tmp = path.with_extension(format!("compact.{}.tmp", std::process::id()));
     {

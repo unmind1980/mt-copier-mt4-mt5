@@ -1442,6 +1442,7 @@ bool CopierIsTopicTarget(const string topic,const string myNid,const string myAc
    if(StringLen(topic)==0) return true;
    if(StringSubstr(topic,0,1)=="@")
      {
+      if(StringLen(envSid)>0 && envSid!="hub") return false;
       return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
      }
    // N73-07: Precise topic & sender matching preventing ZMQ prefix collision bypass

@@ -165,7 +165,7 @@ private:
 
    void              Hardening(Socket *s)
      {
-      if(CheckPointer(s)==POINTER_INVALID) return;
+      if(CheckPointer(s)==POINTER_INVALID || !s.valid()) return;
       //--- must be 0: otherwise shutdown blocks
       s.setLinger(0);
       s.setReconnectInterval(100);
@@ -203,8 +203,10 @@ private:
    static bool       CurveRaw(const string z85,uchar &raw[])
      {
       ArrayResize(raw,0);
-      if(StringLen(z85)!=CP_CURVE_KEY_LEN) return false;
-      if(!Z85::decode(z85,raw)) return false;
+      string clean=z85;
+      StringTrimLeft(clean); StringTrimRight(clean);
+      if(StringLen(clean)!=CP_CURVE_KEY_LEN) return false;
+      if(!Z85::decode(clean,raw)) return false;
       if(ArraySize(raw)!=CP_CURVE_KEY_BYTES) return false;
       return true;
      }
@@ -255,7 +257,7 @@ public:
       //--- over the same socket instead of needing one of its own.
       if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
       m_pub=new Socket(m_ctx,ZMQ_XPUB);
-      if(CheckPointer(m_pub)==POINTER_INVALID) return false;
+      if(CheckPointer(m_pub)==POINTER_INVALID || !m_pub.valid()) { if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; } return false; }
       Hardening(m_pub);
       m_pub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve)
@@ -310,7 +312,7 @@ public:
       m_nSubPrefixes=0;
       for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
-      if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(CheckPointer(m_sub)==POINTER_INVALID || !m_sub.valid()) { if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; } return false; }
       Hardening(m_sub);
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       m_sub.setSendHighWaterMark(CP_SNDHWM);
@@ -350,12 +352,16 @@ public:
             //--- endpoint, one key - has no such limit.
             if(StringLen(serverKeys[i])==0)
               {
+               Print("[copier] ERROR: Missing CURVE server key for endpoint ",endpoints[i]);
+               m_errno=22; // EINVAL
                delete m_sub; m_sub=NULL;
                return false;
               }
             uchar sk[];
             if(!CurveRaw(serverKeys[i],sk) || !m_sub.setCurveServerKey(sk))
               {
+               Print("[copier] ERROR: Invalid CURVE server key for endpoint ",endpoints[i]);
+               m_errno=22; // EINVAL
                delete m_sub; m_sub=NULL;
                return false;
               }
@@ -412,7 +418,7 @@ public:
       m_nSubPrefixes=0;
       for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
-      if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(CheckPointer(m_sub)==POINTER_INVALID || !m_sub.valid()) { if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; } return false; }
       Hardening(m_sub);
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       m_sub.setSendHighWaterMark(CP_SNDHWM);
@@ -665,7 +671,7 @@ public:
            }
          // R2-D5-X01: If no remaining frames were pending in the pipe, libzmq cleared the broken frame on disconnect.
          // Clear latch so the next valid message after reconnect is not discarded!
-         if(!drained) m_midInboundMultipart=false;
+         if(!drained) return 0;
         }
 
       int got=0;
@@ -807,6 +813,7 @@ public:
       m_connectedHubs=0;
       m_midMultipart=false;
       m_midInboundMultipart=false;
+      if(CheckPointer(m_ctx)!=POINTER_INVALID) m_ctx.shutdown();
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
       for(int i=0;i<CP_MAX_XSUB_SUBS;i++) { m_subPrefixes[i]=""; m_subSent[i]=0; }

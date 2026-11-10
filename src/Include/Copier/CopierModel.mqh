@@ -268,9 +268,94 @@ bool CopierIsConnected()
 #endif
   }
 
+//=====================================================================
+// MT5: POSITION_IDENTIFIER is stable but PositionClose needs the
+// CURRENT position ticket. Resolve at execution time - never cache it.
+//=====================================================================
+bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending,const int preferredKind=-1)
+  {
+   ticket=0;
+   isPending=false;
 #ifdef __MQL5__
-bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending);
+   // If caller explicitly requested a pending order, search OrdersTotal() first
+   if(preferredKind==CP_ORD_PENDING)
+     {
+      int ot=OrdersTotal();
+      for(int i=0;i<ot;i++)
+        {
+         ulong tk=OrderGetTicket(i);
+         if(tk==0) continue;
+         if((long)tk!=identifier) continue;
+         if(!OrderSelect(tk)) continue;
+         long ost=(long)OrderGetInteger(ORDER_STATE);
+         if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
+         ticket=(long)tk;
+         isPending=true;
+         return true;
+        }
+     }
+
+   //--- M-03 fast path: In >95% of positions without partial fills, ticket == identifier.
+   //--- Test directly via PositionSelectByTicket to avoid looping over PositionsTotal().
+   if(identifier>0 && PositionSelectByTicket((ulong)identifier))
+     {
+      if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
+        {
+         ticket=identifier;
+         return true;
+        }
+     }
+
+   //--- positions first: POSITION_IDENTIFIER is stable, and it is what a
+   //--- filled pending order's identifier becomes. PositionGetTicket(i) already
+   //--- selects the position into terminal cache.
+   int total=PositionsTotal();
+   for(int i=0;i<total;i++)
+     {
+      ulong tk=PositionGetTicket(i);
+      if(tk==0) continue;
+      if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
+        {
+         ticket=(long)tk;
+         return true;
+        }
+     }
+   //--- then WORKING pending orders. They live in the ORDERS list, are
+   //--- addressed by their own ticket, and are not positions at all - so a
+   //--- positions-only scan finds nothing and every pending cancel would be
+   //--- reported as "already gone" while the order sat there.
+   int ot=OrdersTotal();
+   for(int i=0;i<ot;i++)
+     {
+      ulong tk=OrderGetTicket(i);
+      if(tk==0) continue;
+      if((long)tk!=identifier) continue;
+      if(!OrderSelect(tk)) continue;
+      long ost=(long)OrderGetInteger(ORDER_STATE);
+      if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
+      ticket=(long)tk;
+      isPending=true;
+      return true;
+     }
+   return false;
+#else
+   if(identifier<=0 || (ulong)identifier>0xFFFFFFFF) return false;
+   if(!OrderSelect((int)(uint)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
+   // R47-01: OrderSelect by ticket ignores pool in MT4; closed orders in history must return false
+   if(OrderCloseTime()!=0) return false;
+   ticket=identifier;
+   int t=(int)OrderType();
+   isPending=(t!=OP_BUY && t!=OP_SELL);
+   return true;
 #endif
+  }
+
+//--- convenience for the callers that do not care about the distinction
+bool CopierResolveCloseTicket(const long identifier,long &ticket)
+  {
+   bool pending=false;
+   return CopierResolveCloseTicket(identifier,ticket,pending,-1);
+  }
 
 double CopierTicketSL(const long ticket)
   {
@@ -769,76 +854,6 @@ string CopierReadCommentByTicket(const CopierPos &p)
 #endif
   }
 
-//=====================================================================
-// MT5: POSITION_IDENTIFIER is stable but PositionClose needs the
-// CURRENT position ticket. Resolve at execution time - never cache it.
-//=====================================================================
-bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending)
-  {
-   ticket=0;
-   isPending=false;
-#ifdef __MQL5__
-   //--- M-03 fast path: In >95% of positions without partial fills, ticket == identifier.
-   //--- Test directly via PositionSelectByTicket to avoid looping over PositionsTotal().
-   if(identifier>0 && PositionSelectByTicket((ulong)identifier))
-     {
-      if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
-        {
-         ticket=identifier;
-         return true;
-        }
-     }
-
-   //--- positions first: POSITION_IDENTIFIER is stable, and it is what a
-   //--- filled pending order's identifier becomes. PositionGetTicket(i) already
-   //--- selects the position into terminal cache.
-   int total=PositionsTotal();
-   for(int i=0;i<total;i++)
-     {
-      ulong tk=PositionGetTicket(i);
-      if(tk==0) continue;
-      if((long)PositionGetInteger(POSITION_IDENTIFIER)==identifier)
-        {
-         ticket=(long)tk;
-         return true;
-        }
-     }
-   //--- then WORKING pending orders. They live in the ORDERS list, are
-   //--- addressed by their own ticket, and are not positions at all - so a
-   //--- positions-only scan finds nothing and every pending cancel would be
-   //--- reported as "already gone" while the order sat there.
-   int ot=OrdersTotal();
-   for(int i=0;i<ot;i++)
-     {
-      ulong tk=OrderGetTicket(i);
-      if(tk==0) continue;
-      if((long)tk!=identifier) continue;
-      if(!OrderSelect(tk)) continue;
-      long ost=(long)OrderGetInteger(ORDER_STATE);
-      if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
-      ticket=(long)tk;
-      isPending=true;
-      return true;
-     }
-   return false;
-#else
-   if(identifier<=0 || (ulong)identifier>0xFFFFFFFF) return false;
-   if(!OrderSelect((int)(uint)identifier,SELECT_BY_TICKET,MODE_TRADES)) return false;
-   // R47-01: OrderSelect by ticket ignores pool in MT4; closed orders in history must return false
-   if(OrderCloseTime()!=0) return false;
-   ticket=identifier;
-   int t=(int)OrderType();
-   isPending=(t!=OP_BUY && t!=OP_SELL);
-   return true;
-#endif
-  }
-
-//--- convenience for the callers that do not care about the distinction
-bool CopierResolveCloseTicket(const long identifier,long &ticket)
-  {
-   bool pending=false;
-   return CopierResolveCloseTicket(identifier,ticket,pending);
-  }
 
 //=====================================================================
 // MT4 partial close: the broker CLOSES the old order and opens the
@@ -1123,12 +1138,12 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
 //=====================================================================
 // Close (fully) a position identified by its stable identifier.
 //=====================================================================
-bool CopierClosePosition(const long identifier,const int deviationPoints,int &outErr,const bool asyncMode=false,const double px=0.0)
+bool CopierClosePosition(const long identifier,const int deviationPoints,int &outErr,const bool asyncMode=false,const double px=0.0,const int ordKind=-1)
   {
    outErr=0;
    long ticket=0;
    bool pending=false;
-   if(!CopierResolveCloseTicket(identifier,ticket,pending))
+   if(!CopierResolveCloseTicket(identifier,ticket,pending,ordKind))
      {
       //--- already gone: treat as success so the caller stops retrying
       outErr=0;
@@ -1578,7 +1593,14 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          //--- the closure test below could never become true for a position that
          //--- was born from a reversal.
          if(entry==DEAL_ENTRY_IN)          inVol+=vol;
-         else if(entry==DEAL_ENTRY_INOUT) { inVol+=vol; outVol+=vol; }
+         else if(entry==DEAL_ENTRY_INOUT)
+           {
+            // A reversal closes the existing inVol balance; any excess begins the new direction
+            double closingVol = MathMin(vol, MathMax(0.0, inVol - outVol));
+            outVol += closingVol;
+            double openingVol = vol - closingVol;
+            if(openingVol > 0.0) inVol += openingVol;
+           }
          else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }
       // Only considered fully closed when total exit volume matches or exceeds total entry volume
@@ -1598,8 +1620,8 @@ bool CopierIsTicketClosedInHistory(const long ticket)
      }
    return false;
 #else
-   if(ticket>2147483647) return false;
-   if(OrderSelect((int)ticket,SELECT_BY_TICKET,MODE_HISTORY))
+   if(ticket<=0 || (ulong)ticket>0xFFFFFFFF) return false;
+   if(OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_HISTORY))
      {
       return (OrderCloseTime()>0);
      }

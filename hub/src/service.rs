@@ -173,10 +173,12 @@ pub mod win_service {
             *handle_guard = None;
         }
 
-        rotate_log_files(path, max_bytes, max_backups)?;
+        let rot_res = rotate_log_files(path, max_bytes, max_backups);
+        // Re-open fresh log and bind stdio ALWAYS to avoid leaving OS handles closed on rotation errors
+        let redir_res = redirect_stdio_to_log(path);
 
-        // Re-open fresh log and bind stdio
-        redirect_stdio_to_log(path)?;
+        rot_res?;
+        redir_res?;
         Ok(true)
     }
 

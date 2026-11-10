@@ -709,7 +709,7 @@ int BuildCurrent()
         {
 #ifndef __MQL5__
          string cmt="";
-         if(OrderSelect((int)p.ticket,SELECT_BY_TICKET)) cmt=OrderComment();
+         if(OrderSelect((int)(uint)p.ticket,SELECT_BY_TICKET)) cmt=OrderComment();
          long from=CopierMt4FromTicket(cmt);
          if(from>0)
            {
@@ -725,7 +725,7 @@ int BuildCurrent()
                for(int hops=0;hops<5;hops++)
                  {
                   // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
-                  if(curFrom<=0 || curFrom>2147483647 || !OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+                  if(curFrom<=0 || (ulong)curFrom>0xFFFFFFFF || !OrderSelect((int)(uint)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
                   long prevFrom=CopierMt4FromTicket(OrderComment());
                   if(prevFrom<=0) break;
                   j=g_prev.FindByTicket(prevFrom,p.kind);
@@ -1892,12 +1892,17 @@ void HandleSenderStat(const CopierEnv &se)
        int np=StringSplit(rh,',',pairs);
        for(int p=0;p<np;p++)
          {
-          string kv[];
-          if(StringSplit(pairs[p],':',kv)==2 && SenderAnswersTo(kv[0]))
+          int colPos=StringFind(pairs[p],":");
+          if(colPos>0)
             {
-             SnapTrack(swho,kv[1],false);
-             matched=true;
-             break;
+             string pSid=StringSubstr(pairs[p],0,colPos);
+             string pHash=StringSubstr(pairs[p],colPos+1);
+             if(SenderAnswersTo(pSid))
+               {
+                SnapTrack(swho,pHash,false);
+                matched=true;
+                break;
+               }
             }
          }
       }
@@ -2193,6 +2198,21 @@ void HandleDirectStatusFrame(const string raw)
 void OnTimer()
   {
    long now=CopierNowMs();
+
+#ifdef __MQL5__
+   static long lastConnCheck=0;
+   if(now-lastConnCheck>=1000)
+     {
+      lastConnCheck=now;
+      if(CopierIsConnected() && CopierIsNettingAccount())
+        {
+         g_log.Error("CRITICAL: Terminal connected to a NETTING account at runtime! Sender cannot run on Netting accounts. Emergency STOP.");
+         Alert("Copier SENDER: NETTING account detected at runtime! Emergency STOP.");
+         ExpertRemove();
+         return;
+        }
+     }
+#endif
 
    //--- 0) Fast-path: drain incoming PONG and status BEFORE scanning positions
    int sn=g_tp.DrainStatus(g_drainStatus,CP_DRAIN_MAX);

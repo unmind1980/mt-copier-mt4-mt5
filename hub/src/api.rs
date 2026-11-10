@@ -1343,10 +1343,9 @@ async fn login(
             let verified = crate::users::verify_password(pwd, target_hash) && stored.is_some();
             if verified {
                 //--- Re-check under the lock: the user may have been
-                //--- disabled while we were hashing, and mint_session
-                //--- refuses that rather than handing out a stale pass.
+                //--- disabled or password changed while hashing.
                 let mut s = st.lock_or_recover();
-                s.users.mint_session(&b.id, now)
+                s.users.mint_session_with_expected_hash(&b.id, stored.as_deref().unwrap_or(""), now)
             } else {
                 Err("invalid credentials".to_string())
             }
@@ -1611,23 +1610,8 @@ async fn users_upsert(
     //--- NEW password runs with NO lock held, for the same reason the login
     //--- path was fixed: it is real CPU, and the router thread waits on this
     //--- mutex for every position update.
-    let existing_pass = {
-        let s = st.lock_or_recover();
-        s.users.get(&b.id).map(|u| u.pass.clone())
-    };
-    let pass = if b.password.is_empty() {
-        match existing_pass {
-            Some(p) => p,
-            None => {
-                return (
-                    axum::http::StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "a new user needs a password" })),
-                )
-                    .into_response()
-            }
-        }
-    } else {
-        // F-14: Enforce consistent minimum password policy (at least 8 characters)
+    let is_password_update = !b.password.is_empty();
+    let new_hashed_pass = if is_password_update {
         if b.password.chars().count() < 8 {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
@@ -1636,16 +1620,31 @@ async fn users_upsert(
                 .into_response();
         }
         let salt = crate::users::random_token()[..16].to_string();
-        hash_password(&b.password, &salt)
-    };
-    let u = User {
-        id: b.id.clone(),
-        pass,
-        role,
-        disabled: b.disabled,
+        Some(hash_password(&b.password, &salt))
+    } else {
+        None
     };
     let audit = {
         let mut s = st.lock_or_recover();
+        let final_pass = match new_hashed_pass {
+            Some(p) => p,
+            None => match s.users.get(&b.id).map(|u| u.pass.clone()) {
+                Some(p) => p,
+                None => {
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "a new user needs a password" })),
+                    )
+                        .into_response()
+                }
+            },
+        };
+        let u = User {
+            id: b.id.clone(),
+            pass: final_pass,
+            role,
+            disabled: b.disabled,
+        };
         if let Err(e) = s.users.upsert(u) {
             return (
                 axum::http::StatusCode::CONFLICT,
@@ -3957,6 +3956,8 @@ async fn cluster_handover_request(
     //--- stays a usable tie-breaker for every conflict that follows.
     let new_epoch = s.cluster.epoch();
     s.cluster.demote(new_epoch);
+    // Guard against immediate Dual-Standby recovery while handover agreement is in flight
+    s.cluster.handover_lease_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(15));
     let save_info = s.cluster.save_info();
     let audit_rec = Arc::clone(&s.audit);
     drop(s);
@@ -4141,6 +4142,7 @@ async fn cluster_failback_now(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
 

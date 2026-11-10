@@ -24,6 +24,7 @@
 //--- statement than "multiply by one", and it cannot be broken later by
 //--- someone editing LotParam.
 #define CP_SIZE_OFF        2
+#define CP_SIZE_EQUITY_RATIO 3
 
 //--- THE INPUT DROPDOWN USES THESE SAME NUMBERS. There is one numbering now.
 //---
@@ -52,7 +53,7 @@
 //--- Is this one of the three known codes?
 bool CopierLotModeValid(const int mode)
   {
-   return (mode==CP_SIZE_MULTIPLIER || mode==CP_SIZE_FIXED || mode==CP_SIZE_OFF);
+   return (mode==CP_SIZE_MULTIPLIER || mode==CP_SIZE_FIXED || mode==CP_SIZE_OFF || mode==CP_SIZE_EQUITY_RATIO);
   }
 
 //--- Normalise a mode from the EA input. Anything unrecognised becomes
@@ -83,11 +84,13 @@ int CopierLotModeFromText(const string raw,bool &recognised)
    if(m=="off")        { recognised=true; return CP_SIZE_OFF; }
    if(m=="fixed")      { recognised=true; return CP_SIZE_FIXED; }
    if(m=="multiplier") { recognised=true; return CP_SIZE_MULTIPLIER; }
+   if(m=="equity_ratio" || m=="equityratio") { recognised=true; return CP_SIZE_EQUITY_RATIO; }
 
    //--- the numeric form, in the SAME numbering the EA input uses
    if(m=="0") { recognised=true; return CP_SIZE_MULTIPLIER; }
    if(m=="1") { recognised=true; return CP_SIZE_FIXED; }
    if(m=="2") { recognised=true; return CP_SIZE_OFF; }
+   if(m=="3") { recognised=true; return CP_SIZE_EQUITY_RATIO; }
 
    recognised=false;
    return CP_SIZE_MULTIPLIER;
@@ -98,6 +101,7 @@ string CopierLotModeKey(const int mode)
   {
    if(mode==CP_SIZE_OFF)   return "off";
    if(mode==CP_SIZE_FIXED) return "fixed";
+   if(mode==CP_SIZE_EQUITY_RATIO) return "equity_ratio";
    return "multiplier";
   }
 
@@ -108,6 +112,7 @@ string CopierLotModeText(const int mode)
   {
    if(mode==CP_SIZE_OFF)   return "off (pass the sender's lots through)";
    if(mode==CP_SIZE_FIXED) return "fixed";
+   if(mode==CP_SIZE_EQUITY_RATIO) return "equity_ratio (proportional to sender equity)";
    return "multiplier";
   }
 
@@ -137,14 +142,23 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
   {
    if(lots<=0.0 || !MathIsValidNumber(lots) || si.lotStep<=0.0) return 0.0;
    int digits=CopierLotDigits(si.lotStep);
-   double steps=MathFloor(lots/si.lotStep+0.0000001);
-   double v=NormalizeDouble(steps*si.lotStep,digits);
+   double v=0.0;
+   if(si.minLot>0.0 && lots>=si.minLot)
+     {
+      double steps=MathFloor((lots-si.minLot)/si.lotStep+CP_LOT_EPS);
+      v=NormalizeDouble(si.minLot+steps*si.lotStep,digits);
+     }
+   else
+     {
+      double steps=MathFloor(lots/si.lotStep+CP_LOT_EPS);
+      v=NormalizeDouble(steps*si.lotStep,digits);
+     }
    if(v<0.0) v=0.0;
    if(v>si.maxLot)
      {
       //--- floor the cap to a whole number of steps too, otherwise we
       //--- hand the broker a volume that is not on its lot grid
-      double capSteps=MathFloor(si.maxLot/si.lotStep+0.0000001);
+      double capSteps=MathFloor(si.maxLot/si.lotStep+CP_LOT_EPS);
       v=NormalizeDouble(capSteps*si.lotStep,digits);
      }
    return v;
@@ -171,12 +185,18 @@ double CopierNextInitLots(const double carry,const double lots)
 double CopierComputeLots(const double senderLots,const int mode,const double param,
                          const double symMultiplier,const CopierSymInfo &si,
                          const double minLots,const double maxLots,
-                         bool &rejected)
+                         bool &rejected,
+                         const double senderEquity=0.0,const double receiverEquity=0.0)
   {
    rejected=false;
    double raw=0.0;
    if(mode==CP_SIZE_FIXED)               raw=param*symMultiplier;
    else if(mode==CP_SIZE_OFF)            raw=senderLots*symMultiplier;
+   else if(mode==CP_SIZE_EQUITY_RATIO)
+     {
+      if(senderEquity<=0.0 || receiverEquity<=0.0) { rejected=true; return 0.0; }
+      raw=senderLots*(receiverEquity/senderEquity)*param*symMultiplier;
+     }
    else                                  raw=senderLots*param*symMultiplier;
    if(raw<=0.0) { rejected=true; return 0.0; }
 

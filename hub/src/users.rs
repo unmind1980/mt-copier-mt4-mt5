@@ -418,11 +418,19 @@ impl UserStore {
     /// the hashing) and refuses when the user is gone or now disabled - a
     /// session is never minted for someone who may no longer have one.
     pub fn mint_session(&mut self, id: &str, now: u64) -> Result<(String, Session), String> {
+        let expected = self.users.iter().find(|u| u.id == id && !u.disabled).map(|u| u.pass.clone());
+        match expected {
+            Some(h) => self.mint_session_with_expected_hash(id, &h, now),
+            None => Err("invalid credentials".to_string()),
+        }
+    }
+
+    pub fn mint_session_with_expected_hash(&mut self, id: &str, expected_hash: &str, now: u64) -> Result<(String, Session), String> {
         let (user_id, role, pass_hash) = {
             let u = self
                 .users
                 .iter()
-                .find(|u| u.id == id && !u.disabled)
+                .find(|u| u.id == id && !u.disabled && u.pass == expected_hash)
                 .ok_or_else(|| "invalid credentials".to_string())?;
             (u.id.clone(), u.role, u.pass.clone())
         };

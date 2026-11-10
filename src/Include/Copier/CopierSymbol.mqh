@@ -538,6 +538,14 @@ bool CopierSymbolExists(const string sym)
    //--- and is a no-op when it is already in Market Watch. It is also what
    //--- makes the symbol's data available, so calling it here is the point.
    if(!SymbolSelect(sym,true)) return false;
+   // Ensure cross-currency conversion pair is selected in Market Watch for accurate MT4 OrderProfit
+   string acctCcy = CopierAccountCurrency();
+   string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+   if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+     {
+      SymbolSelect(profCcy+acctCcy, true);
+      SymbolSelect(acctCcy+profCcy, true);
+     }
    return CopierSymbolReady(sym);
 #else
    //--- MT4 DOES have SymbolSelect, and it is required here.
@@ -554,6 +562,14 @@ bool CopierSymbolExists(const string sym)
    //--- negative control (a deliberately invalid function) to prove the check
    //--- can fail. Do not "simplify" this back to a bare MarketInfo.
    if(!SymbolSelect(sym,true)) return false;
+   // Ensure cross-currency conversion pair is selected in Market Watch for accurate MT4 OrderProfit
+   string acctCcy = CopierAccountCurrency();
+   string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+   if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+     {
+      SymbolSelect(profCcy+acctCcy, true);
+      SymbolSelect(acctCcy+profCcy, true);
+     }
    return CopierSymbolReady(sym);
 #endif
   }

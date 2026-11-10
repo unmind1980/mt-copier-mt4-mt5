@@ -316,12 +316,20 @@ public:
       if(peak>m_peakEquity) m_peakEquity=peak;
      }
 
-   void              AdjustPeakForCashFlow(const double cashFlow)
+   void              AdjustPeakForCashFlow(const double cashFlow,const double preCashFlowEquity=0.0)
      {
-      if(cashFlow<0.0 && m_peakEquity>0.0)
+      if(m_peakEquity<=0.0 || MathAbs(cashFlow)<0.00001) return;
+      // Proportional Time-Weighted scaling: preserves percentage drawdown across cash transfers
+      double preEq=(preCashFlowEquity>0.0)?preCashFlowEquity:(CopierAccountEquity()-cashFlow);
+      if(preEq>0.0)
+        {
+         double postEq=MathMax(0.0,preEq+cashFlow);
+         m_peakEquity=NormalizeDouble(m_peakEquity*(postEq/preEq),2);
+        }
+      else
+        {
          m_peakEquity=MathMax(0.0,m_peakEquity+cashFlow);
-      else if(cashFlow>0.0 && m_peakEquity>0.0)
-         m_peakEquity+=cashFlow;
+        }
      }
 
    double            DayStartEquity() const { return m_dayStartEquity; }

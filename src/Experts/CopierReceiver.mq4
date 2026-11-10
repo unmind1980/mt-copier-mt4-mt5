@@ -113,7 +113,8 @@ enum ENUM_LOT_MODE
   {
    LOT_OFF        = CP_SIZE_OFF,          // Off - mirror the sender's lots unchanged
    LOT_MULTIPLIER = CP_SIZE_MULTIPLIER,   // Multiplier - sender lots x SenderLotParam
-   LOT_FIXED      = CP_SIZE_FIXED         // Fixed - always SenderLotParam
+   LOT_FIXED      = CP_SIZE_FIXED,        // Fixed - always SenderLotParam
+   LOT_EQUITY_RATIO = CP_SIZE_EQUITY_RATIO // Equity Ratio - scaled by account equity
   };
 input ENUM_LOT_MODE SenderLotMode = LOT_MULTIPLIER; // SenderLotMode - 0=multiplier 1=fixed 2=off
 input double        SenderLotParam = 1.0;            // SenderLotParam - multiplier, or fixed lots
@@ -317,6 +318,7 @@ string  g_suffix[CP_MAX_SENDERS];
 long    g_magic[CP_MAX_SENDERS];
 int     g_lotMode[CP_MAX_SENDERS];
 double  g_lotParam[CP_MAX_SENDERS];
+double  g_senderEquity[CP_MAX_SENDERS];
 //--- One sequence watermark PER STREAM, not per sender.
 //---
 //--- The sender numbers both sockets from a single counter, and the
@@ -1468,7 +1470,7 @@ bool LoadConfigFromInputs()
      }
    g_sid[0]      =(string)SenderPort;
    g_epEvents[0] =CopierNormalizeEndpoint(SenderIP+":"+(string)SenderPort);
-   g_serverKey[0]=SenderServerKey;
+   g_serverKey[0]=CopierTrim(SenderServerKey);
    g_suffix[0]   =SenderSuffix;
 
    if(StringLen(SenderIP)==0)
@@ -2431,7 +2433,7 @@ string ResolveUid(const CopierPos &p)
       for(;hops<5;hops++)
         {
          // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
-         if(curFrom<=0 || curFrom>2147483647 || !OrderSelect((int)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
+         if(curFrom<=0 || (ulong)curFrom>0xFFFFFFFF || !OrderSelect((int)(uint)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
          long prevFrom=CopierMt4FromTicket(OrderComment());
          if(prevFrom<=0) break;
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
@@ -3270,7 +3272,15 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
 void CompactQueue()
   {
    if(g_qHead<=0) return;
-   for(int i=0;i<g_qn;i++) g_q[i]=g_q[g_qHead+i];
+   int oldHead=g_qHead;
+   for(int i=0;i<g_qn;i++) g_q[i]=g_q[oldHead+i];
+   // M7 & D6: Clear string references on vacated tail slots to prevent dead string retention
+   for(int k=g_qn;k<oldHead+g_qn;k++)
+     {
+      g_q[k].uid="";
+      g_q[k].sym="";
+      g_q[k].key="";
+     }
    g_qHead=0;
   }
 
@@ -3727,6 +3737,33 @@ void ExecuteQueue()
 
       if(a.kind==CP_ACT_OPEN)
         {
+         // Pre-trade Margin Validation (D2-02)
+         bool marginOk=true;
+         double reqMargin=0.0;
+#ifdef __MQL5__
+         ENUM_ORDER_TYPE otype=(a.side==CP_SIDE_BUY)?ORDER_TYPE_BUY:ORDER_TYPE_SELL;
+         if(OrderCalcMargin(otype,a.sym,a.lots,SymbolInfoDouble(a.sym,SYMBOL_ASK),reqMargin))
+           {
+            double freeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+            if(freeMargin<reqMargin) marginOk=false;
+           }
+#else
+         int cmd=(a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
+         if(AccountFreeMarginCheck(a.sym,cmd,a.lots)<=0.0)
+            marginOk=false;
+#endif
+         if(!marginOk)
+           {
+            g_log.Warn("insufficient free margin to open "+a.uid+" "+a.sym+" ("
+                       +DoubleToString(a.lots,2)+" lots) - skipping open to prevent broker rejection");
+            // Park briefly (2s) without climbing 24h exponential backoff
+            string boKey=g_sid[a.senderIdx]+":"+(string)a.kind+":"+a.uid;
+            g_backoff.Park(boKey,2000);
+            ShiftQueue();
+            done++;
+            continue;
+           }
+
          CopierSymInfo si;
          if(!CopierGetSymbolInfo(a.sym,si))
            {
@@ -3866,7 +3903,7 @@ void ExecuteQueue()
                                   CopierCommentForUid(a.uid,a.senderTicket),
                                   dev,err);
          else
-            ok=CopierClosePosition(a.ticket,dev,err,asyncMode,prefetchedPx);
+            ok=CopierClosePosition(a.ticket,dev,err,asyncMode,prefetchedPx,a.ordKind);
         }
 
       //--- L2 retry budget: hoisted above both branches so the orphan-close
@@ -4322,7 +4359,7 @@ void ExecuteQueue()
          int ordType = (sa.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
          spx = (ordType==OP_BUY)?MarketInfo(sa.sym,MODE_BID):MarketInfo(sa.sym,MODE_ASK);
 #endif
-         bool sok = CopierClosePosition(sa.ticket, sdev, serr, false, spx);
+         bool sok = CopierClosePosition(sa.ticket, sdev, serr, false, spx, sa.ordKind);
          if(sok)
            {
             // M-01: Update g_seen, g_ourCount and g_ourLots on Sweeper close success
@@ -4462,8 +4499,9 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    //---     "lot sizing rejected" - which points at the wrong thing).
    //--- The per-position cap is maxLotsPerPosition, applied below.
    double symMult=GetSymbolMultiplier(si,sym);
+   double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
-                                 0.0,0.0,rejected);
+                                 0.0,0.0,rejected,g_senderEquity[si],myEq);
    if(rejected || lots<=0.0) return 0.0;
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
@@ -4504,7 +4542,11 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
      {
       targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
      }
-   if(rejected || targetLots<=0.0) return 0.0;
+   if(rejected || targetLots<=0.0 || targetLots<si2.minLot-CP_LOT_EPS)
+     {
+      rejected=true;
+      return 0.0;
+     }
    // N72-09: Never clamp sub-minLot lots up to minLot as it would silently inflate risk (see CopierSizing.mqh)
    return targetLots;
   }
@@ -4539,11 +4581,13 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
    double remaining=NormalizeDouble(local.lots-trim,digits);
    if(remaining<si2.minLot-0.0000001)
      {
-      double altTrim=NormalizeDouble(local.lots-si2.minLot,digits);
-      if(altTrim>=si2.minLot-0.0000001 && altTrim>=step*0.999999)
+      // Quantize altTrim to broker lotStep grid (D3-01)
+      double altTrim=CopierNormalizeLot(local.lots-si2.minLot,si2);
+      double altRemaining=NormalizeDouble(local.lots-altTrim,digits);
+      if(altTrim>=si2.minLot-CP_LOT_EPS && altRemaining>=si2.minLot-CP_LOT_EPS)
         {
          trim=altTrim;
-         remaining=si2.minLot;
+         remaining=altRemaining;
         }
       else
         {
@@ -5611,6 +5655,7 @@ void RefreshRisk()
 
    long now=CopierNowMs();
    long dayStart=CopierServerDayStart();
+   if(dayStart<=0) return; // Prevent state corruption on uninitialized or disconnected clock
    if(dayStart!=g_riskDay)
      {
       //--- L1: a COLD start is not a day rollover.
@@ -5665,17 +5710,31 @@ void RefreshRisk()
       else
         {
          g_lastRealizedMs=now;
-         //--- Day rolled over while running: anchor baseline to opening balance (R2-D4-M01)
-         //--- to prevent rollover spread spikes from distorting or tripping daily drawdown.
-         g_riskDayStartBalance=CopierAccountBalance();
-         g_riskDayStartEquity=g_riskDayStartBalance;
+         // Derive opening balance exactly across rollover tick gap by stripping post-midnight realized P/L
+         bool rOk=false;
+         double realized=CopierRealizedToday(dayStart,rOk);
+         double curBal=CopierAccountBalance();
+         if(rOk)
+           {
+            double trueStartBal=curBal-realized;
+            g_riskDayStartBalance=(trueStartBal>0.0)?trueStartBal:curBal;
+           }
+         else
+           {
+            g_riskDayStartBalance=curBal;
+           }
+         // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
+         double curEq=CopierAccountEquity();
+         double floatingOffset=curEq-curBal;
+         g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
       RiskPeakSave(true);
      }
    // ISSUE-04 / N-02: Never storm history on every 100ms slow tick. Throttle to 10s when baseline
    // is pending derivation, and 60s once established. Abort immediately if disconnected.
-   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000)))
+   // Recalibrate immediately on balance change (cash flow or deal execution) or periodic 60s
+   else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || MathAbs(CopierAccountBalance()-g_riskDayStartBalance)>0.01)))
      {
       g_lastRealizedMs=now;
       if(!CopierIsConnected()) return;
@@ -5722,7 +5781,9 @@ void RefreshRisk()
                g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
                g_riskDayStartBalance=dayStartBal;
                g_risk.SetDayStartEquity(g_riskDayStartEquity);
-               if(cashFlow<0.0) { g_risk.AdjustPeakForCashFlow(cashFlow); RiskPeakSave(true); }
+               double preEq = CopierAccountEquity() - cashFlow;
+               g_risk.AdjustPeakForCashFlow(cashFlow, preEq);
+               RiskPeakSave(true);
               }
            }
         }
@@ -7932,6 +7993,7 @@ void HandleHeartbeat(const int si,const CopierEnv &e)
    // BUG-85-01: Learn sender clock from periodic heartbeats to maintain active offset calibration
    LearnSenderClock(si,e.ts);
    double eq=CopierKvGetDouble(e.payload,"EQ",0.0);
+   if(eq>0.0) g_senderEquity[si]=eq;
    int npos=CopierKvGetInt(e.payload,"NPOS",-1);
 
    //--- The sender's ACCOUNT NUMBER, so the panel can name it. Falls back to
@@ -8106,6 +8168,13 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       else if(g_once.ShouldEmit("hubctl|"+e.type))
          g_log.Info("central channel: hub sent "+e.type
                     +" (no receiver action for it)");
+      return false;
+     }
+
+   //--- Control channels (@all, @nid, @acc) are strictly reserved for SID=hub (D5-02)
+   if(StringSubstr(topic,0,1)=="@")
+     {
+      g_log.Warn("SECURITY: non-hub SID '"+e.sid+"' attempted transmission on control topic '"+topic+"' - DISCARDED");
       return false;
      }
 
@@ -8581,6 +8650,22 @@ int OnInit()
       string evEnd[];
       ArrayResize(evEnd,g_nSenders);
       for(int i=0;i<g_nSenders;i++) evEnd[i]=g_epEvents[i];
+
+      if(UseCurve)
+        {
+         string trimmedKey=CopierTrim(SenderServerKey);
+         if(StringLen(trimmedKey)==0)
+           {
+            g_log.Error("Direct mode: UseCurve is true but SenderServerKey is empty. Set SenderServerKey to sender's 40-character public key.");
+            return INIT_FAILED;
+           }
+         if(StringLen(trimmedKey)!=CP_KEY_LEN)
+           {
+            g_log.Error("Direct mode: SenderServerKey must be exactly "+IntegerToString(CP_KEY_LEN)+" characters (got "+IntegerToString(StringLen(trimmedKey))+"). Check for extra spaces or truncated paste.");
+            return INIT_FAILED;
+           }
+         g_serverKey[0]=trimmedKey;
+        }
 
       if(!g_tp.ConnectReceiver(evEnd,g_nSenders,
                                UseCurve,g_serverKey,g_myPublicKey,mySecret))
@@ -9105,6 +9190,21 @@ void OnTimer()
    //--- from previous ticks.
    int n=g_tp.DrainFrames(g_drainTopics,g_drainMsgs,CP_DRAIN_MAX);
    long now=CopierNowMs();
+
+#ifdef __MQL5__
+   static long lastConnCheck=0;
+   if(now-lastConnCheck>=1000)
+     {
+      lastConnCheck=now;
+      if(CopierIsConnected() && CopierIsNettingAccount())
+        {
+         g_log.Error("CRITICAL: Terminal connected to a NETTING account at runtime! Netting accounts violate one-UID-one-position invariant. Emergency disarming receiver.");
+         Alert("Copier RECEIVER: NETTING account detected at runtime! Emergency STOP.");
+         ExpertRemove();
+         return;
+        }
+     }
+#endif
    CheckPeersPing(now);
    if(n>=CP_DRAIN_MAX && g_once.ShouldEmit("drainfull"))
       g_log.Warn("drain hit the per-tick bound of "+(string)CP_DRAIN_MAX
@@ -9267,6 +9367,14 @@ void OnTimer()
          s_seenSnapSid[sc]="";
          s_seenSnapHash[sc]=0;
          s_bestSnapSsid[sc]="";
+        }
+      // D6-02: Clear decoded envelope strings to release multi-megabyte snapshot payload buffers
+      for(int ec=0;ec<n;ec++)
+        {
+         s_envs[ec].payload="";
+         s_envs[ec].sid="";
+         s_envs[ec].ssid="";
+         s_envs[ec].type="";
         }
      }
 

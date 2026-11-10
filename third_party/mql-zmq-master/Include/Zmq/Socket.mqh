@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| Module: Socket.mqh                                               |
 //| This file is part of the mql-zmq project:                        |
 //|     https://github.com/dingmaotu/mql-zmq                         |
@@ -152,7 +152,7 @@ int zmq_msg_recv(zmq_msg_t &msg,intptr_t s,int flags);
 //+------------------------------------------------------------------+
 //| I/O multiplexing                                                 |
 //+------------------------------------------------------------------+
-int zmq_poll(PollItem &items[],int nitems,long timeout);
+int zmq_poll(PollItem &items[],int nitems,int timeout);
 //+------------------------------------------------------------------+
 //| Message proxying                                                 |
 //+------------------------------------------------------------------+
@@ -319,7 +319,7 @@ bool Socket::proxySteerable(Socket *frontend,Socket *backend,Socket *capture,Soc
 //+------------------------------------------------------------------+
 int Socket::poll(PollItem &arr[],long timeout)
   {
-   return zmq_poll(arr,ArraySize(arr),timeout);
+   return zmq_poll(arr,ArraySize(arr),(int)timeout);
   }
 //+------------------------------------------------------------------+
 //| fill a poll item for this socket                                 |

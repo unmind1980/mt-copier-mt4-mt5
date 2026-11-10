@@ -160,7 +160,11 @@ impl ArchiveShift {
                 let writer = BufWriter::new(dst);
                 let mut encoder = GzEncoder::new(writer, Compression::default());
                 io::copy(&mut reader, &mut encoder)?;
-                encoder.finish()?;
+                let mut writer = encoder.finish()?;
+                use std::io::Write;
+                writer.flush()?;
+                let f = writer.into_inner().map_err(|e| e.into_error())?;
+                f.sync_all()?;
                 Ok(())
             })();
 
@@ -236,6 +240,19 @@ impl Audit {
         max_bytes: u64,
         max_backups: usize,
     ) -> std::io::Result<Audit> {
+        // Ensure file ends with newline so subsequent appends do not fuse with torn line tails
+        if path.exists() {
+            if let Ok(data) = std::fs::read(path) {
+                if !data.is_empty() && data.last() != Some(&b'\n') {
+                    if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
+                        use std::io::Write;
+                        let _ = f.write_all(b"\n");
+                        let _ = f.sync_data();
+                    }
+                }
+            }
+        }
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
