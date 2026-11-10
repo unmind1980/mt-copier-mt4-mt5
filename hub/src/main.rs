@@ -1992,15 +1992,20 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     //--- (one frame) rather than assumed to be data.
                     let b = &parts[0];
                     if !b.is_empty() && (b[0] == 1 || b[0] == 0) {
+                        if b.len() > 128 {
+                            continue;
+                        }
                         let prefix: String = b[1..].iter().map(|c| *c as char).collect();
                         if b[0] == 1 {
                             //--- R58-04: reference-counted subscriptions.
                             //--- Multiple nodes subscribe to @hub, and multiple receivers
                             //--- subscribe to the same sender data topic.
-                            let count = st.subs.entry(prefix.clone()).or_insert(0);
-                            *count += 1;
-                            if *count == 1 {
-                                println!("[hub] +sub {:<24} {}", prefix, describe_sub(&prefix));
+                            if st.subs.len() < 2048 || st.subs.contains_key(&prefix) {
+                                let count = st.subs.entry(prefix.clone()).or_insert(0);
+                                *count += 1;
+                                if *count == 1 {
+                                    println!("[hub] +sub {:<24} {}", prefix, describe_sub(&prefix));
+                                }
                             }
                         } else {
                             let mut remove = false;

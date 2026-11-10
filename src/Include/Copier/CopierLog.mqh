@@ -117,6 +117,7 @@ private:
    //--- recycled because the log filled up, so clear it first.
    void              Open(const bool fresh)
      {
+      if(m_handle!=INVALID_HANDLE) { FileClose(m_handle); m_handle=INVALID_HANDLE; }
       if(fresh) FileDelete(PathOf(m_gen));
       TryOpen();
 

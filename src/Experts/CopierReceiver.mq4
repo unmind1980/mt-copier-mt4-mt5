@@ -715,6 +715,7 @@ void AddWaitItem(const string uid,const string sym,const int side,const double l
 string  g_mapFrom[CP_MAX_TOTAL_MAPS];
 string  g_mapTo[CP_MAX_TOTAL_MAPS];
 int     g_mapSender[CP_MAX_TOTAL_MAPS];
+double  g_mapMult[CP_MAX_TOTAL_MAPS];
 int     g_nMap=0;
 
 //--- desired-position sets: nSenders * CP_MAX_POSITIONS --------------
@@ -1289,11 +1290,28 @@ CopierSeenRing  g_fillGraceRing;
 //=====================================================================
 void MapAdd(const int si,const string from,const string to)
   {
+   string cleanTo=to;
+   double mult=1.0;
+   int multIdx=StringFind(cleanTo,"*");
+   if(multIdx<0) multIdx=StringFind(cleanTo,":");
+   if(multIdx>0)
+     {
+      string mStr=StringSubstr(cleanTo,multIdx+1);
+      cleanTo=StringSubstr(cleanTo,0,multIdx);
+      mult=StringToDouble(mStr);
+      if(mult<=0.0) mult=1.0;
+     }
+
    for(int i=0;i<g_nMap;i++)
      {
       //--- (si,from) is the key: two senders may map the same symbol
       //--- differently, and that is deliberate.
-      if(g_mapSender[i]==si && g_mapFrom[i]==from) { g_mapTo[i]=to; return; }
+      if(g_mapSender[i]==si && g_mapFrom[i]==from)
+        {
+         g_mapTo[i]=cleanTo;
+         g_mapMult[i]=mult;
+         return;
+        }
      }
    if(g_nMap>=CP_MAX_TOTAL_MAPS)
      {
@@ -1311,8 +1329,9 @@ void MapAdd(const int si,const string from,const string to)
       return;
      }
    g_mapFrom[g_nMap]=from;
-   g_mapTo[g_nMap]=to;
+   g_mapTo[g_nMap]=cleanTo;
    g_mapSender[g_nMap]=si;
+   g_mapMult[g_nMap]=mult;
    g_nMap++;
   }
 
@@ -1334,8 +1353,19 @@ void MapClear()
      {
       g_mapFrom[i]="";
       g_mapTo[i]="";
+      g_mapMult[i]=1.0;
      }
    g_nMap=0;
+  }
+
+double GetSymbolMultiplier(const int si,const string sym)
+  {
+   for(int i=0;i<g_nMap;i++)
+     {
+      if(g_mapSender[i]==si && (g_mapFrom[i]==sym || g_mapTo[i]==sym))
+         return g_mapMult[i];
+     }
+   return 1.0;
   }
 
 string MapSymbol(const int si,const string sym,const string suffix)
@@ -1853,7 +1883,12 @@ string SerializeCurrentConfigToIni()
          for(int m = 0; m < g_nMap; m++)
            {
             if(g_mapSender[m] == i)
-               sb.Add("symbol." + g_mapFrom[m] + "=" + g_mapTo[m] + "\n");
+              {
+               string line = "symbol." + g_mapFrom[m] + "=" + g_mapTo[m];
+               if(g_mapMult[m] != 1.0)
+                  line += "*" + DoubleToString(g_mapMult[m], 4);
+               sb.Add(line + "\n");
+              }
            }
          sb.Add("deviationpoints=" + (string)g_senderCfg[i].deviationPoints + "\n");
          sb.Add("emergencyslpips=" + DoubleToString(g_senderCfg[i].emergencySLPips, 1) + "\n");
@@ -4401,7 +4436,8 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    //---     (a 0.05 fixed size under a 0.1 filter never opened, reported as
    //---     "lot sizing rejected" - which points at the wrong thing).
    //--- The per-position cap is maxLotsPerPosition, applied below.
-   double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],1.0,si2,
+   double symMult=GetSymbolMultiplier(si,sym);
+   double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
                                  0.0,0.0,rejected);
    if(rejected || lots<=0.0) return 0.0;
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
@@ -5658,6 +5694,7 @@ void RefreshRisk()
                g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
                g_riskDayStartBalance=dayStartBal;
                g_risk.SetDayStartEquity(g_riskDayStartEquity);
+               if(cashFlow<0.0) { g_risk.AdjustPeakForCashFlow(cashFlow); RiskPeakSave(true); }
               }
            }
         }

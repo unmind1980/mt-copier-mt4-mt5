@@ -666,11 +666,19 @@ public:
               }
             if(!gotM1)
               {
-               // Drain remaining multipart frames if any to prevent socket misalignment
-               while(m0.more())
+               // R3-X01: Drain remaining multipart frames of THIS message safely without looping on m0
+               bool hasMoreFrames=true;
+               while(hasMoreFrames)
                  {
                   ZmqMsg extra;
-                  if(!m_sub.recv(extra,true)) break;
+                  bool gotExtra=false;
+                  for(int a=0; a<5; a++)
+                    {
+                     if(m_sub.recv(extra,true)) { gotExtra=true; break; }
+                     CopierWaitMs(1);
+                    }
+                  if(!gotExtra) break;
+                  hasMoreFrames=extra.more();
                  }
                break;
               }

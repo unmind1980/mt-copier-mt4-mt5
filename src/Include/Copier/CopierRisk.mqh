@@ -316,6 +316,12 @@ public:
       if(peak>m_peakEquity) m_peakEquity=peak;
      }
 
+   void              AdjustPeakForCashFlow(const double cashFlow)
+     {
+      if(cashFlow<0.0 && m_peakEquity>0.0)
+         m_peakEquity=MathMax(0.0,m_peakEquity+cashFlow);
+     }
+
    double            DayStartEquity() const { return m_dayStartEquity; }
    double            PeakEquity() const { return m_peakEquity; }
 
