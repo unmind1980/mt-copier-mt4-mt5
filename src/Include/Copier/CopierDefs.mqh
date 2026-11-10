@@ -220,6 +220,35 @@ bool CopierSeenRingApplies(const int kind)
    return (kind!=CP_ACT_MODIFY);
   }
 
+struct CopierAction
+  {
+   int    senderIdx;
+   int    kind;
+   string uid;
+   string sym;
+   int    side;
+   double lots;
+   long   ticket;        // CLOSE/TRIM/MODIFY: the receiver's own identifier
+   long   senderTicket;  // OPEN : the sender's ticket, written into the
+                         //        comment so a human can match the two
+                         //        orders by eye in the two terminals
+   double sl;            // MODIFY: the resolved target, in RECEIVER prices.
+   double tp;            //   0 means "remove it" - the receiver mirrors the
+                         //   sender's stops faithfully, including removal
+   //--- OPEN of a PENDING entry: the order to place. ordKind is CP_ORD_MARKET
+   //--- for a normal entry, in which case the rest are 0 and unused.
+   int    ordKind;
+   int    ptype;
+   double pprice;
+   double pstop;
+   long   pexpire;
+   double openPx;        // MQL-03: Sender's entry price for market orders or reporting
+   string key;           // the dedup key this action was admitted under, so
+                         // the seen-ring records the SAME key PushAction
+                         // tested (TRIM keys carry the target volume, MODIFY
+                         // keys carry the target stops)
+  };
+
 //=====================================================================
 // Wire separators. Chosen so they never collide with each other and
 // are extremely unlikely to appear in broker symbol names.

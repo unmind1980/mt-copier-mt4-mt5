@@ -861,6 +861,14 @@ int OnInit()
    g_lastHbt2Ms=0;
 
    g_hubOn=false;
+   g_fillSnapshotDueMs=0;
+   g_forcePosReport=false;
+   g_stateDirty=false;
+   g_hbtSinceReg=0;
+   ArrayInitialize(g_peerWasDown,false);
+   ArrayInitialize(g_peerAlerted,0);
+   ArrayInitialize(g_slotStamp,0);
+   ArrayInitialize(g_rowStamp,0);
    g_prev.Clear();
    ArrayInitialize(g_openLots,0.0);
    ArrayInitialize(g_slotMissCount,0);
@@ -1143,6 +1151,16 @@ void OnDeinit(const int reason)
      }
 
    g_tp.Close();          // sockets first, then context (LINGER=0 already set)
+
+   //--- Flush runtime globals on deinit
+   g_fillSnapshotDueMs=0;
+   g_forcePosReport=false;
+   g_stateDirty=false;
+   g_hbtSinceReg=0;
+   ArrayInitialize(g_peerWasDown,false);
+   ArrayInitialize(g_peerAlerted,0);
+   ArrayInitialize(g_slotStamp,0);
+   ArrayInitialize(g_rowStamp,0);
   }
 
 //--- Say once when a peer goes quiet, and once when it comes back.

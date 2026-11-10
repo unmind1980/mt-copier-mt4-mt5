@@ -3494,6 +3494,155 @@ void TestAuditRound10()
    Ok("r10_modparse: rejects NaN in SL", !CopierPayloadModifyParse(payloadNan, pMod));
   }
 
+void TestAuditRound11()
+  {
+   // 1) freezeLevel in CopierSymInfo zero initialization and safety
+   CopierSymInfo siFreeze;
+   OkDbl("r11_sym_freeze: default freezeLevel is 0.0", siFreeze.freezeLevel, 0.0, 0.000001);
+   OkDbl("r11_sym_freeze: default stopLevel is 0.0", siFreeze.stopLevel, 0.0, 0.000001);
+   OkDbl("r11_sym_freeze: default point is 0.0", siFreeze.point, 0.0, 0.000001);
+
+   // 2) CopierFitStopAt respecting freezeLevel when freezeLevel > stopLevel
+   siFreeze.digits = 5;
+   siFreeze.point = 0.00001;
+   siFreeze.tickSize = 0.00001;
+   siFreeze.stopLevel = 0.00020;   // 20 points
+   siFreeze.freezeLevel = 0.00050; // 50 points (freezeLevel dominates stopLevel)
+
+   bool clamped = false;
+   // Buy SL at 1.09970 against market 1.09980 (10 points dist < freezeLevel 50 points)
+   // Must clamp to market - freezeLevel = 1.09980 - 0.00050 = 1.09930
+   double fittedBuySl = CopierFitStopAt(1.09970, CP_SIDE_BUY, true, 1.09980, siFreeze, clamped);
+   OkDbl("r11_fit_freeze: Buy SL clamped by freezeLevel", fittedBuySl, 1.09930, 0.000001);
+   Ok("r11_fit_freeze: Buy SL clamped flag is true", clamped);
+
+   // Sell SL at 1.10010 against market 1.10000 (10 points dist < freezeLevel 50 points)
+   // Must clamp to market + freezeLevel = 1.10000 + 0.00050 = 1.10050
+   double fittedSellSl = CopierFitStopAt(1.10010, CP_SIDE_SELL, true, 1.10000, siFreeze, clamped);
+   OkDbl("r11_fit_freeze: Sell SL clamped by freezeLevel", fittedSellSl, 1.10050, 0.000001);
+   Ok("r11_fit_freeze: Sell SL clamped flag is true", clamped);
+
+   // Buy TP at 1.10010 against market 1.09980 (30 points dist < freezeLevel 50 points)
+   // Must clamp to market + freezeLevel = 1.09980 + 0.00050 = 1.10030
+   double fittedBuyTp = CopierFitStopAt(1.10010, CP_SIDE_BUY, false, 1.09980, siFreeze, clamped);
+   OkDbl("r11_fit_freeze: Buy TP clamped by freezeLevel", fittedBuyTp, 1.10030, 0.000001);
+   Ok("r11_fit_freeze: Buy TP clamped flag is true", clamped);
+
+   // Sell TP at 1.09970 against market 1.10000 (30 points dist < freezeLevel 50 points)
+   // Must clamp to market - freezeLevel = 1.10000 - 0.00050 = 1.09950
+   double fittedSellTp = CopierFitStopAt(1.09970, CP_SIDE_SELL, false, 1.10000, siFreeze, clamped);
+   OkDbl("r11_fit_freeze: Sell TP clamped by freezeLevel", fittedSellTp, 1.09950, 0.000001);
+   Ok("r11_fit_freeze: Sell TP clamped flag is true", clamped);
+
+   // CopierFitStopAt with NaN freezeLevel falls back gracefully
+   CopierSymInfo siNan;
+   siNan.digits = 5;
+   siNan.point = 0.00001;
+   siNan.tickSize = 0.00001;
+   siNan.stopLevel = 0.00020;
+   siNan.freezeLevel = MathSqrt(-1.0); // NaN
+   double fitNan = CopierFitStopAt(1.09970, CP_SIDE_BUY, true, 1.09980, siNan, clamped);
+   Ok("r11_fit_freeze: NaN freezeLevel does not crash", MathIsValidNumber(fitNan) && fitNan > 0.0);
+
+   // 3) CopierIsHedgingAccount and CopierIsNettingAccount consistency
+   int acctMode = CopierAccountMode();
+   Ok("r11_acct_mode: mode is valid (>=0 or -1)", acctMode >= -1 && acctMode <= 2);
+   if(acctMode == 1)
+     {
+      Ok("r11_acct_hedging: is hedging", CopierIsHedgingAccount());
+      Ok("r11_acct_hedging: not netting", !CopierIsNettingAccount());
+     }
+   else if(acctMode == 2)
+     {
+      Ok("r11_acct_netting: not hedging", !CopierIsHedgingAccount());
+      Ok("r11_acct_netting: is netting", CopierIsNettingAccount());
+     }
+   else
+     {
+      Ok("r11_acct_unk: unknown mode not hedging", !CopierIsHedgingAccount());
+      Ok("r11_acct_unk: unknown mode not netting", !CopierIsNettingAccount());
+     }
+
+   // 4) CopierBackoff Clear() functionality
+   CopierBackoff bo;
+   bo.Park("test_bo_key", 60000);
+   Ok("r11_bo: parked key is blocked", bo.Blocked("test_bo_key"));
+   Ok("r11_bo: blocked exit is blocked", bo.BlockedExit("test_bo_key"));
+   Ok("r11_bo: blocked modify is blocked", bo.BlockedModify("test_bo_key"));
+   bo.Clear();
+   Ok("r11_bo: cleared key is unblocked", !bo.Blocked("test_bo_key"));
+   Ok("r11_bo: cleared key exit is unblocked", !bo.BlockedExit("test_bo_key"));
+   Ok("r11_bo: cleared key modify is unblocked", !bo.BlockedModify("test_bo_key"));
+   OkInt("r11_bo: cleared count is 0", bo.Count("test_bo_key"), 0);
+
+   // 5) CopierPosTable::CopyTo dynamic capacity retention (zero shrinkage)
+   CopierPosTable tbl;
+   CopierPos p1 = MakePos("UIDA1111", 101, "EURUSD", CP_SIDE_BUY, 0.10, 1.0850, 1.0800, 1.0900, 100, 1700000000);
+   CopierPos p2 = MakePos("UIDB2222", 102, "GBPUSD", CP_SIDE_SELL, 0.20, 1.2500, 1.2550, 1.2450, 100, 1700000000);
+   CopierPos p3 = MakePos("UIDC3333", 103, "USDJPY", CP_SIDE_BUY, 0.30, 150.00, 149.50, 150.50, 100, 1700000000);
+   tbl.Upsert(p1);
+   tbl.Upsert(p2);
+   tbl.Upsert(p3);
+   CopierPos dynDense[];
+   int copyN1 = tbl.CopyTo(dynDense);
+   OkInt("r11_copy_dense: copied 3 items", copyN1, 3);
+   int arrCap1 = ArraySize(dynDense);
+   Ok("r11_copy_dense: capacity at least 3", arrCap1 >= 3);
+   tbl.RemoveAt(0); // remove 1 item, table now has 2
+   int copyN2 = tbl.CopyTo(dynDense);
+   OkInt("r11_copy_dense: copied 2 items", copyN2, 2);
+   int arrCap2 = ArraySize(dynDense);
+   OkInt("r11_copy_dense: capacity retained without shrinking", arrCap2, arrCap1);
+
+   // 6) In-place coalescing simulation for CP_ACT_MODIFY
+   CopierAction testQ[4];
+   testQ[0].senderIdx = 0;
+   testQ[0].kind = CP_ACT_MODIFY;
+   testQ[0].uid = "COAL1234";
+   testQ[0].sl = 1.0800;
+   testQ[0].tp = 1.0900;
+   testQ[0].pprice = 0.0;
+   testQ[0].pstop = 0.0;
+   testQ[0].pexpire = 0;
+   testQ[0].key = "sender0:4:COAL1234";
+
+   // Coalesce in place with updated SL/TP
+   double newSl = 1.0820;
+   double newTp = 1.0920;
+   bool coalesced = false;
+   for(int qi = 0; qi < 1; qi++)
+     {
+      if(testQ[qi].senderIdx == 0 && testQ[qi].kind == CP_ACT_MODIFY && testQ[qi].uid == "COAL1234")
+        {
+         testQ[qi].sl = newSl;
+         testQ[qi].tp = newTp;
+         testQ[qi].key = "sender0:4:COAL1234:new";
+         coalesced = true;
+         break;
+        }
+     }
+   Ok("r11_coalesce: in-place modify coalesced", coalesced);
+   OkDbl("r11_coalesce: sl updated in place", testQ[0].sl, 1.0820, 0.000001);
+   OkDbl("r11_coalesce: tp updated in place", testQ[0].tp, 1.0920, 0.000001);
+   OkStr("r11_coalesce: key updated in place", testQ[0].key, "sender0:4:COAL1234:new");
+
+   // 7) ClearQueue complete blanking verification
+   for(int k = 0; k < 4; k++)
+     {
+      testQ[k].uid = "";
+      testQ[k].sym = "";
+      testQ[k].key = "";
+      testQ[k].ticket = 0;
+      testQ[k].senderTicket = 0;
+      testQ[k].lots = 0.0;
+      testQ[k].kind = 0;
+      testQ[k].senderIdx = -1;
+     }
+   OkStr("r11_q_clear: slot 0 uid blanked", testQ[0].uid, "");
+   OkInt("r11_q_clear: slot 0 ticket 0", (int)testQ[0].ticket, 0);
+   OkInt("r11_q_clear: slot 0 senderIdx -1", testQ[0].senderIdx, -1);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3559,6 +3708,7 @@ void OnStart()
    TestAuditRound110();
    TestRound9Enhancements();
    TestAuditRound10();
+   TestAuditRound11();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

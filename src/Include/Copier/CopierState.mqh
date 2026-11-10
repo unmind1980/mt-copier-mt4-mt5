@@ -479,17 +479,16 @@ public:
    //--- an empty identity, which they cannot map to anything.
    int               CopyTo(CopierPos &out[]) const
      {
-      int cap=(m_n<=CP_MAX_POSITIONS)?m_n:CP_MAX_POSITIONS;
-      if(ArrayIsDynamic(out)) ArrayResize(out,cap,CP_MAX_POSITIONS);
+      if(ArrayIsDynamic(out) && ArraySize(out)<m_n) ArrayResize(out,m_n,CP_MAX_POSITIONS);
+      int cap=ArraySize(out);
       int n=0;
-      for(int i=0;i<CP_MAX_POSITIONS;i++)
+      for(int i=0;i<CP_MAX_POSITIONS && n<m_n;i++)
         {
          if(!SlotValid(i)) continue;
-         if(n>=ArraySize(out)) break;
+         if(n>=cap) break;
          out[n]=m_p[i];
          n++;
         }
-      if(ArrayIsDynamic(out) && n!=cap) ArrayResize(out,n);
       return n;
      }
 
@@ -1214,7 +1213,7 @@ private:
      }
 
 public:
-                     CopierBackoff()
+   void              Clear()
      {
       for(int i=0;i<CP_BACKOFF_SLOTS;i++)
         {
@@ -1225,6 +1224,11 @@ public:
          m_h[i]=0;
          m_slot[i]=0;
         }
+     }
+
+                     CopierBackoff()
+     {
+      Clear();
      }
 
    bool              Blocked(const string key)

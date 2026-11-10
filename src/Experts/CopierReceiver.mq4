@@ -727,36 +727,8 @@ int       g_desiredCount[CP_MAX_SENDERS];
 CopierPos g_scratch[];        // decode buffer, allocated once
 
 //--- action queue ---------------------------------------------------
-//--- CP_ACT_* kinds and the "does the seen-ring apply?" rule live in
+//--- CP_ACT_* kinds, struct CopierAction and the "does the seen-ring apply?" rule live in
 //--- CopierDefs.mqh so the self-test can reach them.
-struct CopierAction
-  {
-   int    senderIdx;
-   int    kind;
-   string uid;
-   string sym;
-   int    side;
-   double lots;
-   long   ticket;        // CLOSE/TRIM/MODIFY: the receiver's own identifier
-   long   senderTicket;  // OPEN : the sender's ticket, written into the
-                         //        comment so a human can match the two
-                         //        orders by eye in the two terminals
-   double sl;            // MODIFY: the resolved target, in RECEIVER prices.
-   double tp;            //   0 means "remove it" - the receiver mirrors the
-                         //   sender's stops faithfully, including removal
-   //--- OPEN of a PENDING entry: the order to place. ordKind is CP_ORD_MARKET
-   //--- for a normal entry, in which case the rest are 0 and unused.
-   int    ordKind;
-   int    ptype;
-   double pprice;
-   double pstop;
-   long   pexpire;
-   double openPx;        // MQL-03: Sender's entry price for market orders or reporting
-   string key;           // the dedup key this action was admitted under, so
-                         // the seen-ring records the SAME key PushAction
-                         // tested (TRIM keys carry the target volume, MODIFY
-                         // keys carry the target stops)
-  };
 //--- The action queue is a FIXED array with a moving head, not a shifting one.
 //---
 //--- It used to be contiguous from index 0 and ShiftQueue() moved the whole
@@ -1089,9 +1061,8 @@ int PeakFind(const string uid)
 void PruneSenderPeakLots()
   {
    if(g_uidPeakLotsCount<=0) return;
-   bool isAlive[];
-   ArrayResize(isAlive,g_uidPeakLotsCount);
-   ArrayInitialize(isAlive,false);
+   static bool s_isAlive[CP_MAX_POSITIONS];
+   ArrayInitialize(s_isAlive,false);
 
    //--- DEF-61-04: Mark active UIDs in O(Desired + Acct) time via direct-mapped PeakFind
    //--- instead of O(N * S * D) nested brute-force loop.
@@ -1101,13 +1072,13 @@ void PruneSenderPeakLots()
       for(int d=0;d<g_desiredCount[s];d++)
         {
          int p=PeakFind(g_desired[base+d].uid);
-         if(p>=0 && p<g_uidPeakLotsCount) isAlive[p]=true;
+         if(p>=0 && p<g_uidPeakLotsCount && p<CP_MAX_POSITIONS) s_isAlive[p]=true;
         }
      }
    for(int k=0;k<g_acctAllPosCount;k++)
      {
       int p=PeakFind(g_acctAllPos[k].uid);
-      if(p>=0 && p<g_uidPeakLotsCount) isAlive[p]=true;
+      if(p>=0 && p<g_uidPeakLotsCount && p<CP_MAX_POSITIONS) s_isAlive[p]=true;
      }
 
    //--- Compact active entries in single pass
@@ -1115,7 +1086,7 @@ void PruneSenderPeakLots()
    int writeIdx=0;
    for(int i=0;i<oldPeakCount;i++)
      {
-      if(isAlive[i])
+      if(s_isAlive[i])
         {
          if(writeIdx!=i) g_uidPeakLots[writeIdx]=g_uidPeakLots[i];
          writeIdx++;
@@ -1434,27 +1405,30 @@ bool LoadConfigFromInputs()
       return false;
      }
 
-   //--- reset sender 0's stream state. Globals SURVIVE a reinitialisation,
+   //--- reset all senders' stream state. Globals SURVIVE a reinitialisation,
    //--- so a stale watermark here would make the receiver discard the first
    //--- messages from a sender it has only just been told about, or converge
    //--- on stale desired positions from a previous sender configuration.
-   g_lastSeq[0][CP_STREAM_EVENTS]=-1;
-   g_lastSeq[0][CP_STREAM_SNAP]=-1;
-   g_lastSeq[0][CP_STREAM_HBT]=-1;
-   g_ssidSeen[0]="";
-   ClearAbandonedSsids(0);
-   g_lastMsgMs[0]=0;
-   g_firstMsgMs[0]=0;
-   g_lastSnapMs[0]=0;
-   g_snapHash[0]="";
-   g_stale[0]=false;
-   g_ready[0]=false;
-   g_desiredCount[0]=0;
-   g_senderClockKnown[0]=false;
-   g_senderClockOffset[0]=0;
-   g_senderClockOffsetValid[0]=false;
-   g_snapRejectStreak[0]=0;
-   g_dropped[0]=0;
+   for(int s=0; s<CP_MAX_SENDERS; s++)
+     {
+      g_lastSeq[s][CP_STREAM_EVENTS]=-1;
+      g_lastSeq[s][CP_STREAM_SNAP]=-1;
+      g_lastSeq[s][CP_STREAM_HBT]=-1;
+      g_ssidSeen[s]="";
+      ClearAbandonedSsids(s);
+      g_lastMsgMs[s]=0;
+      g_firstMsgMs[s]=0;
+      g_lastSnapMs[s]=0;
+      g_snapHash[s]="";
+      g_stale[s]=false;
+      g_ready[s]=false;
+      g_desiredCount[s]=0;
+      g_senderClockKnown[s]=false;
+      g_senderClockOffset[s]=0;
+      g_senderClockOffsetValid[s]=false;
+      g_snapRejectStreak[s]=0;
+      g_dropped[s]=0;
+     }
 
    //--- Start from an empty symbol map on every load - see MapClear.
    MapClear();
@@ -3384,12 +3358,16 @@ void ClearQueue()
    g_qRetryAtMs=0;
    g_qBackoffMs=CP_Q_BACKOFF_MIN_MS;
    g_qSpinPasses=0;
-   for(int i=0;i<g_qn;i++)
+   for(int i=0;i<CP_MAX_ACTIONS;i++)
      {
-      int idx=g_qHead+i;
-      g_q[idx].uid="";
-      g_q[idx].sym="";
-      g_q[idx].key="";
+      g_q[i].uid="";
+      g_q[i].sym="";
+      g_q[i].key="";
+      g_q[i].ticket=0;
+      g_q[i].senderTicket=0;
+      g_q[i].lots=0.0;
+      g_q[i].kind=0;
+      g_q[i].senderIdx=-1;
      }
    g_qn=0;
    g_qHead=0;
@@ -8576,8 +8554,8 @@ int OnInit()
    if(!AcquireInstanceLock()) return INIT_FAILED;
    g_seen.SetTtlMs(600000);
    g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode
-   //--- g_backoff carries its own per-key deadline; there is no single TTL
-   //--- to set, which is the whole point of it.
+   g_inflight.Clear();
+   g_backoff.Clear();
    g_unsupported.SetTtlMs(CP_UNSUPPORTED_MS);
    g_onceFail.SetRepeatMs(60000);
    g_onceHbt.SetRepeatMs(60000);
@@ -8590,6 +8568,28 @@ int OnInit()
    ArrayInitialize(g_stLastMs,0);
    g_stOvEpoch++;
    StopsRebuildUidIndex();
+   ZeroMemory(g_stopSig);
+
+   //--- Reset position scan, cache and hash index globals so hot reload doesn't inherit stale state
+   g_acctAllPosCount=0;
+   g_acctScanned=false;
+   g_posCacheCount=0;
+   g_lastOrdersTotal=-1;
+   g_lastFullScanMs=0;
+   g_locIdx.Clear();
+   g_desIdx.Clear();
+   g_qCloseIdx.Clear();
+   ArrayInitialize(s_posCacheTkSlot,0);
+   ArrayInitialize(s_posCacheTkHash,0);
+   g_waitHeld=0;
+   g_waitLots=0.0;
+   g_mktHeld=0;
+   g_mktHeldLots=0.0;
+   g_riskBlocked=0;
+   g_snapSkipped=0;
+   g_snapDeclFailed=0;
+   g_qDeferred=0;
+   g_pushReject="";
 
    //--- risk switches. Every one defaults to off, so this is a no-op unless
    //--- the operator has deliberately configured something.
@@ -8696,6 +8696,7 @@ int OnInit()
    string hdr="";
    CopierPos saved[];
    int savedN=0;
+   g_recKnown.Clear(); // DEF-11-01: clear in-memory table before restoring so stale ghost entries don't persist across hot reload
    if(CopierStateFile::Load(ReceiverStatePath(),hdr,saved,savedN))
      {
       g_stateRestored=true;
@@ -9033,6 +9034,20 @@ void OnDeinit(const int reason)
 
    g_tp.Close();
    ReleaseInstanceLock();
+
+   //--- Flush position scan, cache and hash index globals so hot reload doesn't inherit stale state
+   g_acctAllPosCount=0;
+   g_acctScanned=false;
+   g_posCacheCount=0;
+   g_lastOrdersTotal=-1;
+   g_lastFullScanMs=0;
+   g_recKnown.Clear();
+   g_locIdx.Clear();
+   g_desIdx.Clear();
+   g_qCloseIdx.Clear();
+   ArrayInitialize(s_posCacheTkSlot,0);
+   ArrayInitialize(s_posCacheTkHash,0);
+   ZeroMemory(g_stopSig);
   }
 
 //--- Probe every sender, and say once when one goes quiet.

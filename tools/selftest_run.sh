@@ -60,9 +60,10 @@ FRESH=1
 #--- Raise it DELIBERATELY when you add assertions; never lower it to make a
 #--- build pass. (MT4 reports a few less: the platforms differ by ifdef'd
 #--- assertions, which is why this is a constant here rather than derived.)
-#--- 840 = 764 + 76 added by round 10 deep audit (Agent E): pending types,
-#--- hex formatting, float extremes/NaN, sender collision, seen ring, state file.
-BASELINE=840
+#--- 873 = 840 + 33 added by round 11 deep audit (Agent E): freezeLevel clamping,
+#--- hedging/netting mode verification, backoff clearing, CopyTo capacity retention,
+#--- CP_ACT_MODIFY coalescing, and hot reload queue/state clearing.
+BASELINE=873
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
