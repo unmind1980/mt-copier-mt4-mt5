@@ -2237,12 +2237,9 @@ void OnTimer()
       for(int i=0;i<hn;i++)
         {
          string t=g_drainTopics[i];
-         if(StringLen(t)>0)
-           {
-            string myNid=(string)g_nid;
-            string myAcc=(string)CopierAccountLogin();
-            if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
-           }
+         string myNid=(string)g_nid;
+         string myAcc=(string)CopierAccountLogin();
+         if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
          CopierEnv he;
          if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
          HandleHubSubFrame(he);
@@ -2550,12 +2547,9 @@ void OnTimer()
       for(int i=0;i<hn;i++)
         {
          string t=g_drainTopics[i];
-         if(StringLen(t)>0)
-           {
-            string myNid=(string)g_nid;
-            string myAcc=(string)CopierAccountLogin();
-            if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
-           }
+         string myNid=(string)g_nid;
+         string myAcc=(string)CopierAccountLogin();
+         if(t!="@all" && t!="@"+myNid && t!="@"+myAcc) continue;
          CopierEnv he;
          if(CopierDecodeEnv(g_drainMsgs[i],he)!=CP_ERR_NONE) continue;
          HandleHubSubFrame(he);

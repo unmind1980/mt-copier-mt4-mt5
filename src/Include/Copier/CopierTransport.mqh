@@ -828,8 +828,8 @@ public:
       // MQL-04: Clear cached subscription prefixes on Close() to prevent unbounded accumulation
       m_nSubPrefixes=0;
       for(int i=0;i<CP_MAX_XSUB_SUBS;i++) { m_subPrefixes[i]=""; m_subSent[i]=0; }
-      if(CheckPointer(m_pub)!=POINTER_INVALID) { delete m_pub; m_pub=NULL; }
-      if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
+      if(CheckPointer(m_pub)!=POINTER_INVALID) { m_pub.setLinger(0); delete m_pub; m_pub=NULL; }
+      if(CheckPointer(m_sub)!=POINTER_INVALID) { m_sub.setLinger(0); delete m_sub; m_sub=NULL; }
       if(CheckPointer(m_ctx)!=POINTER_INVALID) { delete m_ctx; m_ctx=NULL; }
      }
   };

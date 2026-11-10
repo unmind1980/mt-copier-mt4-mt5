@@ -768,7 +768,7 @@ fn send_topology(
         HUB_SSID,
         state.seq,
         unix_secs(),
-        unix_millis() % 2147483647,
+        unix_millis(),
         primary_ep,
         standby_ep,
         epoch,
@@ -815,7 +815,7 @@ fn send_cfg(
         HUB_SSID,
         state.seq,
         unix_secs(),
-        unix_millis() % 2147483647,
+        unix_millis(),
         id,
         rev,
         acc,
@@ -849,7 +849,7 @@ fn send_cmd(
         HUB_SSID,
         state.seq,
         unix_secs(),
-        unix_millis() % 2147483647,
+        unix_millis(),
         p
     );
     sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
@@ -862,7 +862,7 @@ fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result
         HUB_SSID,
         state.seq,
         unix_secs(),
-        unix_millis() % 2147483647,
+        unix_millis(),
         nonce
     );
     sock.send_multipart(vec![b"@all".to_vec(), env.into_bytes()], zmq::DONTWAIT)
@@ -1387,6 +1387,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     //--- socket has to be configured before bind and the shared state is not
     //--- built yet at that point.
     let mut curve_for_api: Option<(String, bool)> = None;
+    let mut zap_worker_handle: Option<std::thread::JoinHandle<()>> = None;
     let sock = match ctx.socket(zmq::XPUB) {
         Ok(s) => s,
         Err(e) => {
@@ -1526,7 +1527,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         //--- ZAP is what actually ENFORCES the list, and it must be
         //--- listening before the server socket binds - libzmq asks it
         //--- during the handshake and obeys the answer. See curve.rs.
-        let _zap = curve::spawn_zap_handler(&ctx, list, args.curve_learn, clients_path.clone());
+        zap_worker_handle = Some(curve::spawn_zap_handler(&ctx, list, args.curve_learn, clients_path.clone()));
         curve_for_api = Some((keys.public.clone(), args.curve_learn));
         std::thread::sleep(std::time::Duration::from_millis(80));
     }
@@ -1889,7 +1890,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
     let snap_shared = shared.clone();
     let snap_audit = audit.clone();
-    std::thread::Builder::new()
+    let snap_worker_handle = std::thread::Builder::new()
         .name("snap-worker".to_string())
         .spawn(move || {
             let mut wire_audit_throttle: std::collections::HashMap<(String, String), Instant> =
@@ -3459,7 +3460,12 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     //--- LINGER is 0, so this returns immediately instead of waiting for
     //--- undelivered messages that a hub has no reason to hold on to.
     drop(sock);
+    drop(snap_tx);
+    let _ = snap_worker_handle.join();
     drop(ctx);
+    if let Some(h) = zap_worker_handle {
+        let _ = h.join();
+    }
     Ok(())
 }
 

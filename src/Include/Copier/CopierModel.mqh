@@ -68,6 +68,18 @@ double CopierRoundToTick(const double price, const CopierSymInfo &si)
    return NormalizeDouble(MathRound(price / si.tickSize) * si.tickSize, si.digits);
   }
 
+// R7-D1-02: Normalize deviation points across 2/3/4/5-digit symbols
+int CopierScaleDeviationPoints(const string sym,const int devPoints)
+  {
+   CopierSymInfo si;
+   if(!CopierGetSymbolInfo(sym,si)) return MathMax(0,devPoints);
+   double pipSize=CopierPipOf(si);
+   if(pipSize<=0.0 || si.point<=0.0) return MathMax(0,devPoints);
+   int pointsPerPip=(int)MathRound(pipSize/si.point);
+   if(pointsPerPip<=1) return MathMax(0,devPoints/10);
+   return MathMax(0,devPoints);
+  }
+
 //=====================================================================
 // Symbol helpers
 //=====================================================================
@@ -720,7 +732,14 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
                         safeMagic,(datetime)p.pexpire,clrNONE);
    if(ticket<0)
      {
-      outErr=GetLastError();
+      int e=GetLastError();
+      if(e==147 && p.pexpire>0) // ERR_TRADE_EXPIRATION_DENIED: retry as GTC
+        {
+         ticket=OrderSend(sym,cmd,p.lots,px,MathMax(0,deviationPoints),sl,tp,cmt,safeMagic,0,clrNONE);
+         if(ticket>=0) return true;
+         e=GetLastError();
+        }
+      outErr=e;
       return false;
      }
    return true;
@@ -826,6 +845,12 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       p.pprice=OrderGetDouble(ORDER_PRICE_OPEN);
       p.pstop=OrderGetDouble(ORDER_PRICE_STOPLIMIT);
       p.pexpire=(long)OrderGetInteger(ORDER_TIME_EXPIRATION);
+      ENUM_ORDER_TYPE_TIME tt=(ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME);
+      if(tt==ORDER_TIME_DAY && p.pexpire<=0)
+        {
+         datetime dayEnd=TimeCurrent() - (TimeCurrent()%86400) + 86399;
+         p.pexpire=(long)dayEnd;
+        }
       p.initLots=0.0;   // N-03: receiver bookkeeping only
       p.used=true;
       //--- grow in chunks if dynamic; if fixed static buffer, check bounds
@@ -1068,6 +1093,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    bool ok;
    if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
    else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
+   if(!ok && trade.ResultRetcode()==TRADE_RETCODE_DONE_PARTIAL) ok=true;
    // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
    if(!ok && trade.ResultRetcode()==10030)
      {
@@ -1082,7 +1108,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          trade.SetTypeFilling(candidates[a]);
          if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
          else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
-         if(ok || trade.ResultRetcode()!=10030) break;
+         if(ok || trade.ResultRetcode()==TRADE_RETCODE_DONE_PARTIAL) { ok=true; break; }
+         if(trade.ResultRetcode()!=10030) break;
         }
      }
    if(!ok)
@@ -1173,7 +1200,21 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    if(!CopierGetPrice(sym,side,px)) { outErr=-2; return false; }
    int cmd=(side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
    int safeMagic=(magic>2147483647 || magic<0)?(int)(magic & 0x7FFFFFFF):(int)magic;
-   int ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),sl,tp,comment,safeMagic,0,clrNONE);
+   int ticket=-1;
+   for(int attempt=0;attempt<3;attempt++)
+     {
+      ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),sl,tp,comment,safeMagic,0,clrNONE);
+      if(ticket>=0) break;
+      outErr=GetLastError();
+      if(outErr==135 || outErr==136 || outErr==138) // ERR_PRICE_CHANGED, ERR_OFF_QUOTES, ERR_REQUOTE
+        {
+         Sleep(10);
+         RefreshRates();
+         if(!CopierGetPrice(sym,side,px)) break;
+         continue;
+        }
+      break;
+     }
    if(ticket<0)
      {
       outErr=GetLastError();
@@ -1408,11 +1449,35 @@ bool CopierModifyStops(const long identifier,const string sym,
         {
          req.type_time =ORDER_TIME_GTC;
         }
-      if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
+      if(!OrderSend(req,res))
+        {
+         if(res.retcode==10022 && req.type_time==ORDER_TIME_SPECIFIED)
+           {
+            req.type_time=ORDER_TIME_GTC;
+            req.expiration=0;
+            if(OrderSend(req,res))
+              {
+               if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED || res.retcode==TRADE_RETCODE_NO_CHANGES)
+                  return true;
+              }
+           }
+         outErr=(int)res.retcode;
+         return false;
+        }
       if(res.retcode==TRADE_RETCODE_DONE
          || res.retcode==TRADE_RETCODE_PLACED
          || res.retcode==TRADE_RETCODE_NO_CHANGES)
          return true;
+      if(res.retcode==10022 && req.type_time==ORDER_TIME_SPECIFIED)
+        {
+         req.type_time=ORDER_TIME_GTC;
+         req.expiration=0;
+         if(OrderSend(req,res))
+           {
+            if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED || res.retcode==TRADE_RETCODE_NO_CHANGES)
+               return true;
+           }
+        }
       outErr=(int)res.retcode;
       return false;
      }
@@ -1507,11 +1572,35 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
      {
       req.type_time =ORDER_TIME_GTC;
      }
-   if(!OrderSend(req,res)) { outErr=(int)res.retcode; return false; }
+   if(!OrderSend(req,res))
+     {
+      if(res.retcode==10022 && req.type_time==ORDER_TIME_SPECIFIED)
+        {
+         req.type_time=ORDER_TIME_GTC;
+         req.expiration=0;
+         if(OrderSend(req,res))
+           {
+            if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED || res.retcode==TRADE_RETCODE_NO_CHANGES)
+               return true;
+           }
+        }
+      outErr=(int)res.retcode;
+      return false;
+     }
    if(res.retcode==TRADE_RETCODE_DONE
       || res.retcode==TRADE_RETCODE_PLACED
       || res.retcode==TRADE_RETCODE_NO_CHANGES)
       return true;
+   if(res.retcode==10022 && req.type_time==ORDER_TIME_SPECIFIED)
+     {
+      req.type_time=ORDER_TIME_GTC;
+      req.expiration=0;
+      if(OrderSend(req,res))
+        {
+         if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED || res.retcode==TRADE_RETCODE_NO_CHANGES)
+            return true;
+        }
+     }
    outErr=(int)res.retcode;
    return false;
 #else
@@ -1527,6 +1616,11 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    if(!ok)
      {
       int e=GetLastError();
+      if(e==147 && exp>0)
+        {
+         if(OrderModify((int)ticket,openPx,sl,tp,0,clrNONE)) return true;
+         e=GetLastError();
+        }
       if(e==1) return true;
       outErr=e;
       return false;
@@ -1720,7 +1814,7 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          //--- opens the new one. Counting it only as an exit left inVol at 0, so
          //--- the closure test below could never become true for a position that
          //--- was born from a reversal.
-         if(entry==DEAL_ENTRY_IN)          inVol+=vol;
+         if(entry==DEAL_ENTRY_IN || entry==DEAL_ENTRY_STATE) inVol+=vol;
          else if(entry==DEAL_ENTRY_INOUT)
            {
             if(inVol==0.0)

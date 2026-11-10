@@ -224,8 +224,12 @@ bool CopierDecodeRec(const string rec,CopierPos &p)
    p.used=true;
    p.initLots=0.0;   // N-03: receiver-side only, never carried on the wire
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
-   if(p.lots<=0.0) return false;
-   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0 || p.pprice<0.0 || p.pstop<0.0) return false;
+   if(!MathIsValidNumber(p.lots) || p.lots<=0.0) return false;
+   if(!MathIsValidNumber(p.openPx) || p.openPx<0.0) return false;
+   if(!MathIsValidNumber(p.sl) || p.sl<0.0) return false;
+   if(!MathIsValidNumber(p.tp) || p.tp<0.0) return false;
+   if(!MathIsValidNumber(p.pprice) || p.pprice<0.0) return false;
+   if(!MathIsValidNumber(p.pstop) || p.pstop<0.0) return false;
    if(StringLen(p.uid)!=CP_UID_LEN || !CopierUidValid(p.uid)) return false;
    p.sym=CopierSanitizeSymbol(p.sym);
    //--- a record with no symbol cannot be mirrored, and carrying it into the
@@ -700,7 +704,9 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.tp      =CopierKvGetDouble(payload,"TP",0.0);
    p.openTime=CopierKvGetLong(payload,"OTS",0);
    p.magic   =CopierKvGetLong(payload,"MAGIC",0);
-   if(p.openPx<0.0 || p.sl<0.0 || p.tp<0.0) return false;
+   if(!MathIsValidNumber(p.openPx) || p.openPx<0.0) return false;
+   if(!MathIsValidNumber(p.sl) || p.sl<0.0) return false;
+   if(!MathIsValidNumber(p.tp) || p.tp<0.0) return false;
    //--- EVERY field is written, including the ones a market event does not
    //--- carry. A struct field left unset would inherit whatever was in that
    //--- memory before it - the same phantom-slot trap CopierPosTable's
@@ -710,14 +716,15 @@ bool CopierPayloadOpenParse(const string payload,CopierPos &p)
    p.pprice  =CopierKvGetDouble(payload,"PPRICE",0.0);
    p.pstop   =CopierKvGetDouble(payload,"PSTOP",0.0);
    p.pexpire =CopierKvGetLong(payload,"PEXP",0);
-   if(p.pprice<0.0 || p.pstop<0.0) return false;
+   if(!MathIsValidNumber(p.pprice) || p.pprice<0.0) return false;
+   if(!MathIsValidNumber(p.pstop) || p.pstop<0.0) return false;
    p.cmt     ="";
    p.used    =true;
    p.profit  =0.0;
    p.swap    =0.0;
    p.initLots=0.0;  // N-03: filled in by the receiver when the row is stored
    if(p.side!=CP_SIDE_BUY && p.side!=CP_SIDE_SELL) return false;
-   if(p.lots<=0.0) return false;
+   if(!MathIsValidNumber(p.lots) || p.lots<=0.0) return false;
    //--- same refusal as the record decoder: never mirror a pending type we
    //--- cannot reproduce exactly
    if(p.kind!=CP_ORD_MARKET && p.kind!=CP_ORD_PENDING) return false;

@@ -123,6 +123,7 @@ pub struct UserStore {
 /// memory, from a request that costs the caller nothing. The cap turns that
 /// into a refusal.
 const MAX_PENDING_NONCES: usize = 512;
+const MAX_TRACKED_IPS: usize = 1024;
 
 /// Failed-login throttling.
 ///
@@ -602,6 +603,9 @@ impl UserStore {
         if ip != "default" {
             let ip_limit = if ip == "direct" { 250 } else { 25 };
             self.nonce_ip_rates.retain(|_, (_, start)| now.saturating_sub(*start) <= 2);
+            if !self.nonce_ip_rates.contains_key(ip) && self.nonce_ip_rates.len() >= MAX_TRACKED_IPS {
+                return None;
+            }
             let rate = self.nonce_ip_rates.entry(ip.to_string()).or_insert((0, now));
             if now.saturating_sub(rate.1) >= 1 {
                 *rate = (0, now);

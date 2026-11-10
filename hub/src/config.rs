@@ -131,6 +131,18 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn open(path: &Path) -> std::io::Result<ConfigStore> {
+        // R7-D8-02: Restore from .bak if primary config journal is 0 bytes or missing
+        let bak = std::path::PathBuf::from(format!("{}.bak", path.display()));
+        let is_empty_or_missing = std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
+        if is_empty_or_missing && bak.exists() {
+            if let Ok(m) = std::fs::metadata(&bak) {
+                if m.len() > 0 {
+                    eprintln!("[hub] RECOVERY: Restoring {} from backup {}", path.display(), bak.display());
+                    let _ = std::fs::copy(&bak, path);
+                }
+            }
+        }
+
         // H-04: Compact the journal on startup if it has grown past the threshold, matching CommandStore
         if let Ok(md) = std::fs::metadata(path) {
             if md.len() > CONFIG_JOURNAL_COMPACT_BYTES {

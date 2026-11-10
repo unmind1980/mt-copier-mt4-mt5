@@ -122,9 +122,9 @@ string StringFromPointer(intptr_t psz,int len=0)
    if(len < 0) return NULL;
    if(len==0) {len=lstrlenW(psz);}
    string res;
-   StringInit(res,len);
+   StringInit(res,len+1);
    lstrcpynW(res,psz,len+1);
-   return res;
+   return StringSubstr(res,0,len);
   }
 //+------------------------------------------------------------------+
 //| Get the pointer address of a string                              |

@@ -2582,23 +2582,21 @@ void RiskPeakLoad()
   }
 
 //--- `force` writes even inside the throttle window (used on shutdown).
+//--- R7-D4-02: Two-phase atomic write to prevent 0-byte truncation on crash
 void RiskPeakSave(const bool force)
   {
    double peak=g_risk.PeakEquity();
    if(peak<=0.0) return;
    long now=CopierNowMs();
-   //--- Once a minute is enough: the peak only matters if the terminal dies,
-   //--- and losing up to a minute of a RISING peak understates the baseline by
-   //--- at most that minute's gain - never overstates it, which is the
-   //--- direction that would falsely block trading.
    if(!force && now-g_lastPeakSave<60000) return;
    g_lastPeakSave=now;
-   int h=FileOpen(RiskPeakPath(),FILE_WRITE|FILE_TXT|FILE_ANSI
-                  |FILE_SHARE_READ|FILE_SHARE_WRITE);
+   string targetPath=RiskPeakPath();
+   string tmpPath=targetPath+".tmp";
+   int h=FileOpen(tmpPath,FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(h==INVALID_HANDLE)
      {
       if(g_once.ShouldEmit("peaksave"))
-         g_log.Warn("cannot write "+RiskPeakPath()+" - the drawdown peak will"
+         g_log.Warn("cannot write "+tmpPath+" - the drawdown peak will"
                     +" NOT survive a restart (reported at most once per 10 min)");
       return;
      }
@@ -2612,6 +2610,16 @@ void RiskPeakSave(const bool force)
      }
    FileFlush(h);
    FileClose(h);
+
+   int rh=FileOpen(tmpPath,FILE_READ|FILE_TXT|FILE_ANSI);
+   int wh=FileOpen(targetPath,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(rh!=INVALID_HANDLE && wh!=INVALID_HANDLE)
+     {
+      while(!FileIsEnding(rh)) FileWriteString(wh,FileReadString(rh)+"\r\n");
+     }
+   if(rh!=INVALID_HANDLE) FileClose(rh);
+   if(wh!=INVALID_HANDLE) FileClose(wh);
+   FileDelete(tmpPath);
   }
 
 //--- Terminal-wide mutual exclusion for Receiver instances on the same account.
@@ -3712,7 +3720,7 @@ void ExecuteQueue()
             continue;
            }
          string why="";
-         if(!g_risk.AllowOpen(a.lots,g_ourCount,g_ourLots,0,0.0,why))
+         if(!g_risk.AllowOpen(a.lots,g_ourPositions,g_ourLots,g_ourPending,0.0,why))
            {
             g_riskBlocked++;
             if(g_once.ShouldEmit("drainrisk|"+a.uid))
@@ -3780,11 +3788,22 @@ void ExecuteQueue()
            }
          else
            {
-            // R6-D4-03: Fallback calculation if OrderCalcMargin fails
+            // R6-D4-03 & R7-D3-01: Fallback calculation if OrderCalcMargin fails, converting margin currency to account currency
             double cs=SymbolInfoDouble(a.sym,SYMBOL_TRADE_CONTRACT_SIZE);
             long lev=AccountInfoInteger(ACCOUNT_LEVERAGE);
-            if(cs>0.0 && lev>0 && checkPx>0.0)
-               reqMargin=(a.lots*cs*checkPx)/(double)lev;
+            if(cs>0.0 && lev>0)
+              {
+               string marginCcy=SymbolInfoString(a.sym,SYMBOL_CURRENCY_MARGIN);
+               if(StringLen(marginCcy)==0) marginCcy=SymbolInfoString(a.sym,SYMBOL_CURRENCY_BASE);
+               string accCcy=CopierAccountCurrency();
+               double crossRate=(marginCcy==accCcy)?1.0:CopierGetCurrencyCrossRate(marginCcy,accCcy);
+               if(crossRate>0.0)
+                  reqMargin=((a.lots*cs)/(double)lev)*crossRate;
+               else if(checkPx>0.0)
+                  reqMargin=(a.lots*cs*checkPx)/(double)lev;
+               else
+                  reqMargin=0.0;
+              }
             else
                reqMargin=0.0;
            }
@@ -3831,7 +3850,8 @@ void ExecuteQueue()
             done++;
             continue;
            }
-         int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         int rawDev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         int dev = CopierScaleDeviationPoints(a.sym, rawDev);
          double emSL = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencySLPips:EmergencySLPips;
          double emTP = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencyTPPips:EmergencyTPPips;
 
@@ -3925,7 +3945,8 @@ void ExecuteQueue()
         }
       else
         {
-         int dev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         int rawDev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
+         int dev = CopierScaleDeviationPoints(a.sym, rawDev);
          // NH-03: Exit Slippage Buffer is applied ONLY to emergency exits or true bulk martingale/grid exits (>=8 actions),
          // preventing routine 2-action closes from suffering 100 points (10 pips) slippage.
          if((isEmergencyExit || closeCount>=8) && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP))
@@ -4310,7 +4331,7 @@ void ExecuteQueue()
                        +waitTxt+". A repeat refusal is a"
                        +" standing condition, not a transient one; retrying"
                        +" fast is what gets an account throttled or blocked.";
-            if(ms>=60*60*1000)
+            if(ms>=60*60*1000 || (isExit && fails>=3))
                g_log.Error("ATTENTION NEEDED - "+why
                            +" It will keep retrying, but slowly: fix the"
                            +" cause by hand, or the mirror stays behind.");
@@ -4578,6 +4599,11 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
                                  0.0,0.0,rejected,convSenderEq,myEq);
    if(rejected || lots<=0.0) return 0.0;
+   if(si2.maxLot>0.0 && lots>si2.maxLot)
+     {
+      if(g_once.ShouldEmit("maxlotclamp|"+g_sid[si]+"|"+sym))
+         g_log.Warn("sender "+g_sid[si]+" symbol "+sym+" computed lots "+DoubleToString(lots,2)+" exceeds broker maxLot "+DoubleToString(si2.maxLot,2)+"; clamped to maxLot");
+     }
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
       lots=CopierNormalizeLot(g_senderCfg[si].maxLotsPerPosition,si2);
@@ -4770,19 +4796,19 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       && g_stopSig[sh].ticket==local.ticket
       && g_stopSig[sh].epoch==g_stOvEpoch)
      {
-      if(g_stopSig[sh].v[0]==desired.sl
-         && g_stopSig[sh].v[1]==desired.tp
-         && g_stopSig[sh].v[2]==desired.openPx
-         && g_stopSig[sh].v[3]==local.sl
-         && g_stopSig[sh].v[4]==local.tp
-         && g_stopSig[sh].v[5]==local.pprice
-         && g_stopSig[sh].v[6]==local.pstop
+      if(MathAbs(g_stopSig[sh].v[0]-desired.sl)<0.0000001
+         && MathAbs(g_stopSig[sh].v[1]-desired.tp)<0.0000001
+         && MathAbs(g_stopSig[sh].v[2]-desired.openPx)<0.0000001
+         && MathAbs(g_stopSig[sh].v[3]-local.sl)<0.0000001
+         && MathAbs(g_stopSig[sh].v[4]-local.tp)<0.0000001
+         && MathAbs(g_stopSig[sh].v[5]-local.pprice)<0.0000001
+         && MathAbs(g_stopSig[sh].v[6]-local.pstop)<0.0000001
          && g_stopSig[sh].v[7]==(double)local.pexpire
-         && g_stopSig[sh].v[8]==desired.pprice
-         && g_stopSig[sh].v[9]==desired.pstop
+         && MathAbs(g_stopSig[sh].v[8]-desired.pprice)<0.0000001
+         && MathAbs(g_stopSig[sh].v[9]-desired.pstop)<0.0000001
          && g_stopSig[sh].v[10]==(double)desired.pexpire
          && g_stopSig[sh].v[11]==(double)local.kind
-         && g_stopSig[sh].v[12]==local.openPx)
+         && MathAbs(g_stopSig[sh].v[12]-local.openPx)<0.0000001)
          return;
      }
 
@@ -4837,6 +4863,12 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- The sender's stops, as a distance, re-anchored on our own entry.
    double feedSl,feedTp;
    CopierMapInvertedStops(actualInverted,dSl,dTp,feedSl,feedTp);
+   // R7-D2-03: Under InvertTrades, if sender had an SL but no TP, prevent leaving the mirror naked with no SL
+   if(actualInverted && feedSl<=0.0 && feedTp>0.0 && dOpn>0.0)
+     {
+      double slDist = MathAbs(dOpn - feedTp);
+      if(slDist > 0.0) feedSl = (desired.side==CP_SIDE_BUY) ? (dOpn + slDist) : (dOpn - slDist);
+     }
 
    //--- BUG-05: For pending orders, anchor calculations to the pending order's updated trigger price (dPPrice)
    double effectiveLocalOpen=(local.kind==CP_ORD_PENDING)
@@ -5843,9 +5875,19 @@ void RefreshRisk()
          //--- toward zero and silently disables the guard.
          //--- The anchor is "balance at day start", so it must be derived, not
          //--- sampled from the live account.
+         // R7-D4-01: In MT4, open trade commissions are deducted from balance immediately; include them to avoid misdiagnosing commissions as capital withdrawals
+         double openComm=0.0;
+#ifndef __MQL5__
+         int totOpen=OrdersTotal();
+         for(int oi=0;oi<totOpen;oi++)
+           {
+            if(OrderSelect(oi,SELECT_BY_POS,MODE_TRADES))
+               openComm+=OrderCommission();
+           }
+#endif
          if(g_riskDayStartEquity<=0.0)
            {
-            double derivedBase=curBal-realized;
+            double derivedBase=(curBal-openComm)-realized;
             if(derivedBase>0.0)
               {
                g_riskDayStartEquity=derivedBase;
@@ -5855,7 +5897,7 @@ void RefreshRisk()
            }
          else
            {
-            double dayStartBal=curBal-realized;
+            double dayStartBal=(curBal-openComm)-realized;
             if(g_riskDayStartBalance<=0.0) g_riskDayStartBalance=dayStartBal;
             double cashFlow=dayStartBal-g_riskDayStartBalance;
             if(MathAbs(cashFlow)>0.01)
@@ -6692,7 +6734,7 @@ void ConvergeSender(const int si)
 
       //--- 6. Risk limits & broker quota
       string riskWhy="";
-      if(!g_risk.AllowOpen(lots,g_ourCount,g_ourLots,pendCount,pendLots,riskWhy))
+      if(!g_risk.AllowOpen(lots,g_ourPositions,g_ourLots,pendCount,pendLots,riskWhy))
         {
          string blockKey=g_risk.BlockKey();
          if(StringLen(blockKey)==0) blockKey=riskWhy;

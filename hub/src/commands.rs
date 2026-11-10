@@ -213,6 +213,18 @@ pub struct CommandStore {
 
 impl CommandStore {
     pub fn open(path: &Path) -> std::io::Result<CommandStore> {
+        // R7-D8-02: If target is 0-byte or corrupted from an interrupted atomic replace, restore from .bak
+        let bak = PathBuf::from(format!("{}.bak", path.display()));
+        let is_empty_or_missing = std::fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
+        if is_empty_or_missing && bak.exists() {
+            if let Ok(m) = std::fs::metadata(&bak) {
+                if m.len() > 0 {
+                    eprintln!("[hub] RECOVERY: Restoring {} from backup {}", path.display(), bak.display());
+                    let _ = std::fs::copy(&bak, path);
+                }
+            }
+        }
+
         //--- Load BEFORE opening the append handle: the journal may be
         //--- compacted below, and rewriting a file that is open for append
         //--- would leave the handle writing into the old inode.

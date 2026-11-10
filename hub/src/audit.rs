@@ -183,23 +183,27 @@ impl ArchiveShift {
 
         // 5. Shift existing archives up (.9.gz -> .10.gz), prune, then land
         // the new one at .1.gz.
+        // R7-D8-01: Shift only if .1.gz exists; if .1.gz is already absent,
+        // archives were shifted prior to crash so avoid double-shifting on restart.
         if self.max_backups > 0 {
-            let oldest = self.archive_path(self.max_backups);
-            let _ = fs::remove_file(&oldest);
+            let target = self.archive_path(1);
+            if target.exists() {
+                let oldest = self.archive_path(self.max_backups);
+                let _ = fs::remove_file(&oldest);
 
-            for extra in (self.max_backups + 1)..=(self.max_backups + 5) {
-                let _ = fs::remove_file(self.archive_path(extra));
-            }
+                for extra in (self.max_backups + 1)..=(self.max_backups + 5) {
+                    let _ = fs::remove_file(self.archive_path(extra));
+                }
 
-            for idx in (1..self.max_backups).rev() {
-                let from = self.archive_path(idx);
-                let to = self.archive_path(idx + 1);
-                if from.exists() {
-                    let _ = crate::cluster::atomic_replace_file(&from, &to);
+                for idx in (1..self.max_backups).rev() {
+                    let from = self.archive_path(idx);
+                    let to = self.archive_path(idx + 1);
+                    if from.exists() {
+                        let _ = crate::cluster::atomic_replace_file(&from, &to);
+                    }
                 }
             }
 
-            let target = self.archive_path(1);
             crate::cluster::atomic_replace_file(&gz_tmp, &target)?;
         } else {
             let _ = fs::remove_file(&gz_tmp);

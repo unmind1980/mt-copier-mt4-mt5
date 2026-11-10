@@ -557,11 +557,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, r.status());
 
-                    // R2-H01, D7-H01, R5-D7-01 & R5-D7-02: Autonomous recovery when orphaned in Standby
+                    // R2-H01, D7-H01, R5-D7-01, R5-D7-02 & R7-D7-01: Autonomous recovery when orphaned in Standby
                     let role = s.cluster.state.role.clone();
-                    let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    let lease_expired = s.cluster.handover_lease_until.map(|t| Instant::now() >= t).unwrap_or(false);
-                    if role == "standby" && (is_cfg_primary || lease_expired) {
+                    let handover_in_flight = s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false);
+                    if role == "standby" && !handover_in_flight {
                         let outage = match s.cluster.last_peer_contact {
                             Some(t) => t.elapsed().as_secs(),
                             None => worker_started_at.elapsed().as_secs(),
@@ -589,11 +588,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     s.cluster.sync_status = "disconnected".to_string();
                     s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
 
-                    // R2-H01, D7-H01, R5-D7-01 & R5-D7-02: Autonomous recovery when orphaned in Standby
+                    // R2-H01, D7-H01, R5-D7-01, R5-D7-02 & R7-D7-01: Autonomous recovery when orphaned in Standby
                     let role = s.cluster.state.role.clone();
-                    let is_cfg_primary = s.cluster.state.is_configured_primary;
-                    let lease_expired = s.cluster.handover_lease_until.map(|t| Instant::now() >= t).unwrap_or(false);
-                    if role == "standby" && (is_cfg_primary || lease_expired) {
+                    let handover_in_flight = s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false);
+                    if role == "standby" && !handover_in_flight {
                         let outage = match s.cluster.last_peer_contact {
                             Some(t) => t.elapsed().as_secs(),
                             None => worker_started_at.elapsed().as_secs(),
@@ -646,8 +644,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
                 let (should_demote, save_cmd, audit_rec_opt) = {
                     let mut s = st.lock_or_recover();
-                    let should = !s.cluster.state.is_configured_primary
-                        || (remote_st.is_configured_primary && s.cluster.hub_id() > remote_st.hub_id.as_str());
+                    // R7-D7-02: Structured tie-break avoiding simultaneous demotion of both Primaries
+                    let should = if s.cluster.state.is_configured_primary != remote_st.is_configured_primary {
+                        !s.cluster.state.is_configured_primary
+                    } else {
+                        s.cluster.hub_id() > remote_st.hub_id.as_str()
+                    };
                     if should {
                         // P0-2 fix: demote must NOT bump epoch to prevent triggering peer ADR-04 demotion flip-flop
                         s.cluster.demote(epoch);
@@ -887,11 +889,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         || std::mem::replace(&mut force_full_cfg_resync, false);
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
-                    // BUG-03, BUG-05 & BUG-06: If command line count is greater or divergent (cmd_diff),
-                    // or remote sequence differs, or delta sync stalled, request from line 0 and replace_all to resolve deadlock.
+                    // BUG-03, BUG-05, BUG-06 & R7-D7-03: If command line count is greater or divergent (cmd_diff),
+                    // or remote sequence differs from line count expectations (compaction while offline),
+                    // request from line 0 and replace_all to prevent splicing onto uncompacted journal.
+                    let seq_discontinuity = (local_max_cmd_seq > 0 && remote_st.max_cmd_seq < local_max_cmd_seq)
+                        || (local_max_cmd_seq > 0 && remote_st.max_cmd_seq > local_max_cmd_seq + (remote_st.cmd_lines.saturating_sub(cmd_lines_count) as u64));
                     let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
                         || cmd_diff
                         || cmd_compacted
+                        || seq_discontinuity
                         || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq != local_max_cmd_seq)
                         || std::mem::replace(&mut force_full_cmd_resync, false);
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
