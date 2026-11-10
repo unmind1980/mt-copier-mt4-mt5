@@ -187,7 +187,8 @@ mod sig {
 /// the hub keeps one queue for every connected node. At a few hundred nodes a
 /// 1024-deep queue each is a lot of retained memory for headroom that will not
 /// be used; 256 matches the EAs, which is the only bound that has been measured.
-const HWM: i32 = 256;
+/// R6-D6-03: Aligned with CP_SNDHWM/CP_RCVHWM (1024) in CopierTransport.mqh to absorb multi-order bursts.
+const HWM: i32 = 1024;
 
 /// The largest frame this hub will accept, matching the EAs' CP_MAXMSGSIZE
 /// (1 MB) so a frame the hub forwards can never be one a node would refuse.

@@ -122,7 +122,7 @@ string StringFromPointer(intptr_t psz,int len=0)
    if(len < 0) return NULL;
    if(len==0) {len=lstrlenW(psz);}
    string res;
-   StringInit(res,len+1);
+   StringInit(res,len);
    lstrcpynW(res,psz,len+1);
    return res;
   }
@@ -170,7 +170,11 @@ string StringFromUtf8(const uchar &utf8[])
 void StringToUtf8(const string str,uchar &utf8[],bool ending=true)
   {
    if(!ending && str=="") return;
-   int count=ending ? -1 : StringLen(str);
-   StringToCharArray(str,utf8,0,count,CP_UTF8);
+   StringToCharArray(str,utf8,0,-1,CP_UTF8);
+   if(!ending)
+     {
+      int sz=ArraySize(utf8);
+      if(sz>0 && utf8[sz-1]==0) ArrayResize(utf8,sz-1);
+     }
   }
 //+------------------------------------------------------------------+

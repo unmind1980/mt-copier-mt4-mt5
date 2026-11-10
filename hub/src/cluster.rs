@@ -452,16 +452,21 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
                 std::thread::sleep(Duration::from_millis(delay));
             }
             Err(rename_err) => {
-                // Fallback: overwrite target directly with sync_all
+                // Fallback: preserve backup before overwriting target to prevent 0-byte truncation
                 if let Ok(mut src) = File::open(tmp) {
+                    let bak = PathBuf::from(format!("{}.bak", target.display()));
+                    let _ = fs::copy(target, &bak);
                     if let Ok(mut dst) = OpenOptions::new().write(true).truncate(true).create(true).open(target) {
                         if std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok() {
                             let _ = fs::remove_file(tmp);
+                            let _ = fs::remove_file(&bak);
                             return Ok(());
+                        } else {
+                            let _ = fs::copy(&bak, target);
                         }
                     }
+                    let _ = fs::remove_file(&bak);
                 }
-                let _ = fs::remove_file(tmp);
                 return Err(rename_err);
             }
         }
@@ -493,7 +498,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .unwrap_or_default();
-        let mut last_users_warn = Instant::now() - Duration::from_secs(300);
+        let mut last_users_warn = Instant::now()
+            .checked_sub(Duration::from_secs(300))
+            .unwrap_or_else(Instant::now);
         let mut force_full_cfg_resync = false;
         let mut force_full_cmd_resync = false;
         let mut last_known_remote_cfg_lines = 0usize;

@@ -154,6 +154,12 @@ private:
          ZmqMsg msg;
          if(!s.recv(msg,true)) break;   // EAGAIN -> nothing pending
          string data=msg.getData();
+         // R6-D6-02: Drain any remaining frames if a multipart message arrived on single-frame socket
+         while(msg.more())
+           {
+            ZmqMsg discard;
+            if(!s.recv(discard,true)) break;
+           }
          if(StringLen(data)==0) continue;
          if(got>=ArraySize(out)) break;
          out[got]=data;
@@ -168,7 +174,8 @@ private:
       if(CheckPointer(s)==POINTER_INVALID || !s.valid()) return;
       //--- must be 0: otherwise shutdown blocks
       s.setLinger(0);
-      s.setReconnectInterval(100);
+      int ivl = 100 + (MathRand() % 400); // R6-D6-01: Reconnect backoff with jitter to prevent SYN storms
+      s.setReconnectInterval(ivl);
       s.setReconnectIntervalMax(5000);
       s.setImmediate(true);
       //--- Native ZMTP heartbeats to promptly detect half-open TCP connections

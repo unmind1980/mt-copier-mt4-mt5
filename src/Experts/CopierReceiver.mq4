@@ -2424,7 +2424,12 @@ string ResolveUid(const CopierPos &p)
    if(StringLen(uid)>0) return uid;
 
    CopierPos prev;
-   if(g_recKnown.GetByTicket(p.ticket,prev)) return prev.uid;
+   if(g_recKnown.GetByTicket(p.ticket,prev))
+     {
+      // R6-D1-01: Guard against recycled tickets
+      if(prev.openTime==p.openTime || prev.openTime<=0 || p.openTime<=0)
+         return prev.uid;
+     }
 
    long from=CopierMt4FromTicket(p.cmt);
    if(from>0)
@@ -3467,6 +3472,11 @@ void ExecuteQueue()
    ArrayInitialize(sHeldBase,0);
    ArrayInitialize(sHeldBaseLots,0.0);
    ArrayInitialize(sHeldBaseKnown,false);
+#ifdef __MQL5__
+   double initialFreeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+#else
+   double initialFreeMargin=AccountFreeMargin();
+#endif
    double drainedReqMargin=0.0;
 
    //--- Assess if this is a Batch Close or Batch Modify operation (e.g. Martingale/Grid basket exit, or closeall, or >8 queued)
@@ -3753,9 +3763,35 @@ void ExecuteQueue()
          double checkPx=(a.side==CP_SIDE_BUY)?SymbolInfoDouble(a.sym,SYMBOL_ASK):SymbolInfoDouble(a.sym,SYMBOL_BID);
          if(OrderCalcMargin(otype,a.sym,a.lots,checkPx,reqMargin))
            {
-            double freeMargin=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-            if(freeMargin - drainedReqMargin < reqMargin) marginOk=false;
+            // R6-D3-01: Check if this trade hedges an existing position on a hedging account
+            if((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)==ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+              {
+               double hedgedMargin=SymbolInfoDouble(a.sym,SYMBOL_MARGIN_HEDGED);
+               if(hedgedMargin>=0.0 && PositionSelect(a.sym))
+                 {
+                  ENUM_POSITION_TYPE ptype=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+                  if((a.side==CP_SIDE_BUY && ptype==POSITION_TYPE_SELL) || (a.side==CP_SIDE_SELL && ptype==POSITION_TYPE_BUY))
+                    {
+                     double posLots=PositionGetDouble(POSITION_VOLUME);
+                     if(a.lots<=posLots) reqMargin=hedgedMargin*a.lots;
+                    }
+                 }
+              }
            }
+         else
+           {
+            // R6-D4-03: Fallback calculation if OrderCalcMargin fails
+            double cs=SymbolInfoDouble(a.sym,SYMBOL_TRADE_CONTRACT_SIZE);
+            long lev=AccountInfoInteger(ACCOUNT_LEVERAGE);
+            if(cs>0.0 && lev>0 && checkPx>0.0)
+               reqMargin=(a.lots*cs*checkPx)/(double)lev;
+            else
+               reqMargin=0.0;
+           }
+         // R6-D4-04: Prevent double-counting previously drained margin
+         double curFree=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+         double effectiveFree=MathMin(curFree,initialFreeMargin-drainedReqMargin);
+         if(effectiveFree < reqMargin) marginOk=false;
 #else
          int cmd=(a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
          double curFree=AccountFreeMargin();
@@ -3768,7 +3804,8 @@ void ExecuteQueue()
             if(oneLotMargin>0.0) reqMargin=oneLotMargin*a.lots;
            }
          if(reqMargin<0.0) reqMargin=0.0;
-         if(fmCheck<=0.0 || (curFree - drainedReqMargin < reqMargin))
+         double effectiveFree=MathMin(curFree,initialFreeMargin-drainedReqMargin);
+         if(fmCheck<=0.0 || (effectiveFree < reqMargin))
             marginOk=false;
 #endif
          if(!marginOk)
@@ -4233,7 +4270,13 @@ void ExecuteQueue()
                                    err==10004 || err==10015 || err==10021 || err==10012);
             isTransientRequote = (err==138 || err==10004 || err==10015);
             bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && isTransientRequote);
-            if(queuedForSweep)
+            if(err==146)
+              {
+               // R6-D1-02: MT4 trade context busy clears quickly: yield and park briefly (100ms)
+               CopierWaitMs(50);
+               fails=g_backoff.NotePark(boKey,100,5);
+              }
+            else if(queuedForSweep)
               {
                fails=1;
               }
@@ -4519,6 +4562,7 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    //--- The per-position cap is maxLotsPerPosition, applied below.
    double symMult=GetSymbolMultiplier(si,sym);
    double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
+   if(myEq<=0.0) { rejected=true; return 0.0; }
    double convSenderEq=g_senderEquity[si];
    string recCcy=CopierAccountCurrency();
    if(convSenderEq>0.0 && StringLen(g_senderCurrency[si])>0 && g_senderCurrency[si]!=recCcy)
@@ -5685,7 +5729,8 @@ void RefreshRisk()
    double curBalRisk=CopierAccountBalance();
    if(s_lastCheckedBalance==0.0) s_lastCheckedBalance=curBalRisk;
    bool balChanged=(MathAbs(curBalRisk-s_lastCheckedBalance)>0.01);
-   if(dayStart!=g_riskDay)
+   bool dayChanged=(dayStart!=g_riskDay);
+   if(dayChanged)
      {
       //--- L1: a COLD start is not a day rollover.
       //--- On a mid-day (re)start with no same-day risk file, g_riskDay is 0.
@@ -5757,13 +5802,17 @@ void RefreshRisk()
          if(rOk)
            {
             // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
+            // R6-D4-01: During 00:00-00:05 rollover spread blowout, ignore negative floating spike
+            MqlDateTime sdt;
+            TimeCurrent(sdt);
             double curEq=CopierAccountEquity();
             double floatingOffset=curEq-curBal;
+            if(sdt.hour==0 && sdt.min<5 && floatingOffset<0.0)
+               floatingOffset=0.0;
             g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
            }
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
-      RiskPeakSave(true);
      }
    // R4-D4-01: Throttle history scan to 60s once established, only breaking out when balance changes.
    else if((g_riskDayStartEquity<=0.0 ? (now-g_lastRealizedMs>10000) : (now-g_lastRealizedMs>60000 || balChanged)))
@@ -5831,7 +5880,9 @@ void RefreshRisk()
    //--- switch. Internally throttled to once a minute; a rising peak that is
    //--- lost to a crash understates the baseline by that minute's gain, which
    //--- is the safe direction (it can never falsely block trading).
-   if(g_risk.PeakEquity()>0.0) RiskPeakSave(false);
+   // R6-D4-02: Force-save peak immediately on rollover day change or when peak updates
+   if(dayChanged) RiskPeakSave(true);
+   else if(g_risk.PeakEquity()>0.0) RiskPeakSave(false);
   }
 
 //=====================================================================
@@ -6385,7 +6436,9 @@ void ConvergeSender(const int si)
 
       //--- 3. Lot calculation
       bool rejected=false;
-      double lots=ComputeReceiverLots(si,rsym,d.lots,rejected);
+      // R6-D2-03: Use ComputeTargetLotsForMirror to respect partial-fill scaling
+      double lots=ComputeTargetLotsForMirror(si,d,rsym);
+      if(lots<=0.0) lots=ComputeReceiverLots(si,rsym,d.lots,rejected);
       if(rejected || lots<=0.0)
         {
          if(g_once.ShouldEmit("lotsrej|"+g_sid[si]+"|"+d.uid))

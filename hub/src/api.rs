@@ -1068,11 +1068,11 @@ fn cookie_token(cookies: &str) -> Option<String> {
 fn constant_time_eq_str(a: &str, b: &str) -> bool {
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
-    if a_bytes.len() != b_bytes.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+    let max_len = a_bytes.len().max(b_bytes.len());
+    let mut diff = (a_bytes.len() ^ b_bytes.len()) as u8;
+    for i in 0..max_len {
+        let x = a_bytes.get(i).copied().unwrap_or(0);
+        let y = b_bytes.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
     }
     diff == 0
@@ -3749,15 +3749,21 @@ async fn cluster_sync(
     // must return complete snapshot history so replace_all does not truncate active in-flight commands.
     // Propagate journal read errors as 500 so Standby detects transient failures and backs off.
     const MAX_SYNC_BATCH: usize = 10000;
+    let mut reported_total_cfg_lines = total_cfg_lines;
     let cfg_delta_lines = if !cfg_enabled || req.from_cfg_line >= total_cfg_lines {
         Vec::new()
     } else {
         match crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line) {
-            Ok((mut lines, _)) => {
-                if req.from_cfg_line > 0 && lines.len() > MAX_SYNC_BATCH {
-                    lines.truncate(MAX_SYNC_BATCH);
+            Ok((mut lines, actual_tot)) => {
+                if req.from_cfg_line > 0 && actual_tot < req.from_cfg_line {
+                    reported_total_cfg_lines = actual_tot;
+                    Vec::new()
+                } else {
+                    if req.from_cfg_line > 0 && lines.len() > MAX_SYNC_BATCH {
+                        lines.truncate(MAX_SYNC_BATCH);
+                    }
+                    lines
                 }
-                lines
             }
             Err(e) => {
                 return (
@@ -3769,15 +3775,21 @@ async fn cluster_sync(
         }
     };
 
+    let mut reported_total_cmd_lines = total_cmd_lines;
     let cmd_delta_lines = if !cmd_enabled || req.from_cmd_line >= total_cmd_lines {
         Vec::new()
     } else {
         match crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line) {
-            Ok((mut lines, _, _)) => {
-                if req.from_cmd_line > 0 && lines.len() > MAX_SYNC_BATCH {
-                    lines.truncate(MAX_SYNC_BATCH);
+            Ok((mut lines, actual_tot, _)) => {
+                if req.from_cmd_line > 0 && actual_tot < req.from_cmd_line {
+                    reported_total_cmd_lines = actual_tot;
+                    Vec::new()
+                } else {
+                    if req.from_cmd_line > 0 && lines.len() > MAX_SYNC_BATCH {
+                        lines.truncate(MAX_SYNC_BATCH);
+                    }
+                    lines
                 }
-                lines
             }
             Err(e) => {
                 return (
@@ -3823,9 +3835,9 @@ async fn cluster_sync(
         users_content,
         notif_content,
         curve_clients_content,
-        total_cfg_lines,
+        total_cfg_lines: reported_total_cfg_lines,
         // N87-03: If commands are disabled (--commands none), report 0 to avoid truncated batch errors on Standby
-        total_cmd_lines: if cmd_enabled { total_cmd_lines } else { 0 },
+        total_cmd_lines: if cmd_enabled { reported_total_cmd_lines } else { 0 },
         max_cmd_seq: if cmd_enabled { max_cmd_seq } else { 0 },
     };
     Json(resp).into_response()

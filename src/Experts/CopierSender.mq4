@@ -700,7 +700,8 @@ int BuildCurrent()
         }
       if(idx>=0 && g_prev.At(idx,q))
         {
-         if(q.sym==p.sym)
+         // R6-D1-01: Verify openTime matches to prevent adopting stale UID on MT4 ticket recycling
+         if(q.sym==p.sym && (q.openTime==p.openTime || q.openTime<=0 || p.openTime<=0))
            {
             uid=q.uid;
             slot=idx;

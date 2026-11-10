@@ -713,8 +713,11 @@ impl CommandStore {
                 //--- fast enough to recover a node that came back, slow enough that
                 //--- a refusal is not amplified into a flood.
                 //--- H3: an explicit operator re-issue skips the cooldown - they can see
-                //--- the node's state and are deliberately asking now.
-                if actor.is_empty() && now_secs.saturating_sub(prev_last) < REVIVE_COOLDOWN_SECS {
+                //--- the node's state and are deliberately asking now. Guard against future clock skew.
+                let in_cooldown = actor.is_empty()
+                    && prev_last <= now_secs
+                    && now_secs.saturating_sub(prev_last) < REVIVE_COOLDOWN_SECS;
+                if in_cooldown {
                     return c.clone();
                 }
             }

@@ -36,6 +36,7 @@ struct CopierSymInfo
    double            stopLevel;   // in price units, not points
    double            tickSize;
    double            contractSize;
+   string            sym;
   };
 
 //--- The pip size, in price units.
@@ -51,7 +52,20 @@ struct CopierSymInfo
 //--- quoting, which is exactly why it lives in exactly one place now.
 double CopierPipOf(const CopierSymInfo &si)
   {
+   // R6-D3-03: Commodities (Gold/Silver) & Crypto/Indices pip scaling
+   if(StringFind(si.sym,"XAU")>=0 || StringFind(si.sym,"GOLD")>=0)
+      return (si.digits==3) ? si.point*100.0 : (si.digits==2 ? si.point*10.0 : 0.10);
+   if(StringFind(si.sym,"XAG")>=0 || StringFind(si.sym,"SILVER")>=0)
+      return (si.digits==3) ? si.point*10.0 : si.point;
+   if(si.digits<=1) return (si.point>0.0 ? si.point : 1.0);
    return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
+  }
+
+// R6-D10-01: Discrete-tick rounding utility for non-forex instruments
+double CopierRoundToTick(const double price, const CopierSymInfo &si)
+  {
+   if(si.tickSize<=0.0) return NormalizeDouble(price, si.digits);
+   return NormalizeDouble(MathRound(price / si.tickSize) * si.tickSize, si.digits);
   }
 
 //=====================================================================
@@ -117,6 +131,7 @@ bool CopierGetSymbolInfo(const string sym,CopierSymInfo &si)
    si.tickSize=MarketInfo(sym,MODE_TICKSIZE);
    si.contractSize=MarketInfo(sym,MODE_LOTSIZE);
 #endif
+   si.sym=sym;
    if(si.point<=0.0)      return false;
    if(si.digits<0)        si.digits=5;
    if(si.minLot<=0.0)     si.minLot=0.01;
@@ -1312,6 +1327,8 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
    if(!OrderSelect((int)(uint)ticket,SELECT_BY_TICKET,MODE_TRADES) || OrderCloseTime()!=0) { outErr=0; return true; }
    if(pending)
      {
+      int tcWait=0;
+      while(IsTradeContextBusy() && tcWait++<15) CopierWaitMs(10);
       bool del=OrderDelete((int)(uint)ticket,clrNONE);
       if(!del) outErr=GetLastError();
       return del;
@@ -1320,14 +1337,16 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
    bool ok=false;
    for(int attempt=0; attempt<3; attempt++)
      {
+      int tcWait=0;
+      while(IsTradeContextBusy() && tcWait++<15) CopierWaitMs(10);
       RefreshRates();
       int type=(int)OrderType();
       double closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
       ok=OrderClose((int)(uint)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
       if(ok) break;
       outErr=GetLastError();
-      if(outErr!=138 && outErr!=135 && outErr!=136) break;
-      CopierWaitMs(10);
+      if(outErr!=138 && outErr!=135 && outErr!=136 && outErr!=146) break;
+      CopierWaitMs(20);
      }
    return ok;
 #endif
@@ -1704,10 +1723,17 @@ bool CopierIsTicketClosedInHistory(const long ticket)
          if(entry==DEAL_ENTRY_IN)          inVol+=vol;
          else if(entry==DEAL_ENTRY_INOUT)
            {
-            // R5-D2-02: When evaluating whether position `ticket` is closed, only count the closing portion.
-            // Do NOT inflate inVol of the closed position with the opening portion of the new position.
-            double closingVol = MathMin(vol, MathMax(0.0, inVol - outVol));
-            outVol += closingVol;
+            if(inVol==0.0)
+              {
+               // R6-D2-01: Position born from a reversal deal: initialize inVol with initial deal volume
+               inVol+=vol;
+              }
+            else
+              {
+               // Reversal closing this position: count closing portion towards outVol
+               double closingVol = MathMin(vol, MathMax(0.0, inVol - outVol));
+               outVol += closingVol;
+              }
            }
          else if(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY) outVol+=vol;
         }
