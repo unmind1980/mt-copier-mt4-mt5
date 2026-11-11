@@ -2975,12 +2975,11 @@ void SaveReceiverMap()
      }
    if(!mapChanged && g_stateSaveOk) return; // Unchanged: avoid disk write amplification!
 
-   g_recKnown.CopyFrom(g_saveScratch);
-
    CopierPos dense[];
-   int dn=g_recKnown.CopyTo(dense);
+   int dn=g_saveScratch.CopyTo(dense);
    if(!CopierStateFile::Save(ReceiverStatePath(),"N="+(string)dn,dense,dn))
      {
+      g_stateSaveOk=false; // F03: Ensure retry occurs on next pass if disk save fails
       //--- Rate-limited. This is retried every 10 s, so a persistent
       //--- failure - a locked file, a full disk, a broker sandbox that
       //--- forbids the write - would otherwise add six lines a minute
@@ -2991,13 +2990,17 @@ void SaveReceiverMap()
                     +" survive a restart on MT4 (retried every 10s, reported"
                     +" at most once per 10 min)");
      }
-   else if(!g_stateSaveOk)
+   else
      {
-      //--- Once per session, so a pilot can tell the durability mechanism
-      //--- is actually live rather than merely present in the source.
-      g_stateSaveOk=true;
-      g_log.Info("identity store "+ReceiverStatePath()+" written ("
-                 +(string)dn+" position(s))");
+      g_recKnown.CopyFrom(g_saveScratch); // Update in-memory durable shadow ONLY after confirmed disk save
+      if(!g_stateSaveOk)
+        {
+         //--- Once per session, so a pilot can tell the durability mechanism
+         //--- is actually live rather than merely present in the source.
+         g_stateSaveOk=true;
+         g_log.Info("identity store "+ReceiverStatePath()+" written ("
+                    +(string)dn+" position(s))");
+        }
      }
   }
 
@@ -5281,16 +5284,6 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- The sender's stops, as a distance, re-anchored on our own entry.
    double feedSl,feedTp;
    CopierMapInvertedStops(actualInverted,dSl,dTp,feedSl,feedTp);
-   // R7-D2-03 & R17-A04: Under InvertTrades, if sender had an SL but no TP, prevent leaving the mirror naked with no SL
-   if(actualInverted && feedSl<=0.0 && feedTp>0.0 && dOpn>0.0)
-     {
-      bool senderInProfit = (desired.side==CP_SIDE_BUY) ? (feedTp > dOpn) : (feedTp < dOpn);
-      if(!senderInProfit)
-        {
-         double slDist = MathAbs(dOpn - feedTp);
-         if(slDist > 0.0) feedSl = (desired.side==CP_SIDE_BUY) ? (dOpn + slDist) : (dOpn - slDist);
-        }
-     }
 
    //--- BUG-05: For pending orders, anchor calculations to the pending order's updated trigger price (dPPrice)
    double effectiveLocalOpen=(local.kind==CP_ORD_PENDING)
@@ -5641,32 +5634,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    if(pushed)
      {
       if(oi>=0) g_stLastMs[oi]=nowMs; // R47-18: Consume throttle window only on successful queue push
-      if(local.ticket!=0)
-        {
-         // N70-06 & BUG-12: Check !invertedCrossed in pushed branch too, avoiding caching signature when stops crossed
-         if(!clamped && !emergencyMissing && !invertedCrossed)
-           {
-            g_stopSig[sh].ticket=local.ticket;
-            g_stopSig[sh].epoch=g_stOvEpoch;
-            g_stopSig[sh].v[0]=desired.sl;
-            g_stopSig[sh].v[1]=desired.tp;
-            g_stopSig[sh].v[2]=desired.openPx;
-            g_stopSig[sh].v[3]=local.sl;
-            g_stopSig[sh].v[4]=local.tp;
-            g_stopSig[sh].v[5]=local.pprice;
-            g_stopSig[sh].v[6]=local.pstop;
-            g_stopSig[sh].v[7]=(double)local.pexpire;
-            g_stopSig[sh].v[8]=desired.pprice;
-            g_stopSig[sh].v[9]=desired.pstop;
-            g_stopSig[sh].v[10]=(double)desired.pexpire;
-            g_stopSig[sh].v[11]=(double)local.kind;
-            g_stopSig[sh].v[12]=local.openPx;
-           }
-         else
-           {
-            g_stopSig[sh].ticket=0; // Invalidate cached signature on clamped or missing emergency stop
-           }
-        }
+      // BUG-06: Invalidate stopSig on push so an unexecuted in-flight modify action does not falsely freeze retry if broker rejects
+      if(local.ticket!=0) g_stopSig[sh].ticket=0;
      }
   }
 
@@ -6265,6 +6234,16 @@ void RefreshRisk()
       //--- balance, and today's floating P/L then correctly counts as loss).
       bool wasColdStart=(g_riskDay==0);
       g_riskDay=dayStart;
+      double openComm=0.0;
+#ifndef __MQL5__
+      // LOGIC-03: Account for open position commissions on MT4 so cold start / rollover matches 60s calibration
+      int totOpenComm=OrdersTotal();
+      for(int oci=0;oci<totOpenComm;oci++)
+        {
+         if(OrderSelect(oci,SELECT_BY_POS,MODE_TRADES))
+            openComm+=OrderCommission();
+        }
+#endif
       if(wasColdStart)
         {
          bool rOk=false;
@@ -6277,7 +6256,7 @@ void RefreshRisk()
 #endif
          if(rOk)
            {
-            double trueStartBal=curBal-realized;
+            double trueStartBal=(curBal-openComm)-realized;
             if(trueStartBal>0.0)
               {
                g_riskDayStartBalance=trueStartBal;
@@ -6310,7 +6289,7 @@ void RefreshRisk()
          double curBal=CopierAccountBalance();
          if(rOk)
            {
-            double trueStartBal=curBal-realized;
+            double trueStartBal=(curBal-openComm)-realized;
             g_riskDayStartBalance=(trueStartBal>0.0)?trueStartBal:curBal;
            }
          else

@@ -712,6 +712,18 @@ public:
      {
       // R11-E01: Guard against empty key polluting occupancy tracking
       if(StringLen(key)==0) return;
+      long now=CopierNowMs();
+      if(now<=0) now=1;
+      // BUG-09: If key already present, update timestamp in-place to avoid duplicate slots & stale GetTime
+      for(int j=0;j<m_occN;j++)
+        {
+         int idx=m_occ[j];
+         if(m_k[idx]==key)
+           {
+            m_t[idx]=now;
+            return;
+           }
+        }
       //--- an empty slot becoming occupied is a new occupied index; an
       //--- occupied one being overwritten is already in the list
       if(StringLen(m_k[m_head])==0)
@@ -724,10 +736,6 @@ public:
            }
         }
       m_k[m_head]=key;
-      //--- F-03: Ensure timestamp is strictly positive (>=1) so GetTime()
-      //--- returning 0 unambiguously distinguishes "not found" from "timestamp 0".
-      long now=CopierNowMs();
-      if(now<=0) now=1;
       m_t[m_head]=now;
       m_head++;
       if(m_head>=CP_SEEN_RING) m_head=0;

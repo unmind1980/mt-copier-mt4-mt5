@@ -779,7 +779,7 @@ fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> z
         HUB_SSID,
         state.seq,
         now_sec,
-        unix_millis() % 2147483647,
+        unix_millis(),
         now_sec,
         ms,
         from_tag,
@@ -1006,7 +1006,7 @@ fn send_receipt(
         HUB_SSID,
         state.seq,
         now_sec,
-        unix_millis() % 2147483647,
+        unix_millis(),
         now_sec,
         login,
         sid,
@@ -1144,8 +1144,7 @@ fn relay_receipts(
         // created a mirror edge for it and unicast a RCPT to a node that does not
         // exist. An empty registry may only be guessed at inside the same 60s warm
         // window the sender side already uses.
-        let receiver_valid = login_is_receiver || (warm && n_receivers == 0);
-        let receiver_ok = receiver_valid && (login_is_receiver || warm);
+        let receiver_ok = login_is_receiver || (warm && n_receivers == 0);
 
         let mut changed = false;
         for (sid, h) in pairs {
@@ -1159,12 +1158,7 @@ fn relay_receipts(
             }
             let sid_is_sender = s.reg.get(&format!("sender:{}", sid)).is_some()
                 || sender_nids.contains(sid.as_str());
-            let sender_valid = sid_is_sender || warm || n_senders == 0;
-
-            //--- F-21: the warm window is what makes an unknown sender acceptable,
-            //--- so an empty registry must not grant that forever. When there is no
-            //--- sender at all, only the first 60s may guess.
-            let sender_ok = sender_valid && (sid_is_sender || warm);
+            let sender_ok = sid_is_sender || (warm && n_senders == 0);
 
             if sender_ok && receiver_ok {
                 if s
@@ -2892,9 +2886,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     ts: unix_secs(),
                                     hash: chash,
                                 });
-                                if rev > 0 {
-                                    s.node_rev.insert(key.clone(), rev);
-                                }
+                                // BUG-08: Confirm node revision in node_rev even if rev == 0
+                                s.node_rev.insert(key.clone(), rev);
                             }
                             println!("[hub] {} reported current effective config (rev {})", key, rev);
                             last_cfg_pull.remove(&key);

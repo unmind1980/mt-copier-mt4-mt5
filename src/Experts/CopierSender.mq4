@@ -1601,7 +1601,7 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       // Re-send the last broadcast snapshot (g_snapPayload) so g_snapHash stays aligned with the central network.
       string snapPayload=(StringLen(g_snapPayload)>0)?g_snapPayload:g_latestSnapPayload;
       Emit(CP_T_SNAP,snapPayload,true,false);
-      if(StringLen(g_snapPayload)==0)
+      if(!g_hubOn && StringLen(g_snapPayload)==0)
         {
          g_snapPayload=snapPayload;
          g_snapHash=CopierSnapshotHash(snapPayload);
@@ -2390,7 +2390,6 @@ void ProcessTimerTick()
                // A2: MODIFY already delivers the new levels; only refresh the in-memory
                // latest payload (used by bootstrap / targeted repair). No full broadcast.
                MarkLatestDirty();
-               MarkSnapshotDirty();
                string extraLog = "";
                if(ppriceDiff) extraLog += " pprice="+DoubleToString(g_curScratch[i].pprice,5);
                if(pstopDiff)  extraLog += " pstop="+DoubleToString(g_curScratch[i].pstop,5);

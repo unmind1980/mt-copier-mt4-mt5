@@ -278,6 +278,7 @@ fn node_json(n: &Node, now: Instant) -> Value {
         "positions_detail": if n.role == Role::Receiver || n.role == Role::Sender {
             Value::Array(n.held_items.iter().map(|p| json!({
                 "ticket": p.ticket,
+                "ticket_str": p.ticket.to_string(),
                 "symbol": p.symbol,
                 "side": p.side,
                 "lots": trim_lots(p.lots),
@@ -583,11 +584,20 @@ async fn topology(State(st): State<SharedState>) -> Json<Value> {
         let s = st.lock_or_recover();
 
         let mut edges: Vec<Value> = Vec::new();
+        let nid_to_acc: std::collections::HashMap<String, String> = s
+            .reg
+            .nodes()
+            .iter()
+            .filter(|n| n.acc.len() > 9)
+            .map(|n| (crate::copier_nid(&n.acc), n.acc.clone()))
+            .collect();
         for (sender, recvs) in s.mirrors.iter() {
+            let from_acc = nid_to_acc.get(sender).unwrap_or(sender);
             let mut rs: Vec<&String> = recvs.keys().collect();
             rs.sort();
             for r in rs {
-                edges.push(json!({ "from": sender, "to": r }));
+                let to_acc = nid_to_acc.get(r).unwrap_or(r);
+                edges.push(json!({ "from": from_acc, "to": to_acc }));
             }
         }
 
@@ -2998,7 +3008,7 @@ async fn commands_global(
     use axum::response::IntoResponse;
 
     //--- Parse the operation and optional arguments FIRST (BUG-85-05) to check read-only ops.
-    let (op, args) = {
+    let (op, args, is_force) = {
         let body = body.trim();
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
             let o = v.get("op")
@@ -3028,9 +3038,10 @@ async fn commands_global(
                     };
                 }
             }
-            (o, a)
+            let force = v.get("force").and_then(|x| x.as_bool()).unwrap_or(false);
+            (o, a, force)
         } else {
-            (body.to_string(), String::new())
+            (body.to_string(), String::new(), false)
         }
     };
     if !crate::commands::is_known_op(&op) {
@@ -3131,6 +3142,30 @@ async fn commands_global(
             })),
         )
             .into_response();
+    }
+
+    // BUG-07: Coalesce fleet-wide reqpos commands within a 30-second window
+    static LAST_FLEET_REQPOS: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    if op == "reqpos" && !is_force {
+        let mut guard = LAST_FLEET_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(last_t) = *guard {
+            if last_t.elapsed() < Duration::from_secs(30) {
+                return (
+                    axum::http::StatusCode::ACCEPTED,
+                    Json(json!({
+                        "accepted": true,
+                        "coalesced": true,
+                        "op": "reqpos",
+                        "message": "coalesced: fleet-wide positions request within 30s window",
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        *guard = Some(Instant::now());
+    } else if op == "reqpos" {
+        let mut guard = LAST_FLEET_REQPOS.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(Instant::now());
     }
 
     //--- Every known receiver, in a deterministic order, one command each.
@@ -4773,7 +4808,9 @@ async fn tls_import(
     match tls_mgr.apply_imported_cert(&b.cert_pem, &b.key_pem, &b.domain, port) {
         Ok(()) => {
             if let Some(redir) = b.enable_http_redirect {
-                tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+                let mut c = tls_mgr.config.lock_or_recover();
+                c.enable_http_redirect = redir;
+                let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
             }
             audit.record(&sess.user_id, "", "tls.import", &b.domain, None, None, "ok");
             // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port
@@ -4809,7 +4846,9 @@ async fn tls_self_signed(
     match tls_mgr.apply_self_signed(&b.domain, port) {
         Ok(()) => {
             if let Some(redir) = b.enable_http_redirect {
-                tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+                let mut c = tls_mgr.config.lock_or_recover();
+                c.enable_http_redirect = redir;
+                let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
             }
             audit.record(&sess.user_id, "", "tls.self_signed", &b.domain, None, None, "ok");
             // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port

@@ -754,7 +754,7 @@ impl TlsManager {
             }
             c.status.days_remaining = ((c.status.expires_at as i64) - (now as i64)) / 86400;
             c.status.last_error = None;
-            let _ = save_config(&self.config_path, &c);
+            save_config(&self.config_path, &c).map_err(|e| e.to_string())?;
         }
 
         Ok(())
@@ -798,7 +798,7 @@ impl TlsManager {
             }
             c.status.days_remaining = ((c.status.expires_at as i64) - (now as i64)) / 86400;
             c.status.last_error = None;
-            let _ = save_config(&self.config_path, &c);
+            save_config(&self.config_path, &c).map_err(|e| e.to_string())?;
         }
 
         Ok(())

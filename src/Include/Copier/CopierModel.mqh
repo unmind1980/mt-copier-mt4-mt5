@@ -937,8 +937,7 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
       ENUM_ORDER_TYPE_TIME tt=(ENUM_ORDER_TYPE_TIME)OrderGetInteger(ORDER_TYPE_TIME);
       if(tt==ORDER_TIME_DAY && p.pexpire<=0)
         {
-         datetime dayEnd=TimeCurrent() - (TimeCurrent()%86400) + 86399;
-         p.pexpire=(long)dayEnd;
+         p.pexpire=(long)CopierServerDayStart() + 86399;
         }
       p.initLots=0.0;   // N-03: receiver bookkeeping only
       p.used=true;
@@ -1046,7 +1045,6 @@ string CopierReadCommentByTicket(const CopierPos &p)
         {
          ulong tk=PositionGetTicket(i);
          if(tk==0) continue;
-         if(!PositionSelectByTicket(tk)) continue;
          if((long)PositionGetInteger(POSITION_IDENTIFIER)!=p.ticket) continue;
          return PositionGetString(POSITION_COMMENT);
         }
@@ -1506,7 +1504,7 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
    // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
    if(!ok && trade.ResultRetcode()==10030)
      {
-      string sym=PositionGetString(POSITION_SYMBOL);
+      if(StringLen(sym)==0) sym=PositionGetString(POSITION_SYMBOL);
       long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
       ENUM_ORDER_TYPE_FILLING candidates[3];
       int nCand=0;
@@ -1777,16 +1775,6 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       || res.retcode==TRADE_RETCODE_PLACED
       || res.retcode==TRADE_RETCODE_NO_CHANGES)
       return true;
-   if(res.retcode==10022 && req.type_time==ORDER_TIME_SPECIFIED)
-     {
-      req.type_time=ORDER_TIME_GTC;
-      req.expiration=0;
-      if(OrderSend(req,res))
-        {
-         if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED || res.retcode==TRADE_RETCODE_NO_CHANGES)
-            return true;
-        }
-     }
    outErr=(int)res.retcode;
    return false;
 #else

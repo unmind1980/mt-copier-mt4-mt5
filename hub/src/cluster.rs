@@ -616,11 +616,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 Ok(r) if r.status().is_success() => match r.json().await {
                     Ok(parsed) => parsed,
                     Err(e) => {
-                        let mut s = st.lock_or_recover();
-                        s.cluster.peer_online = false;
-                        s.cluster.continuous_online_start = None;
-                        s.cluster.sync_status = "disconnected".to_string();
-                        s.cluster.last_sync_err = format!("Failed to parse status from {}: {}", peer_url, e);
+                        {
+                            let mut s = st.lock_or_recover();
+                            s.cluster.peer_online = false;
+                            s.cluster.continuous_online_start = None;
+                            s.cluster.sync_status = "disconnected".to_string();
+                            s.cluster.last_sync_err = format!("Failed to parse status from {}: {}", peer_url, e);
+                        }
                         try_orphan_recovery(&st);
                         continue;
                     }
@@ -1017,9 +1019,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     }
                                 } else if !data.cfg_delta_lines.is_empty() {
                                     match cfg.apply_delta_lines(&data.cfg_delta_lines) {
-                                        Ok(applied) => {
-                                            if applied == 0 && cfg_lines_count < remote_st.cfg_lines {
-                                                eprintln!("[hub] cluster sync: cfg delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cfg_delta_lines.len());
+                                        Ok(_applied) => {
+                                            let current_lines = cfg.sync_stats().0;
+                                            if current_lines <= cfg_lines_count && current_lines < remote_st.cfg_lines {
+                                                eprintln!("[hub] cluster sync: cfg delta received {} lines but local line count {} did not advance; scheduling full replace_all to align physical files", data.cfg_delta_lines.len(), current_lines);
                                                 force_full_cfg_resync = true;
                                             }
                                         }
@@ -1050,9 +1053,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     // F-01: Check and propagate apply_delta_lines failure to prevent false synced status
                                     match cmds.apply_delta_lines(&data.cmd_delta_lines) {
-                                        Ok(applied) => {
-                                            if applied == 0 && cmd_lines_count < remote_st.cmd_lines {
-                                                eprintln!("[hub] cluster sync: cmd delta received {} lines but 0 applied; scheduling full replace_all to align physical files", data.cmd_delta_lines.len());
+                                        Ok(_applied) => {
+                                            let current_lines = cmds.sync_stats().0;
+                                            if current_lines <= cmd_lines_count && current_lines < remote_st.cmd_lines {
+                                                eprintln!("[hub] cluster sync: cmd delta received {} lines but local line count {} did not advance; scheduling full replace_all to align physical files", data.cmd_delta_lines.len(), current_lines);
                                                 force_full_cmd_resync = true;
                                             }
                                         }

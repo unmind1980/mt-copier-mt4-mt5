@@ -5021,16 +5021,17 @@ function renderPosNodeDetail(){
           var isClosing = !!(s.closingTickets && s.closingTickets[p.ticket]);
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
           var btnText = isClosing ? t("cockpit.btn_closing") : (isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close"));
-          var btnTitle = isClosing ? t("cockpit.btn_closing") : (isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket)));
+          var tktDisplay = esc(p.ticket_str || p.ticket);
+          var btnTitle = isClosing ? t("cockpit.btn_closing") : (isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + tktDisplay));
           var disabledAttr = isClosing ? ' disabled' : '';
-          var closeActionHtml = '<button type="button" class="' + btnClass + '"' + disabledAttr + ' data-tkt="' + esc(p.ticket) + '" data-node-key="' + esc(n.key) + '" data-sym="' + esc(p.symbol) + '" data-side="' + sideText + '" data-lots="' + esc(p.lots) + '" data-profit="' + pVal + '" title="' + btnTitle + '">' + btnText + '</button>';
+          var closeActionHtml = '<button type="button" class="' + btnClass + '"' + disabledAttr + ' data-tkt="' + tktDisplay + '" data-node-key="' + esc(n.key) + '" data-sym="' + esc(p.symbol) + '" data-side="' + sideText + '" data-lots="' + esc(p.lots) + '" data-profit="' + pVal + '" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
             ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
             : ('Manual / External (Magic: #' + p.magic + ')' + (p.comment ? (' · ' + esc(p.comment)) : ''));
           return '<tr>' +
                  '  <td>' + badge + '</td>' +
-                 '  <td><strong style="font-family:var(--mono)">#' + esc(p.ticket) + '</strong></td>' +
+                 '  <td><strong style="font-family:var(--mono)">#' + tktDisplay + '</strong></td>' +
                  '  <td><strong>' + esc(p.symbol) + '</strong></td>' +
                  '  <td><span class="side-badge ' + sideClass + '">' + sideText + '</span></td>' +
                  '  <td class="num" style="font-family:var(--mono)">' + esc(p.lots) + '</td>' +
@@ -7054,7 +7055,8 @@ function startDashboard(){
       var lots = Number(btn.getAttribute("data-lots") || "0");
       var pval = Number(btn.getAttribute("data-profit") || "0");
       if(nk && tkt){
-        onCloseSinglePosition(nk, /^\d+$/.test(tkt) ? Number(tkt) : tkt, sym, side, lots, pval);
+        // F08: Preserve 64-bit ticket as string to prevent JavaScript IEEE 754 precision truncation
+        onCloseSinglePosition(nk, tkt, sym, side, lots, pval);
       }
     });
   }
