@@ -159,14 +159,15 @@ deploy_into() {
   fi
 }
 
-list_terminals | {
-  deploy_failed=0
-  while IFS='|' read -r id plat label; do
-    [[ -n "$id" ]] || continue
-    deploy_into "$id" "$plat" "$label" || deploy_failed=1
-  done
-  exit $deploy_failed
-}
+deploy_failed=0
+while IFS='|' read -r id plat label; do
+  [[ -n "$id" ]] || continue
+  deploy_into "$id" "$plat" "$label" || deploy_failed=1
+done < <(list_terminals)
+if [[ $deploy_failed -ne 0 ]]; then
+  echo "ERROR: One or more targets failed to deploy." >&2
+  exit 1
+fi
 
 echo
 if [[ $LIST_ONLY -eq 1 ]]; then

@@ -71,15 +71,17 @@ double CopierPipOf(const CopierSymInfo &si)
    if(StringFind(si.sym,"XAU")>=0 || StringFind(si.sym,"GOLD")>=0)
       return (si.digits==3) ? si.point*100.0 : (si.digits==2 ? si.point*10.0 : 0.10);
    if(StringFind(si.sym,"XAG")>=0 || StringFind(si.sym,"SILVER")>=0)
-      return (si.digits==3) ? si.point*10.0 : si.point;
+      return (si.digits==4) ? si.point*100.0 : ((si.digits==3) ? si.point*10.0 : si.point);
    // Indices & Crypto: 1 pip = 1.0 price unit
    if(StringFind(si.sym,"BTC")>=0 || StringFind(si.sym,"ETH")>=0 ||
       StringFind(si.sym,"SOL")>=0 || StringFind(si.sym,"XRP")>=0 || StringFind(si.sym,"LTC")>=0 ||
       StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || StringFind(si.sym,"DJ30")>=0 || StringFind(si.sym,"DJI")>=0 || StringFind(si.sym,"DJIA")>=0 || StringFind(si.sym,"DJX")>=0 ||
-      StringFind(si.sym,"US500")>=0 || StringFind(si.sym,"SPX500")>=0 || StringFind(si.sym,"SP500")>=0 ||
-      StringFind(si.sym,"NAS100")>=0 || StringFind(si.sym,"USTEC")>=0 || StringFind(si.sym,"US100")>=0 ||
+      StringFind(si.sym,"US500")>=0 || StringFind(si.sym,"SPX500")>=0 || StringFind(si.sym,"SP500")>=0 || StringFind(si.sym,"SPX")>=0 ||
+      StringFind(si.sym,"NAS100")>=0 || StringFind(si.sym,"USTEC")>=0 || StringFind(si.sym,"US100")>=0 || StringFind(si.sym,"NDX")>=0 || StringFind(si.sym,"NQ")>=0 ||
       StringFind(si.sym,"GER40")>=0 || StringFind(si.sym,"DE40")>=0 || StringFind(si.sym,"GER30")>=0 || StringFind(si.sym,"DE30")>=0 || StringFind(si.sym,"DAX")>=0 ||
       StringFind(si.sym,"UK100")>=0 || StringFind(si.sym,"FTSE")>=0 ||
+      StringFind(si.sym,"CAC40")>=0 || StringFind(si.sym,"FR40")>=0 || StringFind(si.sym,"STOXX50")>=0 || StringFind(si.sym,"EU50")>=0 ||
+      StringFind(si.sym,"AUS200")>=0 || StringFind(si.sym,"ASX200")>=0 ||
       StringFind(si.sym,"JP225")>=0 || StringFind(si.sym,"NI225")>=0 || StringFind(si.sym,"HK50")>=0)
       return (si.point>0.0 ? 1.0 : 1.0);
    if(si.digits<=1) return (si.point>0.0 ? si.point : 1.0);
@@ -354,6 +356,12 @@ string CopierResolveCrossSymbol(const string pair,const string extraSuffix="")
       string cand=pair+sfx[i];
       if(CopierSymbolEnsure(cand)) return cand;
      }
+   string pfx[]={"pro.","ecn.","r_","i_","c_"};
+   for(int p=0;p<ArraySize(pfx);p++)
+     {
+      string cand=pfx[p]+pair;
+      if(CopierSymbolEnsure(cand)) return cand;
+     }
    return "";
   }
 
@@ -394,6 +402,14 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw,
      {
       double r1=CopierGetCurrencyCrossRate(fromCcy,"EUR",extraSuffix);
       double r2=CopierGetCurrencyCrossRate("EUR",toCcy,extraSuffix);
+      if(r1>0.0 && r2>0.0) return r1*r2;
+     }
+
+   // Intermediate via JPY fallback
+   if(fromCcy!="JPY" && toCcy!="JPY")
+     {
+      double r1=CopierGetCurrencyCrossRate(fromCcy,"JPY",extraSuffix);
+      double r2=CopierGetCurrencyCrossRate("JPY",toCcy,extraSuffix);
       if(r1>0.0 && r2>0.0) return r1*r2;
      }
 
@@ -1340,7 +1356,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          RefreshRates();
          if(!CopierGetPrice(sym,side,px)) break;
          // DEF-B04: Hard cap on cumulative slippage across retries to prevent runaway market chase
-         if(pointVal>0.0 && MathAbs(px-initialPx)/pointVal > MathMax(30,(deviationPoints>0?deviationPoints:30))) break;
+         int maxSlipPts = CopierScaleDeviationPoints(sym, MathMax(30,(deviationPoints>0?deviationPoints:30)));
+         if(pointVal>0.0 && MathAbs(px-initialPx)/pointVal > maxSlipPts) break;
          continue;
         }
       break;
@@ -1665,7 +1682,7 @@ bool CopierModifyStops(const long identifier,const string sym,
    //--- unchanged. OrderExpiration() reads from the selected order, which
    //--- is why the select above has to happen first.
    double openPx=OrderOpenPrice();
-   bool ok=OrderModify((int)ticket,openPx,sl,tp,OrderExpiration(),clrNONE);
+   bool ok=OrderModify((int)(uint)ticket,openPx,sl,tp,OrderExpiration(),clrNONE);
    if(!ok)
      {
       int e=GetLastError();
@@ -1780,13 +1797,13 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
      }
    double openPx=(modPx>0.0)?modPx:OrderOpenPrice();
    datetime exp=expire;
-   bool ok=OrderModify((int)ticket,openPx,modSl,modTp,exp,clrNONE);
+   bool ok=OrderModify((int)(uint)ticket,openPx,modSl,modTp,exp,clrNONE);
    if(!ok)
      {
       int e=GetLastError();
       if(e==147 && exp>0)
         {
-         if(OrderModify((int)ticket,openPx,modSl,modTp,0,clrNONE)) return true;
+         if(OrderModify((int)(uint)ticket,openPx,modSl,modTp,0,clrNONE)) return true;
          e=GetLastError();
         }
       if(e==1) return true;
@@ -1931,13 +1948,26 @@ bool CopierClosePartial(const long identifier,const double lots,
    //--- rejected a real half-close on a micro position.
    if(lots>=have-0.000000001) { outErr=-3; return false; }
 
-   RefreshRates();
+   bool ok=false;
    int type=(int)OrderType();
-   double px=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID)
-                           :MarketInfo(OrderSymbol(),MODE_ASK);
-   bool ok=OrderClose((int)ticket,lots,px,MathMax(0,deviationPoints),clrNONE);
-   if(ok) outClosedLots=lots;
-   else   outErr=GetLastError();
+   for(int attempt=0; attempt<3; attempt++)
+     {
+      int tcWait=0;
+      while(IsTradeContextBusy() && tcWait++<15) CopierWaitMs(10);
+      RefreshRates();
+      double px=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID)
+                              :MarketInfo(OrderSymbol(),MODE_ASK);
+      ok=OrderClose((int)(uint)ticket,lots,px,MathMax(0,deviationPoints),clrNONE);
+      if(ok)
+        {
+         outClosedLots=lots;
+         outErr=0;
+         break;
+        }
+      outErr=GetLastError();
+      if(outErr!=138 && outErr!=135 && outErr!=136 && outErr!=146) break;
+      CopierWaitMs(20);
+     }
    return ok;
 #endif
   }

@@ -550,8 +550,8 @@ impl CommandStore {
                 let _ = std::fs::remove_file(self.0);
             }
         }
-        let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
-        let tmp_path = std::path::Path::new(&tmp);
+        let tmp_path_buf = crate::cluster::unique_tmp_path(&self.path, "cmd_rep");
+        let tmp_path = tmp_path_buf.as_path();
         let _tmp_guard = TmpGuard(tmp_path);
         {
             let mut f = File::create(tmp_path)?;
@@ -1375,7 +1375,7 @@ pub fn command_id_op(node: &str, op: &str, seq: u64) -> String {
 /// keeps the LAST line for an id, so a snapshot file and a full history are
 /// equivalent inputs - only the size differs.
 fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io::Result<usize> {
-    let tmp = path.with_extension(format!("compact.{}.tmp", std::process::id()));
+    let tmp = crate::cluster::unique_tmp_path(path, "cmd_cmp");
     {
         let mut f = std::fs::File::create(&tmp)?;
         let mut sorted: Vec<&Command> = commands.values().collect();

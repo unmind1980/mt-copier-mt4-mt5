@@ -364,8 +364,8 @@ impl ConfigStore {
                 let _ = std::fs::remove_file(self.0);
             }
         }
-        let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
-        let tmp_path = std::path::Path::new(&tmp);
+        let tmp_path_buf = crate::cluster::unique_tmp_path(&self.path, "cfg_rep");
+        let tmp_path = tmp_path_buf.as_path();
         let _tmp_guard = TmpGuard(tmp_path);
         {
             let mut f = File::create(tmp_path)?;
@@ -673,6 +673,11 @@ impl Inner {
                 eprintln!("[hub] CONFIG WRITE FAILED: {}", e);
                 return Err(e);
             }
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "config journal file handle is not open",
+            ));
         }
         self.count += 1;
         self.dirty_seq += 1;
@@ -820,7 +825,7 @@ pub fn compact_journal(path: &Path, keep_per_node: usize) -> std::io::Result<usi
         lines
     }; // file and reader dropped here, freeing the Windows file lock before rename
 
-    let tmp = path.with_extension(format!("compact.{}.tmp", std::process::id()));
+    let tmp = crate::cluster::unique_tmp_path(path, "cfg_cmp");
     {
         let mut f = std::fs::File::create(&tmp)?;
         for (_, line) in &keep_lines {
@@ -1536,5 +1541,30 @@ mod tests {
         assert_eq!(reopened.current("receiver:1").unwrap().rev, 5);
         assert_eq!(reopened.current("receiver:2").unwrap().rev, 3);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_append_fails_when_file_handle_is_missing() {
+        let mut inner = Inner {
+            file: None,
+            current: HashMap::new(),
+            count: 0,
+            torn: 0,
+            dirty_seq: 1,
+        };
+        let rev = Revision {
+            node: "recv:1".to_string(),
+            rev: 1,
+            ts: 1000,
+            actor: "admin".to_string(),
+            ip: "".to_string(),
+            ini: "a=1\n".to_string(),
+            kind: "set".to_string(),
+            from_rev: 0,
+        };
+        let res = inner.append(&rev);
+        assert!(res.is_err(), "append must fail when file handle is None");
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::NotConnected);
+        assert_eq!(inner.count, 0);
     }
 }

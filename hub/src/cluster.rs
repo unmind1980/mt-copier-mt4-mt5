@@ -498,11 +498,15 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
     Ok(())
 }
 
-/// N72-03: Save cluster state to path atomically without holding SharedState mutex.
-pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::io::Result<()> {
+pub(crate) fn unique_tmp_path(target: &Path, tag: &str) -> PathBuf {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = PathBuf::from(format!("{}.tmp.{}.{}", path.display(), std::process::id(), seq));
+    PathBuf::from(format!("{}.{}.{}.{}.tmp", target.display(), tag, std::process::id(), seq))
+}
+
+/// N72-03: Save cluster state to path atomically without holding SharedState mutex.
+pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::io::Result<()> {
+    let tmp = unique_tmp_path(path, "state");
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     {
@@ -881,19 +885,18 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let curve_diff =
                     local_curve_on && remote_curve_on && remote_st.curve_clients_hash != curve_h;
 
-                let cfg_diff = !lines_differ && remote_st.cfg_hash != cfg_h;
-                let cmd_diff = !lines_differ && remote_st.cmd_hash != cmd_h;
+                let local_cfg_on = !cfg_path.as_os_str().is_empty();
+                let local_cmd_on = !cmd_path.as_os_str().is_empty();
+                let cfg_diff = local_cfg_on && !lines_differ && remote_st.cfg_hash != cfg_h;
+                let cmd_diff = local_cmd_on && !lines_differ && remote_st.cmd_hash != cmd_h;
                 // BUG-03: Allow users sync when Standby starts with no local users file (users_h is empty)
                 let users_diff = users_sync_enabled && remote_st.users_sync_enabled && !remote_st.users_hash.is_empty() && remote_st.users_hash != users_h;
 
-                let needs_sync = remote_st.cfg_lines != cfg_lines_count
-                    || remote_st.cmd_lines != cmd_lines_count
-                    || remote_st.max_cmd_seq != local_max_cmd_seq
+                let cfg_needed = local_cfg_on && (remote_st.cfg_lines != cfg_lines_count || force_full_cfg_resync || cfg_diff);
+                let cmd_needed = local_cmd_on && (remote_st.cmd_lines != cmd_lines_count || remote_st.max_cmd_seq != local_max_cmd_seq || force_full_cmd_resync || cmd_diff);
+                let needs_sync = cfg_needed
+                    || cmd_needed
                     || remote_st.epoch > local_epoch
-                    || force_full_cfg_resync
-                    || force_full_cmd_resync
-                    || cfg_diff
-                    || cmd_diff
                     || users_diff
                     || notif_diff
                     || curve_diff;
@@ -916,10 +919,10 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let cfg_compacted = remote_st.cfg_lines < last_known_remote_cfg_lines;
                     let cmd_compacted = remote_st.cmd_lines < last_known_remote_cmd_lines;
 
-                    let full_cfg_resync = cfg_lines_count > remote_st.cfg_lines
+                    let full_cfg_resync = local_cfg_on && (cfg_lines_count > remote_st.cfg_lines
                         || cfg_diff
                         || cfg_compacted
-                        || std::mem::replace(&mut force_full_cfg_resync, false);
+                        || std::mem::replace(&mut force_full_cfg_resync, false));
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
                     // BUG-03, BUG-05, BUG-06 & R7-D7-03: If command line count is greater or divergent (cmd_diff),
@@ -927,12 +930,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     // request from line 0 and replace_all to prevent splicing onto uncompacted journal.
                     let seq_discontinuity = (local_max_cmd_seq > 0 && remote_st.max_cmd_seq < local_max_cmd_seq)
                         || (local_max_cmd_seq > 0 && remote_st.max_cmd_seq > local_max_cmd_seq + (remote_st.cmd_lines.saturating_sub(cmd_lines_count) as u64));
-                    let full_cmd_resync = cmd_lines_count > remote_st.cmd_lines
+                    let full_cmd_resync = local_cmd_on && (cmd_lines_count > remote_st.cmd_lines
                         || cmd_diff
                         || cmd_compacted
                         || seq_discontinuity
                         || (cmd_lines_count == remote_st.cmd_lines && remote_st.max_cmd_seq != local_max_cmd_seq)
-                        || std::mem::replace(&mut force_full_cmd_resync, false);
+                        || std::mem::replace(&mut force_full_cmd_resync, false));
                     let req_from_cmd_line = if full_cmd_resync { 0 } else { cmd_lines_count };
 
                     let sync_req = ClusterSyncRequest {
@@ -1037,7 +1040,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 // Apply full users content if updated (A86-08: propagate all errors)
                                 let mut reload_users = false;
                                 if let Some(u_content) = data.users_content {
-                                    let tmp = users_path.with_extension(format!("json.{}.tmp", std::process::id()));
+                                    let tmp = unique_tmp_path(&users_path, "users");
                                     match File::create(&tmp).and_then(|mut f| {
                                         f.write_all(u_content.as_bytes())?;
                                         f.sync_all()
@@ -1073,8 +1076,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                         //--- and it is NOT a sync error.
                                         eprintln!("[hub] cluster sync: local notifications are disabled (--notifications none); channel content not applied");
                                     } else {
-                                    let tmp = format!("{}.tmp.{}", p.display(), std::process::id());
-                                    let tmp_path = PathBuf::from(&tmp);
+                                    let tmp_path = unique_tmp_path(&p, "notif");
                                     match File::create(&tmp_path).and_then(|mut f| {
                                         f.write_all(n_content.as_bytes())?;
                                         f.sync_all()
@@ -1104,8 +1106,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     if curve_clients_path.as_os_str().is_empty() {
                                         eprintln!("[hub] cluster sync: local curve allow-list path is empty; content not applied");
                                     } else {
-                                    let tmp = format!("{}.tmp.{}", curve_clients_path.display(), std::process::id());
-                                    let tmp_path = PathBuf::from(&tmp);
+                                    let tmp_path = unique_tmp_path(&curve_clients_path, "curve");
                                     match File::create(&tmp_path).and_then(|mut f| {
                                         f.write_all(c_content.as_bytes())?;
                                         f.sync_all()
@@ -1322,7 +1323,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                 let reason = h_data.error.clone().unwrap_or_else(|| "handover rejected by peer".to_string());
                                 eprintln!("[hub] ADR-10 AUTO-FAILBACK REJECTED by Primary: {}", reason);
                                 let mut s = st.lock_or_recover();
-                                s.cluster.continuous_online_start = None;
+                                if !reason.contains("lagging") && !reason.contains("behind") {
+                                    s.cluster.continuous_online_start = None;
+                                }
                                 s.cluster.last_sync_err = format!("failback rejected: {}", reason);
                             }
                         }
@@ -1566,5 +1569,13 @@ mod tests {
         assert_ne!(hash_v1, hash_v2, "CRITICAL: Cached hash returned stale SHA-256 on same-size rewrite!");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_unique_tmp_path_is_monotonic() {
+        let p = PathBuf::from("sample.json");
+        let t1 = unique_tmp_path(&p, "save");
+        let t2 = unique_tmp_path(&p, "save");
+        assert_ne!(t1, t2, "consecutive unique_tmp_path calls must produce distinct paths");
     }
 }

@@ -4122,6 +4122,40 @@ void TestAuditRound15()
    OkInt("r15_cp_max_peers_headroom: CP_MAX_PEERS has capacity", CP_MAX_PEERS >= 104, 1);
   }
 
+void TestAuditRound16()
+  {
+   //==================================================================
+   // 1) CopierNormalizeLot minimum lot epsilon guard (D16-01)
+   //==================================================================
+   CopierSymInfo siMin;
+   ZeroMemory(siMin);
+   siMin.minLot = 0.15; siMin.maxLot = 10.0; siMin.lotStep = 0.10;
+   double normMin = CopierNormalizeLot(0.1499999999, siMin);
+   OkDbl("r16_norm_lot_min_eps: 0.1499999999 snaps to 0.15 minLot", normMin, 0.15, 0.0001);
+
+   //==================================================================
+   // 2) Silver 4-digit & Missing Indices Pip Scaling (D16-04, D16-05)
+   //==================================================================
+   CopierSymInfo siPip;
+   ZeroMemory(siPip);
+   siPip.sym = "XAGUSD"; siPip.digits = 4; siPip.point = 0.0001;
+   OkDbl("r16_pip_xag_4dig: 4-digit silver pip is 0.01", CopierPipOf(siPip), 0.01, 0.00001);
+   siPip.sym = "SPX"; siPip.digits = 2; siPip.point = 0.01;
+   OkDbl("r16_pip_spx: SPX pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym = "AUS200"; siPip.digits = 1; siPip.point = 0.1;
+   OkDbl("r16_pip_aus200: AUS200 pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+
+   //==================================================================
+   // 3) CopierFitStopAt equal tickSize/point quantization (D16-06)
+   //==================================================================
+   CopierSymInfo siFut;
+   ZeroMemory(siFut);
+   siFut.digits = 2; siFut.point = 0.25; siFut.tickSize = 0.25; siFut.stopLevel = 0.5;
+   bool clamped = false;
+   double fitPx = CopierFitStopAt(5800.12, CP_SIDE_BUY, true, 5805.0, siFut, clamped);
+   OkDbl("r16_fit_stop_eq_tick: 5800.12 quantized to 0.25 tick boundary", fitPx, 5800.00, 0.001);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -4192,6 +4226,7 @@ void OnStart()
    TestAuditRound13();
    TestAuditRound14();
    TestAuditRound15();
+   TestAuditRound16();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

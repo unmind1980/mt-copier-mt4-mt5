@@ -405,8 +405,17 @@ impl Audit {
         {
             let (m, cv) = &*self.shifter.pending;
             let mut n = m.lock_or_recover();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while *n > 0 {
-                n = cv.wait(n).unwrap_or_else(|p| p.into_inner());
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let (locked_n, _) = match cv.wait_timeout(n, deadline - now) {
+                    Ok(pair) => pair,
+                    Err(p) => p.into_inner(),
+                };
+                n = locked_n;
             }
         }
         let handle = {
@@ -550,63 +559,13 @@ impl Audit {
 
         // Check if rotation is needed before appending.
         // Fast swap runs under this writer lock (microseconds); the slow
-        // gzip compression + archive shifting runs on a background thread so
-        // the router thread resumes appending immediately.
-        if self.enabled && inner.file.is_some() && inner.current_size >= self.max_bytes {
-            if let Ok(Some((rotating_path, file_len))) = self.swap_locked(&mut inner) {
-                let shifter = self.shifter.clone();
-                let worker_slot = Arc::clone(&self.shifter.active_worker);
-                let rotating_bg = rotating_path.clone();
-                {
-                    let (m, cv) = &*self.shifter.pending;
-                    let mut n = m.lock_or_recover();
-                    while *n >= 3 {
-                        let (locked_n, timeout_res) = match cv.wait_timeout(n, std::time::Duration::from_millis(500)) {
-                            Ok(pair) => pair,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        n = locked_n;
-                        if timeout_res.timed_out() {
-                            break;
-                        }
-                    }
-                    *n = n.saturating_add(1);
-                }
-                let pending_bg = Arc::clone(&self.shifter.pending);
-                // RUST-BUG-06: Take the previous JoinHandle so the new background worker waits for prior compression to finish,
-                // guaranteeing strictly serial archive sequence and preventing race conditions.
-                let prev_worker = worker_slot.lock_or_recover().take();
-                let spawn_res = std::thread::Builder::new()
-                    .name("audit-rotate".to_string())
-                    .spawn(move || {
-                        let _guard = PendingRotateGuard(pending_bg);
-                        if let Some(prev) = prev_worker {
-                            let _ = prev.join();
-                        }
-                        let _ = shifter.finish(&rotating_bg, file_len);
-                    });
-                match spawn_res {
-                    Ok(handle) => {
-                        let mut slot = worker_slot.lock_or_recover();
-                        *slot = Some(handle);
-                    }
-                    Err(e) => {
-                        {
-                            let (m, cv) = &*self.shifter.pending;
-                            let mut n = m.lock_or_recover();
-                            *n = n.saturating_sub(1);
-                            if *n == 0 {
-                                cv.notify_all();
-                            }
-                        }
-                        drop(inner);
-                        eprintln!("[hub] AUDIT: cannot spawn background rotate thread, running synchronously: {}", e);
-                        let _ = self.shifter.finish(&rotating_path, file_len);
-                        inner = self.inner.lock_or_recover();
-                    }
-                }
-            }
-        }
+        // gzip compression + archive shifting runs on a background thread outside inner lock
+        // so writer threads resume appending immediately.
+        let rotate_target = if self.enabled && inner.file.is_some() && inner.current_size >= self.max_bytes {
+            self.swap_locked(&mut inner).ok().flatten()
+        } else {
+            None
+        };
 
         let seq = inner.seq + 1;
         let rec = json!({
@@ -640,31 +599,99 @@ impl Audit {
             }
         }
 
-        let Some(f) = inner.file.as_mut() else {
+        if let Some(f) = inner.file.as_mut() {
+            let bytes = line.as_bytes();
+            match f.write_all(bytes).and_then(|_| f.sync_data()) {
+                Ok(()) => {
+                    inner.seq = seq;
+                    inner.wrote += 1;
+                    inner.current_size += bytes.len() as u64;
+                }
+                Err(e) => {
+                    // NOT swallowed. The record is gone, and the only thing worse
+                    // than that is not knowing.
+                    inner.failed += 1;
+                    eprintln!(
+                        "[hub] AUDIT WRITE FAILED ({} record(s) lost): {}",
+                        inner.failed, e
+                    );
+                }
+            }
+        } else {
             // Disabled or failed to open: still advance `seq` so the caller's view is consistent,
             // and count it so "the audit is off" is visible in the totals.
             inner.seq = seq;
             if self.enabled {
                 inner.failed += 1;
             }
-            return seq;
-        };
+        }
+        drop(inner);
 
-        let bytes = line.as_bytes();
-        match f.write_all(bytes).and_then(|_| f.sync_data()) {
-            Ok(()) => {
-                inner.seq = seq;
-                inner.wrote += 1;
-                inner.current_size += bytes.len() as u64;
+        if let Some((rotating_path, file_len)) = rotate_target {
+            let shifter = self.shifter.clone();
+            let worker_slot = Arc::clone(&self.shifter.active_worker);
+            let rotating_bg = rotating_path.clone();
+            let mut timed_out = false;
+            {
+                let (m, cv) = &*self.shifter.pending;
+                let mut n = m.lock_or_recover();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+                while *n >= 3 {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        timed_out = true;
+                        break;
+                    }
+                    let (locked_n, timeout_res) = match cv.wait_timeout(n, deadline - now) {
+                        Ok(pair) => pair,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    n = locked_n;
+                    if timeout_res.timed_out() {
+                        timed_out = true;
+                        break;
+                    }
+                }
+                if !timed_out {
+                    *n = n.saturating_add(1);
+                }
             }
-            Err(e) => {
-                // NOT swallowed. The record is gone, and the only thing worse
-                // than that is not knowing.
-                inner.failed += 1;
-                eprintln!(
-                    "[hub] AUDIT WRITE FAILED ({} record(s) lost): {}",
-                    inner.failed, e
-                );
+            if timed_out {
+                let prev_worker = worker_slot.lock_or_recover().take();
+                if let Some(prev) = prev_worker {
+                    let _ = prev.join();
+                }
+                let _ = self.shifter.finish(&rotating_path, file_len);
+            } else {
+                let pending_bg = Arc::clone(&self.shifter.pending);
+                // RUST-BUG-06: Take the previous JoinHandle so the new background worker waits for prior compression to finish,
+                // guaranteeing strictly serial archive sequence and preventing race conditions.
+                let prev_worker = worker_slot.lock_or_recover().take();
+                let spawn_res = std::thread::Builder::new()
+                    .name("audit-rotate".to_string())
+                    .spawn(move || {
+                        let _guard = PendingRotateGuard(pending_bg);
+                        if let Some(prev) = prev_worker {
+                            let _ = prev.join();
+                        }
+                        let _ = shifter.finish(&rotating_bg, file_len);
+                    });
+                match spawn_res {
+                    Ok(handle) => {
+                        let mut slot = worker_slot.lock_or_recover();
+                        *slot = Some(handle);
+                    }
+                    Err(e) => {
+                        {
+                            let (m, cv) = &*self.shifter.pending;
+                            let mut n = m.lock_or_recover();
+                            *n = n.saturating_sub(1);
+                            cv.notify_all();
+                        }
+                        eprintln!("[hub] AUDIT: cannot spawn background rotate thread, running synchronously: {}", e);
+                        let _ = self.shifter.finish(&rotating_path, file_len);
+                    }
+                }
             }
         }
         seq
@@ -987,11 +1014,10 @@ fn last_seq_from_file(f: &mut File, len: u64) -> Option<u64> {
 impl Drop for Audit {
     fn drop(&mut self) {
         self.wait_for_rotation();
-        if let Ok(mut inner) = self.inner.lock() {
-            if let Some(mut f) = inner.file.take() {
-                let _ = f.flush();
-                let _ = f.sync_all();
-            }
+        let mut inner = self.inner.lock_or_recover();
+        if let Some(mut f) = inner.file.take() {
+            let _ = f.flush();
+            let _ = f.sync_all();
         }
     }
 }
@@ -1421,8 +1447,11 @@ mod tests {
         assert!(!rot.exists());
     }
 
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_audit_env_var_thresholds() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let p = tmp("audit_env_thresholds");
         cleanup(&p);
         std::env::set_var("MTC_AUDIT_MAX_BYTES", "512");
@@ -1437,6 +1466,7 @@ mod tests {
 
     #[test]
     fn test_audit_env_var_zero_backups() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let p = tmp("audit_env_zero_backups");
         cleanup(&p);
         std::env::set_var("MTC_AUDIT_MAX_BACKUPS", "0");

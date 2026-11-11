@@ -360,7 +360,20 @@ impl NotificationStore {
     }
 
     pub fn load(&mut self) -> io::Result<()> {
-        if !self.enabled || self.path.as_os_str().is_empty() || !self.path.exists() {
+        if !self.enabled || self.path.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let bak = PathBuf::from(format!("{}.bak", self.path.display()));
+        let is_empty_or_missing = fs::metadata(&self.path).map(|m| m.len() == 0).unwrap_or(true);
+        if is_empty_or_missing && bak.exists() {
+            if let Ok(m) = fs::metadata(&bak) {
+                if m.len() > 0 {
+                    eprintln!("[hub] RECOVERY: Restoring {} from backup {}", self.path.display(), bak.display());
+                    let _ = fs::copy(&bak, &self.path);
+                }
+            }
+        }
+        if !self.path.exists() {
             return Ok(());
         }
         let data = fs::read_to_string(&self.path)?;
@@ -386,7 +399,7 @@ impl NotificationStore {
         let json_text = serde_json::to_string_pretty(&list)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        let tmp_path = format!("{}.tmp.{}", self.path.display(), std::process::id());
+        let tmp_path = crate::cluster::unique_tmp_path(&self.path, "notif_save");
         {
             let mut f = File::create(&tmp_path)?;
             f.write_all(json_text.as_bytes())?;
@@ -394,7 +407,7 @@ impl NotificationStore {
             f.sync_all()?;
         }
         // N84-08: Use atomic_replace_file with Windows copy-fallback instead of bare rename
-        crate::cluster::atomic_replace_file(Path::new(&tmp_path), &self.path)?;
+        crate::cluster::atomic_replace_file(&tmp_path, &self.path)?;
         Ok(())
     }
 
@@ -2342,5 +2355,24 @@ mod tests {
 
         let m_frag = mask_webhook_url("https://example.com#fragsecret123");
         assert_eq!(m_frag, "https://example.com/***");
+    }
+
+    #[test]
+    fn test_notification_store_bak_recovery_on_empty_main() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("copier_notif_bak_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let main_p = dir.join("alert_channels.json");
+        let bak_p = dir.join("alert_channels.json.bak");
+        fs::write(&main_p, b"").unwrap();
+        let sample = r#"[{"id":"c1","name":"TestHook","channel_type":"webhook","enabled":true,"min_severity":"warning","config":{"url":"https://example.com/hook"},"created_at":100}]"#;
+        fs::write(&bak_p, sample.as_bytes()).unwrap();
+
+        let mut store = NotificationStore::new(Some(&main_p));
+        store.load().unwrap();
+        assert_eq!(store.channels.len(), 1);
+        assert!(store.channels.contains_key("c1"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

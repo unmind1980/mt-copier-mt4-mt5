@@ -299,7 +299,7 @@ impl UserStore {
     /// Write via a temp file + rename, the same shape the receiver's ini
     /// writer uses: a crash mid-write must not leave half a user list.
     pub fn save(&self) -> Result<(), String> {
-        let tmp = self.path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let tmp = crate::cluster::unique_tmp_path(&self.path, "users_save");
         let text = serde_json::to_string_pretty(&self.users)
             .map_err(|e| format!("serialise users: {}", e))?;
         //--- fsync the temp before the rename. `write_all` returns once the

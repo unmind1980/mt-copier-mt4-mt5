@@ -394,6 +394,7 @@ public:
    //--- caller keys on THIS and prints the message.
    string            BlockKey() const
      {
+      if(m_dailyTripped && m_ddTripped) return "daily+drawdown";
       if(m_dailyTripped) return "daily";
       if(m_ddTripped)    return "drawdown";
       return "";

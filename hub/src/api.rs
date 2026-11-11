@@ -3454,6 +3454,17 @@ async fn notifications_upsert(
             }
         }
     }
+    if b.channel_type == "telegram" {
+        if let Some(tok) = config_for_val.get("bot_token").and_then(|v| v.as_str()) {
+            if !tok.is_empty() && !tok.chars().all(|c| c.is_ascii_alphanumeric() || c == ':' || c == '_' || c == '-') {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Telegram bot_token contains invalid characters" })),
+                )
+                    .into_response();
+            }
+        }
+    }
 
     let (existing_lang, existing_created_at) = {
         let store = notif_store.lock_or_recover();
@@ -3680,12 +3691,17 @@ async fn notifications_test(
     match crate::notifications::send_to_channel(&client, &target_channel, &test_alert).await {
         Ok(res) => Json(json!({ "ok": true, "result": res })).into_response(),
         Err(err) => {
-            // OPT-12: Map SSRF/URL validation errors to 400 Bad Request uniformly across all channels (webhook, wecom, dingtalk)
+            // OPT-12: Map SSRF/URL and token validation errors to 400 Bad Request uniformly across all channels
             let status = if err.contains("prohibited")
                 || err.contains("must begin with")
                 || err.contains("userinfo")
                 || err.contains("no host")
                 || err.contains("Invalid URL")
+                || err.contains("missing")
+                || err.contains("cannot be empty")
+                || err.contains("invalid characters")
+                || err.contains("cannot appear in a token")
+                || err.contains("Unknown channel type")
             {
                 axum::http::StatusCode::BAD_REQUEST
             } else {
@@ -4852,7 +4868,7 @@ async fn tls_renew(
         return standby_readonly_conflict(&peer_url, "TLS import").into_response();
     }
 
-    let (domain, email, staging) = {
+    let (domain, email, staging, is_self_signed, https_port) = {
         let mut c = tls_mgr.config.lock_or_recover();
         // N84-05: Prevent concurrent ACME renewal jobs from colliding
         if c.status.in_progress {
@@ -4869,12 +4885,35 @@ async fn tls_renew(
             )
                 .into_response();
         }
-        c.status.in_progress = true;
-        c.status.progress_step = "initiating".to_string();
-        c.status.last_error = None;
-        let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
-        (c.domain.clone(), c.email.clone(), c.staging_mode)
+        if c.mode == crate::tls::TlsMode::SelfSigned {
+            (c.domain.clone(), c.email.clone(), c.staging_mode, true, c.https_port)
+        } else {
+            c.status.in_progress = true;
+            c.status.progress_step = "initiating".to_string();
+            c.status.last_error = None;
+            let _ = crate::tls::save_config(&tls_mgr.config_path, &c);
+            (c.domain.clone(), c.email.clone(), c.staging_mode, false, c.https_port)
+        }
     };
+
+    if is_self_signed {
+        return match tls_mgr.apply_self_signed(&domain, https_port) {
+            Ok(()) => {
+                audit.record(&sess.user_id, "", "tls.renew", &domain, None, None, "ok");
+                ensure_dedicated_https_listener(&st);
+                (
+                    axum::http::StatusCode::ACCEPTED,
+                    Json(json!({ "accepted": true, "message": "Self-signed certificate renewed and activated." })),
+                )
+                    .into_response()
+            }
+            Err(e) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+                .into_response(),
+        };
+    }
 
     let mgr_bg = Arc::clone(&tls_mgr);
     let domain_bg = domain.clone();

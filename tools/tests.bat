@@ -16,6 +16,9 @@ for %%B in (
     "%ProgramFiles(x86)%\Git\bin\bash.exe"
     "%ProgramFiles%\Git\usr\bin\bash.exe"
     "%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
+    "E:\msys64\msys64\usr\bin\bash.exe"
+    "E:\msys64\usr\bin\bash.exe"
+    "C:\msys64\usr\bin\bash.exe"
 ) do (
     if not defined BASH if exist %%B set "BASH=%%~B"
 )

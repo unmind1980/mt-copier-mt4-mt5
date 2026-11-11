@@ -1652,9 +1652,13 @@ impl AcmeClient {
         if let Err(e) = tls_mgr.reload_from_disk() {
             if let Some(ref b) = prev_fc {
                 let _ = write_secret_atomic(fc_path, b);
+            } else {
+                let _ = std::fs::remove_file(fc_path);
             }
             if let Some(ref b) = prev_pk {
                 let _ = write_secret_atomic(pk_path, b);
+            } else {
+                let _ = std::fs::remove_file(pk_path);
             }
             let _ = tls_mgr.reload_from_disk();
             let mut c = tls_mgr.config.lock_or_recover();
@@ -1682,39 +1686,48 @@ pub fn spawn_auto_renewal_worker(tls_mgr: Arc<TlsManager>) {
         //--- indefinitely. A short delay still lets listeners and the config land.
         tokio::time::sleep(Duration::from_secs(60)).await;
         loop {
-            let (should_renew, domain, email, staging) = {
+            let (should_renew, domain, email, staging, is_self_signed, https_port) = {
                 let c = tls_mgr.config.lock_or_recover();
-                if c.enabled && c.auto_renew && (c.mode == TlsMode::Auto || c.mode == TlsMode::CustomDomain) {
+                let is_ss = c.mode == TlsMode::SelfSigned;
+                let is_acme = c.mode == TlsMode::Auto || c.mode == TlsMode::CustomDomain;
+                if c.enabled && c.auto_renew && (is_acme || is_ss) {
                     let now = unix_now();
                     let days_left = if c.status.expires_at > now {
                         ((c.status.expires_at - now) / 86400) as i64
                     } else {
                         -1
                     };
-                    (days_left <= 30 && !c.status.in_progress, c.domain.clone(), c.email.clone(), c.staging_mode)
+                    (days_left <= 30 && !c.status.in_progress, c.domain.clone(), c.email.clone(), c.staging_mode, is_ss, c.https_port)
                 } else {
-                    (false, String::new(), None, false)
+                    (false, String::new(), None, false, false, 0)
                 }
             };
 
             if should_renew && !domain.is_empty() {
                 println!("[hub] TLS: Certificate for {} expires within 30 days. Initiating automatic renewal...", domain);
-                let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
-                    custom
-                } else if staging {
-                    LETS_ENCRYPT_STAGING_DIR.to_string()
-                } else {
-                    LETS_ENCRYPT_PRODUCTION_DIR.to_string()
-                };
-                let client = AcmeClient::new(dir_url);
                 let mut renew_err = false;
-                if let Err(e) = client.enroll_certificate(&tls_mgr, &domain, email.as_deref()).await {
-                    eprintln!("[hub] TLS ERR: Automatic renewal failed for {}: {}", domain, e);
-                    let mut c = tls_mgr.config.lock_or_recover();
-                    c.status.in_progress = false;
-                    c.status.last_error = Some(e);
-                    let _ = save_config(&tls_mgr.config_path, &c);
-                    renew_err = true;
+                if is_self_signed {
+                    if let Err(e) = tls_mgr.apply_self_signed(&domain, https_port) {
+                        eprintln!("[hub] TLS ERR: Automatic self-signed renewal failed for {}: {}", domain, e);
+                        renew_err = true;
+                    }
+                } else {
+                    let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
+                        custom
+                    } else if staging {
+                        LETS_ENCRYPT_STAGING_DIR.to_string()
+                    } else {
+                        LETS_ENCRYPT_PRODUCTION_DIR.to_string()
+                    };
+                    let client = AcmeClient::new(dir_url);
+                    if let Err(e) = client.enroll_certificate(&tls_mgr, &domain, email.as_deref()).await {
+                        eprintln!("[hub] TLS ERR: Automatic renewal failed for {}: {}", domain, e);
+                        let mut c = tls_mgr.config.lock_or_recover();
+                        c.status.in_progress = false;
+                        c.status.last_error = Some(e);
+                        let _ = save_config(&tls_mgr.config_path, &c);
+                        renew_err = true;
+                    }
                 }
                 if renew_err {
                     // Retry in 15 minutes instead of 12 hours on renewal failure

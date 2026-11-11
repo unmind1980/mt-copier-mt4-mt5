@@ -188,7 +188,7 @@ mod sig {
 /// 1024-deep queue each is a lot of retained memory for headroom that will not
 /// be used; 256 matches the EAs, which is the only bound that has been measured.
 /// R6-D6-03: Aligned with CP_SNDHWM/CP_RCVHWM (256) in CopierTransport.mqh to absorb multi-order bursts while bounding queue memory.
-const HWM: i32 = 256;
+const HWM: i32 = 1024;
 
 /// The largest frame this hub will accept, matching the EAs' CP_MAXMSGSIZE
 /// (1 MB) so a frame the hub forwards can never be one a node would refuse.
@@ -1546,6 +1546,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     //--- Every one of these is load-bearing. See the constants above.
     let setup = (|| -> zmq::Result<()> {
         sock.set_linger(0)?; // or ctx_term blocks forever on shutdown
+        sock.set_xpub_verbose(true)?;
         sock.set_sndhwm(HWM)?;
         sock.set_rcvhwm(HWM)?;
         sock.set_maxmsgsize(MAXMSGSIZE)?;
@@ -2095,7 +2096,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         if declared == Some(0) && carried == 0 {
                             s.reg.clear_held_items("sender", &sid);
                         }
-                        if let Ok(mut acc) = snap_accepted.lock() {
+                        {
+                            let mut acc = snap_accepted.lock_or_recover();
                             acc.insert(sid.clone(), snap_rcpt);
                         }
                         s.pos.mismatched - before
@@ -3120,9 +3122,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     let pos_now = Instant::now();
 
                                     let accepted_matches = accepted_snap_receipts
-                                        .lock()
-                                        .map(|acc| acc.get(&sid) == Some(&new_receipt))
-                                        .unwrap_or(false);
+                                        .lock_or_recover()
+                                        .get(&sid) == Some(&new_receipt);
 
                                     let should_dispatch = if new_receipt.is_empty() {
                                         true
@@ -3188,6 +3189,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             }
         }
     }
+            Err(zmq::Error::EINTR) => continue,
+            Err(zmq::Error::ETERM) => break,
             Err(e) => {
                 consecutive_poll_errors += 1;
                 eprintln!("[hub] poll failed ({} consecutive): {}", consecutive_poll_errors, e);
@@ -3339,13 +3342,15 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         if role == "sender" {
                             last_snap_dispatched.remove(acc);
                             last_snap_touch.remove(acc);
-                            if let Ok(mut a) = accepted_snap_receipts.lock() {
+                            {
+                                let mut a = accepted_snap_receipts.lock_or_recover();
                                 a.remove(acc);
                             }
                             if acc.len() > 9 {
                                 last_snap_dispatched.remove(&copier_nid(acc));
                                 last_snap_touch.remove(&copier_nid(acc));
-                                if let Ok(mut a) = accepted_snap_receipts.lock() {
+                                {
+                                    let mut a = accepted_snap_receipts.lock_or_recover();
                                     a.remove(&copier_nid(acc));
                                 }
                             }
@@ -3364,7 +3369,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     last_snap_dispatched.retain(|acc, _| {
                         s.reg.get(&format!("sender:{}", acc)).is_some() || active_senders.contains(acc)
                     });
-                    if let Ok(mut a) = accepted_snap_receipts.lock() {
+                    {
+                        let mut a = accepted_snap_receipts.lock_or_recover();
                         a.retain(|acc, _| {
                             s.reg.get(&format!("sender:{}", acc)).is_some() || active_senders.contains(acc)
                         });

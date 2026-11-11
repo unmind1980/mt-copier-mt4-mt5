@@ -5885,6 +5885,9 @@ function onClusterPromote(){
     confirmText: t("cluster.confirm_promote_btn")
   }).then(function(ok){
     if(!ok) return;
+    var btn = $("btn_cluster_promote");
+    var orig = btn ? btn.textContent : "";
+    if(btn){ btn.disabled = true; btn.textContent = "⏳ " + orig + "…"; }
     api("/api/v1/cluster/promote", { method: "POST" })
       .then(function(res){
         showToast("⚡ " + t("common.success"), "Promotion successful! This node is now Primary (Epoch " + res.epoch + ").", "ok");
@@ -5892,6 +5895,9 @@ function onClusterPromote(){
       })
       .catch(function(e){
         showToast("⚠️ " + t("common.error"), "Promotion failed: " + e.message, "bad");
+      })
+      .finally(function(){
+        if(btn){ btn.disabled = false; btn.textContent = orig; }
       });
   });
 }
@@ -5904,6 +5910,9 @@ function onClusterFailbackNow(){
     confirmText: t("cluster.confirm_failback_btn")
   }).then(function(ok){
     if(!ok) return;
+    var btn = $("btn_cluster_failback_now");
+    var orig = btn ? btn.textContent : "";
+    if(btn){ btn.disabled = true; btn.textContent = "⏳ " + orig + "…"; }
     api("/api/v1/cluster/failback-now", { method: "POST" })
       .then(function(res){
         showToast("⚡ " + t("common.success"), "Failback successful! Reclaimed Master role (Epoch " + res.epoch + ").", "ok");
@@ -5911,6 +5920,9 @@ function onClusterFailbackNow(){
       })
       .catch(function(e){
         showToast("⚠️ " + t("common.error"), "Failback failed: " + e.message, "bad");
+      })
+      .finally(function(){
+        if(btn){ btn.disabled = false; btn.textContent = orig; }
       });
   });
 }
@@ -6483,9 +6495,16 @@ function renderNodes(nodes){
 
     // Pause/Resume button state
     if(r.btnPz && n.role === "receiver"){
-      var pzOpCur = n.paused ? "resume" : "pause";
-      r.btnPz.setAttribute("data-op", pzOpCur);
-      r.btnPz.textContent = n.paused ? t("nodes.btn_resume") : t("nodes.btn_pause");
+      var inFlight = s.inFlightOps && s.inFlightOps[n.key];
+      if(inFlight){
+        r.btnPz.disabled = true;
+        r.btnPz.textContent = "⏳ " + (inFlight === "pause" ? t("nodes.btn_pause") : (inFlight === "resume" ? t("nodes.btn_resume") : inFlight)) + "…";
+      } else {
+        var pzOpCur = n.paused ? "resume" : "pause";
+        r.btnPz.setAttribute("data-op", pzOpCur);
+        r.btnPz.disabled = false;
+        r.btnPz.textContent = n.paused ? t("nodes.btn_resume") : t("nodes.btn_pause");
+      }
     }
   });
 }
@@ -6848,14 +6867,20 @@ function onOpClick(ev){
   }
   
   // Set button loading state
+  if(!s.inFlightOps) s.inFlightOps = {};
+  s.inFlightOps[k] = op;
   var origText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "⏳ " + (op === "pause" ? t("nodes.btn_pause") : (op === "resume" ? t("nodes.btn_resume") : op)) + "…";
   showToast(t("nodes.cmd_issuing", { op: op.toUpperCase() }), k, "info");
 
   var restoreBtn = function(){
-    btn.disabled = false;
-    btn.textContent = origText;
+    if(s.inFlightOps) delete s.inFlightOps[k];
+    var curBtn = document.querySelector("tr[data-k='" + k + "'] button.opbtn[data-op='" + op + "']") || btn;
+    if(curBtn){
+      curBtn.disabled = false;
+      curBtn.textContent = origText;
+    }
   };
 
   if(op === "closeall"){
@@ -9132,7 +9157,7 @@ function refreshSslStatus(){
         }
       }
 
-      if(!document.activeElement || document.activeElement.tagName !== "INPUT"){
+      if(!document.activeElement || (document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA")){
         if(cfg.domain) $("ssl_input_domain").value = cfg.domain;
         else if(res.suggested_sslip_domain) $("ssl_input_domain").value = res.suggested_sslip_domain;
 

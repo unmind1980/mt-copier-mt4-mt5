@@ -156,12 +156,14 @@ private:
          string data=msg.getData();
          // R6-D6-02 & R12-B01: Drain any remaining frames of THIS multipart message without draining subsequent messages
          bool hasMore=msg.more();
+         bool drainOk=true;
          while(hasMore)
            {
             ZmqMsg discard;
-            if(!s.recv(discard,true)) break;
+            if(!s.recv(discard,true)) { drainOk=false; break; }
             hasMore=discard.more();
            }
+         if(!drainOk) break;
          if(StringLen(data)==0) continue;
          if(got>=ArraySize(out)) break;
          out[got]=data;
@@ -225,12 +227,14 @@ private:
       ArrayResize(frame,1+plen);
       frame[0]=cmdByte;
       for(int k=0;k<plen;k++) frame[1+k]=pbytes[k];
-      if(!m_sub.send(frame,true))
+      int copies=(m_connectedHubs>1)?m_connectedHubs:1;
+      int sent=0;
+      for(int c=0;c<copies;c++)
         {
-         m_errno=CopierZmqErrno();
-         return false;
+         if(m_sub.send(frame,true)) sent++;
+         else m_errno=CopierZmqErrno();
         }
-      return true;
+      return (sent>0);
      }
 
    //--- Decode a 40-character Z85 CURVE key into the 32 raw bytes that the
@@ -354,6 +358,9 @@ public:
       if(!InitContext()) return false;
 
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
+      m_midMultipart=false;
+      m_midInboundMultipart=false;
+      m_connectedHubs=0;
       m_nSubPrefixes=0;
       for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
@@ -459,6 +466,9 @@ public:
       if(nEp<=0) return false;
 
       if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; }
+      m_midMultipart=false;
+      m_midInboundMultipart=false;
+      m_connectedHubs=0;
       // MQL-06: Reset cached subscription prefixes upon ConnectHub to avoid stale replay
       m_nSubPrefixes=0;
       for(int sp=0;sp<CP_MAX_XSUB_SUBS;sp++) { m_subPrefixes[sp]=""; m_subSent[sp]=0; }

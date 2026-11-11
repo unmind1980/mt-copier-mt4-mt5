@@ -120,7 +120,7 @@ private:
       long oldestTime=0;
       for(i=0;i<CP_MAX_PEERS;i++)
         {
-         if(StringSubstr(m_name[i],0,3)=="hub") continue; // Cluster hub peers are permanently pinned
+         if(m_name[i]=="hub" || StringSubstr(m_name[i],0,4)=="hub:") continue; // Cluster hub peers are permanently pinned
          long curTime=MathMax(m_seen[i],m_first[i]);
          if(oldest<0 || curTime<oldestTime) { oldest=i; oldestTime=curTime; }
         }
@@ -222,7 +222,7 @@ public:
    long              RttAt(const int i) const
      {
       if(i<0 || i>=CP_MAX_PEERS) return -1;
-      if(m_seen[i]>0 && (CopierNowMs()-m_seen[i]>15000)) return -1;
+      if(m_seen[i]<=0 || (CopierNowMs()-m_seen[i]>15000)) return -1;
       if(m_rtt[i]>=0 && m_rttTime[i]>0 && (CopierNowMs()-m_rttTime[i]>12000))
          return -1; // Invalidate stale RTT if no PONG received for > 2 probe cycles
       return m_rtt[i];

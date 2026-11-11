@@ -144,9 +144,9 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
    int digits=CopierLotDigits(si.lotStep);
    if(si.minLot>0.0) { int md=CopierLotDigits(si.minLot); if(md>digits) digits=md; }
    double v=0.0;
-   if(si.minLot>0.0 && lots>=si.minLot)
+   if(si.minLot>0.0 && lots>=si.minLot-CP_LOT_EPS)
      {
-      double steps=MathFloor((lots-si.minLot)/si.lotStep+CP_LOT_EPS);
+      double steps=MathMax(0.0,MathFloor((lots-si.minLot)/si.lotStep+CP_LOT_EPS));
       v=NormalizeDouble(si.minLot+steps*si.lotStep,digits);
      }
    else
@@ -287,7 +287,7 @@ double CopierFitStopAt(const double px,const int side,const bool isSl,
       if(out<minPx) { out=minPx; clamped=true; }
      }
    // R6-D10-01: Quantize discrete-tick instruments away from market
-   if(si.tickSize > si.point && si.tickSize > 0.0)
+   if(si.tickSize > 0.0 && (si.tickSize > si.point || si.tickSize >= 0.01))
      {
       double ticks = out / si.tickSize;
       if(below) out = MathFloor(ticks + 0.00000001) * si.tickSize;

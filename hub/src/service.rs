@@ -281,7 +281,8 @@ pub mod win_service {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     println!("[service] Received SCM Stop/Shutdown event. Signalling hub exit...");
                     // OPT-02: Report StopPending with 10s wait hint so SCM doesn't pop timeout dialog
-                    if let Ok(guard) = handle_for_event.lock() {
+                    {
+                        let guard = handle_for_event.lock_or_recover();
                         if let Some(ref h) = *guard {
                             let _ = h.set_service_status(ServiceStatus {
                                 service_type: ServiceType::OWN_PROCESS,
@@ -310,9 +311,8 @@ pub mod win_service {
         };
 
         {
-            if let Ok(mut guard) = status_handle_slot.lock() {
-                *guard = Some(status_handle.clone());
-            }
+            let mut guard = status_handle_slot.lock_or_recover();
+            *guard = Some(status_handle.clone());
         }
 
         // Tell SCM that the service is running

@@ -476,6 +476,8 @@ pub fn spawn_zap_handler(
             }
         };
         let _ = sock.set_linger(0);
+        let _ = sock.set_rcvtimeo(500);
+        let _ = sock.set_sndtimeo(1000);
         if let Err(e) = sock.bind("inproc://zeromq.zap.01") {
             eprintln!("[hub] cannot bind inproc://zeromq.zap.01: {}", e);
             eprintln!("[hub]   CURVE cannot authorise anyone without it - refusing");
@@ -494,6 +496,12 @@ pub fn spawn_zap_handler(
                 Ok(r) => r,
                 Err(zmq::Error::ETERM) => break,
                 Err(zmq::Error::EINTR) => continue,
+                Err(zmq::Error::EAGAIN) => {
+                    if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    continue;
+                }
                 Err(e) => {
                     if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
                         break;

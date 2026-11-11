@@ -1564,7 +1564,14 @@ bool LoadConfigFromInputs()
                   +" unique to this sender.");
       return false;
      }
-   g_magic[0]=Magic;
+#ifndef __MQL5__
+   if(Magic > 2147483647 || Magic < 0)
+      g_magic[0] = (long)(Magic & 0x7FFFFFFF);
+   else
+      g_magic[0] = Magic;
+#else
+   g_magic[0] = Magic;
+#endif
 
    //--- The input enum's numbers ARE the internal CP_SIZE_* ones now, so this
    //--- is a normalisation rather than a mapping - it exists so that anything
@@ -4354,6 +4361,8 @@ void ExecuteQueue()
            }
          else if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP)
            {
+            ForgetSenderPeakLots(a.uid);
+            StopsForget(a.uid);
             // MQL-07: In asyncMode (OrderSendAsync), broker execution is unconfirmed; do NOT deduct risk counters in this tick
             if(!asyncMode)
               {
@@ -4771,7 +4780,7 @@ void ExecuteQueue()
          if(g_mktClosed.Has(sa.sym)) continue;
 
          int sdev = (sa.senderIdx>=0 && sa.senderIdx<g_nSenders)?g_senderCfg[sa.senderIdx].deviationPoints:DeviationPoints;
-         sdev = MathMax(sdev, 100);
+         sdev = CopierScaleDeviationPoints(sa.sym, MathMax(sdev, 100));
          int serr = 0;
          double spx = 0.0;
 #ifndef __MQL5__
@@ -4924,7 +4933,8 @@ bool ComputeRawReceiverLots(const int si,const string sym,const double senderLot
       if(myEq<=0.0) { rejected=true; return false; }
       double convSenderEq=g_senderEquity[si];
       string recCcy=CopierAccountCurrency();
-      if(convSenderEq>0.0 && StringLen(g_senderCurrency[si])>0 && g_senderCurrency[si]!=recCcy)
+      if(StringLen(g_senderCurrency[si])==0) { rejected=true; return false; }
+      if(convSenderEq>0.0 && g_senderCurrency[si]!=recCcy)
         {
          double rate=CopierGetCurrencyCrossRate(g_senderCurrency[si],recCcy,g_suffix[si]);
          if(rate>0.0) convSenderEq*=rate;
@@ -6251,9 +6261,7 @@ void RefreshRisk()
             if(trueStartBal>0.0)
               {
                g_riskDayStartBalance=trueStartBal;
-               double curEq=CopierAccountEquity();
-               double floatingOffset=curEq-curBal;
-               g_riskDayStartEquity=MathMax(0.0, trueStartBal+floatingOffset);
+               g_riskDayStartEquity=trueStartBal;
               }
             else
               {
@@ -6656,13 +6664,8 @@ void ConvergeSender(const int si)
          continue;
         }
 
-      // R47-07: Only forget peak lots and stops if the close action was successfully queued
-      if(PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
-                 0,"",0.0,0.0,g_locScratch[i].kind))
-        {
-         ForgetSenderPeakLots(g_locScratch[i].uid);
-         StopsForget(g_locScratch[i].uid);
-        }
+      PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
+                 0,"",0.0,0.0,g_locScratch[i].kind);
      }
 
    //--- Pre-scan queued CLOSE and TRIM actions for this sender once per tick,
