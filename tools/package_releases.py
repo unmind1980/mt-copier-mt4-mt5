@@ -91,7 +91,7 @@ def make_zip(source_dir: Path, output_zip: Path):
             for file in sorted(files):
                 full_path = Path(root) / file
                 rel_path = full_path.relative_to(source_dir)
-                z.write(full_path, arcname=str(rel_path))
+                z.write(full_path, arcname=rel_path.as_posix())
 
 
 # =========================================================================
@@ -418,7 +418,7 @@ def build_direct_package():
     print(f"\n[*] Building Direct P2P package: mt-copier-direct-v{VERSION}.zip ...")
     pkg_dir = TEMP_BUILD_DIR / f"mt-copier-direct-v{VERSION}"
     if pkg_dir.exists():
-        shutil.rmtree(pkg_dir)
+        shutil.rmtree(pkg_dir, ignore_errors=True)
     pkg_dir.mkdir(parents=True)
 
     # MT4
@@ -451,7 +451,7 @@ def build_hub_suite_package():
     print(f"\n[*] Building Hub Suite package: mt-copier-hub-suite-v{VERSION}.zip ...")
     pkg_dir = TEMP_BUILD_DIR / f"mt-copier-hub-suite-v{VERSION}"
     if pkg_dir.exists():
-        shutil.rmtree(pkg_dir)
+        shutil.rmtree(pkg_dir, ignore_errors=True)
     pkg_dir.mkdir(parents=True)
 
     hub_dir = pkg_dir / "Hub-Server"
@@ -523,7 +523,7 @@ def main():
 
     # Clean up temp
     if TEMP_BUILD_DIR.exists():
-        shutil.rmtree(TEMP_BUILD_DIR)
+        shutil.rmtree(TEMP_BUILD_DIR, ignore_errors=True)
 
     print(f"\n[SUCCESS] All release packages ready in: {DIST_DIR}")
     print(f"1. {direct_zip.name} ({direct_zip.stat().st_size:,} bytes)")

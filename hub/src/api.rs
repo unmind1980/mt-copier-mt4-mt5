@@ -2075,11 +2075,11 @@ pub fn spawn(
                         for ch in channels {
                             let c = http_worker.clone();
                             let a = alert.clone();
-                            let Ok(permit) = std::sync::Arc::clone(&notif_sem).acquire_owned().await else {
-                                break;
-                            };
+                            let sem = std::sync::Arc::clone(&notif_sem);
                             tokio::spawn(async move {
-                                let _permit = permit;
+                                let Ok(_permit) = sem.acquire_owned().await else {
+                                    return;
+                                };
                                 let name = ch.name.clone();
                                 let kind = ch.channel_type.clone();
                                 match crate::notifications::send_to_channel(&c, &ch, &a).await {
@@ -3724,9 +3724,11 @@ async fn cluster_status(
     State(st): State<SharedState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, cmd_lines, max_cmd_seq, cfg_dirty, cmd_dirty, users_path, notif_path, curve_clients_path, cfg_path, cmd_path, api_cfg_cache, api_cmd_cache) = {
+    let (cluster_id, hub_id, role, epoch, writes, is_configured_primary, failback_locked, cfg_lines, max_cfg_rev, cfg_enabled, cmd_enabled, cmd_lines, max_cmd_seq, cfg_dirty, cmd_dirty, users_path, notif_path, curve_clients_path, cfg_path, cmd_path, api_cfg_cache, api_cmd_cache) = {
         let s = st.lock_or_recover();
-        let cfg_lines = s.cfg.total_lines();
+        let (cfg_lines, max_cfg_rev) = s.cfg.sync_stats();
+        let cfg_enabled = s.cfg.enabled();
+        let cmd_enabled = s.cmds.enabled();
         let (cmd_lines, max_cmd_seq) = s.cmds.sync_stats();
         let cfg_dirty = s.cfg.dirty_seq();
         let cmd_dirty = s.cmds.dirty_seq();
@@ -3746,6 +3748,9 @@ async fn cluster_status(
             s.cluster.state.is_configured_primary,
             s.cluster.state.failback_locked,
             cfg_lines,
+            max_cfg_rev,
+            cfg_enabled,
+            cmd_enabled,
             cmd_lines,
             max_cmd_seq,
             cfg_dirty,
@@ -3793,6 +3798,9 @@ async fn cluster_status(
         cfg_lines,
         cmd_lines,
         max_cmd_seq,
+        max_cfg_rev,
+        cfg_enabled,
+        cmd_enabled,
         cfg_hash,
         cmd_hash,
         users_hash,
@@ -4037,11 +4045,14 @@ async fn cluster_handover_request(
     }
 
     // R2-D7-H02 & R4-D7-02: Verify Standby has fully replicated local journals before stepping down
-    let (my_cfg, (my_cmd, my_seq)) = (s.cfg.total_lines(), s.cmds.sync_stats());
+    let (my_cfg, my_cfg_rev) = s.cfg.sync_stats();
+    let (my_cmd, my_seq) = s.cmds.sync_stats();
+    let (my_cfg_enabled, my_cmd_enabled) = (s.cfg.enabled(), s.cmds.enabled());
     if let Some(peer) = s.cluster.peer_status.as_ref() {
-        // DEF-01: Both cmd_lines and max_cmd_seq must have caught up before handover agreement
-        let cmd_behind = peer.cmd_lines < my_cmd || (my_seq > 0 && peer.max_cmd_seq < my_seq);
-        if cmd_behind || peer.cfg_lines < my_cfg {
+        // DEF-01 & R17-C02: Check synchronization only for enabled components; prevent asymmetric cluster deadlocks
+        let cmd_behind = my_cmd_enabled && peer.cmd_enabled && (peer.cmd_lines < my_cmd || (my_seq > 0 && peer.max_cmd_seq < my_seq));
+        let cfg_behind = my_cfg_enabled && peer.cfg_enabled && (peer.cfg_lines < my_cfg || (my_cfg_rev > 0 && peer.max_cfg_rev < my_cfg_rev));
+        if cmd_behind || cfg_behind {
             return (
                 axum::http::StatusCode::CONFLICT,
                 Json(json!({

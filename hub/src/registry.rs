@@ -650,6 +650,7 @@ impl Registry {
 
     fn entry(&mut self, role: &str, acc: &str, now: Instant) -> &mut Node {
         let key = key_of(role, acc);
+        self.capacity_evicted.retain(|k| k != &key);
         if !self.nodes.contains_key(&key) {
             self.ensure_capacity(now);
         }
@@ -694,10 +695,15 @@ impl Registry {
     /// one registry event that cannot be recovered by asking the node, so the
     /// audit log needs to say WHICH one rather than that it happened.
     pub fn evict(&mut self, now: Instant) -> Vec<String> {
-        let mut gone: Vec<String> = std::mem::take(&mut self.capacity_evicted);
+        let mut gone: Vec<String> = Vec::new();
+        for k in std::mem::take(&mut self.capacity_evicted) {
+            if !self.nodes.contains_key(&k) && !gone.contains(&k) {
+                gone.push(k);
+            }
+        }
         self.nodes.retain(|k, n| {
             let keep = now.saturating_duration_since(n.last_seen) < EVICT_AFTER;
-            if !keep {
+            if !keep && !gone.contains(k) {
                 gone.push(k.clone());
             }
             keep

@@ -1874,6 +1874,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let mut last_who = Instant::now();
     let mut last_registry = Instant::now();
     let mut last_cmd_prune = Instant::now();
+    let mut last_service_log_check = Instant::now();
     let mut last_cmd_due = Instant::now() - Duration::from_secs(1);
     let mut who_nonce: u64 = 0;
     //--- Last counts printed, so the registry line only appears when something
@@ -2158,7 +2159,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         if b.len() > 128 {
                             continue;
                         }
-                        let prefix: String = b[1..].iter().map(|c| *c as char).collect();
+                        let prefix = String::from_utf8_lossy(&b[1..]).to_string();
                         if b[0] == 1 {
                             //--- R58-04: reference-counted subscriptions.
                             //--- Multiple nodes subscribe to @hub, and multiple receivers
@@ -3419,6 +3420,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             println!("[hub] config journal compacted at runtime: {} retained revision(s)", n);
                         }
                     }
+                }
+
+                if last_service_log_check.elapsed() >= Duration::from_secs(30) {
+                    last_service_log_check = Instant::now();
                     crate::service::win_service::maybe_rotate_service_log();
                 }
 

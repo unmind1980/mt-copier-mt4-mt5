@@ -4238,7 +4238,7 @@ function confirmDialog(opts){
     function onOk(){ cleanup(true); }
     function onCancel(){ cleanup(false); }
     function onKey(e){
-      if(e.key === "Escape"){ e.preventDefault(); cleanup(false); }
+      if(e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); cleanup(false); }
     }
 
     okBtn.addEventListener("click", onOk);
@@ -7060,6 +7060,7 @@ function startDashboard(){
   var btnBatchP = $("btn-batch-pause");
   if(btnBatchP){
     btnBatchP.addEventListener("click", function(){
+      if(btnBatchP.disabled) return;
       confirmDialog({
         title: t("gops.confirm_global_pause_title"),
         desc: t("gops.confirm_global_pause_desc"),
@@ -7067,13 +7068,17 @@ function startDashboard(){
         danger: true,
         confirmText: t("gops.confirm_global_pause_btn")
       }).then(function(ok){
-        if(ok) sendGlobal("pause");
+        if(ok){
+          btnBatchP.disabled = true;
+          sendGlobal("pause", function(){ btnBatchP.disabled = false; });
+        }
       });
     });
   }
   var btnBatchR = $("btn-batch-reload");
   if(btnBatchR){
     btnBatchR.addEventListener("click", function(){
+      if(btnBatchR.disabled) return;
       confirmDialog({
         title: t("nodes.confirm_batch_reload_title"),
         desc: t("nodes.confirm_batch_reload_desc"),
@@ -7081,7 +7086,10 @@ function startDashboard(){
         danger: false,
         confirmText: t("nodes.confirm_batch_reload_btn")
       }).then(function(ok){
-        if(ok) sendGlobal("reload");
+        if(ok){
+          btnBatchR.disabled = true;
+          sendGlobal("reload", function(){ btnBatchR.disabled = false; });
+        }
       });
     });
   }
@@ -9411,6 +9419,11 @@ function closePeerModal(){
 }
 
 function savePeerConfig(){
+  var saveBtn = $("peer_btn_save");
+  if(saveBtn && saveBtn.disabled) return;
+  var orig = saveBtn ? saveBtn.textContent : "";
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = "⏳ " + orig + "…"; }
+
   var msg = $("peer_opmsg");
   msg.className = "opmsg";
   msg.textContent = "Saving peer settings...";
@@ -9439,6 +9452,8 @@ function savePeerConfig(){
   }).catch(function(e){
     msg.className = "opmsg bad";
     msg.textContent = "Request error: " + e.message;
+  }).finally(function(){
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = orig; }
   });
 }
 
@@ -9451,6 +9466,11 @@ function clearPeerConfig(){
     confirmText: t("cluster.confirm_standalone_btn")
   }).then(function(ok){
     if(!ok) return;
+    var clearBtn = $("peer_btn_clear");
+    if(clearBtn && clearBtn.disabled) return;
+    var orig = clearBtn ? clearBtn.textContent : "";
+    if(clearBtn){ clearBtn.disabled = true; clearBtn.textContent = "⏳ " + orig + "…"; }
+
     var msg = $("peer_opmsg");
     msg.className = "opmsg";
     msg.textContent = "Clearing peer settings...";
@@ -9468,6 +9488,8 @@ function clearPeerConfig(){
         msg.className = "opmsg bad";
         msg.textContent = "Clear failed: " + (res.error || "Unknown error");
       }
+    }).finally(function(){
+      if(clearBtn){ clearBtn.disabled = false; clearBtn.textContent = orig; }
     });
   });
 }
@@ -9491,6 +9513,12 @@ document.addEventListener("keydown", function(ev){
     }
     if(!$("peermodal").classList.contains("hidden")){
       closePeerModal();
+    }
+    if($("adminpwdlg") && !$("adminpwdlg").classList.contains("hidden")){
+      closeAdminPasswordReset();
+    }
+    if($("pwdlg") && !$("pwdlg").classList.contains("hidden")){
+      closeOwnPassword();
     }
   }
 });

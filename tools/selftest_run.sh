@@ -64,7 +64,7 @@ FRESH=1
 #--- CopierExtractSessionSpan cross-midnight & t>86400, CopierNormalizeLot minLot
 #--- precision & NaN/Inf rejection, CopierRisk cash-flow symmetry, CopierPanel
 #--- truncation & cleanup, CopierEventPump OnEvent gate, CopierPeerTable probe/SeenAt.
-BASELINE=985
+BASELINE=990
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

@@ -208,6 +208,12 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
       // R11-D01: Guard against hyperbolic ratio explosion when sender equity collapses
       if(eqRatio>CP_MAX_EQUITY_RATIO) eqRatio=CP_MAX_EQUITY_RATIO;
       raw=senderLots*eqRatio*param*symMultiplier;
+      // R17-D01: If sender lot is at or above broker minimum, prevent float rounding dropout when receiver equity is slightly smaller
+      if(senderLots>=si.minLot && raw<si.minLot && si.lotStep>0.0)
+        {
+         if(MathRound(raw/si.lotStep)*si.lotStep >= si.minLot)
+            raw=si.minLot;
+        }
      }
    else                                  raw=senderLots*param*symMultiplier;
    if(!MathIsValidNumber(raw) || raw<=0.0) { rejected=true; return 0.0; }

@@ -198,8 +198,15 @@ impl AllowList {
         let mut raw_keys: HashSet<[u8; 32]> = HashSet::new();
         for raw in text.lines() {
             let line = raw.trim_start_matches('\u{feff}').trim();
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() {
                 continue;
+            }
+            if line.starts_with('#') {
+                let is_valid_key = (line.len() == 40 || (line.len() > 40 && line.is_char_boundary(40) && line[40..].starts_with(|c: char| c.is_whitespace() || c == '#')))
+                    && shape_ok(line.get(..40).unwrap_or(line));
+                if !is_valid_key {
+                    continue;
+                }
             }
             if line == "*" {
                 any = true;
@@ -735,5 +742,16 @@ mod tests {
         let invalid_binary = [0xffu8; 10];
         let desc_inv = describe_credential(&invalid_binary);
         assert_eq!(desc_inv, "(unprintable)");
+    }
+
+    #[test]
+    fn test_allow_list_preserves_keys_starting_with_hash() {
+        // Valid 40-character Z85 key starting with '#'
+        let hash_key = "#F.V2]V*01j9aK(B0v&4G0r9m]1F$w@b%g]D:aL=";
+        let comment_line = "# this is a pure comment";
+        let text = format!("{}\n{}\n", hash_key, comment_line);
+        let list = AllowList::parse(&text);
+        assert_eq!(list.len(), 1);
+        assert!(list.has_key(hash_key));
     }
 }

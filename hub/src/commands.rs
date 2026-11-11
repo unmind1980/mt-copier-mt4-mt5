@@ -970,6 +970,23 @@ impl CommandStore {
             if now < c.next_at {
                 continue;
             }
+            if c.attempts as usize >= RETRY_LADDER_SECS.len() {
+                // The ladder is exhausted. `unknown`, not `failed` - we do
+                // not know that it did not arrive, only that nobody said.
+                let mut updated = c.clone();
+                updated.state = STATE_UNKNOWN.to_string();
+                updated.ts = unix_secs(); // N82-01 & N82-02: Stamp transition time so recent_unknown does not drop it and revive cooldown starts afresh
+                let total_secs: u64 = RETRY_LADDER_SECS.iter().sum();
+                updated.err = format!(
+                    "no ACK after {} attempts ({}s ladder exhausted)",
+                    updated.attempts,
+                    total_secs
+                );
+                out.push(updated.clone());
+                changed.push(updated);
+                finished.push(id);
+                continue;
+            }
             // HUB-02, R60-06 & N72-02: Check reachability BEFORE incrementing attempts or consuming ladder.
             // If node is currently disconnected/offline, defer next check by 2 seconds without burning retry steps.
             if !is_reachable(&c.node) {
@@ -989,32 +1006,12 @@ impl CommandStore {
                 defer_checks.push((id, now + Duration::from_secs(2)));
                 continue;
             }
-            let step = RETRY_LADDER_SECS.get(c.attempts as usize).copied();
-            match step {
-                Some(secs) => {
-                    let mut updated = c.clone();
-                    updated.attempts += 1;
-                    updated.next_at = now + Duration::from_secs(secs);
-                    out.push(updated.clone());
-                    changed.push(updated);
-                }
-                None => {
-                    // The ladder is exhausted. `unknown`, not `failed` - we do
-                    // not know that it did not arrive, only that nobody said.
-                    let mut updated = c.clone();
-                    updated.state = STATE_UNKNOWN.to_string();
-                    updated.ts = unix_secs(); // N82-01 & N82-02: Stamp transition time so recent_unknown does not drop it and revive cooldown starts afresh
-                    let total_secs: u64 = RETRY_LADDER_SECS.iter().sum();
-                    updated.err = format!(
-                        "no ACK after {} attempts ({}s ladder exhausted)",
-                        updated.attempts,
-                        total_secs
-                    );
-                    out.push(updated.clone());
-                    changed.push(updated);
-                    finished.push(id);
-                }
-            }
+            let secs = RETRY_LADDER_SECS[c.attempts as usize];
+            let mut updated = c.clone();
+            updated.attempts += 1;
+            updated.next_at = now + Duration::from_secs(secs);
+            out.push(updated.clone());
+            changed.push(updated);
         }
 
         // Clean up commands that were already finalized or missing from in_flight

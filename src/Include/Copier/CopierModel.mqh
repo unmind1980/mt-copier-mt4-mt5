@@ -1909,8 +1909,9 @@ bool CopierClosePartial(const long identifier,const double lots,
       req.position     =(ulong)ticket;
       req.symbol       =sym;
       req.volume       =lots;
-      req.type         =(side==CP_SIDE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY;
-      req.price        =(side==CP_SIDE_BUY)?tick.bid:tick.ask;
+      long curPosType  =PositionGetInteger(POSITION_TYPE);
+      req.type         =(curPosType==POSITION_TYPE_BUY)?ORDER_TYPE_SELL:ORDER_TYPE_BUY;
+      req.price        =(curPosType==POSITION_TYPE_BUY)?tick.bid:tick.ask;
       req.deviation    =(ulong)MathMax(0,deviationPoints);
       req.magic        =(ulong)magic;
       req.comment      =comment;   // <- the whole point of doing this by hand
@@ -1947,6 +1948,12 @@ bool CopierClosePartial(const long identifier,const double lots,
    //--- L-03: same 1e-9 as the MT5 branch - 1e-7 is ten 8-decimal steps and
    //--- rejected a real half-close on a micro position.
    if(lots>=have-0.000000001) { outErr=-3; return false; }
+   double minLot=MarketInfo(OrderSymbol(),MODE_MINLOT);
+   if(minLot>0.0 && have-lots>0.000000001 && have-lots<minLot-0.000000001)
+     {
+      outErr=-6; // residual volume would violate broker minLot
+      return false;
+     }
 
    bool ok=false;
    int type=(int)OrderType();

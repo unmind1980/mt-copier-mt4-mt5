@@ -4948,6 +4948,11 @@ bool ComputeRawReceiverLots(const int si,const string sym,const double senderLot
       double eqRatio=myEq/convSenderEq;
       if(eqRatio>CP_MAX_EQUITY_RATIO) eqRatio=CP_MAX_EQUITY_RATIO;
       outRawLots=senderLots*eqRatio*g_lotParam[si]*symMult;
+      if(senderLots>=si2.minLot && outRawLots<si2.minLot && si2.lotStep>0.0)
+        {
+         if(MathRound(outRawLots/si2.lotStep)*si2.lotStep >= si2.minLot)
+            outRawLots=si2.minLot;
+        }
      }
    else
      {
@@ -5071,9 +5076,10 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
 
    double step=si2.lotStep;
    if(step<=0.0) return;
-   if(diff<step*0.999999) return;              // sub-step noise
-
    int digits=MathMax(CopierLotDigits(step),CopierLotDigits(si2.minLot));
+   diff=NormalizeDouble(diff,digits);
+   if(diff<step-CP_LOT_EPS) return;              // sub-step noise
+
    double trim=NormalizeDouble(MathFloor(diff/step+0.0000001)*step,digits);
    if(si2.maxLot>0.0 && trim>si2.maxLot)
      {
@@ -5273,11 +5279,15 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- The sender's stops, as a distance, re-anchored on our own entry.
    double feedSl,feedTp;
    CopierMapInvertedStops(actualInverted,dSl,dTp,feedSl,feedTp);
-   // R7-D2-03: Under InvertTrades, if sender had an SL but no TP, prevent leaving the mirror naked with no SL
+   // R7-D2-03 & R17-A04: Under InvertTrades, if sender had an SL but no TP, prevent leaving the mirror naked with no SL
    if(actualInverted && feedSl<=0.0 && feedTp>0.0 && dOpn>0.0)
      {
-      double slDist = MathAbs(dOpn - feedTp);
-      if(slDist > 0.0) feedSl = (desired.side==CP_SIDE_BUY) ? (dOpn + slDist) : (dOpn - slDist);
+      bool senderInProfit = (desired.side==CP_SIDE_BUY) ? (feedTp > dOpn) : (feedTp < dOpn);
+      if(!senderInProfit)
+        {
+         double slDist = MathAbs(dOpn - feedTp);
+         if(slDist > 0.0) feedSl = (desired.side==CP_SIDE_BUY) ? (dOpn + slDist) : (dOpn - slDist);
+        }
      }
 
    //--- BUG-05: For pending orders, anchor calculations to the pending order's updated trigger price (dPPrice)
@@ -5608,11 +5618,14 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
         }
      }
 
+   string modKeyExtra = ":"+CopierFmtDouble(wantSl,CP_DIGITS_PX)
+                       +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX)
+                       +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX)
+                       +":"+CopierFmtDouble(actPStop,CP_DIGITS_PX)
+                       +":"+(string)actPExp;
    bool pushed=PushAction(si,CP_ACT_MODIFY,desired.uid,local.sym,local.side,
                           0.0,local.ticket,0,
-                          ":"+CopierFmtDouble(wantSl,CP_DIGITS_PX)
-                          +":"+CopierFmtDouble(wantTp,CP_DIGITS_PX)
-                          +":"+CopierFmtDouble(actPPrice,CP_DIGITS_PX),
+                          modKeyExtra,
                           wantSl,wantTp,
                           local.kind,local.ptype,actPPrice,actPStop,actPExp);
 
@@ -6256,8 +6269,7 @@ void RefreshRisk()
 #endif
          if(rOk)
            {
-            double openComm=CopierOpenCommissionsMT4();
-            double trueStartBal=curBal-openComm-realized;
+            double trueStartBal=curBal-realized;
             if(trueStartBal>0.0)
               {
                g_riskDayStartBalance=trueStartBal;
@@ -6290,8 +6302,7 @@ void RefreshRisk()
          double curBal=CopierAccountBalance();
          if(rOk)
            {
-            double openComm=CopierOpenCommissionsMT4();
-            double trueStartBal=curBal-openComm-realized;
+            double trueStartBal=curBal-realized;
             g_riskDayStartBalance=(trueStartBal>0.0)?trueStartBal:curBal;
            }
          else
@@ -6341,11 +6352,9 @@ void RefreshRisk()
          //--- toward zero and silently disables the guard.
          //--- The anchor is "balance at day start", so it must be derived, not
          //--- sampled from the live account.
-         // R7-D4-01: In MT4, open trade commissions are deducted from balance immediately; include them to avoid misdiagnosing commissions as capital withdrawals
-         double openComm=CopierOpenCommissionsMT4();
          if(g_riskDayStartEquity<=0.0)
            {
-            double derivedBase=(curBal-openComm)-realized;
+            double derivedBase=curBal-realized;
             if(derivedBase>0.0)
               {
                g_riskDayStartEquity=derivedBase;
@@ -6355,7 +6364,7 @@ void RefreshRisk()
            }
          else
            {
-            double dayStartBal=(curBal-openComm)-realized;
+            double dayStartBal=curBal-realized;
             if(g_riskDayStartBalance<=0.0) g_riskDayStartBalance=dayStartBal;
             double cashFlow=dayStartBal-g_riskDayStartBalance;
             if(MathAbs(cashFlow)>0.01)
@@ -6701,6 +6710,31 @@ void ConvergeSender(const int si)
 
       int li=g_locIdx.Find(g_locScratch,d.uid);
       bool hasPartialSibling=false;
+
+      // R17-A02: Match local partial-fill market position even if its comment still carries parent pending UID
+      if(li<0 && d.kind==CP_ORD_MARKET && d.ticket>0)
+        {
+         for(int sk=0; sk<ln; sk++)
+           {
+            if(g_locScratch[sk].kind!=CP_ORD_MARKET) continue;
+            long locSenderTkt=CopierSenderTicketFromComment(g_locScratch[sk].cmt);
+            if(locSenderTkt!=d.ticket) continue;
+
+            for(int pk=0; pk<ln; pk++)
+              {
+               if(pk==sk) continue;
+               if(g_locScratch[pk].ticket==g_locScratch[sk].ticket && g_locScratch[pk].kind==CP_ORD_PENDING)
+                 {
+                  li=sk;
+                  hasPartialSibling=true;
+                  g_locScratch[sk].uid=d.uid;
+                  g_recKnown.Upsert(g_locScratch[sk]);
+                  break;
+                 }
+              }
+            if(li>=0) break;
+           }
+        }
       if(li>=0 && g_locScratch[li].ticket>0)
         {
          int matchIdx=-1;
@@ -8974,7 +9008,7 @@ int OnInit()
    // R12-B03: Seed PRNG with salted entropy to avoid lock-step reconnect SYN storms across receiver fleet
    MathSrand((int)(CopierNowMs() ^ (long)TimeLocal() ^ (long)CopierAccountLogin() ^ (long)g_nid));
    g_seen.SetTtlMs(600000);
-   g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode
+   g_inflight.SetTtlMs(5000); // R17-A07: 5-second in-flight window preventing async duplicate dispatch
    g_inflight.Clear();
    g_backoff.Clear();
    g_emgSlApplied.SetTtlMs(24*60*60*1000);

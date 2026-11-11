@@ -85,6 +85,8 @@ struct Inner {
     /// plan's §15 says revisions are permanent - but only the ones a caller
     /// asks for are ever held in memory beyond `current`.
     count: u64,
+    /// Highest revision number recorded across all nodes
+    max_rev: u64,
     /// Set when a line in the file could not be parsed. Not fatal: a torn tail
     /// is a crash, and the revisions before it are still true.
     torn: u64,
@@ -181,11 +183,13 @@ impl ConfigStore {
         //--- that already exist lower in the file, and `load` is last-wins -
         //--- so the stale duplicate could win on the next restart.
         let (current, count, torn) = load(path)?;
+        let max_rev = current.values().map(|r| r.rev).max().unwrap_or(0);
         Ok(ConfigStore {
             inner: Mutex::new(Inner {
                 file: Some(file),
                 current,
                 count,
+                max_rev,
                 torn,
                 dirty_seq: 1,
             }),
@@ -200,6 +204,7 @@ impl ConfigStore {
                 file: None,
                 current: HashMap::new(),
                 count: 0,
+                max_rev: 0,
                 torn: 0,
                 dirty_seq: 1,
             }),
@@ -225,6 +230,15 @@ impl ConfigStore {
     /// Fast memory accessor for total lines in config journal (zero disk I/O).
     pub fn total_lines(&self) -> usize {
         self.inner.lock_or_recover().count as usize
+    }
+
+    /// Fast memory accessor for (total_lines, max_cfg_rev) for cluster sync (zero disk I/O).
+    pub fn sync_stats(&self) -> (usize, u64) {
+        if !self.enabled {
+            return (0, 0);
+        }
+        let inner = self.inner.lock_or_recover();
+        (inner.count as usize, inner.max_rev)
     }
 
     /// Monotonically increasing mutation counter for cache invalidation (H-01).
@@ -347,6 +361,7 @@ impl ConfigStore {
             inner.append_raw(&raw_valid)?;
         }
         for (node, r) in staged_current {
+            inner.max_rev = inner.max_rev.max(r.rev);
             inner.current.insert(node, r);
         }
         Ok(applied)
@@ -390,6 +405,7 @@ impl ConfigStore {
                     "failed to reopen config journal file after replace",
                 ));
             }
+            inner.max_rev = current.values().map(|r| r.rev).max().unwrap_or(0);
             inner.current = current;
             inner.count = count;
             inner.torn = torn;
@@ -501,6 +517,7 @@ impl ConfigStore {
         //--- while the file's last line was still N, and after a restart the
         //--- hub silently disagreed with itself.
         inner.append(&r).map_err(|e| StoreError::Write(e.to_string()))?;
+        inner.max_rev = inner.max_rev.max(rev);
         inner.current.insert(node.to_string(), r.clone());
         Ok(r)
     }
@@ -541,6 +558,7 @@ impl ConfigStore {
             from_rev: to_rev,
         };
         inner.append(&r).map_err(|e| StoreError::Write(e.to_string()))?;
+        inner.max_rev = inner.max_rev.max(rev);
         inner.current.insert(node.to_string(), r.clone());
         Ok(r)
     }
@@ -1549,6 +1567,7 @@ mod tests {
             file: None,
             current: HashMap::new(),
             count: 0,
+            max_rev: 0,
             torn: 0,
             dirty_seq: 1,
         };

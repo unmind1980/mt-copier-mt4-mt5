@@ -338,6 +338,9 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         let ticket = parse_u64(f1);
         let side = parse_i8(it.next().unwrap_or(b""));
         let lots = parse_f64(it.next().unwrap_or(b""));
+        if lots <= 0.0 || !lots.is_finite() {
+            continue; // ignore records with invalid or negative volume
+        }
         let open_px = parse_f64(it.next().unwrap_or(b""));
         let sl = parse_f64(it.next().unwrap_or(b""));
         let tp = parse_f64(it.next().unwrap_or(b""));
@@ -355,7 +358,7 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
         };
 
         v.records += 1;
-        v.lots += lots;
+        v.lots = ((v.lots + lots) * 1e8).round() / 1e8;
         v.items.push(PositionItem {
             ticket,
             uid,
@@ -376,7 +379,7 @@ pub fn parse_snap(payload: &[u8]) -> SnapView {
 
         if let Some(slot) = v.symbols.iter_mut().find(|(s, _, _)| *s == sym) {
             slot.1 += 1;
-            slot.2 += lots;
+            slot.2 = ((slot.2 + lots) * 1e8).round() / 1e8;
         } else if v.symbols.len() < MAX_SYMBOLS {
             v.symbols.push((sym, 1, lots));
         }
@@ -398,12 +401,12 @@ fn value_span(p: &[u8], key: &[u8]) -> Option<(usize, usize)> {
     }
     let mut i = 0usize;
     while i < p.len() {
-        if i == 0 || p[i - 1] == b';' {
+        if i == 0 || p[i - 1] == b';' || p[i - 1] == b'|' {
             let after = i + key.len();
             if p.len() > after && p[i..].starts_with(key) && p[after] == b'=' {
                 let start = after + 1;
                 let mut j = start;
-                while j < p.len() && p[j] != b';' {
+                while j < p.len() && p[j] != b';' && p[j] != b'|' {
                     j += 1;
                 }
                 return Some((start, j));

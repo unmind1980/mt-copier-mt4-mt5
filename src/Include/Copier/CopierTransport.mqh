@@ -366,6 +366,7 @@ public:
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID || !m_sub.valid()) { if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; } return false; }
       Hardening(m_sub);
+      m_sub.setImmediate(false); // R17-B01: Allow libzmq to queue initial subscription for pending connect pipes
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       m_sub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve)
@@ -430,7 +431,7 @@ public:
       //--- 0x00 to unsubscribe. setsockopt(ZMQ_SUBSCRIBE) is documented for
       //--- SUB only, so it is not used here.
       //--- Connect endpoints first so the subscription is routed across the active pipe.
-      m_sub.send("\x01",true);
+      Subscribe("");
       return true;
      }
 
@@ -475,6 +476,7 @@ public:
       m_sub=new Socket(m_ctx,ZMQ_XSUB);
       if(CheckPointer(m_sub)==POINTER_INVALID || !m_sub.valid()) { if(CheckPointer(m_sub)!=POINTER_INVALID) { delete m_sub; m_sub=NULL; } return false; }
       Hardening(m_sub);
+      m_sub.setImmediate(false); // R17-B01: Allow libzmq to queue initial subscription for pending connect pipes
       m_sub.setReceiveHighWaterMark(CP_RCVHWM);
       m_sub.setSendHighWaterMark(CP_SNDHWM);
       if(useCurve)
@@ -518,20 +520,20 @@ public:
       string ep=CopierNormalizeEndpoint(endpoint);
       if(StringLen(ep)==0) return false;
       if(!m_sub.connect(ep)) return false;
-      m_connectedHubs++;
-      // H-06: Replay all existing XSUB subscriptions over the newly connected pipe.
-      //--- N-01: each replayed frame is another 0x01 the hub will count, so the
-      //--- per-prefix counter has to move with it or the later Unsubscribe is
-      //--- short by exactly this many.
       if(!CloseDanglingMultipart()) return false;
+      // H-06 & R17-B02: Replay 1 frame per existing subscription to newly attached pipe
       for(int i=0;i<m_nSubPrefixes;i++)
         {
-         if(StringLen(m_subPrefixes[i])>0)
-           {
-            if(SendSubControlFrame(0x01,m_subPrefixes[i]))
-               m_subSent[i]++;
-           }
+         uchar frame[];
+         uchar pbytes[];
+         StringToUtf8(m_subPrefixes[i],pbytes,false);
+         int plen=ArraySize(pbytes);
+         ArrayResize(frame,1+plen);
+         frame[0]=0x01;
+         for(int k=0;k<plen;k++) frame[1+k]=pbytes[k];
+         m_sub.send(frame,true);
         }
+      m_connectedHubs++;
       return true;
    }
 

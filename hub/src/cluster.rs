@@ -71,6 +71,12 @@ pub struct ClusterStatusResponse {
     pub cmd_lines: usize,
     pub max_cmd_seq: u64,
     #[serde(default)]
+    pub max_cfg_rev: u64,
+    #[serde(default)]
+    pub cfg_enabled: bool,
+    #[serde(default)]
+    pub cmd_enabled: bool,
+    #[serde(default)]
     pub cfg_hash: String,
     #[serde(default)]
     pub cmd_hash: String,
@@ -570,6 +576,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
             .unwrap_or_else(Instant::now);
         let mut force_full_cfg_resync = false;
         let mut force_full_cmd_resync = false;
+        let mut last_failback_attempt: Option<Instant> = None;
         let mut last_known_remote_cfg_lines = 0usize;
         let mut last_known_remote_cmd_lines = 0usize;
         let mut cfg_cache: JournalCache = None;
@@ -805,9 +812,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 // preventing unsynced Standby from claiming equal epoch and causing split-brain/data-loss on handover.
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
-                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, local_epoch, cfg_dirty, cmd_dirty, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
+                let (cfg_lines_count, local_max_cfg_rev, cmd_lines_count, local_max_cmd_seq, local_epoch, cfg_dirty, cmd_dirty, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
                     let s = st.lock_or_recover();
-                    let cfg_tot = s.cfg.total_lines();
+                    let (cfg_tot, max_cfg) = s.cfg.sync_stats();
                     let (cmd_tot, max_seq) = s.cmds.sync_stats();
                     let ep = s.cluster.epoch();
                     let c_dirty = s.cfg.dirty_seq();
@@ -817,7 +824,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let c_p = s.cluster.curve_clients_path.clone();
                     let cfg_p = s.cfg.path().to_path_buf();
                     let cmd_p = s.cmds.path().to_path_buf();
-                    (cfg_tot, cmd_tot, max_seq, ep, c_dirty, m_dirty, u_p, n_p, c_p, cfg_p, cmd_p)
+                    (cfg_tot, max_cfg, cmd_tot, max_seq, ep, c_dirty, m_dirty, u_p, n_p, c_p, cfg_p, cmd_p)
                 };
 
                 // H-03 / H-PERF-01: When journal lines differ, sync is already required;
@@ -887,13 +894,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
                 let local_cfg_on = !cfg_path.as_os_str().is_empty();
                 let local_cmd_on = !cmd_path.as_os_str().is_empty();
-                let cfg_diff = local_cfg_on && !lines_differ && remote_st.cfg_hash != cfg_h;
-                let cmd_diff = local_cmd_on && !lines_differ && remote_st.cmd_hash != cmd_h;
+                let remote_cfg_on = remote_st.cfg_enabled || !remote_st.cfg_hash.is_empty();
+                let remote_cmd_on = remote_st.cmd_enabled || !remote_st.cmd_hash.is_empty();
+                let cfg_diff = local_cfg_on && remote_cfg_on && !lines_differ && remote_st.cfg_hash != cfg_h;
+                let cmd_diff = local_cmd_on && remote_cmd_on && !lines_differ && remote_st.cmd_hash != cmd_h;
                 // BUG-03: Allow users sync when Standby starts with no local users file (users_h is empty)
                 let users_diff = users_sync_enabled && remote_st.users_sync_enabled && !remote_st.users_hash.is_empty() && remote_st.users_hash != users_h;
 
-                let cfg_needed = local_cfg_on && (remote_st.cfg_lines != cfg_lines_count || force_full_cfg_resync || cfg_diff);
-                let cmd_needed = local_cmd_on && (remote_st.cmd_lines != cmd_lines_count || remote_st.max_cmd_seq != local_max_cmd_seq || force_full_cmd_resync || cmd_diff);
+                let cfg_needed = local_cfg_on && remote_cfg_on && (remote_st.cfg_lines != cfg_lines_count || (local_max_cfg_rev > 0 && remote_st.max_cfg_rev != local_max_cfg_rev) || force_full_cfg_resync || cfg_diff);
+                let cmd_needed = local_cmd_on && remote_cmd_on && (remote_st.cmd_lines != cmd_lines_count || remote_st.max_cmd_seq != local_max_cmd_seq || force_full_cmd_resync || cmd_diff);
                 let needs_sync = cfg_needed
                     || cmd_needed
                     || remote_st.epoch > local_epoch
@@ -919,9 +928,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let cfg_compacted = remote_st.cfg_lines < last_known_remote_cfg_lines;
                     let cmd_compacted = remote_st.cmd_lines < last_known_remote_cmd_lines;
 
+                    let rev_discontinuity = (local_max_cfg_rev > 0 && remote_st.max_cfg_rev < local_max_cfg_rev)
+                        || (local_max_cfg_rev > 0 && remote_st.max_cfg_rev > local_max_cfg_rev + (remote_st.cfg_lines.saturating_sub(cfg_lines_count) as u64));
                     let full_cfg_resync = local_cfg_on && (cfg_lines_count > remote_st.cfg_lines
                         || cfg_diff
                         || cfg_compacted
+                        || rev_discontinuity
+                        || (cfg_lines_count == remote_st.cfg_lines && remote_st.max_cfg_rev != local_max_cfg_rev)
                         || std::mem::replace(&mut force_full_cfg_resync, false));
                     let req_from_cfg_line = if full_cfg_resync { 0 } else { cfg_lines_count };
 
@@ -1256,7 +1269,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (eligible, online_dur, h)
                 };
 
-                if can_failback {
+                let cooldown_ok = match last_failback_attempt {
+                    Some(t) => t.elapsed() >= Duration::from_secs(60),
+                    None => true,
+                };
+
+                if can_failback && cooldown_ok {
+                    last_failback_attempt = Some(Instant::now());
                     println!(
                         "[hub] ADR-10: Host online continuous {:.1}s >= {:.1}h. Requesting graceful failback...",
                         continuous_secs, live_hours

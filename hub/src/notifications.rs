@@ -1012,17 +1012,19 @@ pub async fn send_to_channel(
 }
 
 async fn read_response_body_bounded(mut resp: reqwest::Response, max_bytes: usize) -> String {
-    let mut buf = Vec::with_capacity(max_bytes.min(4096));
-    while buf.len() < max_bytes {
+    let cap = max_bytes.min(512);
+    let mut buf = Vec::with_capacity(cap);
+    while buf.len() < cap {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
-                let take = chunk.len().min(max_bytes - buf.len());
+                let take = chunk.len().min(cap - buf.len());
                 buf.extend_from_slice(&chunk[..take]);
             }
             _ => break,
         }
     }
-    String::from_utf8_lossy(&buf).to_string()
+    let s = String::from_utf8_lossy(&buf).to_string();
+    s.chars().take(256).collect()
 }
 
 async fn send_telegram(
@@ -1264,8 +1266,8 @@ fn check_url_base(url: &str) -> Result<Option<String>, String> {
     }
 
     let host_raw = parsed.host_str().ok_or_else(|| "URL has no host".to_string())?;
-    // Handle IPv6 bracket format [fe80::...] or standard host
-    let host = host_raw.trim_start_matches('[').trim_end_matches(']');
+    // Handle IPv6 bracket format [fe80::...] or standard host, stripping any trailing FQDN dot
+    let host = host_raw.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.');
 
     let host_lower = host.to_ascii_lowercase();
     // Prohibit link-local and cloud metadata under ALL conditions

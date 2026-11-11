@@ -157,7 +157,7 @@ Use Hub Mode when accounts are distributed across different VPS providers, or wh
 ### 2. Sizing & Symbol Mapping
 | Parameter | Default | Description & Recommended Usage |
 | :--- | :---: | :--- |
-| **`SenderLotMode`** | `LOT_MULTIPLIER` | **Lot Sizing Calculation Engine**:<br>• `LOT_MULTIPLIER` (0): Multiplier mode (`Receiver Lots = Master Lots * SenderLotParam`).<br>• `LOT_FIXED` (1): Fixed volume (`Receiver Lots = SenderLotParam`).<br>• `LOT_OFF` (2): Telemetry only (no orders placed).<br>• `LOT_EQUITY_RATIO` (3): Proportional equity auto-scaling.<br>• `LOT_BALANCE_RATIO` (4): Proportional balance auto-scaling.<br>• `LOT_FREE_MARGIN_RATIO` (5): Proportional free margin auto-scaling. |
+| **`SenderLotMode`** | `LOT_MULTIPLIER` | **Lot Sizing Calculation Engine**:<br>• `LOT_MULTIPLIER` (0): Multiplier mode (`Receiver Lots = Master Lots * SenderLotParam`).<br>• `LOT_FIXED` (1): Fixed volume (`Receiver Lots = SenderLotParam`).<br>• `LOT_OFF` (2): Pass sender volume through directly 1:1 without scaling by SenderLotParam (to observe telemetry without placing trades, set `InpIgnoreNewEntrySignals=true`).<br>• `LOT_EQUITY_RATIO` (3): Proportional equity auto-scaling. |
 | **`SenderLotParam`** | `1.0` | **Lot Sizing Parameter**.<br>In multiplier mode, `1.0` = 1:1 copy, `0.5` = half size. In fixed mode, `0.05` = 0.05 lots per order. |
 | **`SenderSuffix`** | *(empty)* | **Broker Symbol Suffix**.<br>If Master uses `EURUSD` and Slave broker uses `EURUSD.pro`, set to `pro` (leading period is optional; handled automatically). |
 | **`SenderSymbolMap`** | *(empty)* | **Explicit Symbol Translation Map**.<br>Comma-separated `Source=Target` pairs. E.g. `GOLD=XAUUSD,USOIL=WTI`. |

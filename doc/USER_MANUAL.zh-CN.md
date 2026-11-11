@@ -149,7 +149,7 @@
 ### 2. 手数模式与品种映射 (Sizing & Symbol Mapping)
 | 参数名 | 默认值 | 详细用途与设置指导 |
 | :--- | :---: | :--- |
-| **`SenderLotMode`** | `LOT_MULTIPLIER` | **核心手数计算模式**（详见后文实操章节）：<br>• `LOT_MULTIPLIER` (0)：倍率跟随（从端手数 = 主端手数 × `SenderLotParam`）；<br>• `LOT_FIXED` (1)：固定手数（每次开仓恒为 `SenderLotParam` 手）；<br>• `LOT_OFF` (2)：仅监控不发单；<br>• `LOT_EQUITY_RATIO` (3)：净值比例跟随；<br>• `LOT_BALANCE_RATIO` (4)：余额比例跟随；<br>• `LOT_FREE_MARGIN_RATIO` (5)：可用保证金比例跟随。 |
+| **`SenderLotMode`** | `LOT_MULTIPLIER` | **核心手数计算模式**（详见后文实操章节）：<br>• `LOT_MULTIPLIER` (0)：倍率跟随（从端手数 = 主端手数 × `SenderLotParam`）；<br>• `LOT_FIXED` (1)：固定手数（每次开仓恒为 `SenderLotParam` 手）；<br>• `LOT_OFF` (2)：1:1 直通主端手数不经 LotParam 缩放（如需仅观察不发单，请设置 `InpIgnoreNewEntrySignals=true`）；<br>• `LOT_EQUITY_RATIO` (3)：净值比例跟随。 |
 | **`SenderLotParam`** | `1.0` | **手数参数值**。配合上方模式使用。在倍率模式下 `1.0` 代表 1:1 等比例跟随；在固定手数模式下 `0.05` 代表每次开 0.05 手。 |
 | **`SenderSuffix`** | *(空)* | **从端券商品种后缀**。如主端为 `EURUSD`，本端券商为 `EURUSD.pro`，此处填 `pro`（系统会自动拼装，支持自动识别前置点号）。 |
 | **`SenderSymbolMap`** | *(空)* | **完全自定义品种映射对**。逗号分隔 `源=目标`。<br>例如黄金跨券商：`GOLD=XAUUSD,XAUUSD.m=XAUUSD`。 |

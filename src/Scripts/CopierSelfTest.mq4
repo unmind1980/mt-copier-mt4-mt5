@@ -4156,6 +4156,56 @@ void TestAuditRound16()
    OkDbl("r16_fit_stop_eq_tick: 5800.12 quantized to 0.25 tick boundary", fitPx, 5800.00, 0.001);
   }
 
+void TestAuditRound17()
+  {
+   //==================================================================
+   // 1) CopierIsTopicTarget 10-digit login vs 9-digit NID (B17-03)
+   //==================================================================
+   string sids[1]; sids[0] = "1600123456"; // 10-digit login
+   string nid9 = (string)CopierNid(1600123456);
+   bool tgtOk = CopierIsTopicTarget(nid9, nid9, "myAcc", sids, 1, nid9);
+   OkInt("r17_topic_10dig_login_match: NID matches 10-digit login", tgtOk, 1);
+
+   //==================================================================
+   // 2) CopierMirrorStopInverted inverted SL/TP distance check (A17-03)
+   //==================================================================
+   // Sender BUY @ 1.1000 with SL 1.0950 (50 pips loss).
+   // Local trade is SELL @ 1.1000. Inverted SL is mapped from sender TP (or sender SL feeds local TP):
+   double invTp = CopierMirrorStopInverted(1.0950, 1.1000, 1.1000, CP_SIDE_SELL, false);
+   OkDbl("r17_mirror_stop_inv_loss: sender sl feeds receiver tp", invTp, 1.0950, 0.0001);
+
+   //==================================================================
+   // 3) CopierComputeLots minLot near-dropout protection (D17-01)
+   //==================================================================
+   CopierSymInfo siSizing;
+   ZeroMemory(siSizing);
+   siSizing.minLot = 0.01; siSizing.lotStep = 0.01; siSizing.maxLot = 100.0;
+   bool rej = false;
+   // Sender 0.01 lot, sender eq 10001, receiver eq 10000 -> raw = 0.009999
+   double calcLots = CopierComputeLots(0.01, CP_SIZE_EQUITY_RATIO, 1.0, 1.0, siSizing, 0.0, 0.0, rej, 10001.0, 10000.0);
+   OkDbl("r17_compute_lots_min_protect: 0.009999 protected to 0.01 minLot", calcLots, 0.01, 0.001);
+
+   //==================================================================
+   // 4) CopierRisk BlockKey dual-trip alert verification (D16-07)
+   //==================================================================
+   CopierRiskLimits lim;
+   ZeroMemory(lim);
+   lim.dailyLossPct = 5.0;
+   lim.maxDrawdownPct = 10.0;
+   CopierRisk risk;
+   risk.Configure(lim);
+   risk.ObserveAt(10000.0, 1000, 10000.0); // arm at 10000 peak
+   risk.ObserveAt(8500.0, 1000, 10000.0);  // 15% loss -> trips both daily (15% >= 5%) and drawdown (15% >= 10%)
+   string key = risk.BlockKey();
+   OkStr("r17_risk_block_dual_trip: BlockKey reports both trips", key, "daily+drawdown");
+
+   //==================================================================
+   // 5) CopierScaleDeviationPoints scale factor check (A16-04, A16-09)
+   //==================================================================
+   int scaled = CopierScaleDeviationPoints("EURUSD", 30);
+   OkInt("r17_scale_dev_pts_eurusd: 30 pts on EURUSD returns >= 3", scaled >= 3, 1);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -4227,6 +4277,7 @@ void OnStart()
    TestAuditRound14();
    TestAuditRound15();
    TestAuditRound16();
+   TestAuditRound17();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

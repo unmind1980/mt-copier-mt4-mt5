@@ -1524,12 +1524,19 @@ bool CopierIsTopicTarget(const string topic,const string myNid,const string myAc
       if(StringLen(envSid)>0 && envSid!="hub") return false;
       return (topic=="@all" || topic=="@"+myNid || topic=="@"+myAcc);
      }
-   // N73-07: Precise topic & sender matching preventing ZMQ prefix collision bypass
+   // N73-07 & R17-B03: Precise topic & sender matching preventing ZMQ prefix collision bypass
    if(topic==myNid || topic==myAcc)
      {
       // Target topic: slice-B targeted repair sent by one of our senders
       if(StringLen(envSid)==0) return true;
-      for(int i=0;i<nSids;i++) if(envSid==sids[i]) return true;
+      for(int i=0;i<nSids;i++)
+        {
+         if(envSid==sids[i]) return true;
+         long sidNum=CopierParseLong(sids[i]);
+         if(sidNum>0 && (string)CopierNid(sidNum)==envSid) return true;
+         long envNum=CopierParseLong(envSid);
+         if(envNum>0 && (string)CopierNid(envNum)==sids[i]) return true;
+        }
       return false;
      }
    for(int i=0;i<nSids;i++)

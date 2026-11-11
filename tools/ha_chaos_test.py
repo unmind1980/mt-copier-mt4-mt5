@@ -281,13 +281,12 @@ def main():
         check("Self-Healing: Restarted client auto-connects to Standby via disk cache while Primary is dead",
               got_order_21, f"received={len(healed_frames)} frames")
 
-        client_sub.close()
-        healed_sub.close()
-        sender_sub_hub1.close()
-        sender_sub_hub2.close()
-        sender_pub.close()
-
     finally:
+        for s in (client_sub, healed_sub, sender_sub_hub1, sender_sub_hub2, sender_pub):
+            try:
+                s.close(linger=0)
+            except Exception:
+                pass
         ctx.term()
         dep.cleanup()
 

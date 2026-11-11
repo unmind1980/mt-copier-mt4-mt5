@@ -2487,6 +2487,15 @@ void ProcessTimerTick()
               { supersededBySameTicket=true; break; }
            }
         }
+      if(supersededBySameTicket)
+        {
+         // R17-A01: Market slice was united into full-volume parent UID; do NOT emit market close!
+         g_slotMissCount[k]=0;
+         g_slotMissMs[k]=0;
+         g_prev.RemoveAt(k);
+         g_openLots[k]=0.0;
+         continue;
+        }
       if(!supersededBySameTicket)
         {
          // BUG-08: If we already exhausted our 8 probes for this tick and this slot has never been probed
