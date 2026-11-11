@@ -154,7 +154,7 @@ pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
     //--- Re-check right before publishing: if someone else got there first,
     //--- adopt THEIR key instead of overwriting it.
     if let Ok(existing) = std::fs::read_to_string(path) {
-        let mut lines = existing.lines();
+        let mut lines = existing.trim_start_matches('\u{feff}').lines();
         if lines.next().map(|l| l.trim()) == Some(KEY_FILE_MAGIC) {
             let mut p = String::new();
             let mut s = String::new();
@@ -453,6 +453,7 @@ pub fn spawn_zap_handler(
                         // SEC-03: If allow-list file was truncated to 0 or empty, do NOT overwrite in-memory allow-list unless in learn mode
                         if l.is_empty() && !learn {
                             eprintln!("[hub] allow-list reload warning: {} is empty, keeping existing allow-list", path.display());
+                            last = cur;
                             continue;
                         }
                         last = cur;
@@ -491,7 +492,15 @@ pub fn spawn_zap_handler(
             //--- mechanism, credentials.
             let req = match sock.recv_multipart(0) {
                 Ok(r) => r,
-                Err(_) => break, // context gone: the hub is shutting down
+                Err(zmq::Error::ETERM) => break,
+                Err(zmq::Error::EINTR) => continue,
+                Err(e) => {
+                    if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    eprintln!("[hub] ZAP recv error: {}", e);
+                    continue;
+                }
             };
             let version = req.first().cloned().unwrap_or_else(|| b"1.0".to_vec());
             let request_id = req.get(1).cloned().unwrap_or_default();
@@ -528,8 +537,9 @@ pub fn spawn_zap_handler(
                 let mut l = shared.lock_or_recover();
                 //--- Learn mode means "accept anyone who can authenticate,
                 //--- and write down who they were".
+                let valid_shape = cred.len() == 32 || shape_ok(&key);
                 let known = l.permits_credential(&cred);
-                if known || learn {
+                if known || (learn && valid_shape) {
                     if learn && !l.has_key(&key) && key.len() == 40 {
                         match append_learned_key(&clients_path, &key) {
                             Ok(true) => println!(
@@ -702,5 +712,20 @@ mod tests {
         assert_eq!(l.len(), 1);
         assert!(l.has_key(&k1));
         assert!(!l.has_key(&k2));
+    }
+
+    #[test]
+    fn test_describe_credential_validation() {
+        let raw_32 = [42u8; 32];
+        let desc = describe_credential(&raw_32);
+        assert_eq!(desc.len(), 40);
+
+        let z85_text = b"4F.V2]V*01j9aK(B0v&4G0r9m]1F$w@b%g]D:aL=";
+        let desc_text = describe_credential(z85_text);
+        assert_eq!(desc_text, "4F.V2]V*01j9aK(B0v&4G0r9m]1F$w@b%g]D:aL=");
+
+        let invalid_binary = [0xffu8; 10];
+        let desc_inv = describe_credential(&invalid_binary);
+        assert_eq!(desc_inv, "(unprintable)");
     }
 }

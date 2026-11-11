@@ -44,7 +44,8 @@ list_terminals() {
 # --- older upstream tarball. It is idempotent either way.
 if [[ $LIST_ONLY -eq 0 && -f "$REPO/tools/patch-zmq.py" ]]; then
   PY=""
-  for c in python3 python "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"; do
+  for c in "/c/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+           python3 python "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"; do
     command -v "$c" >/dev/null 2>&1 && { PY="$c"; break; }
     [[ -x "$c" ]] && { PY="$c"; break; }
   done

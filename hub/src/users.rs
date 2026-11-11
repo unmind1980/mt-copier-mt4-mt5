@@ -711,10 +711,10 @@ impl UserStore {
         let (nonce_user, expire_at) = self
             .auth_nonces
             .remove(nonce)
-            .ok_or_else(|| "invalid credentials".to_string())?;
+            .ok_or_else(|| "invalid challenge nonce".to_string())?;
 
         if now > expire_at || nonce_user != id {
-            return Err("invalid credentials".to_string());
+            return Err("invalid challenge nonce".to_string());
         }
 
         // 2. Lookup user

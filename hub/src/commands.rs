@@ -182,6 +182,7 @@ pub struct Command {
 }
 
 struct Inner {
+    path: PathBuf,
     file: Option<File>,
     enabled: bool,
     /// id -> the command, at its LATEST state. Rebuilt last-wins from the
@@ -237,6 +238,7 @@ impl CommandStore {
         //--- restart re-parses the whole journal.
         let now = unix_secs();
         let mut inner = Inner {
+            path: path.to_path_buf(),
             file: None,
             enabled: true,
             commands: HashMap::new(),
@@ -317,6 +319,7 @@ impl CommandStore {
         let salt = format!("{:04x}", (unix_millis() ^ (std::process::id() as u64)) & 0xffff);
         CommandStore {
             inner: Mutex::new(Inner {
+                path: PathBuf::new(),
                 file: None,
                 enabled: false,
                 commands: HashMap::new(),
@@ -339,6 +342,17 @@ impl CommandStore {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn reopen_append_if_needed(path: &Path, inner: &mut Inner) -> std::io::Result<()> {
+        if inner.enabled && inner.file.is_none() && !path.as_os_str().is_empty() {
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            inner.file = Some(f);
+        }
+        Ok(())
     }
 
     /// Fast memory accessor for (total_lines, max_seq) in command journal for cluster sync (zero disk I/O).
@@ -416,6 +430,7 @@ impl CommandStore {
             return Ok(0);
         }
         let mut inner = self.inner.lock_or_recover();
+        Self::reopen_append_if_needed(&self.path, &mut inner)?;
         let mut applied = 0;
         //--- V1: every valid replicated line is mirrored to disk verbatim; only the
         //--- rows that ADVANCE state are applied to the in-memory map.
@@ -745,24 +760,25 @@ impl CommandStore {
                     return c.clone();
                 }
             }
-            c.state = STATE_PENDING.to_string();
-            c.attempts = 0;
-            c.ack_at = 0;
-            c.err = String::new();
+            let mut cand = c.clone();
+            cand.state = STATE_PENDING.to_string();
+            cand.attempts = 0;
+            cand.ack_at = 0;
+            cand.err = String::new();
             //--- H3: strictly increasing timestamp. Reviving an ACKED/REJECTED command
             //--- inside the same second it was acked would produce `inc.ts == cur.ts`
             //--- with a LOWER state rank, and both `load()` and the standby's
             //--- `apply_delta_lines()` order by `(ts, rank, attempts)` - so the revival
             //--- row would be discarded and the command would stay terminal everywhere.
-            c.ts = now_secs.max(prev_last.saturating_add(1));
-            c.next_at = Instant::now();
+            cand.ts = now_secs.max(prev_last.saturating_add(1));
+            cand.next_at = Instant::now();
             if !actor.is_empty() {
-                c.actor = actor.to_string();
+                cand.actor = actor.to_string();
             }
             if !ip.is_empty() {
-                c.ip = ip.to_string();
+                cand.ip = ip.to_string();
             }
-            revive_cmd = Some(c.clone());
+            revive_cmd = Some(cand);
         }
 
         if let Some(updated) = revive_cmd {
@@ -773,6 +789,7 @@ impl CommandStore {
                 failed.err = "command journal write failed on revive".to_string();
                 return failed;
             }
+            inner.commands.insert(id.clone(), updated.clone());
             inner.in_flight.insert(id);
             return updated;
         }
@@ -1131,6 +1148,23 @@ impl CommandStore {
 }
 
 impl Inner {
+    fn reopen_if_needed(&mut self) -> io::Result<()> {
+        if self.file.is_none() && self.enabled && !self.path.as_os_str().is_empty() {
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?;
+            self.file = Some(f);
+        }
+        if self.file.is_none() {
+            if !self.enabled {
+                return Err(io::Error::new(io::ErrorKind::Other, "command store is disabled"));
+            }
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
+        }
+        Ok(())
+    }
+
     fn append(&mut self, c: &Command) -> bool {
         self.append_many(std::slice::from_ref(c)).is_ok()
     }
@@ -1147,21 +1181,14 @@ impl Inner {
     /// N56-12 & F-01: returns Result to ensure callers propagate write failures
     /// and do not commit in-memory state when disk writes fail.
     fn append_many(&mut self, cs: &[Command]) -> io::Result<()> {
-        let f = match self.file.as_mut() {
-            Some(f) => f,
-            None => {
-                // A86-05: If store is intentionally disabled (memory-only mode), append is a no-op that updates memory counters.
-                if !self.enabled {
-                    self.line_count += cs.len();
-                    for c in cs {
-                        self.max_seq = self.max_seq.max(c.seq);
-                    }
-                    return Ok(());
-                }
-                // When enabled but file handle is unexpectedly None, fail-closed
-                return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
+        if !self.enabled {
+            self.line_count += cs.len();
+            for c in cs {
+                self.max_seq = self.max_seq.max(c.seq);
             }
-        };
+            return Ok(());
+        }
+        self.reopen_if_needed()?;
         let mut buf = String::new();
         let mut batch_max_seq = self.max_seq;
         self.line_count += cs.len();
@@ -1193,6 +1220,10 @@ impl Inner {
         // Same rule as the audit and the revisions: append, flush, never seek.
         // "What did we tell that node to do" must survive the machine losing
         // power - so the fsync is still there, just not once per line.
+        let f = match self.file.as_mut() {
+            Some(f) => f,
+            None => return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open")),
+        };
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
             Ok(()) => {
                 self.max_seq = batch_max_seq;
@@ -1225,17 +1256,12 @@ impl Inner {
         if lines.is_empty() {
             return Ok(());
         }
-        let f = match self.file.as_mut() {
-            Some(f) => f,
-            None => {
-                if !self.enabled {
-                    self.line_count += lines.len();
-                    self.max_seq = self.max_seq.max(max_seq_seen);
-                    return Ok(());
-                }
-                return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open"));
-            }
-        };
+        if !self.enabled {
+            self.line_count += lines.len();
+            self.max_seq = self.max_seq.max(max_seq_seen);
+            return Ok(());
+        }
+        self.reopen_if_needed()?;
         let mut buf = String::new();
         let mut written = 0usize;
         for l in lines {
@@ -1252,6 +1278,10 @@ impl Inner {
         }
         let new_max_seq = self.max_seq.max(max_seq_seen);
         self.line_count += written;
+        let f = match self.file.as_mut() {
+            Some(f) => f,
+            None => return Err(io::Error::new(io::ErrorKind::NotConnected, "command journal file handle is not open")),
+        };
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
             Ok(()) => {
                 self.max_seq = new_max_seq;
@@ -2219,6 +2249,33 @@ mod tests {
         assert!(res.is_err(), "append_many must fail when file is read-only");
         let after_stats = s.sync_stats();
         assert_eq!(after_stats.1, 0, "max_seq must not advance when disk write fails");
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_reopen_append_if_needed_recovers_dropped_handle() {
+        let p = tmp("reopen_append_test");
+        let s = CommandStore::open(&p).unwrap();
+        // Drop the file handle to simulate transient file descriptor loss
+        {
+            let mut inner = s.inner.lock().unwrap();
+            inner.file = None;
+            assert!(inner.file.is_none());
+        }
+
+        // Issue op command which appends to disk
+        let cmd = s.issue_op("receiver:1", "pause", "", "op", "");
+        assert_eq!(cmd.state, STATE_PENDING);
+
+        // Verify handle was safely reopened and command was written
+        {
+            let inner = s.inner.lock().unwrap();
+            assert!(inner.file.is_some(), "file handle must be reopened automatically");
+        }
+        let (lines, max_seq) = s.sync_stats();
+        assert_eq!(lines, 1);
+        assert_eq!(max_seq, 1);
 
         let _ = std::fs::remove_file(&p);
     }

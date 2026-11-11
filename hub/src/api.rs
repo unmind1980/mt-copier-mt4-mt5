@@ -1421,11 +1421,16 @@ async fn login(
                 .into_response()
         }
         // Deliberately does NOT say whether the id exists.
-        Err(_) => {
+        Err(err_msg) => {
+            let is_bogus_nonce = err_msg == "invalid challenge nonce";
             let is_heavy = b.password.is_some();
             let (delay_ms, audit) = {
                 let mut s = st.lock_or_recover();
-                let d = s.users.note_login_failure(&b.id, now, is_heavy);
+                let d = if is_bogus_nonce {
+                    0
+                } else {
+                    s.users.note_login_failure(&b.id, now, is_heavy)
+                };
                 (d, Arc::clone(&s.audit))
             };
             // HUB-02: Prevent disk I/O DoS. Skip synchronous fsync audit write under heavy flood
@@ -4738,11 +4743,11 @@ async fn tls_import(
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
-    if let Some(redir) = b.enable_http_redirect {
-        tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
-    }
     match tls_mgr.apply_imported_cert(&b.cert_pem, &b.key_pem, &b.domain, port) {
         Ok(()) => {
+            if let Some(redir) = b.enable_http_redirect {
+                tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+            }
             audit.record(&sess.user_id, "", "tls.import", &b.domain, None, None, "ok");
             // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port
             ensure_dedicated_https_listener(&st);
@@ -4774,11 +4779,11 @@ async fn tls_self_signed(
     }
 
     let port = b.https_port.unwrap_or(crate::tls::DEFAULT_HTTPS_PORT);
-    if let Some(redir) = b.enable_http_redirect {
-        tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
-    }
     match tls_mgr.apply_self_signed(&b.domain, port) {
         Ok(()) => {
+            if let Some(redir) = b.enable_http_redirect {
+                tls_mgr.config.lock_or_recover().enable_http_redirect = redir;
+            }
             audit.record(&sess.user_id, "", "tls.self_signed", &b.domain, None, None, "ok");
             // HUB-02: Dynamically spawn dedicated listener if custom HTTPS port
             ensure_dedicated_https_listener(&st);

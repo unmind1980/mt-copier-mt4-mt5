@@ -116,13 +116,15 @@ private:
         }
       //--- full: reuse the one that has been silent longest, whose row matters
       //--- least. Evicting the freshest would make a busy panel flicker.
-      int oldest=0;
-      long oldestTime=MathMax(m_seen[0],m_first[0]);
-      for(i=1;i<CP_MAX_PEERS;i++)
+      int oldest=-1;
+      long oldestTime=0;
+      for(i=0;i<CP_MAX_PEERS;i++)
         {
+         if(StringSubstr(m_name[i],0,3)=="hub") continue; // Cluster hub peers are permanently pinned
          long curTime=MathMax(m_seen[i],m_first[i]);
-         if(curTime<oldestTime) { oldest=i; oldestTime=curTime; }
+         if(oldest<0 || curTime<oldestTime) { oldest=i; oldestTime=curTime; }
         }
+      if(oldest<0) oldest=0; // Fallback only if table is entirely hubs
       ResetSlot(oldest);
       m_name[oldest]=name;
       m_first[oldest]=CopierNowMs();

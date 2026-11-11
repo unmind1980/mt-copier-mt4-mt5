@@ -306,6 +306,8 @@ impl ConfigStore {
             return Ok(0);
         }
         let mut inner = self.inner.lock_or_recover();
+        Self::reopen_append_if_needed(&self.path, &mut inner)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e)))?;
         let mut applied = 0;
         //--- V1: every valid replicated line is mirrored to disk verbatim; only
         //--- the rows that ADVANCE state are applied to the in-memory map.

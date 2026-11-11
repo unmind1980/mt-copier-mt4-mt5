@@ -121,9 +121,7 @@ impl Drop for PendingRotateGuard {
         let (m, cv) = &*self.0;
         let mut n = m.lock_or_recover();
         *n = n.saturating_sub(1);
-        if *n == 0 {
-            cv.notify_all();
-        }
+        cv.notify_all();
     }
 }
 
@@ -258,7 +256,7 @@ impl Audit {
         let max_backups = std::env::var("MTC_AUDIT_MAX_BACKUPS")
             .ok()
             .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|&v| (1..=100).contains(&v))
+            .filter(|&v| (0..=100).contains(&v))
             .unwrap_or(DEFAULT_MAX_BACKUPS);
         Self::open_with_rotation(path, max_bytes, max_backups)
     }
@@ -560,8 +558,18 @@ impl Audit {
                 let worker_slot = Arc::clone(&self.shifter.active_worker);
                 let rotating_bg = rotating_path.clone();
                 {
-                    let (m, _) = &*self.shifter.pending;
+                    let (m, cv) = &*self.shifter.pending;
                     let mut n = m.lock_or_recover();
+                    while *n >= 3 {
+                        let (locked_n, timeout_res) = match cv.wait_timeout(n, std::time::Duration::from_millis(500)) {
+                            Ok(pair) => pair,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        n = locked_n;
+                        if timeout_res.timed_out() {
+                            break;
+                        }
+                    }
                     *n = n.saturating_add(1);
                 }
                 let pending_bg = Arc::clone(&self.shifter.pending);
@@ -1423,6 +1431,17 @@ mod tests {
         assert_eq!(a.max_bytes, 512);
         assert_eq!(a.max_backups, 3);
         std::env::remove_var("MTC_AUDIT_MAX_BYTES");
+        std::env::remove_var("MTC_AUDIT_MAX_BACKUPS");
+        cleanup(&p);
+    }
+
+    #[test]
+    fn test_audit_env_var_zero_backups() {
+        let p = tmp("audit_env_zero_backups");
+        cleanup(&p);
+        std::env::set_var("MTC_AUDIT_MAX_BACKUPS", "0");
+        let a = Audit::open(&p).unwrap();
+        assert_eq!(a.max_backups, 0);
         std::env::remove_var("MTC_AUDIT_MAX_BACKUPS");
         cleanup(&p);
     }

@@ -25,10 +25,28 @@ DIST_DIR = REPO_ROOT / "releases" / f"v{VERSION}"
 TEMP_BUILD_DIR = REPO_ROOT / "releases" / "build_temp"
 
 # Source paths
-MT4_EXPERT_SRC = Path(
-    r"C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\287469DEA9630EA94D0715D755974F1B\MQL4\Experts"
+def _resolve_expert_dir(env_var: str, default_path: str, fallback_candidates: list) -> Path:
+    val = os.environ.get(env_var)
+    if val and Path(val).exists():
+        return Path(val)
+    def_p = Path(default_path)
+    if def_p.exists():
+        return def_p
+    for cand in fallback_candidates:
+        if cand.exists():
+            return cand
+    return def_p
+
+MT4_EXPERT_SRC = _resolve_expert_dir(
+    "MT4_EXPERT_SRC",
+    r"C:\Users\Administrator\AppData\Roaming\MetaQuotes\Terminal\287469DEA9630EA94D0715D755974F1B\MQL4\Experts",
+    [REPO_ROOT / "src" / "Experts", REPO_ROOT / "build" / "MT4"]
 )
-MT5_EXPERT_SRC = Path(r"E:\MT5-Portable-Test\MQL5\Experts")
+MT5_EXPERT_SRC = _resolve_expert_dir(
+    "MT5_EXPERT_SRC",
+    r"E:\MT5-Portable-Test\MQL5\Experts",
+    [REPO_ROOT / "src" / "Experts", REPO_ROOT / "build" / "MT5"]
+)
 
 ZMQ_MT4_DLL = REPO_ROOT / "third_party" / "mql-zmq-master" / "Library" / "MT4" / "libzmq.dll"
 ZMQ_MT5_DLL = REPO_ROOT / "third_party" / "mql-zmq-master" / "Library" / "MT5" / "libzmq.dll"

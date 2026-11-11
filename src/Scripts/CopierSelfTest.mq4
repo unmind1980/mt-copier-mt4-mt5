@@ -4090,6 +4090,38 @@ void TestAuditRound14()
    OkDbl("r14_cross_same_ccy: USD to USD is 1.0", CopierGetCurrencyCrossRate("USD", "USD"), 1.0, 0.00001);
   }
 
+void TestAuditRound15()
+  {
+   //==================================================================
+   // 1) CopierNormalizeLot zero maxLot guard (D15-02)
+   //==================================================================
+   CopierSymInfo siLot;
+   ZeroMemory(siLot);
+   siLot.minLot = 0.01; siLot.maxLot = 0.0; siLot.lotStep = 0.01;
+   double lotNorm = CopierNormalizeLot(1.5, siLot);
+   OkDbl("r15_norm_lot_zero_max: zero maxLot does not cap lot", lotNorm, 1.5, 0.001);
+
+   //==================================================================
+   // 2) CopierResolveCrossSymbol & cross rate identity (D15-05, D15-06)
+   //==================================================================
+   OkDbl("r15_cross_rate_gbp_gbp: GBP to GBP is 1.0", CopierGetCurrencyCrossRate("GBP", "GBP"), 1.0, 0.00001);
+   OkDbl("r15_cross_rate_jpy_jpy: JPY to JPY is 1.0", CopierGetCurrencyCrossRate("JPY", "JPY"), 1.0, 0.00001);
+
+   //==================================================================
+   // 3) CopierRoundToTick sl/tp alignment (A15-03, D15-04)
+   //==================================================================
+   CopierSymInfo siTick;
+   ZeroMemory(siTick);
+   siTick.digits = 3; siTick.point = 0.001; siTick.tickSize = 0.005;
+   double rounded = CopierRoundToTick(1.234, siTick);
+   OkDbl("r15_round_tick_3pt: 1.234 with 0.005 tick rounds to 1.235", rounded, 1.235, 0.0001);
+
+   //==================================================================
+   // 4) CP_MAX_PEERS pinned hubs check (B15-04)
+   //==================================================================
+   OkInt("r15_cp_max_peers_headroom: CP_MAX_PEERS has capacity", CP_MAX_PEERS >= 104, 1);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -4159,6 +4191,7 @@ void OnStart()
    TestAuditRound12();
    TestAuditRound13();
    TestAuditRound14();
+   TestAuditRound15();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

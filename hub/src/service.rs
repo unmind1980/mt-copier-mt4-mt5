@@ -195,7 +195,16 @@ pub mod win_service {
         // Re-open fresh log and bind stdio ALWAYS to avoid leaving OS handles closed on rotation errors
         let redir_res = redirect_stdio_to_log(path);
         #[cfg(windows)]
-        drop(_nul);
+        {
+            if redir_res.is_err() {
+                if let Some(nf) = _nul {
+                    let mut handle_guard = LOG_HANDLE.lock_or_recover();
+                    *handle_guard = Some(nf);
+                }
+            } else {
+                drop(_nul);
+            }
+        }
 
         rot_res?;
         redir_res?;

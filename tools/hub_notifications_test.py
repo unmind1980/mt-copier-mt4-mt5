@@ -334,6 +334,12 @@ def main():
                 and "Manual connection test" in str(body_data.get("detail", {})),
             )
 
+        try:
+            server.shutdown()
+            server.server_close()
+        except Exception:
+            pass
+
         # 10. Update channel with masked credentials (stars preservation test)
         masked_tg_token = tg_c.get("bot_token")
         st, body = js(

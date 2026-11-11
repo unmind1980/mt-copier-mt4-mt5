@@ -1609,8 +1609,12 @@ impl AcmeClient {
 
         // HUB-05: Atomically save certificate files with 0o600 permissions
         tls_mgr.cert_paths.ensure_dir().map_err(|e| e.to_string())?;
-        write_secret_atomic(&tls_mgr.cert_paths.fullchain_pem, cert_pem.as_bytes())?;
-        write_secret_atomic(&tls_mgr.cert_paths.privkey_pem, site_key_pem.as_bytes())?;
+        let fc_path = &tls_mgr.cert_paths.fullchain_pem;
+        let pk_path = &tls_mgr.cert_paths.privkey_pem;
+        let prev_fc = std::fs::read(fc_path).ok();
+        let prev_pk = std::fs::read(pk_path).ok();
+        write_secret_atomic(fc_path, cert_pem.as_bytes())?;
+        write_secret_atomic(pk_path, site_key_pem.as_bytes())?;
 
         // Step 6: Mark enabled and reload into active acceptor
         let prev_config = tls_mgr.config.lock_or_recover().clone();
@@ -1646,6 +1650,13 @@ impl AcmeClient {
         }
 
         if let Err(e) = tls_mgr.reload_from_disk() {
+            if let Some(ref b) = prev_fc {
+                let _ = write_secret_atomic(fc_path, b);
+            }
+            if let Some(ref b) = prev_pk {
+                let _ = write_secret_atomic(pk_path, b);
+            }
+            let _ = tls_mgr.reload_from_disk();
             let mut c = tls_mgr.config.lock_or_recover();
             *c = prev_config;
             c.status.in_progress = false;

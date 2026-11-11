@@ -46,8 +46,10 @@ fi
 
 HAS_ZMQ=1
 PY="${PY:-}"
-for c in "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+for c in "/c/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+         "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
          python3 python \
+         "/c/Users/Administrator/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe" \
          "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe" \
          "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python"; do
   [[ -n "$PY" ]] && break
@@ -58,8 +60,10 @@ done
 
 if [[ -z "$PY" ]]; then
   # TOOL-02: Fallback to any python interpreter for lightweight checks (dash, i18n, inputcheck)
-  for c in "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+  for c in "/c/Users/Administrator/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
+           "$HOME/.workbuddy-ai/binaries/python/envs/default/Scripts/python.exe" \
            python3 python \
+           "/c/Users/Administrator/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe" \
            "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe" \
            "$HOME/.workbuddy-ai/binaries/python/versions/3.13.12/python"; do
     if command -v "$c" >/dev/null 2>&1 || [[ -x "$c" ]]; then

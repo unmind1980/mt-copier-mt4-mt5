@@ -92,7 +92,7 @@ class ChaosDeployment:
             "--curve-clients", os.path.join(p_dir, "curve_clients.txt"),
             "--curve", "off",
         ]
-        self.p_proc = subprocess.Popen(p_cmd, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.p_proc = subprocess.Popen(p_cmd, cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def start_standby(self):
         env = os.environ.copy()
@@ -118,7 +118,7 @@ class ChaosDeployment:
             "--curve-clients", os.path.join(s_dir, "curve_clients.txt"),
             "--curve", "off",
         ]
-        self.s_proc = subprocess.Popen(s_cmd, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.s_proc = subprocess.Popen(s_cmd, cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def kill_primary_hard(self):
         if self.p_proc and self.p_proc.poll() is None:

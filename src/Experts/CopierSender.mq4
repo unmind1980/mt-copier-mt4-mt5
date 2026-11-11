@@ -710,9 +710,14 @@ int BuildCurrent()
                   if(p.lots>q.lots+CP_LOT_EPS)
                      usePend=true;
 #ifdef __MQL5__
-                  else if(HistoryOrderSelect((ulong)p.ticket) &&
-                          HistoryOrderGetInteger((ulong)p.ticket,ORDER_STATE)==ORDER_STATE_FILLED)
-                     usePend=true;
+                  else
+                    {
+                     if(!HistoryOrderSelect((ulong)p.ticket))
+                        HistorySelectByPosition((ulong)p.ticket);
+                     if(HistoryOrderSelect((ulong)p.ticket) &&
+                        HistoryOrderGetInteger((ulong)p.ticket,ORDER_STATE)==ORDER_STATE_FILLED)
+                        usePend=true;
+                    }
 #endif
                  }
                if(usePend) idx=pendIdx;

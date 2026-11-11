@@ -4108,7 +4108,7 @@ void ExecuteQueue()
          soLevel=AccountStopoutLevel();
          isMoneyMode=(AccountStopoutMode()==1);
 #endif
-         double projMargin = curMargin + drainedReqMargin + reqMargin;
+         double projMargin = MathMax(0.0, curMargin + drainedReqMargin + reqMargin - freedMarginEst);
          if(curEquity <= 0.0)
            {
             marginOk=false;
@@ -4259,7 +4259,7 @@ void ExecuteQueue()
          // R12-D03: Exit operations (CLOSE, TRIM, DEDUP) are pure risk-reduction operations.
          // Grant generous slippage (at least 300 points) to prevent unclosable lockout on gap opens
          if(a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_TRIM || a.kind==CP_ACT_DEDUP)
-            dev = MathMax(dev, 300);
+            dev = MathMax(dev, CopierScaleDeviationPoints(a.sym, 300));
 
 #ifdef __MQL5__
          asyncMode = isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP);
@@ -4920,7 +4920,7 @@ bool ComputeRawReceiverLots(const int si,const string sym,const double senderLot
      }
    else if(g_lotMode[si]==CP_SIZE_EQUITY_RATIO)
      {
-      double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
+      double myEq=CopierAccountEquity();
       if(myEq<=0.0) { rejected=true; return false; }
       double convSenderEq=g_senderEquity[si];
       string recCcy=CopierAccountCurrency();
@@ -5467,7 +5467,11 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
         {
          if(dPExp>0 && (local.pexpire<=0 || MathAbs(local.pexpire-dPExp)>2)) pendingDiff=true;
         }
-      else if(desired.pexpire==0 && local.pexpire!=0) pendingDiff=true;
+      else if(desired.pexpire==0 && local.pexpire!=0)
+        {
+         datetime dayEnd=TimeCurrent() - (TimeCurrent()%86400) + 86399;
+         if(MathAbs(local.pexpire-(long)dayEnd)>60) pendingDiff=true;
+        }
      }
 
    // R11-A02 & R14-D04: Strict Ratchet Guard for market positions,
@@ -6247,7 +6251,9 @@ void RefreshRisk()
             if(trueStartBal>0.0)
               {
                g_riskDayStartBalance=trueStartBal;
-               g_riskDayStartEquity=trueStartBal;
+               double curEq=CopierAccountEquity();
+               double floatingOffset=curEq-curBal;
+               g_riskDayStartEquity=MathMax(0.0, trueStartBal+floatingOffset);
               }
             else
               {
@@ -6723,7 +6729,7 @@ void ConvergeSender(const int si)
          // BUG-04 & SEC-01 & R1-M02 & DEF-A03 & DEF-09-05: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
          // While close is pending or retrying with broker, local position MUST still converge protective stops (SL/TP)
          // to avoid naked risk. Do NOT call QueueTrimIfNeeded here to avoid conflicting simultaneous CLOSE + TRIM actions.
-         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket))
+         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasSenderTicket(g_sid[si],g_locScratch[li].ticket))
            {
             if(!SymbolMarketClosed(g_locScratch[li].sym))
               {

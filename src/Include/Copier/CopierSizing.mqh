@@ -155,7 +155,7 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
       v=NormalizeDouble(steps*si.lotStep,digits);
      }
    if(v<0.0) v=0.0;
-   if(v>si.maxLot)
+   if(si.maxLot>0.0 && v>si.maxLot)
      {
       //--- floor the cap to a whole number of steps too, otherwise we
       //--- hand the broker a volume that is not on its lot grid (D-06)

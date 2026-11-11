@@ -342,6 +342,11 @@ string CopierResolveCrossSymbol(const string pair,const string extraSuffix="")
      {
       string custom=pair+extraSuffix;
       if(CopierSymbolEnsure(custom)) return custom;
+      if(StringSubstr(extraSuffix,0,1)!=".")
+        {
+         string customDot=pair+"."+extraSuffix;
+         if(CopierSymbolEnsure(customDot)) return customDot;
+        }
      }
    string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c","i",".c",".raw","_std"};
    for(int i=0;i<ArraySize(sfx);i++)
@@ -385,7 +390,7 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw,
      }
 
    // Intermediate via EUR fallback
-   if(fromCcy!="EUR" && toCcy!="EUR" && fromCcy!="USD" && toCcy!="USD")
+   if(fromCcy!="EUR" && toCcy!="EUR")
      {
       double r1=CopierGetCurrencyCrossRate(fromCcy,"EUR",extraSuffix);
       double r2=CopierGetCurrencyCrossRate("EUR",toCcy,extraSuffix);
@@ -577,7 +582,7 @@ double CopierRealizedToday(const long dayStart,bool &outOk)
       ulong t=HistoryDealGetTicket(i);
       if(t==0) continue;
       long dtype=HistoryDealGetInteger(t,DEAL_TYPE);
-      if(dtype!=DEAL_TYPE_BUY && dtype!=DEAL_TYPE_SELL) continue;
+      if(dtype==DEAL_TYPE_BALANCE || dtype==DEAL_TYPE_CREDIT || dtype==DEAL_TYPE_BONUS) continue;
       //--- profit and swap are zero on an entry deal, but commission is
       //--- charged there, so every deal is summed rather than only exits
       sum+=HistoryDealGetDouble(t,DEAL_PROFIT)
@@ -716,8 +721,8 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
    string cmt=CopierCommentForUid(p.uid,p.ticket);
    double px=CopierRoundToTick(p.pprice,si);
    double stop=CopierRoundToTick(p.pstop,si);
-   double sl=(p.sl>0.0)?NormalizeDouble(p.sl,si.digits):0.0;
-   double tp=(p.tp>0.0)?NormalizeDouble(p.tp,si.digits):0.0;
+   double sl=(p.sl>0.0)?CopierRoundToTick(p.sl,si):0.0;
+   double tp=(p.tp>0.0)?CopierRoundToTick(p.tp,si):0.0;
 
 #ifdef __MQL5__
    long pt=CopierPendToPlatformType(p.ptype);
@@ -1256,7 +1261,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                if(fsl>0.0 || ftp>0.0)
                  {
                   double mkPoint=SymbolInfoDouble(sym,SYMBOL_POINT);
-                  double mkStop=(double)SymbolInfoInteger(sym,SYMBOL_TRADE_STOPS_LEVEL)*mkPoint;
+                  double mkStop=(double)MathMax(SymbolInfoInteger(sym,SYMBOL_TRADE_STOPS_LEVEL),SymbolInfoInteger(sym,SYMBOL_TRADE_FREEZE_LEVEL))*mkPoint;
                   int    mkDig=(int)SymbolInfoInteger(sym,SYMBOL_DIGITS);
                   double mkBid=SymbolInfoDouble(sym,SYMBOL_BID);
                   double mkAsk=SymbolInfoDouble(sym,SYMBOL_ASK);
@@ -1285,6 +1290,12 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                         if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
                         else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(MathMin(mkAsk-mkStop,mkBid-mkPoint),mkDig);
                        }
+                    }
+                  CopierSymInfo siEcn;
+                  if(CopierGetSymbolInfo(sym,siEcn))
+                    {
+                     if(fsl>0.0) fsl=CopierRoundToTick(fsl,siEcn);
+                     if(ftp>0.0) ftp=CopierRoundToTick(ftp,siEcn);
                     }
                  }
                // BUG-05: In MT5, position index in terminal cache might lag deal execution.
@@ -1367,7 +1378,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                if(fsl>0.0 || ftp>0.0)
                  {
                   double mkPoint=MarketInfo(sym,MODE_POINT);
-                  double mkStop=MarketInfo(sym,MODE_STOPLEVEL)*mkPoint;
+                  double mkStop=MathMax(MarketInfo(sym,MODE_STOPLEVEL),MarketInfo(sym,MODE_FREEZELEVEL))*mkPoint;
                   int    mkDig=(int)MarketInfo(sym,MODE_DIGITS);
                   double mkBid=MarketInfo(sym,MODE_BID);
                   double mkAsk=MarketInfo(sym,MODE_ASK);
@@ -1396,6 +1407,12 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
                         if(ftp>=mkBid) ftp=0.0; // crossed: defer to converge
                         else if(mkStop>0.0 && mkAsk-ftp<mkStop) ftp=NormalizeDouble(MathMin(mkAsk-mkStop,mkBid-mkPoint),mkDig);
                        }
+                    }
+                  CopierSymInfo siEcn;
+                  if(CopierGetSymbolInfo(sym,siEcn))
+                    {
+                     if(fsl>0.0) fsl=CopierRoundToTick(fsl,siEcn);
+                     if(ftp>0.0) ftp=CopierRoundToTick(ftp,siEcn);
                     }
                  }
                if(OrderSelect(ticket,SELECT_BY_TICKET))
@@ -1462,6 +1479,10 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
      }
    CTrade trade;
    trade.SetDeviationInPoints((ulong)MathMax(0,deviationPoints));
+   string sym=PositionGetString(POSITION_SYMBOL);
+   if(StringLen(sym)==0 && PositionSelectByTicket((ulong)ticket))
+      sym=PositionGetString(POSITION_SYMBOL);
+   if(StringLen(sym)>0) trade.SetTypeFillingBySymbol(sym);
    trade.SetAsyncMode(asyncMode);
    bool ok=trade.PositionClose((ulong)ticket);
    // R2-D1-M02: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback
@@ -1500,9 +1521,13 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
      {
       int tcWait=0;
       while(IsTradeContextBusy() && tcWait++<15) CopierWaitMs(10);
-      RefreshRates();
+      double closePx=px;
       int type=(int)OrderType();
-      double closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
+      if(attempt>0 || closePx<=0.0)
+        {
+         RefreshRates();
+         closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
+        }
       ok=OrderClose((int)(uint)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
       if(ok) break;
       outErr=GetLastError();
@@ -1683,11 +1708,15 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
 
    double modPx=price;
    double modStopLimit=stoplimit;
+   double modSl=sl;
+   double modTp=tp;
    CopierSymInfo si;
-   if((modPx>0.0 || modStopLimit>0.0) && CopierGetSymbolInfo(sym,si))
+   if((modPx>0.0 || modStopLimit>0.0 || modSl>0.0 || modTp>0.0) && CopierGetSymbolInfo(sym,si))
      {
       if(modPx>0.0)        modPx=CopierRoundToTick(modPx,si);
       if(modStopLimit>0.0) modStopLimit=CopierRoundToTick(modStopLimit,si);
+      if(modSl>0.0)        modSl=CopierRoundToTick(modSl,si);
+      if(modTp>0.0)        modTp=CopierRoundToTick(modTp,si);
      }
 
 #ifdef __MQL5__
@@ -1699,8 +1728,8 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    req.order =(ulong)ticket;
    req.symbol=sym;
    req.price =(modPx>0.0)?modPx:OrderGetDouble(ORDER_PRICE_OPEN);
-   req.sl    =sl;
-   req.tp    =tp;
+   req.sl    =modSl;
+   req.tp    =modTp;
    if(modStopLimit>0.0) req.stoplimit=modStopLimit;
    if(expire>0)
      {
@@ -1751,13 +1780,13 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
      }
    double openPx=(modPx>0.0)?modPx:OrderOpenPrice();
    datetime exp=expire;
-   bool ok=OrderModify((int)ticket,openPx,sl,tp,exp,clrNONE);
+   bool ok=OrderModify((int)ticket,openPx,modSl,modTp,exp,clrNONE);
    if(!ok)
      {
       int e=GetLastError();
       if(e==147 && exp>0)
         {
-         if(OrderModify((int)ticket,openPx,sl,tp,0,clrNONE)) return true;
+         if(OrderModify((int)ticket,openPx,modSl,modTp,0,clrNONE)) return true;
          e=GetLastError();
         }
       if(e==1) return true;
@@ -2006,16 +2035,9 @@ bool CopierIsTicketClosedInHistory(const long ticket)
      {
       // HistorySelectByPosition only caches orders with POSITION_IDENTIFIER == ticket.
       // Cancelled/expired pending orders have ORDER_POSITION_ID == 0; populate history cache to query them.
-      // DEF-09-07: Throttle HistorySelect to at most once per 500ms to prevent UI / communication thread freezing
-      static long s_lastHistSelectMs=0;
-      long nowMs=CopierNowMs();
-      if(nowMs-s_lastHistSelectMs>=500)
-        {
-         s_lastHistSelectMs=nowMs;
-         datetime hFrom=(datetime)(CopierServerTime()-86400*3);
-         datetime hTo=(datetime)(CopierServerTime()+86400);
-         HistorySelect(hFrom,hTo);
-        }
+      datetime hFrom=(datetime)(CopierServerTime()-86400*3);
+      datetime hTo=(datetime)(CopierServerTime()+86400);
+      HistorySelect(hFrom,hTo);
      }
    if(HistoryOrderSelect((ulong)ticket))
      {

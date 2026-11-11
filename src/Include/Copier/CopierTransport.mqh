@@ -485,10 +485,17 @@ public:
         }
       //--- deliberately NO \x01 here. See the note above.
       //--- Connect all parsed cluster endpoints to the same XSUB socket
-      m_connectedHubs=nEp;
+      m_connectedHubs=0;
       for(int k=0;k<nEp;k++)
         {
-         m_sub.connect(eps[k]);
+         if(m_sub.connect(eps[k]))
+            m_connectedHubs++;
+        }
+      if(m_connectedHubs<=0)
+        {
+         m_errno=CopierZmqErrno();
+         delete m_sub; m_sub=NULL;
+         return false;
         }
       return true;
      }
@@ -563,6 +570,7 @@ public:
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
       if(!CloseDanglingMultipart()) return false;
       int sent=0;
+      bool removed=false;
       for(int i=0;i<m_nSubPrefixes;i++)
         {
          if(m_subPrefixes[i]!=prefix) continue;
@@ -571,19 +579,28 @@ public:
          int n=m_subSent[i];
          for(int k=0;k<n;k++)
            {
-            if(SendSubControlFrame(0x00,prefix)) sent++;
+            if(SendSubControlFrame(0x00,prefix))
+              {
+               sent++;
+               m_subSent[i]--;
+              }
+            else break;
            }
-         for(int j=i;j<m_nSubPrefixes-1;j++)
+         if(m_subSent[i]<=0)
            {
-            m_subPrefixes[j]=m_subPrefixes[j+1];
-            m_subSent[j]=m_subSent[j+1];
+            for(int j=i;j<m_nSubPrefixes-1;j++)
+              {
+               m_subPrefixes[j]=m_subPrefixes[j+1];
+               m_subSent[j]=m_subSent[j+1];
+              }
+            m_nSubPrefixes--;
+            m_subPrefixes[m_nSubPrefixes]="";
+            m_subSent[m_nSubPrefixes]=0;
+            removed=true;
            }
-         m_nSubPrefixes--;
-         m_subPrefixes[m_nSubPrefixes]="";
-         m_subSent[m_nSubPrefixes]=0;
          break;
         }
-      return (sent>0);
+      return (sent>0 || removed);
      }
 
    //--- Send a TWO-FRAME message: [topic, payload].
@@ -657,7 +674,13 @@ public:
             //--- - one corrupt frame the peer cannot parse - and `sent++` would then
             //--- report SUCCESS for it. Nothing may be written to this socket until
             //--- the frame is closed.
-            if(!m_sub.send("",true))
+            bool closed=false;
+            for(int att=0; att<3; att++)
+              {
+               if(m_sub.send("",true)) { closed=true; break; }
+               CopierWaitMs(1);
+              }
+            if(!closed)
               {
                m_errno=CopierZmqErrno();
                m_midMultipart=true;
@@ -667,7 +690,7 @@ public:
            }
          sent++;
         }
-      return (sent>0);
+      return (sent>0 && !m_midMultipart);
      }
 
    //--- Drain m_sub, splitting each message into (topic, payload).

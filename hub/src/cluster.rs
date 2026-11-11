@@ -210,7 +210,7 @@ pub fn cached_journal_sha256(
     if let Ok(meta_after) = fs::metadata(path) {
         let mtime_after = meta_after.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let len_after = meta_after.len();
-        if mtime_after == mtime && len_after == len {
+        if mtime_after == mtime && len_after == len && (len == 0 || !hash.is_empty()) {
             *cache = Some((mtime, len, ver, now, hash.clone()));
         } else {
             *cache = None;
@@ -602,6 +602,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                         s.cluster.continuous_online_start = None;
                         s.cluster.sync_status = "disconnected".to_string();
                         s.cluster.last_sync_err = format!("Failed to parse status from {}: {}", peer_url, e);
+                        try_orphan_recovery(&st);
                         continue;
                     }
                 },
@@ -800,10 +801,11 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 // preventing unsynced Standby from claiming equal epoch and causing split-brain/data-loss on handover.
 
                 // DEF-64-03: Zero-disk-IO under lock. Extract paths & in-memory stats, then compute file_sha256 outside lock.
-                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, cfg_dirty, cmd_dirty, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
+                let (cfg_lines_count, cmd_lines_count, local_max_cmd_seq, local_epoch, cfg_dirty, cmd_dirty, users_path, notif_path, curve_path, cfg_path, cmd_path) = {
                     let s = st.lock_or_recover();
                     let cfg_tot = s.cfg.total_lines();
                     let (cmd_tot, max_seq) = s.cmds.sync_stats();
+                    let ep = s.cluster.epoch();
                     let c_dirty = s.cfg.dirty_seq();
                     let m_dirty = s.cmds.dirty_seq();
                     let u_p = s.users.path().to_path_buf();
@@ -811,7 +813,7 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     let c_p = s.cluster.curve_clients_path.clone();
                     let cfg_p = s.cfg.path().to_path_buf();
                     let cmd_p = s.cmds.path().to_path_buf();
-                    (cfg_tot, cmd_tot, max_seq, c_dirty, m_dirty, u_p, n_p, c_p, cfg_p, cmd_p)
+                    (cfg_tot, cmd_tot, max_seq, ep, c_dirty, m_dirty, u_p, n_p, c_p, cfg_p, cmd_p)
                 };
 
                 // H-03 / H-PERF-01: When journal lines differ, sync is already required;
@@ -887,6 +889,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let needs_sync = remote_st.cfg_lines != cfg_lines_count
                     || remote_st.cmd_lines != cmd_lines_count
                     || remote_st.max_cmd_seq != local_max_cmd_seq
+                    || remote_st.epoch > local_epoch
+                    || force_full_cfg_resync
+                    || force_full_cmd_resync
                     || cfg_diff
                     || cmd_diff
                     || users_diff
@@ -972,11 +977,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                             let msg = format!("cfg replace_all failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
+                                            force_full_cfg_resync = true;
                                         }
                                     } else {
                                         let msg = format!("full cfg resync received truncated batch ({} < {}), deferring replace_all", data.cfg_delta_lines.len(), data.total_cfg_lines);
                                         eprintln!("[hub] WARN {}", msg);
                                         file_sync_err = Some(msg);
+                                        force_full_cfg_resync = true;
                                     }
                                 } else if !data.cfg_delta_lines.is_empty() {
                                     match cfg.apply_delta_lines(&data.cfg_delta_lines) {
@@ -1002,11 +1009,13 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                             let msg = format!("cmds replace_all failed: {}", e);
                                             eprintln!("[hub] cluster sync: {}", msg);
                                             file_sync_err = Some(msg);
+                                            force_full_cmd_resync = true;
                                         }
                                     } else {
                                         let msg = format!("full cmd resync received truncated batch ({} < {}), deferring replace_all", data.cmd_delta_lines.len(), data.total_cmd_lines);
                                         eprintln!("[hub] WARN {}", msg);
                                         file_sync_err = Some(msg);
+                                        force_full_cmd_resync = true;
                                     }
                                 } else if !data.cmd_delta_lines.is_empty() {
                                     // F-01: Check and propagate apply_delta_lines failure to prevent false synced status
@@ -1309,6 +1318,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     None,
                                     "ok",
                                 );
+                            } else {
+                                let reason = h_data.error.clone().unwrap_or_else(|| "handover rejected by peer".to_string());
+                                eprintln!("[hub] ADR-10 AUTO-FAILBACK REJECTED by Primary: {}", reason);
+                                let mut s = st.lock_or_recover();
+                                s.cluster.continuous_online_start = None;
+                                s.cluster.last_sync_err = format!("failback rejected: {}", reason);
                             }
                         }
                     }

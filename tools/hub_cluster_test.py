@@ -153,8 +153,8 @@ class TestCluster:
             "--failback-hours", str(failback_hours),
         ]
 
-        self.p_proc = subprocess.Popen(p_cmd, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.s_proc = subprocess.Popen(s_cmd, cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.p_proc = subprocess.Popen(p_cmd, cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.s_proc = subprocess.Popen(s_cmd, cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         # Wait for both APIs to become available
         for _ in range(50):

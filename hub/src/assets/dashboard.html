@@ -4252,6 +4252,11 @@ function confirmDialog(opts){
 function api(path, opts){
   return fetch(path, opts).then(function(r){
     if(!r.ok){
+      if(r.status === 401 && path !== "/api/v1/whoami" && path !== "/api/v1/login"){
+        if(typeof showLogin === "function"){
+          showLogin();
+        }
+      }
       return r.json().catch(function(){ return {}; }).then(function(j){
         var msg = (j && j.error) ? j.error : (path + " -> " + r.status);
         if(r.status === 409){
@@ -5013,10 +5018,12 @@ function renderPosNodeDetail(){
           var swapHtml = '<span class="' + swClass + '" style="font-family:var(--mono)">' + swSign + swVal.toFixed(2) + '</span>';
           var qKey = n.key + ":" + p.ticket;
           var isTicketQueued = !!(s.queuedCloseTickets && s.queuedCloseTickets[qKey]);
+          var isClosing = !!(s.closingTickets && s.closingTickets[p.ticket]);
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
-          var btnText = isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close");
-          var btnTitle = isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket));
-          var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" data-node-key="' + esc(n.key) + '" data-sym="' + esc(p.symbol) + '" data-side="' + sideText + '" data-lots="' + esc(p.lots) + '" data-profit="' + pVal + '" title="' + btnTitle + '">' + btnText + '</button>';
+          var btnText = isClosing ? t("cockpit.btn_closing") : (isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close"));
+          var btnTitle = isClosing ? t("cockpit.btn_closing") : (isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket)));
+          var disabledAttr = isClosing ? ' disabled' : '';
+          var closeActionHtml = '<button type="button" class="' + btnClass + '"' + disabledAttr + ' data-tkt="' + esc(p.ticket) + '" data-node-key="' + esc(n.key) + '" data-sym="' + esc(p.symbol) + '" data-side="' + sideText + '" data-lots="' + esc(p.lots) + '" data-profit="' + pVal + '" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
             ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
@@ -5616,6 +5623,8 @@ function onCloseSinglePosition(nodeKey, ticket, symbol, side, lots, profit){
 }
 
 function executeCloseSingle(nodeKey, ticket){
+  if(!s.closingTickets) s.closingTickets = {};
+  s.closingTickets[ticket] = true;
   var btn = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
   if(btn){
     btn.disabled = true;
@@ -5628,6 +5637,7 @@ function executeCloseSingle(nodeKey, ticket){
   var msgEl = $("pos_foot_msg") || $("gmsg");
 
   var resetBtn = function(isQueuedMarketClosed){
+    if(s.closingTickets) delete s.closingTickets[ticket];
     var b = document.querySelector('button.pos-close-single-btn[data-tkt="' + ticket + '"]');
     if(b){
       b.disabled = false;
@@ -7414,6 +7424,11 @@ $("loginform").addEventListener("submit", function(ev){
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id: user })
   }).then(function(r){
+    if(r.status === 429){
+      return r.json().then(function(j){
+        throw new Error("throttled:" + ((j && (j.retry_after_secs || j.error)) || "retry shortly"));
+      }, function(){ throw new Error("throttled:retry shortly"); });
+    }
     if(!r.ok) throw new Error("nonce request failed");
     return r.json();
   }).then(function(ch){

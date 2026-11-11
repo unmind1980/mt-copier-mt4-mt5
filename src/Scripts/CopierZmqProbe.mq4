@@ -117,10 +117,17 @@ bool RecvFrames(Socket *s,string &f0,string &f1,int &nFrames,const int waitMs)
       nFrames=1;
       if(!m0.more()) return true;    // a single-frame message
       ZmqMsg m1;
-      if(s.recv(m1,true))
+      int m1Waited=0;
+      while(m1Waited<1000)
         {
-         f1=m1.getData();
-         nFrames=2;
+         if(s.recv(m1,true))
+           {
+            f1=m1.getData();
+            nFrames=2;
+            break;
+           }
+         Sleep(5);
+         m1Waited+=5;
         }
       return true;
      }
