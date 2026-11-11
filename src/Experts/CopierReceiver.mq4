@@ -320,6 +320,7 @@ int     g_lotMode[CP_MAX_SENDERS];
 double  g_lotParam[CP_MAX_SENDERS];
 double  g_senderEquity[CP_MAX_SENDERS];
 string  g_senderCurrency[CP_MAX_SENDERS];
+long    g_lastSeqGlobal[CP_MAX_SENDERS];
 //--- One sequence watermark PER STREAM, not per sender.
 //---
 //--- The sender numbers both sockets from a single counter, and the
@@ -1220,30 +1221,82 @@ bool SymbolInOpenWarmup(const string sym,int &elapsedSecs)
    long now=CopierServerTime();
    MqlDateTime dt;
    TimeToStruct((datetime)now,dt);
-   int prevDow=(dt.day_of_week==0)?6:(dt.day_of_week-1);
-   bool prevEndsAtMidnight=false;
+   int secOfDay=dt.hour*3600 + dt.min*60 + dt.sec;
+   int dow=dt.day_of_week;
+   int prevDow=(dow+6)%7;
+
+   int activeIdx=-1;
+   long activeFs=0;
+   long prevTodayEnd=-1;
+   long prevTodayFs=0;
    for(int si0=0;si0<8;si0++)
      {
       datetime pf=0,pt=0;
-      if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,si0,pf,pt)) break;
-      if(pf==0 && pt==0) continue;
-      if(((long)(pt%86400)==0 && pt>pf) || (long)pt>=86400)
+      if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dow,si0,pf,pt)) break;
+      long fs=0,todayEnd=0,nextTail=0;
+      if(!CopierExtractSessionSpan(pf,pt,fs,todayEnd,nextTail)) continue;
+      if(secOfDay>=fs && secOfDay<=todayEnd)
         {
-         prevEndsAtMidnight=true;
+         activeIdx=si0;
+         activeFs=fs;
          break;
         }
+      prevTodayFs=fs;
+      prevTodayEnd=todayEnd;
      }
-   bool todayStartsAtMidnight=false;
-   datetime tf=0,tt=0;
-   if(SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dt.day_of_week,0,tf,tt) && (tf!=0 || tt!=0))
+
+   if(activeIdx>=0)
      {
-      if((long)(tf%86400)==0) todayStartsAtMidnight=true;
+      // Same-day session following a break (e.g. lunch break 12:00->13:00):
+      // only continuous if previous session ended within 60s of this session's open.
+      if(prevTodayEnd>=0)
+        {
+         if((activeFs-prevTodayEnd)<=60 && (secOfDay-prevTodayFs)>=MarketOpenDelayMinutes*60)
+            return false;
+        }
+      else if(activeFs<=60)
+        {
+         // First session of day starting at 00:00 (..00:01): continuous with yesterday only
+         // if yesterday's final session reached midnight (>=23:59 == 86340s) AND total
+         // elapsed open span across midnight has already exceeded the warmup window.
+         long prevLastFs=0, prevMaxEnd=-1;
+         for(int si1=0;si1<8;si1++)
+           {
+            datetime pf=0,pt=0;
+            if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,si1,pf,pt)) break;
+            long fs=0,todayEnd=0,nextTail=0;
+            if(!CopierExtractSessionSpan(pf,pt,fs,todayEnd,nextTail)) continue;
+            if(todayEnd>=prevMaxEnd)
+              {
+               prevMaxEnd=todayEnd;
+               prevLastFs=fs;
+              }
+           }
+         if(prevMaxEnd>=86340)
+           {
+            long crossMidnightElapsed=secOfDay+(86400-prevLastFs);
+            if(crossMidnightElapsed>=MarketOpenDelayMinutes*60)
+               return false;
+           }
+        }
      }
-   bool continuous247=(prevEndsAtMidnight && todayStartsAtMidnight);
-   if(continuous247) return false;
 
    elapsedSecs=secs;
    return true;
+  }
+
+void SampleSpreadIfUnique(const string sym,string &sampled[],int &nSampled,const int cap)
+  {
+   if(StringLen(sym)==0 || nSampled>=cap) return;
+   for(int j=0;j<nSampled;j++)
+      if(sampled[j]==sym) return;
+   sampled[nSampled++]=sym;
+   int el=0;
+   if(SymInSessionCached(sym) && !SymStaleCached(sym) && !SymbolInOpenWarmup(sym,el))
+     {
+      double sp=CopierGetSpreadPoints(sym);
+      if(sp>0.0) TrackSymbolSpread(sym,sp,false);
+     }
   }
 
 bool CopierTradeAllowed()
@@ -1276,6 +1329,9 @@ CopierSeenRing  g_fillGraceRing;
                              // when sender fills, receiver waits up to
                              // PendingFillGraceSeconds for its own pending order
                              // to fill naturally before cancelling and re-opening.
+CopierSeenRing  g_emgSlApplied;
+                             // UIDs whose local SL was temporarily initialized from
+                             // EmergencySLPips and has not yet converged to sender's real SL.
 
 //=====================================================================
 // Symbol map (flattened)
@@ -1466,6 +1522,10 @@ bool LoadConfigFromInputs()
       g_senderClockOffsetValid[s]=false;
       g_snapRejectStreak[s]=0;
       g_dropped[s]=0;
+      g_senderEquity[s]=0.0;
+      g_senderCurrency[s]="";
+      g_senderAcc[s]="";
+      g_lastSeqGlobal[s]=0;
      }
 
    //--- Start from an empty symbol map on every load - see MapClear.
@@ -2096,6 +2156,7 @@ bool LoadConfigForHub()
    string oldSid[CP_MAX_SENDERS];
    long oldMagic[CP_MAX_SENDERS];
    long oldLastSeq[CP_MAX_SENDERS][CP_STREAM_COUNT];
+   long oldLastSeqGlobal[CP_MAX_SENDERS];
    string oldSsidSeen[CP_MAX_SENDERS];
    string oldSsidOld[CP_MAX_SENDERS][CP_OLD_SSID_MAX];
    int oldSsidOldHead[CP_MAX_SENDERS];
@@ -2111,9 +2172,13 @@ bool LoadConfigForHub()
    bool oldClockValid[CP_MAX_SENDERS];
    int oldRejectStreak[CP_MAX_SENDERS];
    int oldDropped[CP_MAX_SENDERS];
+   double oldSenderEquity[CP_MAX_SENDERS];
+   string oldSenderCurrency[CP_MAX_SENDERS];
+   string oldSenderAcc[CP_MAX_SENDERS];
 
    ArrayInitialize(oldMagic,0);
    ArrayInitialize(oldLastSeq,-1);
+   ArrayInitialize(oldLastSeqGlobal,0);
    ArrayInitialize(oldSsidOldHead,0);
    ArrayInitialize(oldDesiredCount,0);
    ArrayInitialize(oldReady,false);
@@ -2126,11 +2191,14 @@ bool LoadConfigForHub()
    ArrayInitialize(oldClockValid,false);
    ArrayInitialize(oldRejectStreak,0);
    ArrayInitialize(oldDropped,0);
+   ArrayInitialize(oldSenderEquity,0.0);
    for(int z=0;z<CP_MAX_SENDERS;z++)
      {
       oldSid[z]="";
       oldSsidSeen[z]="";
       oldSnapHash[z]="";
+      oldSenderCurrency[z]="";
+      oldSenderAcc[z]="";
       for(int k=0;k<CP_OLD_SSID_MAX;k++) oldSsidOld[z][k]="";
      }
 
@@ -2145,6 +2213,7 @@ bool LoadConfigForHub()
          oldLastSeq[s][0]=g_lastSeq[s][0];
          oldLastSeq[s][1]=g_lastSeq[s][1];
          oldLastSeq[s][2]=g_lastSeq[s][2];
+         oldLastSeqGlobal[s]=g_lastSeqGlobal[s];
          oldSsidSeen[s]=g_ssidSeen[s];
          for(int k=0;k<CP_OLD_SSID_MAX;k++) oldSsidOld[s][k]=g_ssidOld[s][k];
          oldSsidOldHead[s]=g_ssidOldHead[s];
@@ -2160,6 +2229,9 @@ bool LoadConfigForHub()
          oldClockValid[s]=g_senderClockOffsetValid[s];
          oldRejectStreak[s]=g_snapRejectStreak[s];
          oldDropped[s]=g_dropped[s];
+         oldSenderEquity[s]=g_senderEquity[s];
+         oldSenderCurrency[s]=g_senderCurrency[s];
+         oldSenderAcc[s]=g_senderAcc[s];
 
          int sbase = s * CP_MAX_POSITIONS;
          for(int d=0; d<oldDesiredCount[s]; d++)
@@ -2296,6 +2368,7 @@ bool LoadConfigForHub()
          g_lastSeq[i][0] = oldLastSeq[prevIdx][0];
          g_lastSeq[i][1] = oldLastSeq[prevIdx][1];
          g_lastSeq[i][2] = oldLastSeq[prevIdx][2];
+         g_lastSeqGlobal[i] = oldLastSeqGlobal[prevIdx];
          g_ssidSeen[i]   = oldSsidSeen[prevIdx];
          g_desiredCount[i]= oldDesiredCount[prevIdx];
          g_ready[i]      = oldReady[prevIdx];
@@ -2309,6 +2382,9 @@ bool LoadConfigForHub()
          g_senderClockOffsetValid[i] = oldClockValid[prevIdx];
          g_snapRejectStreak[i]       = oldRejectStreak[prevIdx];
          g_dropped[i]    = oldDropped[prevIdx];
+         g_senderEquity[i]   = oldSenderEquity[prevIdx];
+         g_senderCurrency[i] = oldSenderCurrency[prevIdx];
+         g_senderAcc[i]      = oldSenderAcc[prevIdx];
 
          if(prevIdx != i)
            {
@@ -2333,6 +2409,7 @@ bool LoadConfigForHub()
          g_lastSeq[i][CP_STREAM_EVENTS]=-1;
          g_lastSeq[i][CP_STREAM_SNAP]=-1;
          g_lastSeq[i][CP_STREAM_HBT]=-1;
+         g_lastSeqGlobal[i]=0;
          g_ssidSeen[i]="";
          ClearAbandonedSsids(i);
          g_lastMsgMs[i]=0;
@@ -2347,6 +2424,9 @@ bool LoadConfigForHub()
          g_senderClockOffsetValid[i]=false;
          g_snapRejectStreak[i]=0;
          g_dropped[i]=0;
+         g_senderEquity[i]=0.0;
+         g_senderCurrency[i]="";
+         g_senderAcc[i]="";
         }
 
       InitSenderSettings(i, ini, sec);
@@ -3278,10 +3358,10 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
               }
            }
         }
-      if(openCancelled)
+      if(openCancelled && ticket<=0)
         {
-         // Open was cancelled in queue before ever reaching the broker.
-         // The position does not exist locally; close is already satisfied.
+         // Open was cancelled in queue before ever reaching the broker
+         // and no local ticket was supplied; close is already satisfied.
          g_pushReject="open_cancelled_in_queue";
          return false;
         }
@@ -3605,6 +3685,7 @@ void ExecuteQueue()
    double initialFreeMargin=AccountFreeMargin();
 #endif
    double drainedReqMargin=0.0;
+   double freedMarginEst=0.0;
 
    //--- Assess if this is a Batch Close or Batch Modify operation (e.g. Martingale/Grid basket exit, or closeall, or >8 queued)
    int closeCount=0;
@@ -3616,6 +3697,27 @@ void ExecuteQueue()
          closeCount++;
       else if(qk==CP_ACT_MODIFY)
          modifyCount++;
+     }
+   // R14-A09/D06: Prioritize risk-reducing exits ahead of pending/new opens in the same tick
+   // while preserving FIFO ordering inside exits and inside opens/modifies.
+   if(closeCount>0 && closeCount<g_qn)
+     {
+      int exitDest=0;
+      for(int qi=0; qi<g_qn; qi++)
+        {
+         int qk=g_q[g_qHead+qi].kind;
+         if(qk==CP_ACT_CLOSE || qk==CP_ACT_TRIM || qk==CP_ACT_DEDUP)
+           {
+            if(qi>exitDest)
+              {
+               CopierAction exitAct=g_q[g_qHead+qi];
+               for(int sh=qi; sh>exitDest; sh--)
+                  g_q[g_qHead+sh]=g_q[g_qHead+sh-1];
+               g_q[g_qHead+exitDest]=exitAct;
+              }
+            exitDest++;
+           }
+        }
      }
    bool isEmergencyExit=(g_cmdCloseAllActive || g_riskCloseAllPending);
    bool isBatchClose=(isEmergencyExit || closeCount>=8);
@@ -3739,7 +3841,6 @@ void ExecuteQueue()
             if(!g_riskCloseAllPending && !g_cmdCloseAllActive && !g_risk.AnyTripped())
               {
                double minSp = GetSymbolMinSpread(a.sym);
-               if(minSp<=0.0) minSp = 15.0; // conservative 1.5 pip baseline before warmup completes
                bool isWide = (minSp>0.0 && curSp > minSp * MaxSpreadMultiplier);
                if(isWide && warmupElapsed < MarketOpenCloseMaxWaitSec)
                  {
@@ -3908,7 +4009,19 @@ void ExecuteQueue()
         }
 
       double reqMargin=0.0;
-      if(a.kind==CP_ACT_OPEN)
+      double preExitFree=0.0;
+      double closedLots=a.lots;
+      bool checkMargin=(a.kind==CP_ACT_OPEN);
+      if(checkMargin && a.ordKind==CP_ORD_PENDING)
+        {
+#ifdef __MQL5__
+         ENUM_SYMBOL_CALC_MODE pCalcMode=(ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(a.sym,SYMBOL_TRADE_CALC_MODE);
+         checkMargin=(pCalcMode==SYMBOL_CALC_MODE_FUTURES || pCalcMode==SYMBOL_CALC_MODE_EXCH_FUTURES || pCalcMode==SYMBOL_CALC_MODE_EXCH_FUTURES_FORTS);
+#else
+         checkMargin=(MarketInfo(a.sym,MODE_PROFITCALCMODE)==2);
+#endif
+        }
+      if(checkMargin)
         {
          // Pre-trade Margin Validation (D2-02)
          bool marginOk=true;
@@ -3937,19 +4050,24 @@ void ExecuteQueue()
             // R6-D4-03 & R7-D3-01 & D-04: Fallback calculation if OrderCalcMargin fails, converting margin currency to account currency
             double cs=SymbolInfoDouble(a.sym,SYMBOL_TRADE_CONTRACT_SIZE);
             long lev=AccountInfoInteger(ACCOUNT_LEVERAGE);
-            if(cs>0.0 && lev>0)
+            ENUM_SYMBOL_CALC_MODE calcMode=(ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(a.sym,SYMBOL_TRADE_CALC_MODE);
+            bool noLev=(calcMode==SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE);
+            if(cs>0.0 && (lev>0 || noLev))
               {
                string marginCcy=SymbolInfoString(a.sym,SYMBOL_CURRENCY_MARGIN);
                if(StringLen(marginCcy)==0) marginCcy=SymbolInfoString(a.sym,SYMBOL_CURRENCY_BASE);
                string accCcy=CopierAccountCurrency();
-               double crossRate=(marginCcy==accCcy)?1.0:CopierGetCurrencyCrossRate(marginCcy,accCcy);
-               ENUM_SYMBOL_CALC_MODE calcMode=(ENUM_SYMBOL_CALC_MODE)SymbolInfoInteger(a.sym,SYMBOL_TRADE_CALC_MODE);
-               bool needsPrice = (calcMode!=SYMBOL_CALC_MODE_FOREX && calcMode!=SYMBOL_CALC_MODE_FOREX_NO_LEVERAGE);
+               string sfx=(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)?g_suffix[a.senderIdx]:"";
+               double crossRate=(marginCcy==accCcy)?1.0:CopierGetCurrencyCrossRate(marginCcy,accCcy,sfx);
+               bool needsPrice = (calcMode!=SYMBOL_CALC_MODE_FOREX && !noLev);
                double nominal = (needsPrice && checkPx>0.0) ? (a.lots*cs*checkPx) : (a.lots*cs);
-               if(crossRate>0.0)
-                  reqMargin=(nominal/(double)lev)*crossRate;
+               double effLev = noLev ? 1.0 : (double)lev;
+               if(marginCcy!=accCcy && crossRate<=0.0)
+                  marginOk=false;
+               else if(crossRate>0.0)
+                  reqMargin=(nominal/effLev)*crossRate;
                else if(checkPx>0.0)
-                  reqMargin=(nominal)/(double)lev;
+                  reqMargin=nominal/effLev;
                else
                   reqMargin=0.0;
               }
@@ -3958,7 +4076,7 @@ void ExecuteQueue()
            }
          // R6-D4-04: Prevent double-counting previously drained margin
          double curFree=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-         double effectiveFree=MathMin(curFree,initialFreeMargin-drainedReqMargin);
+         double effectiveFree=MathMin(curFree,initialFreeMargin+freedMarginEst-drainedReqMargin);
          if(effectiveFree < reqMargin) marginOk=false;
 #else
          int cmd=(a.side==CP_SIDE_BUY)?OP_BUY:OP_SELL;
@@ -3972,7 +4090,7 @@ void ExecuteQueue()
             if(oneLotMargin>0.0) reqMargin=oneLotMargin*a.lots;
            }
          if(reqMargin<0.0) reqMargin=0.0;
-         double effectiveFree=MathMin(curFree,initialFreeMargin-drainedReqMargin);
+         double effectiveFree=MathMin(curFree,initialFreeMargin+freedMarginEst-drainedReqMargin);
          if(fmCheck<=0.0 || (effectiveFree < reqMargin))
             marginOk=false;
 #endif
@@ -4017,7 +4135,6 @@ void ExecuteQueue()
             string boKey=g_sid[a.senderIdx]+":"+(string)a.kind+":"+a.uid;
             g_backoff.Park(boKey,2000);
             ShiftQueue();
-            done++;
             continue;
            }
 
@@ -4036,6 +4153,7 @@ void ExecuteQueue()
          int dev = CopierScaleDeviationPoints(a.sym, rawDev);
          double emSL = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencySLPips:EmergencySLPips;
          double emTP = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].emergencyTPPips:EmergencyTPPips;
+         bool usedEmSl=false;
 
          if(a.ordKind==CP_ORD_PENDING)
            {
@@ -4048,6 +4166,7 @@ void ExecuteQueue()
               {
                double rawSl=(a.side==CP_SIDE_BUY)?(anchorPx-emSL*pipSize):(anchorPx+emSL*pipSize);
                pendSl=NormalizeDouble(rawSl,si.digits);
+               usedEmSl=(pendSl>0.0);
               }
             if(pendTp<=0.0 && emTP>0.0 && anchorPx>0.0)
               {
@@ -4058,6 +4177,7 @@ void ExecuteQueue()
             bool clamped=false;
             if(pendSl>0.0 && anchorPx>0.0)
                pendSl=CopierFitStopAt(pendSl,a.side,true,anchorPx,si,clamped);
+            if(usedEmSl && pendSl<=0.0) usedEmSl=false;
             if(pendTp>0.0 && anchorPx>0.0)
                pendTp=CopierFitStopAt(pendTp,a.side,false,anchorPx,si,clamped);
 
@@ -4097,6 +4217,7 @@ void ExecuteQueue()
            {
             int e2=0;
             sl=CopierEmergencySl(a.sym,a.side,0.0,emSL,si,e2);
+            if(sl>0.0) usedEmSl=true;
             if(e2!=0 && g_once.ShouldEmit("em_sl_fail|"+a.sym))
                g_log.Warn("NL-02: EmergencySL configured but could not be computed for "+a.sym+" (err="+(string)e2+") - opening without SL");
            }
@@ -4113,6 +4234,7 @@ void ExecuteQueue()
                              CopierCommentForUid(a.uid,a.senderTicket),
                              g_magic[a.senderIdx],dev,err);
            }
+         if(ok && usedEmSl) g_emgSlApplied.Add(a.uid);
         }
       else if(a.kind==CP_ACT_MODIFY)
         {
@@ -4124,9 +4246,12 @@ void ExecuteQueue()
             ok=CopierModifyPendingOrder(a.ticket,a.sym,a.pprice,a.sl,a.tp,a.pstop,(datetime)a.pexpire,err);
          else
             ok=CopierModifyStops(a.ticket,a.sym,a.sl,a.tp,err);
+         if(ok) g_emgSlApplied.Forget(a.uid);
         }
       else
         {
+         closedLots=a.lots;
+         preExitFree=0.0;
          int rawDev = (a.senderIdx>=0 && a.senderIdx<g_nSenders)?g_senderCfg[a.senderIdx].deviationPoints:DeviationPoints;
          int dev = CopierScaleDeviationPoints(a.sym, rawDev);
          // NH-03: Exit Slippage Buffer is applied ONLY to emergency exits or true bulk martingale/grid exits (>=8 actions),
@@ -4157,12 +4282,20 @@ void ExecuteQueue()
             prefetchedPx = (ordType==OP_BUY)?MarketInfo(a.sym,MODE_BID):MarketInfo(a.sym,MODE_ASK);
            }
 #endif
+         if((a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP || a.kind==CP_ACT_TRIM) && a.ordKind==CP_ORD_MARKET)
+           {
+#ifdef __MQL5__
+            preExitFree=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+#else
+            preExitFree=AccountFreeMargin();
+#endif
+           }
 
          if(a.kind==CP_ACT_TRIM)
             ok=CopierClosePartial(a.ticket,a.lots,a.sym,a.side,
                                   (a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS ? g_magic[a.senderIdx] : 0),
                                   CopierCommentForUid(a.uid,a.senderTicket),
-                                  dev,err);
+                                  dev,err,closedLots);
          else
             ok=CopierClosePosition(a.ticket,dev,err,asyncMode,prefetchedPx,a.ordKind);
         }
@@ -4180,11 +4313,12 @@ void ExecuteQueue()
          //--- CopierSeenRingApplies()
          //--- H-01 & NH-04: In asyncMode, broker confirmation is pending.
          //--- Park in 1s g_inflight instead of 10m g_seen to suppress duplicate re-triggers while avoiding lockouts.
+         bool trimComplete=(a.kind!=CP_ACT_TRIM || closedLots>=a.lots-CP_LOT_EPS);
 #ifdef __MQL5__
          if(asyncMode) g_inflight.Add(a.key);
-         else if(CopierSeenRingApplies(a.kind)) g_seen.Add(a.key);
+         else if(CopierSeenRingApplies(a.kind) && trimComplete) g_seen.Add(a.key);
 #else
-         if(CopierSeenRingApplies(a.kind)) g_seen.Add(a.key);
+         if(CopierSeenRingApplies(a.kind) && trimComplete) g_seen.Add(a.key);
 #endif
 
          //--- A mirror now EXISTS on this account, so record it: this is what
@@ -4272,12 +4406,21 @@ void ExecuteQueue()
            {
             if(a.ordKind==CP_ORD_MARKET)
               {
-               g_ourLots=MathMax(0.0,g_ourLots-a.lots);
+               g_ourLots=MathMax(0.0,g_ourLots-closedLots);
                if(a.senderIdx>=0 && a.senderIdx<CP_MAX_SENDERS)
                  {
-                  sAddedLots[a.senderIdx]-=a.lots;
+                  sAddedLots[a.senderIdx]-=closedLots;
                  }
               }
+           }
+         if((a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP || a.kind==CP_ACT_TRIM) && !asyncMode && a.ordKind==CP_ORD_MARKET)
+           {
+#ifdef __MQL5__
+            double postExitFree=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+#else
+            double postExitFree=AccountFreeMargin();
+#endif
+            if(postExitFree>preExitFree) freedMarginEst+=(postExitFree-preExitFree);
            }
          //--- An executed action just changed what the identity file holds:
          //--- OPEN created a mirror, TRIM moved MT4's remainder onto a new
@@ -4758,49 +4901,73 @@ void ExecuteQueue()
 // would need a second position under the same UID, which breaks the
 // one-UID-one-position mapping the whole design rests on.
 //=====================================================================
+// Compute raw (pre-normalization) receiver lot size for `senderLots` in mode `g_lotMode[si]`.
+// Equity and cross-currency conversions are evaluated ONLY in CP_SIZE_EQUITY_RATIO.
+bool ComputeRawReceiverLots(const int si,const string sym,const double senderLots,
+                            const CopierSymInfo &si2,double &outRawLots,bool &rejected,
+                            const string senderSym="")
+  {
+   rejected=false;
+   outRawLots=0.0;
+   double symMult=(StringLen(senderSym)>0)?GetSymbolMultiplierForPair(si,senderSym,sym):GetSymbolMultiplier(si,sym);
+   if(g_lotMode[si]==CP_SIZE_FIXED)
+     {
+      outRawLots=g_lotParam[si]*symMult;
+     }
+   else if(g_lotMode[si]==CP_SIZE_OFF)
+     {
+      outRawLots=senderLots*symMult;
+     }
+   else if(g_lotMode[si]==CP_SIZE_EQUITY_RATIO)
+     {
+      double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
+      if(myEq<=0.0) { rejected=true; return false; }
+      double convSenderEq=g_senderEquity[si];
+      string recCcy=CopierAccountCurrency();
+      if(convSenderEq>0.0 && StringLen(g_senderCurrency[si])>0 && g_senderCurrency[si]!=recCcy)
+        {
+         double rate=CopierGetCurrencyCrossRate(g_senderCurrency[si],recCcy,g_suffix[si]);
+         if(rate>0.0) convSenderEq*=rate;
+         else
+           {
+            rejected=true;
+            return false;
+           }
+        }
+      if(convSenderEq<=0.0) { rejected=true; return false; }
+      double eqRatio=myEq/convSenderEq;
+      if(eqRatio>CP_MAX_EQUITY_RATIO) eqRatio=CP_MAX_EQUITY_RATIO;
+      outRawLots=senderLots*eqRatio*g_lotParam[si]*symMult;
+     }
+   else
+     {
+      outRawLots=senderLots*g_lotParam[si]*symMult;
+     }
+   if(!MathIsValidNumber(outRawLots) || outRawLots<=0.0)
+     {
+      outRawLots=0.0;
+      rejected=true;
+      return false;
+     }
+   return true;
+  }
+
 double ComputeReceiverLots(const int si,const string sym,const double senderLots,bool &rejected,const string senderSym="")
   {
    rejected=false;
    CopierSymInfo si2;
    if(!CopierGetSymbolInfo(sym,si2)) { rejected=true; return 0.0; }
-   //--- minLots/maxLots here are bounds on the LOCAL volume, NOT the sender's.
-   //---
-   //--- They used to be fed minsenderlotsize/maxsenderlotsize, which is wrong
-   //--- on both counts: those two fields mean "skip a SIGNAL whose size is
-   //--- outside this range" (and ConvergeSender already applies them to
-   //--- d.lots), not "clamp the mirror to this size". Passing them here made
-   //---   * maxsenderlotsize silently SHRINK a mirror (multiplier 2.0 on a 0.4
-   //---     lot signal became 0.5 with no log line at all), and
-   //---   * minsenderlotsize REJECT the entry outright in fixed-lot mode
-   //---     (a 0.05 fixed size under a 0.1 filter never opened, reported as
-   //---     "lot sizing rejected" - which points at the wrong thing).
-   //--- The per-position cap is maxLotsPerPosition, applied below.
-   double symMult=(StringLen(senderSym)>0)?GetSymbolMultiplierForPair(si,senderSym,sym):GetSymbolMultiplier(si,sym);
-   double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
-   if(myEq<=0.0) { rejected=true; return 0.0; }
-   double convSenderEq=g_senderEquity[si];
-   string recCcy=CopierAccountCurrency();
-   if(convSenderEq>0.0 && StringLen(g_senderCurrency[si])>0 && g_senderCurrency[si]!=recCcy)
-     {
-      double rate=CopierGetCurrencyCrossRate(g_senderCurrency[si],recCcy);
-      if(rate>0.0) convSenderEq*=rate;
-      else
-        {
-         rejected=true;
-         return 0.0;
-        }
-     }
-   double lots=CopierComputeLots(senderLots,g_lotMode[si],g_lotParam[si],symMult,si2,
-                                 0.0,0.0,rejected,convSenderEq,myEq);
-   if(rejected || lots<=0.0) return 0.0;
-   double rawEstimate = (g_lotMode[si]==CP_SIZE_FIXED) ? (g_lotParam[si]*symMult) :
-                        (g_lotMode[si]==CP_SIZE_EQUITY_RATIO && convSenderEq>0.0) ? (senderLots*(myEq/convSenderEq)*g_lotParam[si]*symMult) :
-                        (senderLots*g_lotParam[si]*symMult);
+   double rawEstimate=0.0;
+   if(!ComputeRawReceiverLots(si,sym,senderLots,si2,rawEstimate,rejected,senderSym))
+      return 0.0;
    if(si2.maxLot>0.0 && rawEstimate>si2.maxLot)
      {
       if(g_once.ShouldEmit("maxlotclamp|"+g_sid[si]+"|"+sym))
          g_log.Warn("sender "+g_sid[si]+" symbol "+sym+" computed lots "+DoubleToString(rawEstimate,2)+" exceeds broker maxLot "+DoubleToString(si2.maxLot,2)+"; clamped to maxLot");
+      rawEstimate=si2.maxLot;
      }
+   double lots=CopierNormalizeLot(rawEstimate,si2);
+   if(lots<=0.0 || lots<si2.minLot) { rejected=true; return 0.0; }
    if(g_senderCfg[si].maxLotsPerPosition>0.0 && lots>g_senderCfg[si].maxLotsPerPosition)
      {
       lots=CopierNormalizeLot(g_senderCfg[si].maxLotsPerPosition,si2);
@@ -4816,29 +4983,55 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    return lots;
   }
 
-double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const string sym)
+double ComputeTargetLotsForMirrorRaw(const int si,const CopierPos &desired,const string sym,bool &outRejected)
   {
+   outRejected=false;
    CopierSymInfo si2;
-   if(!CopierGetSymbolInfo(sym,si2)) return 0.0;
-   bool rejected=false;
-   double targetLots=0.0;
+   if(!CopierGetSymbolInfo(sym,si2)) { outRejected=true; return 0.0; }
    double origLots=(desired.initLots>0.0)
                    ?desired.initLots
                    :GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
+   double targetLots=0.0;
    if(origLots>0.0 && desired.lots<origLots)
      {
-      double baseLots=ComputeReceiverLots(si,sym,origLots,rejected,desired.sym);
-      targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
+      double rawBase=0.0;
+      bool baseRej=false;
+      if(!ComputeRawReceiverLots(si,sym,origLots,si2,rawBase,baseRej,desired.sym) || baseRej)
+        {
+         outRejected=true;
+         return 0.0;
+        }
+      if(si2.maxLot>0.0 && rawBase>si2.maxLot)
+        {
+         if(g_once.ShouldEmit("maxlotclamp|"+g_sid[si]+"|"+sym))
+            g_log.Warn("sender "+g_sid[si]+" symbol "+sym+" computed lots "+DoubleToString(rawBase,2)+" exceeds broker maxLot "+DoubleToString(si2.maxLot,2)+"; clamped to maxLot");
+         rawBase=si2.maxLot;
+        }
+      if(g_senderCfg[si].maxLotsPerPosition>0.0 && rawBase>g_senderCfg[si].maxLotsPerPosition)
+         rawBase=g_senderCfg[si].maxLotsPerPosition;
+      // Single normalization after scaling by (desired.lots / origLots) avoids double lotStep rounding loss
+      double rawScaled=rawBase*(desired.lots/origLots);
+      targetLots=CopierNormalizeLot(rawScaled,si2);
+      if(targetLots<=0.0 || targetLots<si2.minLot) return 0.0;
      }
    else
      {
-      targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected,desired.sym);
+      bool recRej=false;
+      targetLots=ComputeReceiverLots(si,sym,desired.lots,recRej,desired.sym);
+      if(recRej || targetLots<=0.0)
+        {
+         outRejected=true;
+         return 0.0;
+        }
      }
-   if(rejected || targetLots<=0.0)
-     {
-      rejected=true;
-      return 0.0;
-     }
+   return targetLots;
+  }
+
+double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const string sym)
+  {
+   bool rejected=false;
+   double targetLots=ComputeTargetLotsForMirrorRaw(si,desired,sym,rejected);
+   if(rejected || targetLots<=0.0) return 0.0;
    // N72-09: Never clamp sub-minLot lots up to minLot as it would silently inflate risk (see CopierSizing.mqh)
    return targetLots;
   }
@@ -4847,27 +5040,36 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
   {
    if(local.kind!=CP_ORD_MARKET) return;
 
+   CopierSymInfo si2;
+   if(!CopierGetSymbolInfo(local.sym,si2)) return;
+
    //--- Sizing conversion: use cached targetLots if already computed by converge,
-   //--- or compute directly if called stand-alone.
+   //--- or compute directly (distinguishing rejection from sub-minLot partial trim).
    double targetLots=targetLotsCached;
-   if(targetLots<=0.0) targetLots=ComputeTargetLotsForMirror(si,desired,local.sym);
+   if(targetLots<=0.0)
+     {
+      bool targetRej=false;
+      targetLots=ComputeTargetLotsForMirrorRaw(si,desired,local.sym,targetRej);
+      if(targetRej) return;
+      if(targetLots<=0.0 && desired.lots>0.0 && local.lots>si2.minLot+CP_LOT_EPS)
+         targetLots=si2.minLot;
+     }
    if(targetLots<=0.0) return;
 
    double diff=local.lots-targetLots;
    if(diff<=0.0) return;                       // local is not larger than target
 
-   //--- R59-05: Query symbol info ONLY when there is actual excess volume to trim.
-   //--- In steady state (99.99% of ticks), local.lots <= targetLots, returning
-   //--- above with ZERO MarketInfo / DLL queries per position.
-   CopierSymInfo si2;
-   if(!CopierGetSymbolInfo(local.sym,si2)) return;
-
    double step=si2.lotStep;
    if(step<=0.0) return;
    if(diff<step*0.999999) return;              // sub-step noise
 
-   int digits=CopierLotDigits(step);
+   int digits=MathMax(CopierLotDigits(step),CopierLotDigits(si2.minLot));
    double trim=NormalizeDouble(MathFloor(diff/step+0.0000001)*step,digits);
+   if(si2.maxLot>0.0 && trim>si2.maxLot)
+     {
+      trim=CopierNormalizeLot(si2.maxLot,si2);
+      if(trim<=0.0) return;
+     }
    if(trim<=0.0 || trim<si2.minLot-0.0000001) return;
 
    double remaining=NormalizeDouble(local.lots-trim,digits);
@@ -4875,6 +5077,7 @@ void QueueTrimIfNeeded(const int si,const CopierPos &desired,const CopierPos &lo
      {
       // Quantize altTrim to broker lotStep grid (D3-01)
       double altTrim=CopierNormalizeLot(local.lots-si2.minLot,si2);
+      if(si2.maxLot>0.0 && altTrim>si2.maxLot) altTrim=CopierNormalizeLot(si2.maxLot,si2);
       double altRemaining=NormalizeDouble(local.lots-altTrim,digits);
       if(altTrim>=si2.minLot-CP_LOT_EPS && altRemaining>=si2.minLot-CP_LOT_EPS)
         {
@@ -5267,9 +5470,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       else if(desired.pexpire==0 && local.pexpire!=0) pendingDiff=true;
      }
 
-   // R11-A02: Strict Ratchet Guard for market positions:
-   // Stop loss must never be pushed in the direction of widening loss!
-   if(local.kind==CP_ORD_MARKET && local.sl>0.0 && wantSl>0.0)
+   // R11-A02 & R14-D04: Strict Ratchet Guard for market positions,
+   // bypassed once when upgrading an initial EmergencySL to the sender's real SL.
+   if(local.kind==CP_ORD_MARKET && local.sl>0.0 && wantSl>0.0 && !(g_emgSlApplied.Has(local.uid) && feedSl>0.0))
      {
       if(local.side==CP_SIDE_BUY && wantSl<local.sl)
         {
@@ -5282,6 +5485,8 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          clampedSl=false;
         }
      }
+   if(!StopsDiffer(local.sl,wantSl,si2) && g_emgSlApplied.Has(local.uid) && feedSl>0.0)
+      g_emgSlApplied.Forget(local.uid);
 
    if(!StopsDiffer(local.sl,wantSl,si2) && !StopsDiffer(local.tp,wantTp,si2) && !pendingDiff)
      {
@@ -5361,7 +5566,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    //--- mirror would keep the first stop it ever saw.
    double actPPrice = (local.kind==CP_ORD_PENDING && dPPrice>0.0) ? dPPrice : local.pprice;
    double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
-   long   actPExp   = (local.kind==CP_ORD_PENDING) ? dPExp : local.pexpire;
+   long   actPExp   = (local.kind==CP_ORD_PENDING) ? ((desired.pexpire>0 && dPExp==0) ? local.pexpire : dPExp) : local.pexpire;
 
    // DEF-10-03: If existing pending entry/stops are within broker freezeLevel, modifications will be rejected (10016 / 145 / 130)
    if(si2.freezeLevel>0.0)
@@ -5532,6 +5737,9 @@ int DedupLocal(const int si,const int base,CopierPos &loc[],const int ln)
          if(g_ignore.Has(loc[k].uid) || (si>=0 && si<g_nSenders && g_senderIgnore[si].Has(loc[k].uid))) continue;
          if(loc[k].uid!=loc[i].uid) continue;
          if(k==keep) continue;
+         // R14-A03: On MT5, a partially filled pending order leaves both a MARKET position
+         // and a remaining PENDING order sharing the same ticket; neither is a duplicate.
+         if(loc[k].ticket>0 && loc[k].ticket==loc[keep].ticket && loc[k].kind!=loc[keep].kind) continue;
 
          drop[k]=1;
          removed++;
@@ -6138,10 +6346,14 @@ void RefreshRisk()
             double cashFlow=dayStartBal-g_riskDayStartBalance;
             if(MathAbs(cashFlow)>0.01)
               {
-               g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
+               double postEq=CopierAccountEquity();
+               double preEq=postEq-cashFlow;
+               if(preEq>0.0 && postEq>0.0 && g_riskDayStartEquity>0.0)
+                  g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity*(postEq/preEq));
+               else
+                  g_riskDayStartEquity=MathMax(0.0, g_riskDayStartEquity+cashFlow);
                g_riskDayStartBalance=dayStartBal;
                g_risk.SetDayStartEquity(g_riskDayStartEquity);
-               double preEq = CopierAccountEquity() - cashFlow;
                g_risk.AdjustPeakForCashFlow(cashFlow, preEq);
                RiskPeakSave(true);
               }
@@ -6414,6 +6626,39 @@ void ConvergeSender(const int si)
    double sPendLots=0.0;
    PendingOpensForSender(si,sPendCount,sPendLots);
 
+   //--- mirrored but no longer desired -> close (queued BEFORE opens so exits win margin & queue capacity)
+   //---
+   //--- Same index trick in the other direction: "is this local uid still in
+   //--- the desired set" used to be a scan of every desired row for every
+   //--- local row.
+   if(ln>0) g_desIdx.Build(g_desired,base,g_desiredCount[si]);
+   for(int i=0;i<ln;i++)
+     {
+      if(g_desIdx.Find(g_desired,g_locScratch[i].uid)>=0) continue;
+
+      if(g_ignore.Has(g_locScratch[i].uid) || g_senderIgnore[si].Has(g_locScratch[i].uid)) continue;
+
+      if(g_senderCfg[si].ignoreallexitsignals)
+        {
+         if(g_once.ShouldEmit("gateexit|"+g_sid[si]+"|"+g_locScratch[i].uid))
+            g_log.Warn("sender "+g_sid[si]+" IgnoreAllExitSignals is on - NOT closing "
+                       +g_locScratch[i].uid+" "+g_locScratch[i].sym+" even though the sender"
+                       +" has exited it. This account is still in that trade"
+                       +" and nothing here will close it. Close it by hand, or"
+                       +" add "+g_locScratch[i].uid+" to the IgnoreUids input to stop"
+                       +" being told.");
+         continue;
+        }
+
+      // R47-07: Only forget peak lots and stops if the close action was successfully queued
+      if(PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
+                 0,"",0.0,0.0,g_locScratch[i].kind))
+        {
+         ForgetSenderPeakLots(g_locScratch[i].uid);
+         StopsForget(g_locScratch[i].uid);
+        }
+     }
+
    //--- Pre-scan queued CLOSE and TRIM actions for this sender once per tick,
    //--- NM-01: Built into g_qCloseIdx hash table to achieve true O(N + Q) lookup.
    static string queuedCloseOrTrim[CP_MAX_ACTIONS];
@@ -6446,6 +6691,23 @@ void ConvergeSender(const int si)
       if(g_ignore.Has(d.uid) || g_senderIgnore[si].Has(d.uid)) continue;
 
       int li=g_locIdx.Find(g_locScratch,d.uid);
+      bool hasPartialSibling=false;
+      if(li>=0 && g_locScratch[li].ticket>0)
+        {
+         int matchIdx=-1;
+         for(int sk=0;sk<ln;sk++)
+           {
+            if(sk==li) continue;
+            if(g_locScratch[sk].uid==d.uid
+               && g_locScratch[sk].ticket==g_locScratch[li].ticket
+               && g_locScratch[sk].kind!=g_locScratch[li].kind)
+              {
+               hasPartialSibling=true;
+               if(g_locScratch[sk].kind==d.kind && matchIdx<0) matchIdx=sk;
+              }
+           }
+         if(matchIdx>=0) li=matchIdx;
+        }
       if(li>=0)
         {
          //--- Clear seen keys only when there is NO in-flight close/trim queued,
@@ -6461,8 +6723,7 @@ void ConvergeSender(const int si)
          // BUG-04 & SEC-01 & R1-M02 & DEF-A03 & DEF-09-05: If operator manually closed this UID from WebUI/CMD, retry closing it until gone.
          // While close is pending or retrying with broker, local position MUST still converge protective stops (SL/TP)
          // to avoid naked risk. Do NOT call QueueTrimIfNeeded here to avoid conflicting simultaneous CLOSE + TRIM actions.
-         // Check both UID and ticket (scoped to sender ID) to prevent cross-sender ticket collision.
-         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket) || g_manualClosed.HasSenderTicket(g_sid[si],d.ticket))
+         if(g_manualClosed.Has(d.uid) || g_manualClosed.HasTicket(g_locScratch[li].ticket))
            {
             if(!SymbolMarketClosed(g_locScratch[li].sym))
               {
@@ -6492,7 +6753,7 @@ void ConvergeSender(const int si)
          //--- from the state file at startup for positions that were already
          //--- open.
 
-         if(g_locScratch[li].kind!=d.kind)
+         if(g_locScratch[li].kind!=d.kind && !hasPartialSibling)
            {
             //--- PENDING on local, but MARKET on sender: sender's pending order filled.
             //--- Give local pending order up to PendingFillGraceSeconds to fill naturally
@@ -6559,12 +6820,26 @@ void ConvergeSender(const int si)
               }
            }
 
+         CopierSymInfo si2;
+         bool haveSi2=CopierGetSymbolInfo(g_locScratch[li].sym,si2);
+         bool eqRatioNoTrim=false;
+         if(g_lotMode[si]==CP_SIZE_EQUITY_RATIO)
+           {
+            double origLots=(d.initLots>0.0)
+                            ?d.initLots
+                            :GetOrUpdateSenderPeakLots(d.uid,d.lots);
+            bool overCap=(haveSi2 && si2.maxLot>0.0 && g_locScratch[li].lots>si2.maxLot+CP_LOT_EPS)
+                       ||(g_senderCfg[si].maxLotsPerPosition>0.0
+                          && g_locScratch[li].lots>g_senderCfg[si].maxLotsPerPosition+CP_LOT_EPS);
+            if(!overCap && origLots>0.0 && d.lots>=origLots-CP_LOT_EPS)
+               eqRatioNoTrim=true;
+           }
+
          // N49-02 & N80-01: Pending order volume adjustment (cancel + re-place)
          // MetaTrader broker APIs cannot modify volume on existing pending orders.
-         if(d.kind==CP_ORD_PENDING && g_locScratch[li].kind==CP_ORD_PENDING)
+         if(!eqRatioNoTrim && d.kind==CP_ORD_PENDING && g_locScratch[li].kind==CP_ORD_PENDING)
            {
-            CopierSymInfo si2;
-            if(CopierGetSymbolInfo(g_locScratch[li].sym,si2) && targetLots>0.0 && si2.lotStep>0.0)
+            if(haveSi2 && targetLots>0.0 && si2.lotStep>0.0)
               {
                if(MathAbs(g_locScratch[li].lots-targetLots)>=si2.lotStep*0.999999)
                  {
@@ -6581,7 +6856,7 @@ void ConvergeSender(const int si)
            }
 
          QueueModifyIfNeeded(si,d,g_locScratch[li]);
-         QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
+         if(!eqRatioNoTrim) QueueTrimIfNeeded(si,d,g_locScratch[li],targetLots);
          continue;
         }
 
@@ -6589,8 +6864,7 @@ void ConvergeSender(const int si)
       //--- If operator manually closed this position, NEVER reopen it while sender still holds it.
       //--- Placed here after li>=0 check so if manual close is still pending or delayed by broker,
       //--- the existing local position continues to have SL/TP/Trim managed normally.
-      // DEF-A03 & DEF-09-05: Check both UID and ticket scoped to sender ID
-      if(g_manualClosed.Has(d.uid) || g_manualClosed.HasSenderTicket(g_sid[si],d.ticket)) continue;
+      if(g_manualClosed.Has(d.uid)) continue;
 
       // D2-M02: Prevent opening new positions if local account position table is full
       if(g_acctAllPosCount>=CP_MAX_POSITIONS)
@@ -6972,7 +7246,7 @@ void ConvergeSender(const int si)
 
       //--- 6. Risk limits & broker quota
       string riskWhy="";
-      if(!g_risk.AllowOpen(lots,g_ourPositions,g_ourLots,pendCount,pendLots,riskWhy))
+      if(!g_risk.AllowOpen(lots,g_ourPositions,g_ourLots,g_ourPending+pendCount,pendLots,riskWhy))
         {
          string blockKey=g_risk.BlockKey();
          if(StringLen(blockKey)==0) blockKey=riskWhy;
@@ -7047,40 +7321,6 @@ void ConvergeSender(const int si)
                     +" and this account does not (closed by hand, by another"
                     +" EA, or by a stop-out). To leave it alone, add "+d.uid
                     +" to the IgnoreUids input");
-     }
-
-   //--- mirrored but no longer desired -> close
-   //---
-   //--- Same index trick in the other direction: "is this local uid still in
-   //--- the desired set" used to be a scan of every desired row for every
-   //--- local row.
-   
-   if(ln>0) g_desIdx.Build(g_desired,base,g_desiredCount[si]);
-   for(int i=0;i<ln;i++)
-     {
-      if(g_desIdx.Find(g_desired,g_locScratch[i].uid)>=0) continue;
-
-      if(g_ignore.Has(g_locScratch[i].uid) || g_senderIgnore[si].Has(g_locScratch[i].uid)) continue;
-
-      if(g_senderCfg[si].ignoreallexitsignals)
-        {
-         if(g_once.ShouldEmit("gateexit|"+g_sid[si]+"|"+g_locScratch[i].uid))
-            g_log.Warn("sender "+g_sid[si]+" IgnoreAllExitSignals is on - NOT closing "
-                       +g_locScratch[i].uid+" "+g_locScratch[i].sym+" even though the sender"
-                       +" has exited it. This account is still in that trade"
-                       +" and nothing here will close it. Close it by hand, or"
-                       +" add "+g_locScratch[i].uid+" to the IgnoreUids input to stop"
-                       +" being told.");
-         continue;
-        }
-
-      // R47-07: Only forget peak lots and stops if the close action was successfully queued
-      if(PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
-                 0,"",0.0,0.0,g_locScratch[i].kind))
-        {
-         ForgetSenderPeakLots(g_locScratch[i].uid);
-         StopsForget(g_locScratch[i].uid);
-        }
      }
 
    //--- N84-02, N84-07 & L2: Garbage collect manually closed entries.
@@ -8419,6 +8659,7 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
       g_lastSeq[si][CP_STREAM_EVENTS]=-1;
       g_lastSeq[si][CP_STREAM_SNAP]=-1;
       g_lastSeq[si][CP_STREAM_HBT]=-1;
+      g_lastSeqGlobal[si]=0;
       g_ready[si]=false;
       int prevDesired=g_desiredCount[si];
       g_desiredCount[si]=0;
@@ -8493,17 +8734,16 @@ bool AcceptSeq(const int si,const CopierEnv &e,const int stream,const string top
    if((long)(e.seq - g_lastSeq[si][stream])<=0) return false;
    // R12-B04: Sender sequence is global across all streams.
    // Track drops against sender's global high watermark rather than stream watermark to avoid false alarms on stream interleaving.
-   static long s_lastSeqGlobal[CP_MAX_SENDERS]={0};
-   long globalGap = (e.seq - s_lastSeqGlobal[si]) - 1;
-   if(s_lastSeqGlobal[si] > 0 && globalGap > 0)
+   long globalGap = (e.seq - g_lastSeqGlobal[si]) - 1;
+   if(g_lastSeqGlobal[si] > 0 && globalGap > 0)
      {
       if(g_once.ShouldEmit("net_gap|"+g_sid[si]))
          g_log.Warn("NETWORK DROP: sender "+g_sid[si]+
                     " lost "+(string)globalGap+" frame(s) [expected "+
-                    (string)(s_lastSeqGlobal[si]+1)+".."+(string)(e.seq-1)+
+                    (string)(g_lastSeqGlobal[si]+1)+".."+(string)(e.seq-1)+
                     ", got "+(string)e.seq+"]");
      }
-   if(e.seq > s_lastSeqGlobal[si]) s_lastSeqGlobal[si] = e.seq;
+   if(e.seq > g_lastSeqGlobal[si]) g_lastSeqGlobal[si] = e.seq;
    g_lastSeq[si][stream]=e.seq;
    return true;
   }
@@ -8728,6 +8968,8 @@ int OnInit()
    g_inflight.SetTtlMs(1000); // NH-04: 1-second in-flight window for asyncMode
    g_inflight.Clear();
    g_backoff.Clear();
+   g_emgSlApplied.SetTtlMs(24*60*60*1000);
+   g_emgSlApplied.Clear();
    g_unsupported.SetTtlMs(CP_UNSUPPORTED_MS);
    g_onceFail.SetRepeatMs(60000);
    g_onceHbt.SetRepeatMs(60000);
@@ -9836,9 +10078,16 @@ void OnTimer()
         {
          g_pump.ArmFast(); // Bounded micro burst to execute queue on high-priority chart pump
          RefreshRisk();    // R47-06: Update account position risk counts before fast-track converge & execute
-         for(int i=0;i<g_nSenders;i++)
+         static int s_fastRrStart=0;
+         if(g_nSenders>0)
            {
-            if(fastSender[i] && !g_stale[i] && g_ready[i]) ConvergeSender(i);
+            int start=s_fastRrStart%g_nSenders;
+            for(int off=0;off<g_nSenders;off++)
+              {
+               int i=(start+off)%g_nSenders;
+               if(fastSender[i] && !g_stale[i] && g_ready[i]) ConvergeSender(i);
+              }
+            s_fastRrStart=(start+1)%g_nSenders;
            }
          ExecuteQueue();
          g_lastConvergeSweepMs = now; // BUG-08: Stave off immediate redundant slow-lane sweep in the same invocation
@@ -10064,6 +10313,23 @@ void OnTimer()
    if(didScan)
      {
       RefreshRisk();
+      static long s_lastSpreadScanMs=0;
+      if(nowMs-s_lastSpreadScanMs>=2000)
+        {
+         s_lastSpreadScanMs=nowMs;
+         string sampled[128];
+         int nSampled=0;
+         for(int i=0;i<g_acctAllPosCount && nSampled<128;i++)
+            SampleSpreadIfUnique(g_acctAllPos[i].sym,sampled,nSampled,128);
+         for(int si=0;si<g_nSenders && nSampled<128;si++)
+           {
+            if(!g_ready[si]) continue;
+            int base=si*CP_MAX_POSITIONS;
+            for(int i=0;i<g_desiredCount[si] && nSampled<128;i++)
+               SampleSpreadIfUnique(MapSymbol(si,g_desired[base+i].sym,g_suffix[si]),sampled,nSampled,128);
+           }
+         for(int c=0;c<nSampled;c++) sampled[c]="";
+        }
      }
    if(didScan && g_risk.TakeJustTripped())
      {
@@ -10163,7 +10429,17 @@ void OnTimer()
       //--- survive to the next tick
       g_convergeDirtyAll=false;
       for(int i=0;i<g_nSenders;i++) g_convergeDirty[i]=false;
-      for(int i=0;i<g_nSenders;i++) ConvergeSender(i);
+      static int s_sweepRrStart=0;
+      if(g_nSenders>0)
+        {
+         int rrStart=(s_sweepRrStart % g_nSenders + g_nSenders) % g_nSenders;
+         s_sweepRrStart=(rrStart+1) % g_nSenders;
+         for(int k=0;k<g_nSenders;k++)
+           {
+            int i=(rrStart+k) % g_nSenders;
+            ConvergeSender(i);
+           }
+        }
      }
    //--- Periodic check for market reopened or unblocked exit actions on held queue (every 5s)
    //--- BUG-01: Removed g_qBackoffMs >= 900000 gate so unblocked exit actions or reopened markets

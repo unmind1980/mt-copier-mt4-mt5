@@ -824,7 +824,7 @@ async fn ws_handler(
     axum::extract::Extension(tok): axum::extract::Extension<Token>,
 ) -> impl axum::response::IntoResponse {
     use axum::response::IntoResponse;
-    static ACTIVE_WS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static WS_SEMAPHORE: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
     const MAX_WS_CONNS: usize = 128;
 
     // D9-H03: Validate Origin header against Host to prevent CSWSH
@@ -837,18 +837,12 @@ async fn ws_handler(
             }
         }
     }
-    if ACTIVE_WS.load(std::sync::atomic::Ordering::Relaxed) >= MAX_WS_CONNS {
+    let sem = WS_SEMAPHORE.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_WS_CONNS)));
+    let Ok(permit) = std::sync::Arc::clone(sem).try_acquire_owned() else {
         return (axum::http::StatusCode::TOO_MANY_REQUESTS, "Max WebSocket connections reached").into_response();
-    }
-    ACTIVE_WS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    };
     ws.on_upgrade(move |socket| async move {
-        struct WsGuard;
-        impl Drop for WsGuard {
-            fn drop(&mut self) {
-                ACTIVE_WS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-        let _guard = WsGuard;
+        let _permit = permit;
         handle_socket(socket, st, tx, tok.0).await
     }).into_response()
 }
@@ -1253,7 +1247,7 @@ async fn auth_nonce(
                 headers
                     .get("x-forwarded-for")
                     .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.split(',').next())
+                    .and_then(|s| s.rsplit(',').next())
                     .map(|s| s.trim().to_string())
             })
             .unwrap_or_else(|| "direct".to_string())
@@ -2251,6 +2245,9 @@ pub(crate) fn ensure_dedicated_https_listener(st: &SharedState) {
         (c.https_port, c.enabled)
     };
     if !tls_enabled || https_port == 0 || https_port == current_port {
+        if let Some((_, old_tx)) = tls_mgr.active_https_shutdown.lock_or_recover().take() {
+            let _ = old_tx.send(());
+        }
         return;
     }
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -3753,6 +3750,17 @@ async fn cluster_status(
         let mut c = api_cmd_cache.lock().unwrap_or_else(|p| p.into_inner());
         crate::cluster::cached_journal_sha256(&cmd_path, (cmd_lines, cmd_dirty), &mut *c)
     };
+    {
+        let s = st.lock_or_recover();
+        if s.cfg.total_lines() != cfg_lines || s.cfg.dirty_seq() != cfg_dirty {
+            let mut c = api_cfg_cache.lock().unwrap_or_else(|p| p.into_inner());
+            *c = None;
+        }
+        if s.cmds.sync_stats().0 != cmd_lines || s.cmds.dirty_seq() != cmd_dirty {
+            let mut c = api_cmd_cache.lock().unwrap_or_else(|p| p.into_inner());
+            *c = None;
+        }
+    }
 
     let resp = crate::cluster::ClusterStatusResponse {
         ok: true,
@@ -3827,8 +3835,8 @@ async fn cluster_sync(
     } else {
         match crate::config::ConfigStore::read_lines_from_path(&cfg_path, req.from_cfg_line) {
             Ok((mut lines, actual_tot)) => {
+                reported_total_cfg_lines = actual_tot;
                 if req.from_cfg_line > 0 && actual_tot < req.from_cfg_line {
-                    reported_total_cfg_lines = actual_tot;
                     Vec::new()
                 } else {
                     if req.from_cfg_line > 0 && lines.len() > MAX_SYNC_BATCH {
@@ -3853,8 +3861,8 @@ async fn cluster_sync(
     } else {
         match crate::commands::CommandStore::read_lines_from_path(&cmd_path, req.from_cmd_line) {
             Ok((mut lines, actual_tot, _)) => {
+                reported_total_cmd_lines = actual_tot;
                 if req.from_cmd_line > 0 && actual_tot < req.from_cmd_line {
-                    reported_total_cmd_lines = actual_tot;
                     Vec::new()
                 } else {
                     if req.from_cmd_line > 0 && lines.len() > MAX_SYNC_BATCH {
@@ -4024,6 +4032,17 @@ async fn cluster_handover_request(
             )
                 .into_response();
         }
+    } else if my_cfg > 0 || my_cmd > 0 || my_seq > 0 {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "agreed": false,
+                "new_epoch": s.cluster.epoch(),
+                "error": "Handover rejected: peer sync status unknown"
+            })),
+        )
+            .into_response();
     }
 
     // Step down atomically on current Primary before agreeing:
@@ -4373,17 +4392,48 @@ async fn cluster_set_peer(
     }
 
     let (new_url, new_zmq) = if let Some(url) = b.peer_url.filter(|u| !u.trim().is_empty()) {
-        (url.trim().to_string(), b.peer_zmq.unwrap_or_default())
+        (url.trim().trim_end_matches('/').to_string(), b.peer_zmq.unwrap_or_default().trim().trim_end_matches('/').to_string())
     } else if !b.peer_ip.trim().is_empty() {
-        let mut ip = b.peer_ip.trim();
+        let raw_ip = b.peer_ip.trim().trim_end_matches('/');
+        let scheme = if raw_ip.starts_with("https://") { "https" } else { "http" };
+        let mut ip = raw_ip;
         if let Some(stripped) = ip.strip_prefix("http://") {
             ip = stripped;
         } else if let Some(stripped) = ip.strip_prefix("https://") {
             ip = stripped;
         }
-        let api_port = b.peer_api_port.unwrap_or(6010);
+        ip = ip.trim_end_matches('/');
+        if ip.contains('/') {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "peer_ip cannot contain paths or trailing slashes" })),
+            )
+                .into_response();
+        }
+        let (host, api_port_override) = if let Some(colon_pos) = ip.rfind(':') {
+            if !ip.contains(']') && ip.chars().filter(|&c| c == ':').count() > 1 {
+                (format!("[{}]", ip), None)
+            } else if ip.starts_with('[') && ip.ends_with(']') {
+                (ip.to_string(), None)
+            } else if ip.contains(']') && colon_pos > ip.rfind(']').unwrap() {
+                let (h, p) = ip.split_at(colon_pos);
+                let p_val: u16 = p[1..].parse().unwrap_or(0);
+                (h.to_string(), if p_val > 0 { Some(p_val) } else { None })
+            } else if !ip.contains(']') && ip.chars().filter(|&c| c == ':').count() == 1 {
+                let (h, p) = ip.split_at(colon_pos);
+                let p_val: u16 = p[1..].parse().unwrap_or(0);
+                (h.to_string(), if p_val > 0 { Some(p_val) } else { None })
+            } else {
+                (ip.to_string(), None)
+            }
+        } else if ip.contains(':') && !ip.starts_with('[') {
+            (format!("[{}]", ip), None)
+        } else {
+            (ip.to_string(), None)
+        };
+        let api_port = api_port_override.or(b.peer_api_port).unwrap_or(6010);
         let zmq_port = b.peer_zmq_port.unwrap_or(6000);
-        (format!("http://{}:{}", ip, api_port), format!("tcp://{}:{}", ip, zmq_port))
+        (format!("{}://{}:{}", scheme, host, api_port), format!("tcp://{}:{}", host, zmq_port))
     } else {
         // Clear peer -> switch cleanly to standalone mode
         (String::new(), String::new())
@@ -4607,14 +4657,6 @@ async fn tls_configure(
             )
                 .into_response();
         }
-        c.mode = b.mode;
-        c.domain = target_domain.clone();
-        c.https_port = https_port;
-        c.http_port = http_port;
-        c.email = b.email.clone();
-        c.enable_http_redirect = enable_redirect;
-        c.auto_renew = auto_renew;
-        c.staging_mode = staging;
         c.status.in_progress = true;
         c.status.progress_step = "initiating".to_string();
         c.status.last_error = None;
@@ -4636,6 +4678,16 @@ async fn tls_configure(
     let domain_bg = target_domain.clone();
     let email_bg = b.email.clone();
     let st_bg = st.clone();
+    let pending_settings = crate::tls::PendingTlsSettings {
+        mode: b.mode,
+        domain: target_domain.clone(),
+        https_port,
+        http_port,
+        email: b.email.clone(),
+        enable_http_redirect: enable_redirect,
+        auto_renew,
+        staging_mode: staging,
+    };
     tokio::spawn(async move {
         let dir_url = if let Ok(custom) = std::env::var("MTC_ACME_DIR_URL") {
             custom
@@ -4645,18 +4697,13 @@ async fn tls_configure(
             crate::tls::LETS_ENCRYPT_PRODUCTION_DIR.to_string()
         };
         let acme = crate::tls::AcmeClient::new(dir_url);
-        match acme.enroll_certificate(&mgr_bg, &domain_bg, email_bg.as_deref()).await {
+        match acme.enroll_certificate_with_settings(&mgr_bg, &domain_bg, email_bg.as_deref(), Some(pending_settings)).await {
             Ok(()) => {
                 // HUB-02: Dynamically spawn HTTPS listener on dedicated port once cert is active
                 ensure_dedicated_https_listener(&st_bg);
             }
             Err(e) => {
                 eprintln!("[hub] TLS ERR: Enrollment failed for {}: {}", domain_bg, e);
-                let mut c = mgr_bg.config.lock_or_recover();
-                c.status.in_progress = false;
-                c.status.progress_step = "failed".to_string(); // N84-11
-                c.status.last_error = Some(e);
-                let _ = crate::tls::save_config(&mgr_bg.config_path, &c);
             }
         }
     });
@@ -4864,45 +4911,62 @@ async fn tls_renew(
 // I18N / Locales Endpoints
 // ============================================================================
 
+fn resolve_locales_dir() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("locales");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
+    std::path::PathBuf::from("locales")
+}
+
 async fn locales_list() -> Json<Value> {
-    let mut list = Vec::new();
-    let locales_dir = std::path::Path::new("locales");
-    if locales_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(locales_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
-                    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if stem == "template" {
-                        continue;
-                    }
-                    if let Ok(content) = std::fs::read_to_string(&p) {
-                        if let Ok(v) = serde_json::from_str::<Value>(&content) {
-                            let name = v
-                                .get("meta")
-                                .and_then(|m| m.get("name"))
-                                .and_then(|n| n.as_str())
-                                .unwrap_or(stem);
-                            let code = v
-                                .get("meta")
-                                .and_then(|m| m.get("code"))
-                                .and_then(|c| c.as_str())
-                                .unwrap_or(stem);
-                            list.push(json!({
-                                "code": code,
-                                "name": name
-                            }));
+    let list = tokio::task::spawn_blocking(|| {
+        let mut list = Vec::new();
+        let locales_dir = resolve_locales_dir();
+        if locales_dir.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(locales_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json") {
+                        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        if stem == "template" {
+                            continue;
+                        }
+                        if let Ok(content) = std::fs::read_to_string(&p) {
+                            if let Ok(v) = serde_json::from_str::<Value>(&content) {
+                                let name = v
+                                    .get("meta")
+                                    .and_then(|m| m.get("name"))
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or(stem);
+                                let code = v
+                                    .get("meta")
+                                    .and_then(|m| m.get("code"))
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or(stem);
+                                list.push(json!({
+                                    "code": code,
+                                    "name": name
+                                }));
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    list.sort_by(|a, b| {
-        let code_a = a.get("code").and_then(|c| c.as_str()).unwrap_or("");
-        let code_b = b.get("code").and_then(|c| c.as_str()).unwrap_or("");
-        code_a.cmp(code_b)
-    });
+        list.sort_by(|a, b| {
+            let code_a = a.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            let code_b = b.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            code_a.cmp(code_b)
+        });
+        list
+    })
+    .await
+    .unwrap_or_default();
     Json(json!({ "locales": list }))
 }
 
@@ -4920,16 +4984,17 @@ async fn locale_get(Path(code): Path<String>) -> axum::response::Response {
         )
             .into_response();
     }
-    let file_path = std::path::Path::new("locales").join(format!("{}.json", code));
-    if !file_path.exists() {
-        return (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(json!({ "error": "locale not found" })),
-        )
-            .into_response();
-    }
-    match std::fs::read_to_string(&file_path) {
-        Ok(content) => (
+    let res = tokio::task::spawn_blocking(move || {
+        let file_path = resolve_locales_dir().join(format!("{}.json", code));
+        if !file_path.exists() {
+            return None;
+        }
+        Some(std::fs::read_to_string(&file_path))
+    })
+    .await;
+
+    match res {
+        Ok(Some(Ok(content))) => (
             [(
                 axum::http::header::CONTENT_TYPE,
                 "application/json; charset=utf-8",
@@ -4937,9 +5002,14 @@ async fn locale_get(Path(code): Path<String>) -> axum::response::Response {
             content,
         )
             .into_response(),
-        Err(e) => (
+        Ok(Some(Err(e))) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("cannot read locale: {}", e) })),
+        )
+            .into_response(),
+        _ => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "locale not found" })),
         )
             .into_response(),
     }

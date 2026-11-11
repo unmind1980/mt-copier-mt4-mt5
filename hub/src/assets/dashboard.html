@@ -6967,6 +6967,7 @@ function refreshWritesState(){
 //--- invitation to the overlay. Every later 401 (an expired session, say)
 //--- comes back here through api()'s rejection path.
 function showLogin(){
+  if(typeof stopPosAutoPoll==="function") stopPosAutoPoll();
   if(s.poller){ clearInterval(s.poller); s.poller = null; }
   if(s.renderTickTimer){ clearInterval(s.renderTickTimer); s.renderTickTimer = null; }
   if(s.wsReconnTimer){ clearTimeout(s.wsReconnTimer); s.wsReconnTimer = null; }

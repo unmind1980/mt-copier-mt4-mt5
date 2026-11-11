@@ -685,11 +685,14 @@ int BuildCurrent()
       int slot=-1;
       CopierPos q;
       int idx=g_prev.FindByTicket(p.ticket,p.kind);
-      if(idx<0 && p.kind==CP_ORD_MARKET)
+      if(p.kind==CP_ORD_MARKET)
         {
-         // D1-M01 & R5-D1-02: Pending order triggered into market position with same ticket.
-         // Only inherit UID if the pending order has completely disappeared (full fill).
-         // If pending order is still present in raw scan (partial fill), pending order keeps UID.
+         // D1-M01, R5-D1-02 & R14-A02: Pending order triggered into market position with same ticket.
+         // If the pending order has completely disappeared (!pendStillActive), check if an active
+         // CP_ORD_PENDING slot (U1) exists in g_prev. If so and the remaining pending leg filled into
+         // this market position (replacing/merging with any partial-fill slice U2), promote U1 so the
+         // original pending UID continues as CP_ORD_MARKET at full volume and U2 can close promptly.
+         // If U1 was canceled rather than filled (volume unchanged & not ORDER_STATE_FILLED), keep U2.
          bool pendStillActive=false;
          for(int r=0; r<rn; r++)
            {
@@ -697,7 +700,24 @@ int BuildCurrent()
               { pendStillActive=true; break; }
            }
          if(!pendStillActive)
-            idx=g_prev.FindByTicket(p.ticket,CP_ORD_PENDING);
+           {
+            int pendIdx=g_prev.FindByTicket(p.ticket,CP_ORD_PENDING);
+            if(pendIdx>=0)
+              {
+               bool usePend=(idx<0);
+               if(idx>=0 && g_prev.At(idx,q))
+                 {
+                  if(p.lots>q.lots+CP_LOT_EPS)
+                     usePend=true;
+#ifdef __MQL5__
+                  else if(HistoryOrderSelect((ulong)p.ticket) &&
+                          HistoryOrderGetInteger((ulong)p.ticket,ORDER_STATE)==ORDER_STATE_FILLED)
+                     usePend=true;
+#endif
+                 }
+               if(usePend) idx=pendIdx;
+              }
+           }
         }
       if(idx>=0 && g_prev.At(idx,q))
         {
@@ -2450,23 +2470,38 @@ void ProcessTimerTick()
             continue;
            }
         }
-      // BUG-08: If we already exhausted our 8 probes for this tick and this slot has never been probed
-      // (g_slotMissCount[k] == 0), don't increment its miss count now! Leave it at 0 so it gets probed
-      // with g_slotMissCount <= 1 on the very next 5ms tick!
-      if(deepHistProbes>=8 && g_slotMissCount[k]==0) continue;
-      g_slotMissCount[k]++;
-      if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
-      // R47-03 & P1: Instant 0ms close when confirmed in history on initial miss;
-      // Micro-stepped probe (0ms, 50ms..300ms step, 2000ms debounce) captures asynchronous broker fills in 50-100ms
-      long elapsedMiss=now-g_slotMissMs[k];
-      bool shouldProbe=((g_slotMissCount[k]<=1) || (elapsedMiss>=2000) || (elapsedMiss>=50 && elapsedMiss<=300 && (g_slotMissCount[k]%5==0))) && (deepHistProbes<8);
-      bool closedInHist=false;
-      if(shouldProbe)
+      // R14-A02: If a temporary partial-fill CP_ORD_MARKET slice (U2) was superseded on the
+      // same ticket by the promoted pending order (U1), emit CLOSE for U2 immediately instead
+      // of waiting 2000ms for history confirmation (the ticket itself remains live under U1).
+      bool supersededBySameTicket=false;
+      if(q.kind==CP_ORD_MARKET)
         {
-         deepHistProbes++;
-         closedInHist=CopierIsTicketClosedInHistory(q.ticket);
+         for(int ci=0; ci<n; ci++)
+           {
+            if(g_curScratch[ci].ticket==q.ticket && g_curScratch[ci].kind==CP_ORD_MARKET && g_curScratch[ci].uid!=q.uid)
+              { supersededBySameTicket=true; break; }
+           }
         }
-      if(!closedInHist && (elapsedMiss<2000)) continue;
+      if(!supersededBySameTicket)
+        {
+         // BUG-08: If we already exhausted our 8 probes for this tick and this slot has never been probed
+         // (g_slotMissCount[k] == 0), don't increment its miss count now! Leave it at 0 so it gets probed
+         // with g_slotMissCount <= 1 on the very next 5ms tick!
+         if(deepHistProbes>=8 && g_slotMissCount[k]==0) continue;
+         g_slotMissCount[k]++;
+         if(g_slotMissMs[k]==0) g_slotMissMs[k]=now;
+         // R47-03 & P1: Instant 0ms close when confirmed in history on initial miss;
+         // Micro-stepped probe (0ms, 50ms..300ms step, 2000ms debounce) captures asynchronous broker fills in 50-100ms
+         long elapsedMiss=now-g_slotMissMs[k];
+         bool shouldProbe=((g_slotMissCount[k]<=1) || (elapsedMiss>=2000) || (elapsedMiss>=50 && elapsedMiss<=300 && (g_slotMissCount[k]%5==0))) && (deepHistProbes<8);
+         bool closedInHist=false;
+         if(shouldProbe)
+           {
+            deepHistProbes++;
+            closedInHist=CopierIsTicketClosedInHistory(q.ticket);
+           }
+         if(!closedInHist && (elapsedMiss<2000)) continue;
+        }
       g_slotMissCount[k]=0;
       g_slotMissMs[k]=0;
       EmitClose(q,k);
@@ -2483,7 +2518,13 @@ void ProcessTimerTick()
         {
          //--- Steady-state (99.9%): no numeric difference -> NO-OP!
          //--- Zero struct copies and m_tkValid is preserved.
-         if(g_rowStamp[i]==g_stampGen) g_prev.UpdateNumericAt(g_prevSlotScratch[i],g_curScratch[i]);
+         if(g_rowStamp[i]==g_stampGen)
+           {
+            int pslot=g_prevSlotScratch[i];
+            g_prev.UpdateNumericAt(pslot,g_curScratch[i]);
+            if(g_curScratch[i].lots>g_openLots[pslot])
+               g_openLots[pslot]=g_curScratch[i].lots;
+           }
         }
       else
         {

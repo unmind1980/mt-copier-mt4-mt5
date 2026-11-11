@@ -197,6 +197,42 @@ private:
       s.setMaxMessageSize(CP_MAXMSGSIZE);
      }
 
+   //--- F-18: If an earlier SendUp wrote frame 0 (MORE) and frame 1 failed on EAGAIN,
+   //--- libzmq holds the socket mid-multipart until an empty terminating frame lands.
+   bool              CloseDanglingMultipart()
+     {
+      if(!m_midMultipart) return true;
+      if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(!m_sub.send("",true))
+        {
+         m_errno=CopierZmqErrno();
+         return false;
+        }
+      m_midMultipart=false;
+      return true;
+     }
+
+   //--- Send a raw XSUB subscription control frame ([0x01|0x00] + UTF-8 prefix bytes).
+   //--- Avoids MQL string NUL-termination truncating "\x00"+prefix to 0 bytes.
+   bool              SendSubControlFrame(const uchar cmdByte,const string prefix)
+     {
+      if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(!CloseDanglingMultipart()) return false;
+      uchar pbytes[];
+      StringToUtf8(prefix,pbytes,false);
+      int plen=ArraySize(pbytes);
+      uchar frame[];
+      ArrayResize(frame,1+plen);
+      frame[0]=cmdByte;
+      for(int k=0;k<plen;k++) frame[1+k]=pbytes[k];
+      if(!m_sub.send(frame,true))
+        {
+         m_errno=CopierZmqErrno();
+         return false;
+        }
+      return true;
+     }
+
    //--- Decode a 40-character Z85 CURVE key into the 32 raw bytes that the
    //--- ZMQ_CURVE_* options actually take.
    //---
@@ -470,11 +506,12 @@ public:
       //--- N-01: each replayed frame is another 0x01 the hub will count, so the
       //--- per-prefix counter has to move with it or the later Unsubscribe is
       //--- short by exactly this many.
+      if(!CloseDanglingMultipart()) return false;
       for(int i=0;i<m_nSubPrefixes;i++)
         {
          if(StringLen(m_subPrefixes[i])>0)
            {
-            if(m_sub.send("\x01"+m_subPrefixes[i],true))
+            if(SendSubControlFrame(0x01,m_subPrefixes[i]))
                m_subSent[i]++;
            }
         }
@@ -514,7 +551,7 @@ public:
          m_nSubPrefixes++;
         }
       if(!found && slot<0) return false;
-      if(!m_sub.send("\x01"+prefix,true)) return false;
+      if(!SendSubControlFrame(0x01,prefix)) return false;
       //--- count only frames that reached the socket: a failed send is a
       //--- subscription the hub never saw, and must not need an 0x00 later
       if(slot>=0) m_subSent[slot]++;
@@ -524,6 +561,7 @@ public:
    bool              Unsubscribe(const string prefix)
      {
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(!CloseDanglingMultipart()) return false;
       int sent=0;
       for(int i=0;i<m_nSubPrefixes;i++)
         {
@@ -533,7 +571,7 @@ public:
          int n=m_subSent[i];
          for(int k=0;k<n;k++)
            {
-            if(m_sub.send("\x00"+prefix,true)) sent++;
+            if(SendSubControlFrame(0x00,prefix)) sent++;
            }
          for(int j=i;j<m_nSubPrefixes-1;j++)
            {
@@ -593,15 +631,7 @@ public:
       //--- writable again. If it still fails the socket cannot be used for uplink
       //--- at all, and saying so (return false) is better than appending every
       //--- future message to a frame nobody can parse.
-      if(m_midMultipart)
-        {
-         if(!m_sub.send("",true))
-           {
-            m_errno=CopierZmqErrno();
-            return false;
-           }
-         m_midMultipart=false;
-        }
+      if(!CloseDanglingMultipart()) return false;
       int copies=(m_connectedHubs>1) ? 2 : 1;
       int sent=0;
       for(int i=0;i<copies;i++)
@@ -795,6 +825,7 @@ public:
       //--- direction of the SAME socket - see the header for why that works
       //--- and what was measured before relying on it.
       if(CheckPointer(m_sub)==POINTER_INVALID) return false;
+      if(!CloseDanglingMultipart()) return false;
       if(!m_sub.send(msg,true)) { m_errno=CopierZmqErrno(); return false; }
       return true;
      }

@@ -344,6 +344,7 @@ pub struct Args {
     /// same role can coexist on one machine (`MTCopierPrimary_edge`, ...). Empty
     /// means the historic, unsuffixed name.
     pub instance: Option<String>,
+    reset_password: Option<String>,
 }
 
 pub fn parse_args() -> Result<Args, String> {
@@ -382,6 +383,7 @@ pub fn parse_args() -> Result<Args, String> {
         service_status: None,
         workdir: None,
         instance: None,
+        reset_password: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -483,6 +485,14 @@ pub fn parse_args() -> Result<Args, String> {
                 // "none" is passed through verbatim: the bootstrap skips it
                 // and the middleware answers as an anonymous viewer.
                 a.users = v.clone();
+                i += 2;
+            }
+            "--reset-password" => {
+                let v = need(i)?;
+                if v.is_empty() {
+                    return Err("--reset-password requires a non-empty password".to_string());
+                }
+                a.reset_password = Some(v.clone());
                 i += 2;
             }
             "--curve" => {
@@ -634,6 +644,7 @@ fn usage() {
     println!("  --users        M9 user store (default users.json); sessions are");
     println!("                 always in-memory. --users none = empty store, which");
     println!("                 bootstraps a fresh admin on next start.");
+    println!("  --reset-password PASSWORD reset the admin user's password and exit.");
     println!("  --notifications alert channel store (default alert_channels.json);");
     println!("                 --notifications none keeps channels in memory only.");
     println!("  --writes       on | off (default ON since 2026-10-14, owner's");
@@ -706,6 +717,52 @@ struct HubState {
     seq: u64,
     role: String,
     last_topo_sent: HashMap<String, (String, String, u64, String)>,
+    torn_multipart: bool,
+}
+
+/// Send a 2-frame message on an XPUB socket with torn-multipart protection.
+/// If a prior send left the socket in torn-multipart state, attempts to close it first.
+/// If the second frame fails, safely attempts an empty terminator close so the socket
+/// is not left with an unclosed SNDMORE frame.
+fn send_xpub_pair(
+    sock: &zmq::Socket,
+    torn_multipart: &mut bool,
+    topic: &[u8],
+    payload: &[u8],
+) -> zmq::Result<()> {
+    if *torn_multipart {
+        if sock.send("", zmq::DONTWAIT).is_ok() {
+            *torn_multipart = false;
+        } else {
+            return Err(zmq::Error::EAGAIN);
+        }
+    }
+    let first_res = sock.send(topic, zmq::DONTWAIT | zmq::SNDMORE);
+    match first_res {
+        Ok(()) => {
+            if let Err(e) = sock.send(payload, zmq::DONTWAIT) {
+                eprintln!(
+                    "[hub] WARN control payload frame failed ({}): closing multipart frame with empty terminator",
+                    e
+                );
+                let mut closed = false;
+                for _ in 0..5 {
+                    if sock.send("", zmq::DONTWAIT).is_ok() {
+                        closed = true;
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+                if !closed {
+                    *torn_multipart = true;
+                }
+                Err(e)
+            } else {
+                Ok(())
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Echo a node's probe back, on the two-frame channel.
@@ -728,9 +785,12 @@ fn send_pong(sock: &zmq::Socket, nid: &str, ms: &str, state: &mut HubState) -> z
         from_tag,
         nid
     );
-    sock.send_multipart(
-        vec![format!("@{}", nid).into_bytes(), env.into_bytes()],
-        zmq::DONTWAIT,
+    let topic = format!("@{}", nid);
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        topic.as_bytes(),
+        env.as_bytes(),
     )
 }
 
@@ -779,9 +839,12 @@ fn send_topology(
         active_role
     );
     let target_nid = copier_nid(nid);
-    sock.send_multipart(
-        vec![format!("@{}", target_nid).into_bytes(), env.into_bytes()],
-        zmq::DONTWAIT,
+    let topic = format!("@{}", target_nid);
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        topic.as_bytes(),
+        env.as_bytes(),
     )
 }
 
@@ -827,7 +890,13 @@ fn send_cfg(
         acc,
         config::escape_ini(ini)
     );
-    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
+    let topic = format!("@{}", nid);
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        topic.as_bytes(),
+        env.as_bytes(),
+    )
 }
 
 /// Send one operational command to a node: `T=CMD` on the node's own `@<nid>`
@@ -867,7 +936,13 @@ fn send_cmd(
         now_sec,
         p
     );
-    sock.send_multipart(vec![format!("@{}", nid).into_bytes(), env.into_bytes()], zmq::DONTWAIT)
+    let topic = format!("@{}", nid);
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        topic.as_bytes(),
+        env.as_bytes(),
+    )
 }
 
 fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result<()> {
@@ -882,7 +957,12 @@ fn send_who(sock: &zmq::Socket, nonce: u64, state: &mut HubState) -> zmq::Result
         now_sec,
         nonce
     );
-    sock.send_multipart(vec![b"@all".to_vec(), env.into_bytes()], zmq::DONTWAIT)
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        b"@all",
+        env.as_bytes(),
+    )
 }
 
 /// Relay a receiver's snapshot receipt to the sender it is about.
@@ -932,13 +1012,12 @@ fn send_receipt(
         sid,
         h
     );
-    sock.send_multipart(
-        //--- B7: normalise the topic the same way every other control frame is
-        //--- normalised. The payload keeps the raw SID (the sender needs the value
-        //--- its ini calls `id=`), but the TOPIC must be the node's @<nid>, or a
-        //--- 10-digit account only ever lands here by coincidence.
-        vec![format!("@{}", copier_nid(sid)).into_bytes(), env.into_bytes()],
-        zmq::DONTWAIT,
+    let topic = format!("@{}", copier_nid(sid));
+    send_xpub_pair(
+        sock,
+        &mut state.torn_multipart,
+        topic.as_bytes(),
+        env.as_bytes(),
     )
 }
 
@@ -1024,7 +1103,13 @@ fn relay_receipts(
     last_rcpt_prune: &mut Instant,
     last_rcpt_drop: &mut Instant,
 ) -> bool {
-    if pairs.is_empty() {
+    let login_shape_ok = !login.is_empty()
+        && login.len() <= 32
+        && !login.contains(';')
+        && !login.contains('|')
+        && !login.contains('\n')
+        && !login.contains('\r');
+    if pairs.is_empty() || !login_shape_ok {
         return false;
     }
 
@@ -1065,6 +1150,11 @@ fn relay_receipts(
         let mut changed = false;
         for (sid, h) in pairs {
             if sid.is_empty() || sid == "-" {
+                continue;
+            }
+            let sid_ok = sid.len() <= 11 && sid.bytes().all(|b| b.is_ascii_digit());
+            let h_ok = h.is_empty() || (h.len() == 8 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+            if !sid_ok || !h_ok {
                 continue;
             }
             let sid_is_sender = s.reg.get(&format!("sender:{}", sid)).is_some()
@@ -1386,6 +1476,44 @@ fn main() {
         std::process::exit(0);
     }
 
+    if let Some(new_pw) = &args.reset_password {
+        if args.users == "none" {
+            eprintln!("copier-hub: --reset-password cannot be used with --users none");
+            std::process::exit(1);
+        }
+        let users_path = std::path::PathBuf::from(if args.users.is_empty() {
+            crate::users::USERS_PATH.to_string()
+        } else {
+            args.users.clone()
+        });
+        let mut store = match crate::users::UserStore::load_at(&users_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("copier-hub: cannot read {}: {}", users_path.display(), e);
+                std::process::exit(1);
+            }
+        };
+        let salt = crate::users::random_token()[..16].to_string();
+        let pass_hash = crate::users::hash_password(new_pw, &salt);
+        let u = crate::users::User {
+            id: "admin".to_string(),
+            pass: pass_hash,
+            role: crate::users::Role::Admin,
+            disabled: false,
+        };
+        if let Err(e) = store.upsert(u) {
+            eprintln!("copier-hub: cannot update admin user: {}", e);
+            std::process::exit(1);
+        }
+        if let Err(e) = store.save() {
+            eprintln!("copier-hub: cannot save {}: {}", users_path.display(), e);
+            std::process::exit(1);
+        }
+        store.cleanup_bootstrap_password();
+        println!("[hub] updated password for user 'admin' in {}", users_path.display());
+        std::process::exit(0);
+    }
+
     //--- Ctrl-C sets a flag rather than killing the process, so the final
     //--- stats line still prints. That matters more than it looks: the numbers
     //--- on that line are the only record of what a run did.
@@ -1548,7 +1676,6 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         //--- during the handshake and obeys the answer. See curve.rs.
         zap_worker_handle = Some(curve::spawn_zap_handler(&ctx, list, args.curve_learn, clients_path.clone()));
         curve_for_api = Some((keys.public.clone(), args.curve_learn));
-        std::thread::sleep(std::time::Duration::from_millis(80));
     }
 
     let endpoint = format!("tcp://{}:{}", args.bind, args.port);
@@ -1605,7 +1732,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     println!();
 
     let mut st = Stats::new();
-    let mut state = HubState { seq: 0, role: cluster_mgr.role().to_string(), last_topo_sent: HashMap::new() };
+    let mut state = HubState { seq: 0, role: cluster_mgr.role().to_string(), last_topo_sent: HashMap::new(), torn_multipart: false };
     //--- M2 + M3 state, and M8's view of it.
     //---
     //--- Both now live behind a mutex because the API thread reads them. That
@@ -1779,6 +1906,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         if let Err(e) = api::spawn(args.http.clone(), shared.clone()) {
             eprintln!("[hub] cannot start the API: {}", e);
         }
+    } else {
+        println!("[hub] dashboard + REST DISABLED (--http none)");
     }
     //--- Notify the dashboards.
     //---
@@ -1896,19 +2025,21 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let mut last_rcpt_relayed: std::collections::HashMap<(String, String), (String, Instant)> =
         std::collections::HashMap::new();
     let mut last_rcpt_prune = Instant::now();
-    let mut last_known_receipt: std::collections::HashMap<String, String> =
+    let mut last_snap_dispatched: std::collections::HashMap<String, (String, Instant)> =
         std::collections::HashMap::new();
+    let accepted_snap_receipts: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut last_drop_warn = Instant::now() - Duration::from_secs(10);
     let mut dropped_security_frames: u64 = 0;
     let mut last_snapq_warn = Instant::now() - Duration::from_secs(10);
     let mut last_cfgr_print: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
     let mut last_snap_touch: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
-    let mut torn_multipart = false;
 
     //--- Background Worker for Asynchronous Snapshot Parsing
     let (snap_tx, mut snap_rx) = tokio::sync::mpsc::channel::<(String, Vec<u8>, Instant)>(128);
     let snap_shared = shared.clone();
     let snap_audit = audit.clone();
+    let snap_accepted = accepted_snap_receipts.clone();
     let snap_worker_handle = std::thread::Builder::new()
         .name("snap-worker".to_string())
         .spawn(move || {
@@ -1955,6 +2086,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             );
                         }
                     } else {
+                    let snap_rcpt = view.receipt.clone();
                     let mismatched_now = {
                         let mut s = snap_shared.lock_or_recover();
                         let before = s.pos.mismatched;
@@ -1962,6 +2094,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         // BUG-02 & BUG-07: If sender snapshot declares N=0 and carries 0 records, clear held_items in registry
                         if declared == Some(0) && carried == 0 {
                             s.reg.clear_held_items("sender", &sid);
+                        }
+                        if let Ok(mut acc) = snap_accepted.lock() {
+                            acc.insert(sid.clone(), snap_rcpt);
                         }
                         s.pos.mismatched - before
                     };
@@ -2260,12 +2395,13 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     let primary_ep = if is_prim { &local_zmq } else { active_peer_zmq };
                                     let standby_ep = if is_prim { active_peer_zmq } else { &local_zmq };
                                     let topo_key = (primary_ep.to_string(), standby_ep.to_string(), cur_epoch, cur_role.clone());
-                                    let should_send_topo = match state.last_topo_sent.get(&acc) {
+                                    let is_reg = ty == "REG";
+                                    let should_send_topo = is_reg || match state.last_topo_sent.get(&acc) {
                                         Some(prev) => prev != &topo_key,
                                         None => true,
                                     };
                                     if (!primary_ep.is_empty() || !standby_ep.is_empty()) && should_send_topo {
-                                        let _ = send_topology(
+                                        if send_topology(
                                             &sock,
                                             &acc,
                                             primary_ep,
@@ -2273,8 +2409,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                             cur_epoch,
                                             &cur_role,
                                             &mut state,
-                                        );
-                                        state.last_topo_sent.insert(acc.clone(), topo_key);
+                                        ).is_ok() {
+                                            state.last_topo_sent.insert(acc.clone(), topo_key);
+                                        }
                                     }
                                 }
                                 if ty == "REG" {
@@ -2941,10 +3078,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             }
                         }
 
-                        if torn_multipart {
+                        if state.torn_multipart {
                             // ISSUE-09: Close hanging multipart frame before starting a new one to prevent boundary inversion
                             if sock.send("", zmq::DONTWAIT).is_ok() {
-                                torn_multipart = false;
+                                state.torn_multipart = false;
                             } else {
                                 skip_frame = true;
                             }
@@ -2969,7 +3106,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                             std::thread::yield_now();
                                         }
                                         if !closed {
-                                            torn_multipart = true;
+                                            state.torn_multipart = true;
                                         }
                                     } else {
                                         st.note_forward(topic_str, &ty);
@@ -2982,16 +3119,26 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                                     let new_receipt = crate::positions::extract_receipt(snap_payload);
                                     let pos_now = Instant::now();
 
-                                    // Fast-path zero-lock check in local router thread state:
-                                    let should_dispatch = match last_known_receipt.get(&sid) {
-                                        Some(prev) => prev != &new_receipt || new_receipt.is_empty(),
-                                        None => true,
+                                    let accepted_matches = accepted_snap_receipts
+                                        .lock()
+                                        .map(|acc| acc.get(&sid) == Some(&new_receipt))
+                                        .unwrap_or(false);
+
+                                    let should_dispatch = if new_receipt.is_empty() {
+                                        true
+                                    } else if !accepted_matches {
+                                        match last_snap_dispatched.get(&sid) {
+                                            Some((prev, t)) => prev != &new_receipt || pos_now.duration_since(*t) >= Duration::from_millis(250),
+                                            None => true,
+                                        }
+                                    } else {
+                                        false
                                     };
 
                                     if should_dispatch {
                                         match snap_tx.try_send((sid.clone(), snap_payload.to_vec(), pos_now)) {
                                             Ok(_) => {
-                                                last_known_receipt.insert(sid.clone(), new_receipt);
+                                                last_snap_dispatched.insert(sid.clone(), (new_receipt.clone(), pos_now));
                                             }
                                             Err(_) => {
                                                 // F-07 & NM-12: Queue is full: do NOT advance last_known_receipt, with 2s warn rate limiting
@@ -3190,17 +3337,23 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     if let Some((role, acc)) = key.split_once(':') {
                         state.last_topo_sent.remove(acc);
                         if role == "sender" {
-                            last_known_receipt.remove(acc);
+                            last_snap_dispatched.remove(acc);
                             last_snap_touch.remove(acc);
+                            if let Ok(mut a) = accepted_snap_receipts.lock() {
+                                a.remove(acc);
+                            }
                             if acc.len() > 9 {
-                                last_known_receipt.remove(&copier_nid(acc));
+                                last_snap_dispatched.remove(&copier_nid(acc));
                                 last_snap_touch.remove(&copier_nid(acc));
+                                if let Ok(mut a) = accepted_snap_receipts.lock() {
+                                    a.remove(&copier_nid(acc));
+                                }
                             }
                         }
                     }
                 }
                 // H-07, NL-04 & R12-C01: Retain only senders currently registered; collect active senders ONCE outside retain
-                if last_known_receipt.len() > 1024 {
+                if last_snap_dispatched.len() > 1024 {
                     let mut active_senders: std::collections::HashSet<String> = std::collections::HashSet::new();
                     for n in s.reg.nodes() {
                         if n.role == crate::registry::Role::Sender {
@@ -3208,9 +3361,14 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                             active_senders.insert(copier_nid(&n.acc));
                         }
                     }
-                    last_known_receipt.retain(|acc, _| {
+                    last_snap_dispatched.retain(|acc, _| {
                         s.reg.get(&format!("sender:{}", acc)).is_some() || active_senders.contains(acc)
                     });
+                    if let Ok(mut a) = accepted_snap_receipts.lock() {
+                        a.retain(|acc, _| {
+                            s.reg.get(&format!("sender:{}", acc)).is_some() || active_senders.contains(acc)
+                        });
+                    }
                 }
                 //--- Age the mirror EDGES by their own timestamps. The registry
                 //--- can keep a receiver online on heartbeats alone while its

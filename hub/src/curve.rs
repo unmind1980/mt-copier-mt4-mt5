@@ -465,7 +465,8 @@ pub fn spawn_zap_handler(
             }
         });
     }
-    std::thread::spawn(move || {
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let handle = std::thread::spawn(move || {
         let sock = match ctx.socket(zmq::REP) {
             Ok(s) => s,
             Err(e) => {
@@ -479,6 +480,7 @@ pub fn spawn_zap_handler(
             eprintln!("[hub]   CURVE cannot authorise anyone without it - refusing");
             std::process::exit(1);
         }
+        let _ = ready_tx.send(());
 
         let mut denied: u64 = 0;
         let mut last_deny_log = std::time::Instant::now() - std::time::Duration::from_secs(10);
@@ -593,7 +595,9 @@ pub fn spawn_zap_handler(
                 }
             }
         }
-    })
+    });
+    let _ = ready_rx.recv();
+    handle
 }
 
 #[cfg(test)]

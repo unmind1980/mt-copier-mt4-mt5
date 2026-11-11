@@ -615,7 +615,14 @@ impl UserStore {
             let ip_limit = if ip == "direct" { 250 } else { 25 };
             self.nonce_ip_rates.retain(|_, (_, start)| now.saturating_sub(*start) <= 2);
             if !self.nonce_ip_rates.contains_key(ip) && self.nonce_ip_rates.len() >= MAX_TRACKED_IPS {
-                return None;
+                if let Some(oldest_key) = self
+                    .nonce_ip_rates
+                    .iter()
+                    .min_by_key(|(k, (_, start))| (if k.as_str() == "direct" { 1u8 } else { 0u8 }, *start))
+                    .map(|(k, _)| k.clone())
+                {
+                    self.nonce_ip_rates.remove(&oldest_key);
+                }
             }
             let rate = self.nonce_ip_rates.entry(ip.to_string()).or_insert((0, now));
             if now.saturating_sub(rate.1) >= 1 {
@@ -1335,5 +1342,20 @@ mod tests {
         let wait = s.login_blocked(now).expect("the flood was not refused");
         assert!(wait <= GLOBAL_BLOCK_SECS);
         assert_eq!(s.login_blocked(now + GLOBAL_BLOCK_SECS + 1), None, "the block never lifted");
+    }
+
+    #[test]
+    fn test_ip_eviction_on_max_tracked_ips() {
+        let mut s = UserStore::new();
+        let now = 8_000_000u64;
+        for i in 0..MAX_TRACKED_IPS {
+            s.nonce_ip_rates.insert(format!("10.0.0.{}", i), (1, now));
+        }
+        assert_eq!(s.nonce_ip_rates.len(), MAX_TRACKED_IPS);
+        // Calling create_nonce_with_ip with a new IP must evict the oldest entry and succeed
+        let res = s.create_nonce_with_ip("admin", now, 60, "192.168.1.1");
+        assert!(res.is_some(), "IP eviction failed to make room for new IP");
+        assert!(s.nonce_ip_rates.contains_key("192.168.1.1"));
+        assert_eq!(s.nonce_ip_rates.len(), MAX_TRACKED_IPS);
     }
 }

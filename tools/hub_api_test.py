@@ -730,6 +730,14 @@ def main():
         except subprocess.TimeoutExpired:
             hub2.kill()
         out2.close()
+        banner2 = ""
+        try:
+            with open(os.path.join(HERE, "_hub_api2.out"), "rb") as fh2:
+                banner2 = fh2.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        check("--http none prints disabled banner", "DISABLED (--http none)" in banner2,
+              "banner verified" if "DISABLED (--http none)" in banner2 else f"banner: {banner2.strip()[:100]}")
         try:
             os.remove(os.path.join(HERE, "_hub_api2.out"))
         except OSError:

@@ -111,6 +111,20 @@ struct ArchiveShift {
     lock: Arc<Mutex<()>>,
     wait_lock: Arc<Mutex<()>>,
     active_worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    pending: Arc<(Mutex<usize>, std::sync::Condvar)>,
+}
+
+struct PendingRotateGuard(Arc<(Mutex<usize>, std::sync::Condvar)>);
+
+impl Drop for PendingRotateGuard {
+    fn drop(&mut self) {
+        let (m, cv) = &*self.0;
+        let mut n = m.lock_or_recover();
+        *n = n.saturating_sub(1);
+        if *n == 0 {
+            cv.notify_all();
+        }
+    }
 }
 
 impl ArchiveShift {
@@ -236,7 +250,17 @@ impl Audit {
     /// starts empty on every hub restart would be worse than useless, and that
     /// is the default behaviour of `File::create`.
     pub fn open(path: &Path) -> std::io::Result<Audit> {
-        Self::open_with_rotation(path, DEFAULT_MAX_BYTES, DEFAULT_MAX_BACKUPS)
+        let max_bytes = std::env::var("MTC_AUDIT_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v >= 256)
+            .unwrap_or(DEFAULT_MAX_BYTES);
+        let max_backups = std::env::var("MTC_AUDIT_MAX_BACKUPS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&v| (1..=100).contains(&v))
+            .unwrap_or(DEFAULT_MAX_BACKUPS);
+        Self::open_with_rotation(path, max_bytes, max_backups)
     }
 
     /// Open with custom size rotation threshold and max compressed archive count.
@@ -275,6 +299,7 @@ impl Audit {
             lock: Arc::new(Mutex::new(())),
             wait_lock: Arc::new(Mutex::new(())),
             active_worker: Arc::new(Mutex::new(None)),
+            pending: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
         };
 
         // A hub that died between the swap and the archive leaves a
@@ -339,6 +364,7 @@ impl Audit {
                 lock: Arc::new(Mutex::new(())),
                 wait_lock: Arc::new(Mutex::new(())),
                 active_worker: Arc::new(Mutex::new(None)),
+                pending: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
             },
             path: PathBuf::new(),
             max_bytes: DEFAULT_MAX_BYTES,
@@ -378,6 +404,13 @@ impl Audit {
     #[allow(dead_code)]
     pub fn wait_for_rotation(&self) {
         let _wait_serial = self.shifter.wait_lock.lock_or_recover();
+        {
+            let (m, cv) = &*self.shifter.pending;
+            let mut n = m.lock_or_recover();
+            while *n > 0 {
+                n = cv.wait(n).unwrap_or_else(|p| p.into_inner());
+            }
+        }
         let handle = {
             let mut worker = self.shifter.active_worker.lock_or_recover();
             worker.take()
@@ -526,12 +559,19 @@ impl Audit {
                 let shifter = self.shifter.clone();
                 let worker_slot = Arc::clone(&self.shifter.active_worker);
                 let rotating_bg = rotating_path.clone();
+                {
+                    let (m, _) = &*self.shifter.pending;
+                    let mut n = m.lock_or_recover();
+                    *n = n.saturating_add(1);
+                }
+                let pending_bg = Arc::clone(&self.shifter.pending);
                 // RUST-BUG-06: Take the previous JoinHandle so the new background worker waits for prior compression to finish,
                 // guaranteeing strictly serial archive sequence and preventing race conditions.
                 let prev_worker = worker_slot.lock_or_recover().take();
                 let spawn_res = std::thread::Builder::new()
                     .name("audit-rotate".to_string())
                     .spawn(move || {
+                        let _guard = PendingRotateGuard(pending_bg);
                         if let Some(prev) = prev_worker {
                             let _ = prev.join();
                         }
@@ -543,8 +583,18 @@ impl Audit {
                         *slot = Some(handle);
                     }
                     Err(e) => {
+                        {
+                            let (m, cv) = &*self.shifter.pending;
+                            let mut n = m.lock_or_recover();
+                            *n = n.saturating_sub(1);
+                            if *n == 0 {
+                                cv.notify_all();
+                            }
+                        }
+                        drop(inner);
                         eprintln!("[hub] AUDIT: cannot spawn background rotate thread, running synchronously: {}", e);
                         let _ = self.shifter.finish(&rotating_path, file_len);
+                        inner = self.inner.lock_or_recover();
                     }
                 }
             }
@@ -1361,5 +1411,19 @@ mod tests {
         assert!(rot.exists());
         cleanup(&p);
         assert!(!rot.exists());
+    }
+
+    #[test]
+    fn test_audit_env_var_thresholds() {
+        let p = tmp("audit_env_thresholds");
+        cleanup(&p);
+        std::env::set_var("MTC_AUDIT_MAX_BYTES", "512");
+        std::env::set_var("MTC_AUDIT_MAX_BACKUPS", "3");
+        let a = Audit::open(&p).unwrap();
+        assert_eq!(a.max_bytes, 512);
+        assert_eq!(a.max_backups, 3);
+        std::env::remove_var("MTC_AUDIT_MAX_BYTES");
+        std::env::remove_var("MTC_AUDIT_MAX_BACKUPS");
+        cleanup(&p);
     }
 }

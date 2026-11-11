@@ -206,7 +206,16 @@ pub fn cached_journal_sha256(
     }
 
     let hash = file_sha256(path);
-    *cache = Some((mtime, len, ver, now, hash.clone()));
+    // Do not poison the cache if the file changed on disk while we were hashing it.
+    if let Ok(meta_after) = fs::metadata(path) {
+        let mtime_after = meta_after.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let len_after = meta_after.len();
+        if mtime_after == mtime && len_after == len {
+            *cache = Some((mtime, len, ver, now, hash.clone()));
+        } else {
+            *cache = None;
+        }
+    }
     hash
 }
 
@@ -261,15 +270,6 @@ impl ClusterManager {
             }
         };
 
-        // If explicit CLI role passed, apply it
-        if let Some(r) = cli_role {
-            state.role = r.to_string();
-            if r == "primary" {
-                state.is_configured_primary = true;
-            } else if r == "standby" {
-                state.is_configured_primary = false;
-            }
-        }
         if failback_lock {
             state.failback_locked = true;
         }
@@ -341,6 +341,8 @@ impl ClusterManager {
 
     // DEF-02: Returns save_info so caller can persist to disk OUTSIDE SharedState lock
     pub fn set_peer(&mut self, peer_url: String, peer_zmq: String) -> (PathBuf, ClusterStateFile) {
+        let peer_url = peer_url.trim().trim_end_matches('/').to_string();
+        let peer_zmq = peer_zmq.trim().trim_end_matches('/').to_string();
         let is_empty = peer_url.is_empty();
         self.peer_url = peer_url.clone();
         self.peer_zmq = peer_zmq.clone();
@@ -466,28 +468,28 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
             Err(rename_err) => {
                 // Fallback: preserve backup before overwriting target to prevent 0-byte truncation.
                 // Scope File handles before removing/restoring files so Windows sharing locks release cleanly.
-                let tmp_len = fs::metadata(tmp).map(|m| m.len()).unwrap_or(0);
-                if tmp_len > 0 {
-                    let bak = PathBuf::from(format!("{}.bak", target.display()));
-                    let _ = fs::copy(target, &bak);
-                    let copy_ok = {
-                        if let (Ok(mut src), Ok(mut dst)) = (
-                            File::open(tmp),
-                            OpenOptions::new().write(true).truncate(true).create(true).open(target),
-                        ) {
-                            std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok()
-                        } else {
-                            false
+                if tmp.exists() {
+                    if let Ok(bytes) = fs::read(tmp) {
+                        let bak = PathBuf::from(format!("{}.bak", target.display()));
+                        let _ = fs::copy(target, &bak);
+                        let copy_ok = {
+                            if let Ok(mut dst) = OpenOptions::new().write(true).create(true).open(target) {
+                                dst.write_all(&bytes).is_ok()
+                                    && dst.set_len(bytes.len() as u64).is_ok()
+                                    && dst.sync_all().is_ok()
+                            } else {
+                                false
+                            }
+                        };
+                        if copy_ok {
+                            let _ = fs::remove_file(tmp);
+                            let _ = fs::remove_file(&bak);
+                            return Ok(());
+                        } else if bak.exists() {
+                            let _ = fs::copy(&bak, target);
                         }
-                    };
-                    if copy_ok {
-                        let _ = fs::remove_file(tmp);
-                        let _ = fs::remove_file(&bak);
-                        return Ok(());
-                    } else if bak.exists() {
-                        let _ = fs::copy(&bak, target);
+                        // DEF-05: Preserve .bak on fallback error so restart can recover
                     }
-                    // DEF-05: Preserve .bak on fallback error so restart can recover
                 }
                 return Err(rename_err);
             }
@@ -511,10 +513,49 @@ pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::
     atomic_replace_file(&tmp, path)
 }
 
+/// Autonomous recovery when Standby loses all contact with Primary after having previously connected.
+fn try_orphan_recovery(st: &SharedState) {
+    let mut s = st.lock_or_recover();
+    let role = s.cluster.state.role.clone();
+    let handover_in_flight = s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false);
+    let outage_opt = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs());
+    if role == "standby" && !handover_in_flight {
+        if let Some(outage) = outage_opt {
+            if outage >= 30 {
+                s.cluster.handover_lease_until = None;
+                let target_ep = Some(next_epoch(
+                    s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch()),
+                ));
+                let ep = s.cluster.promote(target_ep);
+                s.writes = s.writes_allowed;
+                let writes = s.writes;
+                let audit_rec = Arc::clone(&s.audit);
+                let (p, st_file) = s.cluster.save_info();
+                drop(s);
+                audit_rec.record(
+                    "cluster",
+                    "",
+                    "cluster.orphan_primary_recovered",
+                    &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes),
+                    None,
+                    None,
+                    "ok",
+                );
+                println!(
+                    "[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.",
+                    outage, ep, writes
+                );
+                if let Err(err) = save_state_to_file(&p, &st_file) {
+                    eprintln!("[hub] ORPHAN RECOVERY ERR: Failed to persist state: {}", err);
+                }
+            }
+        }
+    }
+}
+
 /// Spawns the background cluster replication and failback manager loop.
 pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
     tokio::spawn(async move {
-        let worker_started_at = Instant::now();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::limited(5))
@@ -535,17 +576,9 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
         loop {
             tokio::time::sleep(check_interval).await;
 
-            let (peer_url, token, role, epoch, is_cfg_primary, locked, hours) = {
+            let (peer_url, token) = {
                 let s = st.lock_or_recover();
-                (
-                    s.cluster.peer_url.clone(),
-                    s.cluster.cluster_token.clone(),
-                    s.cluster.state.role.clone(),
-                    s.cluster.state.epoch,
-                    s.cluster.state.is_configured_primary,
-                    s.cluster.state.failback_locked,
-                    s.cluster.state.failback_stabilization_hours,
-                )
+                (s.cluster.peer_url.clone(), s.cluster.cluster_token.clone())
             };
 
             if peer_url.is_empty() {
@@ -573,69 +606,28 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 },
                 Ok(r) => {
-                    let mut s = st.lock_or_recover();
-                    s.cluster.peer_online = false;
-                    s.cluster.continuous_online_start = None;
-                    s.cluster.sync_status = "disconnected".to_string();
-                    s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, r.status());
-
-                    // R2-H01, D7-H01, R5-D7-01, R5-D7-02 & R7-D7-01: Autonomous recovery when orphaned in Standby
-                    let role = s.cluster.state.role.clone();
-                    let handover_in_flight = s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false);
-                    if role == "standby" && !handover_in_flight {
-                        let outage = match s.cluster.last_peer_contact {
-                            Some(t) => t.elapsed().as_secs(),
-                            None => worker_started_at.elapsed().as_secs(),
-                        };
-                        if outage >= 30 {
-                            s.cluster.handover_lease_until = None;
-                            let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
-                            let ep = s.cluster.promote(target_ep);
-                            s.writes = s.writes_allowed;
-                            let writes = s.writes;
-                            let audit_rec = Arc::clone(&s.audit);
-                            let (p, st_file) = s.cluster.save_info();
-                            drop(s);
-                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
-                            if let Err(err) = save_state_to_file(&p, &st_file) {
-                                eprintln!("[hub] ORPHAN RECOVERY ERR: Failed to persist state: {}", err);
-                            }
-                        }
+                    let status = r.status();
+                    {
+                        let mut s = st.lock_or_recover();
+                        s.cluster.peer_online = false;
+                        s.cluster.continuous_online_start = None;
+                        s.cluster.sync_status = "disconnected".to_string();
+                        s.cluster.last_sync_err = format!("Peer {} returned status code {}", peer_url, status);
+                    }
+                    if status != reqwest::StatusCode::UNAUTHORIZED && status != reqwest::StatusCode::FORBIDDEN {
+                        try_orphan_recovery(&st);
                     }
                     continue;
                 }
                 Err(e) => {
-                    let mut s = st.lock_or_recover();
-                    s.cluster.peer_online = false;
-                    s.cluster.continuous_online_start = None;
-                    s.cluster.sync_status = "disconnected".to_string();
-                    s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
-
-                    // R2-H01, D7-H01, R5-D7-01, R5-D7-02 & R7-D7-01: Autonomous recovery when orphaned in Standby
-                    let role = s.cluster.state.role.clone();
-                    let handover_in_flight = s.cluster.handover_lease_until.map(|t| Instant::now() < t).unwrap_or(false);
-                    if role == "standby" && !handover_in_flight {
-                        let outage = match s.cluster.last_peer_contact {
-                            Some(t) => t.elapsed().as_secs(),
-                            None => worker_started_at.elapsed().as_secs(),
-                        };
-                        if outage >= 30 {
-                            s.cluster.handover_lease_until = None;
-                            let target_ep = Some(next_epoch(s.cluster.peer_status.as_ref().map(|p| p.epoch).unwrap_or(0).max(s.cluster.epoch())));
-                            let ep = s.cluster.promote(target_ep);
-                            s.writes = s.writes_allowed;
-                            let writes = s.writes;
-                            let audit_rec = Arc::clone(&s.audit);
-                            let (p, st_file) = s.cluster.save_info();
-                            drop(s);
-                            audit_rec.record("cluster", "", "cluster.orphan_primary_recovered", &format!("recovered Primary role after {}s peer isolation (epoch {}, writes={})", outage, ep, writes), None, None, "ok");
-                            println!("[hub] ORPHAN RECOVERY: Promoting after {}s peer isolation. Epoch {}. Writes={}.", outage, ep, writes);
-                            if let Err(err) = save_state_to_file(&p, &st_file) {
-                                eprintln!("[hub] ORPHAN RECOVERY ERR: Failed to persist state: {}", err);
-                            }
-                        }
+                    {
+                        let mut s = st.lock_or_recover();
+                        s.cluster.peer_online = false;
+                        s.cluster.continuous_online_start = None;
+                        s.cluster.sync_status = "disconnected".to_string();
+                        s.cluster.last_sync_err = format!("Cannot connect to peer {}: {}", peer_url, e);
                     }
+                    try_orphan_recovery(&st);
                     continue;
                 }
             };
@@ -665,6 +657,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 s.cluster.last_peer_contact = Some(now);
                 s.cluster.peer_status = Some(remote_st.clone());
             }
+
+            // R14-C04: Re-read live cluster role/epoch/config after HTTP probe await
+            let (role, epoch) = {
+                let s = st.lock_or_recover();
+                (s.cluster.state.role.clone(), s.cluster.state.epoch)
+            };
 
             // 2. Check split-brain conflict and resolve (H-10 & P1-5 & P0-2)
             if role == "primary" && remote_st.role == "primary" && remote_st.epoch == epoch {
@@ -751,19 +749,23 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 
             // P1-2, D7-H02 & R4-D7-01: Dual Standby recovery - total lexicographical ordering to prevent election deadlock
             if current_role == "standby" && remote_st.role == "standby" && !handover_in_flight {
-                let my_seq = {
+                let (live_epoch, my_seq, live_is_cfg_primary) = {
                     let s = st.lock_or_recover();
-                    s.cmds.sync_stats().1
+                    (
+                        s.cluster.state.epoch,
+                        s.cmds.sync_stats().1,
+                        s.cluster.state.is_configured_primary,
+                    )
                 };
                 use std::cmp::Ordering;
-                let my_data = (epoch, my_seq);
+                let my_data = (live_epoch, my_seq);
                 let remote_data = (remote_st.epoch, remote_st.max_cmd_seq);
                 let should_recover = match my_data.cmp(&remote_data) {
                     Ordering::Greater => true,
                     Ordering::Less => false,
                     Ordering::Equal => {
-                        if is_cfg_primary != remote_st.is_configured_primary {
-                            is_cfg_primary
+                        if live_is_cfg_primary != remote_st.is_configured_primary {
+                            live_is_cfg_primary
                         } else {
                             my_hub_id < remote_st.hub_id
                         }
@@ -877,8 +879,8 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let curve_diff =
                     local_curve_on && remote_curve_on && remote_st.curve_clients_hash != curve_h;
 
-                let cfg_diff = !cfg_h.is_empty() && !remote_st.cfg_hash.is_empty() && remote_st.cfg_hash != cfg_h;
-                let cmd_diff = !cmd_h.is_empty() && !remote_st.cmd_hash.is_empty() && remote_st.cmd_hash != cmd_h;
+                let cfg_diff = !lines_differ && remote_st.cfg_hash != cfg_h;
+                let cmd_diff = !lines_differ && remote_st.cmd_hash != cmd_h;
                 // BUG-03: Allow users sync when Standby starts with no local users file (users_h is empty)
                 let users_diff = users_sync_enabled && remote_st.users_sync_enabled && !remote_st.users_hash.is_empty() && remote_st.users_hash != users_h;
 
@@ -1145,7 +1147,17 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                                     //--- Primary's epoch, so a later promote or takeover
                                     //--- would carry stale state into the highest epoch -
                                     //--- exactly the rollback HUB-02 exists to prevent.
-                                    let batch_incomplete = (req_from_cmd_line + data.cmd_delta_lines.len() < data.total_cmd_lines)
+                                    let cfg_shrunk = data.total_cfg_lines < req_from_cfg_line;
+                                    let cmd_shrunk = data.total_cmd_lines < req_from_cmd_line;
+                                    if cfg_shrunk {
+                                        force_full_cfg_resync = true;
+                                    }
+                                    if cmd_shrunk {
+                                        force_full_cmd_resync = true;
+                                    }
+                                    let batch_incomplete = cfg_shrunk
+                                        || cmd_shrunk
+                                        || (req_from_cmd_line + data.cmd_delta_lines.len() < data.total_cmd_lines)
                                         || (req_from_cfg_line + data.cfg_delta_lines.len() < data.total_cfg_lines);
                                     let sync_clean = file_sync_err.is_none() && !batch_incomplete;
                                     let save_info = if sync_clean && data.epoch > s.cluster.epoch() {
@@ -1217,25 +1229,27 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     }
                 }
 
-                // 5. ADR-10 Auto-Failback Check
-                let (can_failback, continuous_secs) = {
+                // 5. ADR-10 Auto-Failback Check (re-read live config/lock under mutex after sync)
+                let (can_failback, continuous_secs, live_hours) = {
                     let s = st.lock_or_recover();
                     let online_dur = s
                         .cluster
                         .continuous_online_start
                         .map(|t| t.elapsed().as_secs_f64())
                         .unwrap_or(0.0);
-                    let eligible = is_cfg_primary
-                        && !locked
+                    let h = s.cluster.state.failback_stabilization_hours;
+                    let eligible = s.cluster.state.role == "standby"
+                        && s.cluster.state.is_configured_primary
+                        && !s.cluster.state.failback_locked
                         && s.cluster.sync_status == "synced"
-                        && online_dur >= (hours * 3600.0);
-                    (eligible, online_dur)
+                        && online_dur >= (h * 3600.0);
+                    (eligible, online_dur, h)
                 };
 
                 if can_failback {
                     println!(
                         "[hub] ADR-10: Host online continuous {:.1}s >= {:.1}h. Requesting graceful failback...",
-                        continuous_secs, hours
+                        continuous_secs, live_hours
                     );
                     let handover_url = format!("{}/api/v1/cluster/handover-request", peer_url);
                     let h_req = HandoverRequest {
@@ -1337,11 +1351,15 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                     (String::new(), String::new())
                 };
 
-                let hashes_ok = (remote_st.cfg_hash.is_empty() || my_cfg_h.is_empty() || remote_st.cfg_hash == my_cfg_h)
-                    && (remote_st.cmd_hash.is_empty() || my_cmd_h.is_empty() || remote_st.cmd_hash == my_cmd_h)
-                    && (!users_sync_enabled || !remote_st.users_sync_enabled || remote_st.users_hash.is_empty() || remote_st.users_hash == my_u_h)
-                    && (!remote_st.notif_enabled || my_n_h.is_empty() || remote_st.notif_hash.is_empty() || remote_st.notif_hash == my_n_h)
-                    && (remote_st.curve_clients_hash.is_empty() || my_c_h.is_empty() || remote_st.curve_clients_hash == my_c_h);
+                let local_notif_on = !n_p.as_os_str().is_empty();
+                let local_curve_on = !c_p.as_os_str().is_empty();
+                let remote_notif_on = remote_st.notif_enabled || !remote_st.notif_hash.is_empty();
+                let remote_curve_on = remote_st.curve_clients_enabled || !remote_st.curve_clients_hash.is_empty();
+                let hashes_ok = (remote_st.cfg_hash == my_cfg_h)
+                    && (remote_st.cmd_hash == my_cmd_h)
+                    && (!users_sync_enabled || !remote_st.users_sync_enabled || remote_st.users_hash == my_u_h)
+                    && (!local_notif_on || !remote_notif_on || remote_st.notif_hash == my_n_h)
+                    && (!local_curve_on || !remote_curve_on || remote_st.curve_clients_hash == my_c_h);
 
                 let mut s = st.lock_or_recover();
                 if !cmd_in_sync || remote_st.cmd_lines != my_cmd || remote_st.cfg_lines != my_cfg || !hashes_ok {

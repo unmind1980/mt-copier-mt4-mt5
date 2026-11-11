@@ -140,13 +140,25 @@ bool RecvFrames(Socket *s,string &f0,string &f1,int &nFrames,const int waitMs)
 //--- emits one notification per subscribe/unsubscribe, so its arrival IS the
 //--- signal that the filter has been updated.
 //--- Returns the milliseconds waited, or -1 if nothing arrived in maxMs.
-int WaitForSubEvent(Socket *pub,const int maxMs)
+int WaitForSubEvent(Socket *pub,const int maxMs,const int expectCmdByte=-1)
   {
    int waited=0;
    while(waited<maxMs)
      {
       ZmqMsg m;
-      if(pub.recv(m,true)) return waited;
+      if(pub.recv(m,true))
+        {
+         if(expectCmdByte>=0)
+           {
+            uchar raw[];
+            m.getData(raw);
+            if(ArraySize(raw)>0 && (int)raw[0]==expectCmdByte) return waited;
+           }
+         else
+           {
+            return waited;
+           }
+        }
       Sleep(20);
       waited+=20;
      }
@@ -268,8 +280,15 @@ void OnStart()
    //    Clearing sub first makes the loop see only what is sent AFTER the
    //    unsubscribe. DrainAll(pub) was already done; this is its mirror.
    //=================================================================
-   sub.send("\x00"+"999999");
-   int wDrop=WaitForSubEvent(pub,3000);
+   uchar unsubPrefix[];
+   StringToUtf8("999999",unsubPrefix,false);
+   int unsubLen=ArraySize(unsubPrefix);
+   uchar unsubFrame[];
+   ArrayResize(unsubFrame,1+unsubLen);
+   unsubFrame[0]=0x00;
+   for(int ui=0;ui<unsubLen;ui++) unsubFrame[1+ui]=unsubPrefix[ui];
+   sub.send(unsubFrame);
+   int wDrop=WaitForSubEvent(pub,3000,0x00);
    Ok("the XPUB saw the unsubscribe",wDrop>=0);
    if(wDrop>=0) Note("...applied after "+IntegerToString(wDrop)+" ms");
    DrainAll(pub);

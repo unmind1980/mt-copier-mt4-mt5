@@ -74,7 +74,13 @@ double CopierPipOf(const CopierSymInfo &si)
       return (si.digits==3) ? si.point*10.0 : si.point;
    // Indices & Crypto: 1 pip = 1.0 price unit
    if(StringFind(si.sym,"BTC")>=0 || StringFind(si.sym,"ETH")>=0 ||
-      StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || (StringFind(si.sym,"DJ30")>=0 || StringFind(si.sym,"DJI")>=0 || StringFind(si.sym,"DJIA")>=0 || StringFind(si.sym,"DJX")>=0))
+      StringFind(si.sym,"SOL")>=0 || StringFind(si.sym,"XRP")>=0 || StringFind(si.sym,"LTC")>=0 ||
+      StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || StringFind(si.sym,"DJ30")>=0 || StringFind(si.sym,"DJI")>=0 || StringFind(si.sym,"DJIA")>=0 || StringFind(si.sym,"DJX")>=0 ||
+      StringFind(si.sym,"US500")>=0 || StringFind(si.sym,"SPX500")>=0 || StringFind(si.sym,"SP500")>=0 ||
+      StringFind(si.sym,"NAS100")>=0 || StringFind(si.sym,"USTEC")>=0 || StringFind(si.sym,"US100")>=0 ||
+      StringFind(si.sym,"GER40")>=0 || StringFind(si.sym,"DE40")>=0 || StringFind(si.sym,"GER30")>=0 || StringFind(si.sym,"DE30")>=0 || StringFind(si.sym,"DAX")>=0 ||
+      StringFind(si.sym,"UK100")>=0 || StringFind(si.sym,"FTSE")>=0 ||
+      StringFind(si.sym,"JP225")>=0 || StringFind(si.sym,"NI225")>=0 || StringFind(si.sym,"HK50")>=0)
       return (si.point>0.0 ? 1.0 : 1.0);
    if(si.digits<=1) return (si.point>0.0 ? si.point : 1.0);
    return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
@@ -90,13 +96,15 @@ double CopierRoundToTick(const double price, const CopierSymInfo &si)
 // R7-D1-02 & D-10: Normalize deviation points across 2/3/4/5-digit symbols
 int CopierScaleDeviationPoints(const string sym,const int devPoints)
   {
+   if(devPoints<=0) return 0;
    CopierSymInfo si;
-   if(!CopierGetSymbolInfo(sym,si)) return MathMax(0,devPoints);
+   if(!CopierGetSymbolInfo(sym,si)) return devPoints;
    double pipSize=CopierPipOf(si);
-   if(pipSize<=0.0 || si.point<=0.0) return MathMax(0,devPoints);
+   if(pipSize<=0.0 || si.point<=0.0) return devPoints;
    int pointsPerPip=(int)MathRound(pipSize/si.point);
    if(pointsPerPip<=1) return MathMax(1,(int)MathRound((double)devPoints/10.0));
-   return MathMax(0,devPoints);
+   if(pointsPerPip>10) return MathMax(1,(int)MathRound((double)devPoints*((double)pointsPerPip/10.0)));
+   return devPoints;
   }
 
 //=====================================================================
@@ -327,10 +335,15 @@ bool CopierIsConnected()
 //=====================================================================
 // Currency cross rate with broker suffix resolution
 //=====================================================================
-string CopierResolveCrossSymbol(const string pair)
+string CopierResolveCrossSymbol(const string pair,const string extraSuffix="")
   {
    if(CopierSymbolEnsure(pair)) return pair;
-   string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c","i",".c"};
+   if(StringLen(extraSuffix)>0)
+     {
+      string custom=pair+extraSuffix;
+      if(CopierSymbolEnsure(custom)) return custom;
+     }
+   string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c","i",".c",".raw","_std"};
    for(int i=0;i<ArraySize(sfx);i++)
      {
       string cand=pair+sfx[i];
@@ -339,7 +352,7 @@ string CopierResolveCrossSymbol(const string pair)
    return "";
   }
 
-double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw)
+double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw,const string extraSuffix="")
   {
    string fromCcy=CopierTrim(fromCcyRaw);
    string toCcy=CopierTrim(toCcyRaw);
@@ -348,7 +361,7 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw)
    if(fromCcy==toCcy || StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 1.0;
 
    // Direct pair: fromCcy + toCcy (e.g. USDJPY -> 1 USD = px JPY)
-   string direct=CopierResolveCrossSymbol(fromCcy+toCcy);
+   string direct=CopierResolveCrossSymbol(fromCcy+toCcy,extraSuffix);
    if(StringLen(direct)>0)
      {
       double px=0.0;
@@ -356,7 +369,7 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw)
      }
 
    // Inverted pair: toCcy + fromCcy (e.g. EURUSD -> 1 EUR = px USD -> 1 USD = 1/px EUR)
-   string inverted=CopierResolveCrossSymbol(toCcy+fromCcy);
+   string inverted=CopierResolveCrossSymbol(toCcy+fromCcy,extraSuffix);
    if(StringLen(inverted)>0)
      {
       double px=0.0;
@@ -366,16 +379,16 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw)
    // Intermediate via USD
    if(fromCcy!="USD" && toCcy!="USD")
      {
-      double r1=CopierGetCurrencyCrossRate(fromCcy,"USD");
-      double r2=CopierGetCurrencyCrossRate("USD",toCcy);
+      double r1=CopierGetCurrencyCrossRate(fromCcy,"USD",extraSuffix);
+      double r2=CopierGetCurrencyCrossRate("USD",toCcy,extraSuffix);
       if(r1>0.0 && r2>0.0) return r1*r2;
      }
 
    // Intermediate via EUR fallback
    if(fromCcy!="EUR" && toCcy!="EUR" && fromCcy!="USD" && toCcy!="USD")
      {
-      double r1=CopierGetCurrencyCrossRate(fromCcy,"EUR");
-      double r2=CopierGetCurrencyCrossRate("EUR",toCcy);
+      double r1=CopierGetCurrencyCrossRate(fromCcy,"EUR",extraSuffix);
+      double r2=CopierGetCurrencyCrossRate("EUR",toCcy,extraSuffix);
       if(r1>0.0 && r2>0.0) return r1*r2;
      }
 
@@ -701,8 +714,8 @@ bool CopierPlacePending(const CopierPos &p,const string sym,
    if(!CopierGetSymbolInfo(sym,si)) { outErr=-2; return false; }
 
    string cmt=CopierCommentForUid(p.uid,p.ticket);
-   double px=NormalizeDouble(p.pprice,si.digits);
-   double stop=NormalizeDouble(p.pstop,si.digits);
+   double px=CopierRoundToTick(p.pprice,si);
+   double stop=CopierRoundToTick(p.pstop,si);
    double sl=(p.sl>0.0)?NormalizeDouble(p.sl,si.digits):0.0;
    double tp=(p.tp>0.0)?NormalizeDouble(p.tp,si.digits):0.0;
 
@@ -1124,33 +1137,35 @@ bool CopierIsTradeDisabled(const int err)
    return (err==4109 || err==10027 || err==10026 || err==10017);
   }
 
+#ifdef __MQL5__
 //=====================================================================
-// Open a market position.
-// Returns true on success. On failure outErr carries the broker /
-// terminal return code (MT5 retcode, MT4 GetLastError()).
+// Helper: Execute a market DEAL via CTrade with 10030 (INVALID_FILL)
+// native OrderSend fallback across FOK/IOC/RETURN candidates.
 //=====================================================================
-bool CopierOpenMarket(const string sym,const int side,const double lots,
-                      const double sl,const double tp,const string comment,
-                      const long magic,const int deviationPoints,
-                      int &outErr)
+bool CopierMql5DealWithFilling(CTrade &trade,const string sym,const int side,const double lots,
+                               const double sl,const double tp,const string comment,
+                               const long magic,const int deviationPoints,
+                               int &outErr,ulong &outOrder,ulong &outDeal)
   {
    outErr=0;
-   if(!CopierSymbolEnsure(sym)) { outErr=-1; return false; }
-
-#ifdef __MQL5__
-   CTrade trade;
-   trade.SetExpertMagicNumber((ulong)magic);
-   // N81-03: Guard against signed negative deviationPoints underflow to 18446744073709551615
-   trade.SetDeviationInPoints(deviationPoints > 0 ? (ulong)deviationPoints : 0);
-   trade.SetTypeFillingBySymbol(sym);
-   trade.SetAsyncMode(false);
-   bool ok;
+   outOrder=0;
+   outDeal=0;
+   bool ok=false;
    if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,sl,tp,comment);
    else                  ok=trade.Sell(lots,sym,0.0,sl,tp,comment);
-   if(!ok && trade.ResultRetcode()==TRADE_RETCODE_DONE_PARTIAL) ok=true;
+   uint rc=trade.ResultRetcode();
+   if(!ok && (rc==TRADE_RETCODE_DONE_PARTIAL || rc==TRADE_RETCODE_PLACED))
+      ok=true;
+   if(ok)
+     {
+      outOrder=trade.ResultOrder();
+      outDeal=trade.ResultDeal();
+      return true;
+     }
    // R2-D1-M02 & R11-A01: 10030 (TRADE_RETCODE_INVALID_FILL) candidate fallback using native OrderSend
    // Bypasses CTrade::PositionOpen's internal FillingCheck() which forcefully resets type_filling to FOK
-   if(!ok && trade.ResultRetcode()==10030)
+   int lastErr=(int)rc;
+   if(rc==10030)
      {
       long fillMode=SymbolInfoInteger(sym,SYMBOL_FILLING_MODE);
       ENUM_ORDER_TYPE_FILLING candidates[3];
@@ -1176,18 +1191,46 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
          req.comment      = comment;
          req.type_filling = candidates[a];
 
-         ok=OrderSend(req,res);
-         if(ok && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_DONE_PARTIAL || res.retcode==TRADE_RETCODE_PLACED))
+         bool sent=OrderSend(req,res);
+         lastErr=(int)res.retcode;
+         if(sent && (res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_DONE_PARTIAL || res.retcode==TRADE_RETCODE_PLACED))
            {
-            ok=true;
-            break;
+            outOrder=res.order;
+            outDeal=res.deal;
+            return true;
            }
          if(res.retcode!=10030) break;
         }
      }
+   outErr=(lastErr!=0)?lastErr:(int)trade.ResultRetcode();
+   return false;
+  }
+#endif
+
+//=====================================================================
+// Open a market position.
+// Returns true on success. On failure outErr carries the broker /
+// terminal return code (MT5 retcode, MT4 GetLastError()).
+//=====================================================================
+bool CopierOpenMarket(const string sym,const int side,const double lots,
+                      const double sl,const double tp,const string comment,
+                      const long magic,const int deviationPoints,
+                      int &outErr)
+  {
+   outErr=0;
+   if(!CopierSymbolEnsure(sym)) { outErr=-1; return false; }
+
+#ifdef __MQL5__
+   CTrade trade;
+   trade.SetExpertMagicNumber((ulong)magic);
+   // N81-03: Guard against signed negative deviationPoints underflow to 18446744073709551615
+   trade.SetDeviationInPoints(deviationPoints > 0 ? (ulong)deviationPoints : 0);
+   trade.SetTypeFillingBySymbol(sym);
+   trade.SetAsyncMode(false);
+   ulong ord=0, deal=0;
+   bool ok=CopierMql5DealWithFilling(trade,sym,side,lots,sl,tp,comment,magic,deviationPoints,outErr,ord,deal);
    if(!ok)
      {
-      outErr=(int)trade.ResultRetcode();
       //--- DEF-61-02: TRADE_RETCODE_INVALID_STOPS (10016) fallback.
       //--- On ECN brokers or during spread/StopLevel widening, market orders with
       //--- non-zero SL/TP are rejected with 10016. Fall back to opening flat
@@ -1195,16 +1238,14 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
       //--- attempt immediate stop placement (and let converge re-clamp if needed).
       if(outErr==10016 && (sl>0.0 || tp>0.0))
         {
-         if(side==CP_SIDE_BUY) ok=trade.Buy(lots,sym,0.0,0.0,0.0,comment);
-         else                  ok=trade.Sell(lots,sym,0.0,0.0,0.0,comment);
+         int flatErr=0;
+         ok=CopierMql5DealWithFilling(trade,sym,side,lots,0.0,0.0,comment,magic,deviationPoints,flatErr,ord,deal);
          if(ok)
            {
             outErr=0;
-            ulong deal=trade.ResultDeal();
-            ulong order=trade.ResultOrder();
             // N71-08: In MT5, position identifier matches the initial order ticket (ResultOrder),
             // not the fill deal ticket (ResultDeal). Prioritize order over deal.
-            ulong posId=(order>0)?order:deal;
+            ulong posId=(ord>0)?ord:deal;
             if(posId>0)
               {
                // BUG-02: Protect against crossed stops on fallback.
@@ -1262,7 +1303,7 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
            }
          else
            {
-            outErr=(int)trade.ResultRetcode();
+            if(flatErr!=0) outErr=flatErr;
            }
         }
      }
@@ -1276,10 +1317,11 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
    int ticket=-1;
    double initialPx=px;
    double pointVal=MarketInfo(sym,MODE_POINT);
+   outErr=0;
    for(int attempt=0;attempt<3;attempt++)
      {
       ticket=OrderSend(sym,cmd,lots,px,MathMax(0,deviationPoints),sl,tp,comment,safeMagic,0,clrNONE);
-      if(ticket>=0) break;
+      if(ticket>=0) { outErr=0; break; }
       outErr=GetLastError();
       if(outErr==135 || outErr==136 || outErr==138) // ERR_PRICE_CHANGED, ERR_OFF_QUOTES, ERR_REQUOTE
         {
@@ -1294,7 +1336,8 @@ bool CopierOpenMarket(const string sym,const int side,const double lots,
      }
    if(ticket<0)
      {
-      outErr=GetLastError();
+      //--- R14-A04: outErr already holds GetLastError() from the final OrderSend attempt;
+      //--- reading GetLastError() a second time clears it to 0 and disables err-130 fallback.
       //--- ECN broker / Market Execution fallback: on ECN brokers, OrderSend
       //--- forbids non-zero SL/TP on market entry and returns err 130 (ERR_INVALID_STOPS).
       //--- Fall back to opening with SL=0, TP=0, then apply stops via OrderModify.
@@ -1739,9 +1782,11 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
 //=====================================================================
 bool CopierClosePartial(const long identifier,const double lots,
                         const string sym,const int side,const long magic,
-                        const string comment,const int deviationPoints,int &outErr)
+                        const string comment,const int deviationPoints,int &outErr,
+                        double &outClosedLots)
   {
    outErr=0;
+   outClosedLots=0.0;
    if(lots<=0.0) return true;
 
    long ticket=0;
@@ -1831,7 +1876,13 @@ bool CopierClosePartial(const long identifier,const double lots,
       if(sent && (res.retcode==TRADE_RETCODE_DONE
                   || res.retcode==TRADE_RETCODE_PLACED
                   || res.retcode==TRADE_RETCODE_DONE_PARTIAL))
+        {
+         if(res.retcode==TRADE_RETCODE_DONE_PARTIAL)
+            outClosedLots=(res.volume>0.0)?MathMin(lots,res.volume):0.0;
+         else
+            outClosedLots=(res.volume>0.0)?MathMin(lots,res.volume):lots;
          return true;
+        }
 
       //--- only an unsupported filling mode justifies another attempt
       if(res.retcode!=TRADE_RETCODE_INVALID_FILL) return false;
@@ -1856,9 +1907,18 @@ bool CopierClosePartial(const long identifier,const double lots,
    double px=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID)
                            :MarketInfo(OrderSymbol(),MODE_ASK);
    bool ok=OrderClose((int)ticket,lots,px,MathMax(0,deviationPoints),clrNONE);
-   if(!ok) outErr=GetLastError();
+   if(ok) outClosedLots=lots;
+   else   outErr=GetLastError();
    return ok;
 #endif
+  }
+
+bool CopierClosePartial(const long identifier,const double lots,
+                        const string sym,const int side,const long magic,
+                        const string comment,const int deviationPoints,int &outErr)
+  {
+   double closedLots=0.0;
+   return CopierClosePartial(identifier,lots,sym,side,magic,comment,deviationPoints,outErr,closedLots);
   }
 
 //=====================================================================

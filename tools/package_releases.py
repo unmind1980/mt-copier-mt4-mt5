@@ -245,7 +245,7 @@ Step 1: Start the Central Hub Server
     * ZMQ Order Router : 0.0.0.0:6000
     * Web Cockpit      : http://127.0.0.1:6010
 - Open your browser at http://127.0.0.1:6010.
-  (Initial setup will prompt you to create an administrator account).
+  (Initial startup generates a one-time admin password in .admin_bootstrap_password next to users.json).
 
 Step 2: Install EAs into MetaTrader Terminals
 --------------------------------------------
@@ -384,6 +384,12 @@ if "%NEWPASS%"=="" (
     exit /b 1
 )
 copier-hub.exe --reset-password "%NEWPASS%"
+if errorlevel 1 (
+    echo.
+    echo ERROR: Failed to update admin password.
+    pause
+    exit /b 1
+)
 echo.
 echo Password updated successfully.
 pause

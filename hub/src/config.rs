@@ -356,21 +356,29 @@ impl ConfigStore {
         if !self.enabled {
             return Ok(0);
         }
+        struct TmpGuard<'a>(&'a std::path::Path);
+        impl<'a> Drop for TmpGuard<'a> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0);
+            }
+        }
         let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
+        let tmp_path = std::path::Path::new(&tmp);
+        let _tmp_guard = TmpGuard(tmp_path);
         {
-            let mut f = File::create(&tmp)?;
+            let mut f = File::create(tmp_path)?;
             for l in lines {
                 f.write_all(l.as_bytes())?;
                 f.write_all(b"\n")?;
             }
             f.sync_all()?;
         }
-        let (current, count, torn) = load(std::path::Path::new(&tmp))?;
+        let (current, count, torn) = load(tmp_path)?;
         {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
             // ISSUE-08 / N-05: Ensure file handle is reopened even on replace errors to prevent permanent NotConnected
-            let rep_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
+            let rep_res = crate::cluster::atomic_replace_file(tmp_path, &self.path);
             let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
             inner.file = reopen_res.ok();
             rep_res?;
@@ -440,6 +448,18 @@ impl ConfigStore {
     /// hub, i.e. drifted, when in fact the hub had just taken over. Continuing
     /// the node's numbering instead makes the hub's first revision strictly
     /// newer than what the node runs, so `in sync` is reachable.
+    fn reopen_append_if_needed(path: &Path, inner: &mut Inner) -> Result<(), StoreError> {
+        if inner.file.is_none() {
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| StoreError::Write(format!("failed to reopen config journal: {}", e)))?;
+            inner.file = Some(f);
+        }
+        Ok(())
+    }
+
     pub fn put(
         &self,
         node: &str,
@@ -449,10 +469,11 @@ impl ConfigStore {
         kind: &str,
         base_rev: u64,
     ) -> Result<Revision, StoreError> {
-        let mut inner = self.inner.lock_or_recover();
-        if inner.file.is_none() {
+        if !self.enabled {
             return Err(StoreError::Disabled);
         }
+        let mut inner = self.inner.lock_or_recover();
+        Self::reopen_append_if_needed(&self.path, &mut inner)?;
         let rev = match inner.current.get(node) {
             Some(r) => r.rev.saturating_add(1),
             //--- `base_rev` comes straight off the wire (`REV=` on a REG), so
@@ -498,11 +519,10 @@ impl ConfigStore {
         if !self.enabled {
             return Err(StoreError::Disabled);
         }
-        let body = self.revision_body(node, to_rev).ok_or(StoreError::NotFound)?;
         let mut inner = self.inner.lock_or_recover();
-        if inner.file.is_none() {
-            return Err(StoreError::Disabled);
-        }
+        Self::reopen_append_if_needed(&self.path, &mut inner)?;
+        let body = Self::revision_body_locked(&self.path, &inner, node, to_rev)
+            .ok_or(StoreError::NotFound)?;
         let rev = inner
             .current
             .get(node)
@@ -523,19 +543,15 @@ impl ConfigStore {
         Ok(r)
     }
 
-    /// The body of one specific revision, read from the file.
-    fn revision_body(&self, node: &str, rev: u64) -> Option<String> {
+    fn revision_body_locked(path: &Path, inner: &Inner, node: &str, rev: u64) -> Option<String> {
         // HUB-08: Check memory cache first for current revision
-        {
-            let inner = self.inner.lock_or_recover();
-            if let Some(cur) = inner.current.get(node) {
-                if cur.rev == rev {
-                    return Some(cur.ini.clone());
-                }
+        if let Some(cur) = inner.current.get(node) {
+            if cur.rev == rev {
+                return Some(cur.ini.clone());
             }
         }
         use std::io::BufRead;
-        let file = std::fs::File::open(&self.path).ok()?;
+        let file = std::fs::File::open(path).ok()?;
         let reader = std::io::BufReader::new(file);
         for line_res in reader.lines() {
             let line = match line_res {
@@ -553,6 +569,12 @@ impl ConfigStore {
             }
         }
         None
+    }
+
+    /// The body of one specific revision, read from the file.
+    fn revision_body(&self, node: &str, rev: u64) -> Option<String> {
+        let inner = self.inner.lock_or_recover();
+        Self::revision_body_locked(&self.path, &inner, node, rev)
     }
 
     /// The most recent `limit` revisions, newest last.

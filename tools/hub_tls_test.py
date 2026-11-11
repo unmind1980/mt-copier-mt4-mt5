@@ -349,10 +349,20 @@ def main():
         )
         try:
             with urllib.request.urlopen(https_import_req, context=ctx, timeout=3.0) as resp:
-                pass
+                check(
+                    "9. Mismatched imported certificate pair safely rejected with 400 Bad Request",
+                    False,
+                    f"unexpected HTTP {resp.status}",
+                )
         except urllib.error.HTTPError as e:
             # 400 Bad Request indicates cryptographic sanity check succeeded in catching mismatched keys
             check("9. Mismatched imported certificate pair safely rejected with 400 Bad Request", e.code == 400)
+        except Exception as e:
+            check(
+                "9. Mismatched imported certificate pair safely rejected with 400 Bad Request",
+                False,
+                f"unexpected error: {e}",
+            )
 
         # 6. Disable TLS and return to plain HTTP
         https_dis_req = urllib.request.Request(

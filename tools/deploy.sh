@@ -139,7 +139,10 @@ deploy_into() {
       if [[ -f "$dst" ]] && cmp -s "$dll" "$dst"; then
         continue
       fi
-      cp -f "$dll" "$mql/Libraries/" 2>/dev/null || true
+      if ! cp -f "$dll" "$mql/Libraries/"; then
+        echo "    !! ERROR: failed to copy $(basename "$dll") to $mql/Libraries/ (close terminal if locked)" >&2
+        return 1
+      fi
     done
     echo "    dlls: $(ls "$ZMQ/Library/$zdir" | tr '\n' ' ')"
     #--- libsodium.dll was a SEPARATE dependency up to libzmq 4.2.x. From
@@ -155,10 +158,14 @@ deploy_into() {
   fi
 }
 
-list_terminals | while IFS='|' read -r id plat label; do
-  [[ -n "$id" ]] || continue
-  deploy_into "$id" "$plat" "$label"
-done
+list_terminals | {
+  deploy_failed=0
+  while IFS='|' read -r id plat label; do
+    [[ -n "$id" ]] || continue
+    deploy_into "$id" "$plat" "$label" || deploy_failed=1
+  done
+  exit $deploy_failed
+}
 
 echo
 if [[ $LIST_ONLY -eq 1 ]]; then

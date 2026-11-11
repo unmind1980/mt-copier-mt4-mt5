@@ -129,7 +129,79 @@ def main():
         except Exception:
             proc.kill()
 
+    # --- Phase 2: Dynamic threshold rotation with MTC_AUDIT_MAX_BYTES and MTC_AUDIT_MAX_BACKUPS (E#11) ---
+    print("\n--- Phase 2: Env-driven rotation thresholds (MTC_AUDIT_MAX_BYTES=600, MTC_AUDIT_MAX_BACKUPS=2) ---")
+    p2_dir = tempfile.mkdtemp(prefix="mtc_audit_rot_p2_")
+    p2_audit_file = os.path.join(p2_dir, "_p2_audit.jsonl")
+    p2_env = os.environ.copy()
+    p2_env["MTC_ADMIN_PASSWORD"] = "rot-test-pass"
+    p2_env["MTC_AUDIT_MAX_BYTES"] = "600"
+    p2_env["MTC_AUDIT_MAX_BACKUPS"] = "2"
+
+    proc2 = subprocess.Popen(
+        [
+            HUB,
+            "--port", str(ZMQ_PORT + 10),
+            "--http", f"127.0.0.1:{HTTP_PORT}",
+            "--audit", p2_audit_file,
+            "--users", os.path.join(p2_dir, "_users.json"),
+            "--commands", os.path.join(p2_dir, "_cmds.jsonl"),
+            "--notifications", os.path.join(p2_dir, "_notif.json"),
+            "--curve", "off",
+            "--stats-every", "0",
+            "--duration", "60",
+        ],
+        cwd=p2_dir,
+        env=p2_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+
+    try:
+        time.sleep(2.0)
+        st, _, c_hdr = http_req("POST", "/api/v1/login", {"id": "admin", "password": "rot-test-pass"})
+        cookie = c_hdr.split(";")[0] if c_hdr and "mtc_session=" in c_hdr else None
+        check("10. Phase 2 login succeeds", st == 200 and bool(cookie))
+
+        st, a_stat, _ = http_req("GET", "/api/v1/audit", cookie=cookie)
+        check("11. Phase 2 max_bytes env override (600)", a_stat.get("max_bytes") == 600)
+        check("12. Phase 2 max_backups env override (2)", a_stat.get("max_backups") == 2)
+
+        # Send 20 operations to trigger multiple rotations
+        for i in range(20):
+            http_req("POST", "/api/v1/notifications", {
+                "name": f"RotChannel_{i}",
+                "channel_type": "webhook",
+                "config": {"url": f"https://example.com/hook/{i:04d}"}
+            }, cookie=cookie)
+
+        time.sleep(1.0)
+        st, a_stat2, _ = http_req("GET", "/api/v1/audit", cookie=cookie)
+        rotations = a_stat2.get("rotations", 0)
+        check("13. Rotations occurred (>= 2)", rotations >= 2, f"rotations={rotations}")
+
+        gz1 = p2_audit_file + ".1.gz"
+        gz2 = p2_audit_file + ".2.gz"
+        gz3 = p2_audit_file + ".3.gz"
+        check("14. Backup .1.gz exists", os.path.exists(gz1))
+        check("15. Backup .2.gz exists", os.path.exists(gz2))
+        check("16. Backup .3.gz pruned (max_backups=2)", not os.path.exists(gz3))
+
+        # Check pagination stitches archive records
+        st, a_stitched, _ = http_req("GET", "/api/v1/audit?since=1&limit=50", cookie=cookie)
+        s_recs = a_stitched.get("records", [])
+        check("17. Pagination stitches records across archives", len(s_recs) >= 6, f"len={len(s_recs)}")
+        is_ordered = all(s_recs[i]["seq"] < s_recs[i+1]["seq"] for i in range(len(s_recs)-1)) if len(s_recs) > 1 else False
+        check("18. Stitched records maintain strictly ascending seqs", is_ordered)
+
+    finally:
+        proc2.terminate()
+        try:
+            proc2.wait(timeout=3)
+        except Exception:
+            proc2.kill()
         shutil.rmtree(test_dir, ignore_errors=True)
+        shutil.rmtree(p2_dir, ignore_errors=True)
 
     passed = sum(1 for _, ok, _ in CHECKS if ok)
     total = len(CHECKS)

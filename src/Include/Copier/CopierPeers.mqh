@@ -39,7 +39,9 @@
 //--- Eviction is unchanged (longest-silent first) and still a real state, not
 //--- a failure: past 100 the panel and the RTT measurement drop the oldest,
 //--- while the data path - a PUB broadcast - keeps serving everyone.
-#define CP_MAX_PEERS 100
+//--- R14-B06: Add headroom beyond CP_MAX_SENDERS (100) for cluster hub peers
+//--- ("hub:primary" / "hub:standby") so 100-sender HA capacity never evicts.
+#define CP_MAX_PEERS 104
 //--- How long a baseline stays valid. Short enough that clock drift cannot
 //--- masquerade as delay; long enough that a busy link still gets a clean
 //--- sample to re-baseline on.

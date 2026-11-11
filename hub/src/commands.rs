@@ -529,22 +529,30 @@ impl CommandStore {
         if !self.enabled {
             return Ok(0);
         }
+        struct TmpGuard<'a>(&'a std::path::Path);
+        impl<'a> Drop for TmpGuard<'a> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0);
+            }
+        }
         let tmp = format!("{}.tmp.{}", self.path.display(), std::process::id());
+        let tmp_path = std::path::Path::new(&tmp);
+        let _tmp_guard = TmpGuard(tmp_path);
         {
-            let mut f = File::create(&tmp)?;
+            let mut f = File::create(tmp_path)?;
             for l in lines {
                 f.write_all(l.as_bytes())?;
                 f.write_all(b"\n")?;
             }
             f.sync_all()?;
         }
-        let (mut commands, seq, torn, line_count, max_seq) = load(std::path::Path::new(&tmp))?;
+        let (mut commands, seq, torn, line_count, max_seq) = load(tmp_path)?;
         let now = unix_secs();
         {
             let mut inner = self.inner.lock_or_recover();
             inner.file = None; // Drop file handle so Windows allows replacing the file
             // ISSUE-08 / N-05: Ensure file handle is reopened even on replace errors to prevent permanent NotConnected
-            let rep_res = crate::cluster::atomic_replace_file(std::path::Path::new(&tmp), &self.path);
+            let rep_res = crate::cluster::atomic_replace_file(tmp_path, &self.path);
             let reopen_res = OpenOptions::new().create(true).append(true).open(&self.path);
             inner.file = reopen_res.ok();
             rep_res?;
@@ -1155,9 +1163,10 @@ impl Inner {
             }
         };
         let mut buf = String::new();
+        let mut batch_max_seq = self.max_seq;
         self.line_count += cs.len();
         for c in cs {
-            self.max_seq = self.max_seq.max(c.seq);
+            batch_max_seq = batch_max_seq.max(c.seq);
             let line = json!({
                 "v": 1,
                 "id": c.id,
@@ -1186,6 +1195,7 @@ impl Inner {
         // power - so the fsync is still there, just not once per line.
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
             Ok(()) => {
+                self.max_seq = batch_max_seq;
                 self.dirty_seq += 1;
                 Ok(())
             }
@@ -1240,10 +1250,11 @@ impl Inner {
         if written == 0 {
             return Ok(());
         }
+        let new_max_seq = self.max_seq.max(max_seq_seen);
         self.line_count += written;
-        self.max_seq = self.max_seq.max(max_seq_seen);
         match f.write_all(buf.as_bytes()).and_then(|_| f.sync_data()) {
             Ok(()) => {
+                self.max_seq = new_max_seq;
                 self.dirty_seq += 1;
                 Ok(())
             }
@@ -2185,6 +2196,29 @@ mod tests {
             s.inner.lock().unwrap().in_flight.contains(&c.id),
             "command must remain in in_flight set for retry"
         );
+
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_append_many_failure_does_not_advance_max_seq() {
+        let p = tmp("append_many_max_seq_fail");
+        let s = CommandStore::open(&p).unwrap();
+        let init_stats = s.sync_stats();
+        assert_eq!(init_stats.1, 0); // max_seq == 0
+
+        // Force append failure by swapping inner file descriptor to read-only
+        {
+            let mut inner = s.inner.lock().unwrap();
+            let ro_file = OpenOptions::new().read(true).open(&p).unwrap();
+            inner.file = Some(ro_file);
+        }
+
+        let cmd = s.issue_op("receiver:1", "pause", "", "op", "");
+        let res = s.inner.lock().unwrap().append_many(&[cmd]);
+        assert!(res.is_err(), "append_many must fail when file is read-only");
+        let after_stats = s.sync_stats();
+        assert_eq!(after_stats.1, 0, "max_seq must not advance when disk write fails");
 
         let _ = std::fs::remove_file(&p);
     }

@@ -87,24 +87,26 @@ pub mod win_service {
         })
     }
 
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetStdHandle(nStdHandle: u32, hHandle: *mut std::ffi::c_void) -> i32;
+    }
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5; // -11
+    const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4;  // -12
+
+    fn bind_std_handles(raw_handle: *mut std::ffi::c_void) {
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, raw_handle);
+            SetStdHandle(STD_ERROR_HANDLE, raw_handle);
+        }
+    }
+
     pub fn redirect_stdio_to_log(path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        let raw_handle = file.as_raw_handle();
-
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn SetStdHandle(nStdHandle: u32, hHandle: *mut std::ffi::c_void) -> i32;
-        }
-        const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5; // -11
-        const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4;  // -12
-
-        unsafe {
-            SetStdHandle(STD_OUTPUT_HANDLE, raw_handle);
-            SetStdHandle(STD_ERROR_HANDLE, raw_handle);
-        }
+        bind_std_handles(file.as_raw_handle());
         //--- H4: keep the handle in a static instead of `mem::forget`. The file must
         //--- stay open for the life of the process either way, but the handle is now
         //--- owned and reachable rather than deliberately leaked - and a second call
@@ -169,6 +171,20 @@ pub mod win_service {
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
 
+        // Rebind stdout/stderr to NUL before releasing LOG_HANDLE so concurrent writers
+        // neither write to a closed/reused handle nor keep the old log file locked on Windows.
+        #[cfg(windows)]
+        let _nul = {
+            use std::os::windows::io::AsRawHandle;
+            match OpenOptions::new().write(true).open("NUL") {
+                Ok(nf) => {
+                    bind_std_handles(nf.as_raw_handle());
+                    Some(nf)
+                }
+                Err(_) => None,
+            }
+        };
+
         // Release file handle held by LOG_HANDLE so Windows file lock is released
         {
             let mut handle_guard = LOG_HANDLE.lock_or_recover();
@@ -178,6 +194,8 @@ pub mod win_service {
         let rot_res = rotate_log_files(path, max_bytes, max_backups);
         // Re-open fresh log and bind stdio ALWAYS to avoid leaving OS handles closed on rotation errors
         let redir_res = redirect_stdio_to_log(path);
+        #[cfg(windows)]
+        drop(_nul);
 
         rot_res?;
         redir_res?;

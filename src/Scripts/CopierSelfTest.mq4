@@ -4042,6 +4042,54 @@ void TestAuditRound13()
    Ok("r13_peer_good_pong_up: slot 0 becomes UP", pr.StateAt(0, 15000)==CP_PEER_UP);
   }
 
+void TestAuditRound14()
+  {
+   //==================================================================
+   // 1) CopierPipOf indices and crypto (D#8.1)
+   //==================================================================
+   CopierSymInfo siPip;
+   ZeroMemory(siPip);
+   siPip.sym="BTCUSD"; siPip.digits=2; siPip.point=0.01;
+   OkDbl("r14_pip_btcusd: crypto 2-digit pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="ETHUSD"; siPip.digits=2; siPip.point=0.01;
+   OkDbl("r14_pip_ethusd: crypto 2-digit pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="US30.cash"; siPip.digits=1; siPip.point=0.1;
+   OkDbl("r14_pip_us30: index 1-digit pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="DE30"; siPip.digits=1; siPip.point=0.1;
+   OkDbl("r14_pip_de30: index 1-digit pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="USTEC"; siPip.digits=2; siPip.point=0.01;
+   OkDbl("r14_pip_ustec: index 2-digit pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+
+   //==================================================================
+   // 2) CopierScaleDeviationPoints (D#8.2)
+   //==================================================================
+   OkInt("r14_scale_dev_zero: devPoints<=0 returns 0", CopierScaleDeviationPoints("XYZ", 0), 0);
+   OkInt("r14_scale_dev_missing_sym: unresolvable symbol returns devPoints", CopierScaleDeviationPoints("NON_EXISTENT_SYM", 25), 25);
+
+   //==================================================================
+   // 3) CopierRoundToTick (D#8.3)
+   //==================================================================
+   CopierSymInfo siTick;
+   ZeroMemory(siTick);
+   siTick.digits=5; siTick.point=0.00001; siTick.tickSize=0.00005;
+   double r1=CopierRoundToTick(1.23456, siTick);
+   OkDbl("r14_round_tick_5pt: 1.23456 with 0.00005 tick", r1, 1.23455, 0.000001);
+   double r2=CopierRoundToTick(1.23458, siTick);
+   OkDbl("r14_round_tick_round_up: 1.23458 with 0.00005 tick", r2, 1.23460, 0.000001);
+   siTick.digits=2; siTick.point=0.01; siTick.tickSize=0.25;
+   double r3=CopierRoundToTick(100.23, siTick);
+   OkDbl("r14_round_tick_quarter: 100.23 with 0.25 tick", r3, 100.25, 0.000001);
+   siTick.digits=5; siTick.tickSize=0.0;
+   double r4=CopierRoundToTick(1.23456, siTick);
+   OkDbl("r14_round_tick_zero_tick: falls back to NormalizeDouble", r4, 1.23456, 0.000001);
+
+   //==================================================================
+   // 4) CP_MAX_PEERS capacity check (B#6) & Cross-rate same currency (D#2)
+   //==================================================================
+   OkInt("r14_cp_max_peers: CP_MAX_PEERS is 104", CP_MAX_PEERS, 104);
+   OkDbl("r14_cross_same_ccy: USD to USD is 1.0", CopierGetCurrencyCrossRate("USD", "USD"), 1.0, 0.00001);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -4110,6 +4158,7 @@ void OnStart()
    TestAuditRound11();
    TestAuditRound12();
    TestAuditRound13();
+   TestAuditRound14();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

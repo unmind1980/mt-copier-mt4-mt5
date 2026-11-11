@@ -369,6 +369,9 @@ fn parse_one_time(bytes: &[u8]) -> Option<(u64, &[u8])> {
     }
     let time_bytes = &bytes[start..start + len];
     let rem = &bytes[start + len..];
+    if !time_bytes.is_ascii() {
+        return None;
+    }
     let s = std::str::from_utf8(time_bytes).ok()?;
     if tag == 0x17 && s.len() >= 12 {
         // UTCTime: YYMMDDHHMMSSZ
@@ -720,6 +723,7 @@ impl TlsManager {
     pub fn apply_imported_cert(&self, cert_pem: &str, key_pem: &str, domain: &str, https_port: u16) -> Result<(), String> {
         let pfx_bytes = pem_to_pkcs12(cert_pem, key_pem, "mtc_tls_pass")?;
         let new_acceptor = create_tls_acceptor(&pfx_bytes, "mtc_tls_pass")?;
+        let parsed_validity = parse_pem_validity(cert_pem);
 
         self.cert_paths.ensure_dir().map_err(|e| e.to_string())?;
         write_secret_atomic(&self.cert_paths.fullchain_pem, cert_pem.as_bytes())?;
@@ -741,7 +745,7 @@ impl TlsManager {
             c.status.issuer = "Custom Imported".to_string();
             c.status.subject = domain.to_string();
             let now = unix_now();
-            if let Some((nb, na)) = parse_pem_validity(cert_pem) {
+            if let Some((nb, na)) = parsed_validity {
                 c.status.issued_at = nb;
                 c.status.expires_at = na;
             } else {
@@ -1109,6 +1113,19 @@ pub fn generate_csr_der(sign_key: &SigningKey, domain: &str) -> Result<Vec<u8>, 
     Ok(csr_der)
 }
 
+/// Settings staged for application after ACME certificate issuance succeeds.
+#[derive(Clone, Debug)]
+pub struct PendingTlsSettings {
+    pub mode: TlsMode,
+    pub domain: String,
+    pub https_port: u16,
+    pub http_port: u16,
+    pub email: Option<String>,
+    pub enable_http_redirect: bool,
+    pub auto_renew: bool,
+    pub staging_mode: bool,
+}
+
 /// Asynchronous RFC 8555 ACME Client.
 pub struct AcmeClient {
     pub http: reqwest::Client,
@@ -1225,7 +1242,17 @@ impl AcmeClient {
         domain: &str,
         email: Option<&str>,
     ) -> Result<(), String> {
-        let res = self.enroll_certificate_inner(tls_mgr, domain, email).await;
+        self.enroll_certificate_with_settings(tls_mgr, domain, email, None).await
+    }
+
+    pub async fn enroll_certificate_with_settings(
+        &self,
+        tls_mgr: &Arc<TlsManager>,
+        domain: &str,
+        email: Option<&str>,
+        pending: Option<PendingTlsSettings>,
+    ) -> Result<(), String> {
+        let res = self.enroll_certificate_inner(tls_mgr, domain, email, pending).await;
         if let Err(ref e) = res {
             let mut c = tls_mgr.config.lock_or_recover();
             c.status.in_progress = false;
@@ -1241,6 +1268,7 @@ impl AcmeClient {
         tls_mgr: &Arc<TlsManager>,
         domain: &str,
         email: Option<&str>,
+        pending: Option<PendingTlsSettings>,
     ) -> Result<(), String> {
         {
             let mut c = tls_mgr.config.lock_or_recover();
@@ -1354,7 +1382,10 @@ impl AcmeClient {
             c.status.progress_step = "answering_challenges".to_string();
         }
 
-        let http_port = tls_mgr.config.lock_or_recover().http_port;
+        let http_port = pending
+            .as_ref()
+            .map(|p| p.http_port)
+            .unwrap_or_else(|| tls_mgr.config.lock_or_recover().http_port);
         // On-Demand: Dynamically open HTTP-01 listener on port 80 ONLY during challenge verification
         let mut temp_server = TempChallengeServer::start(Arc::clone(tls_mgr), http_port).await?;
 
@@ -1582,10 +1613,22 @@ impl AcmeClient {
         write_secret_atomic(&tls_mgr.cert_paths.privkey_pem, site_key_pem.as_bytes())?;
 
         // Step 6: Mark enabled and reload into active acceptor
+        let prev_config = tls_mgr.config.lock_or_recover().clone();
         {
             let mut c = tls_mgr.config.lock_or_recover();
+            if let Some(ref p) = pending {
+                c.mode = p.mode;
+                c.domain = p.domain.clone();
+                c.https_port = p.https_port;
+                c.http_port = p.http_port;
+                c.email = p.email.clone();
+                c.enable_http_redirect = p.enable_http_redirect;
+                c.auto_renew = p.auto_renew;
+                c.staging_mode = p.staging_mode;
+            } else {
+                c.domain = domain.to_string();
+            }
             c.enabled = true;
-            c.domain = domain.to_string();
             c.status.in_progress = false;
             c.status.progress_step = "ready".to_string();
             c.status.last_error = None;
@@ -1602,7 +1645,15 @@ impl AcmeClient {
             let _ = save_config(&tls_mgr.config_path, &c);
         }
 
-        tls_mgr.reload_from_disk()?;
+        if let Err(e) = tls_mgr.reload_from_disk() {
+            let mut c = tls_mgr.config.lock_or_recover();
+            *c = prev_config;
+            c.status.in_progress = false;
+            c.status.progress_step = "failed".to_string();
+            c.status.last_error = Some(format!("TLS reload failed: {}", e));
+            let _ = save_config(&tls_mgr.config_path, &c);
+            return Err(format!("TLS reload failed: {}", e));
+        }
 
         println!("[hub] TLS: ACME certificate issued and activated for {}", domain);
         Ok(())
@@ -1805,5 +1856,14 @@ BQYHCA==
             let pfx = pem_to_pkcs12(&cert_pem, &key_pem, "testpass").expect("real cert to pkcs12 failed");
             let _acceptor = create_tls_acceptor(&pfx, "testpass").expect("real acceptor creation failed");
         }
+    }
+
+    #[test]
+    fn test_parse_one_time_ascii_validation() {
+        // Non-ascii bytes must be rejected
+        assert_eq!(parse_one_time(&[0x17, 3, 0xff, 0xfe, 0xfd]), None);
+        // Valid UTCTime: 261111120000Z
+        let utc_asn1 = &[0x17, 13, b'2', b'6', b'1', b'1', b'1', b'1', b'1', b'2', b'0', b'0', b'0', b'0', b'Z'];
+        assert!(parse_one_time(utc_asn1).is_some());
     }
 }
