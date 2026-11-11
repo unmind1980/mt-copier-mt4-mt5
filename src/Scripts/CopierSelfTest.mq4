@@ -32,6 +32,7 @@
 #include <Copier/CopierPeers.mqh>
 #include <Copier/CopierSymbol.mqh>
 #include <Copier/CopierPanel.mqh>
+#include <Copier/CopierPump.mqh>
 
 int g_pass=0;
 int g_fail=0;
@@ -3904,6 +3905,143 @@ void TestAuditRound12()
    Ok("r12_mc_clear: has uid false after clear", !rMc.Has("MC_UID_01"));
   }
 
+void TestAuditRound13()
+  {
+   //==================================================================
+   // 1) CopierPipOf substring precision (JPY / DJ30 / non-matching suffix)
+   //==================================================================
+   CopierSymInfo siPip;
+   ZeroMemory(siPip);
+   siPip.sym="USDJPY"; siPip.digits=3; siPip.point=0.001;
+   OkDbl("r13_pip_usdjpy: 3-digit JPY pip is 0.01", CopierPipOf(siPip), 0.01, 0.00001);
+   siPip.sym="AUDJPY"; siPip.digits=3; siPip.point=0.001;
+   OkDbl("r13_pip_audjpy: 3-digit cross JPY pip is 0.01", CopierPipOf(siPip), 0.01, 0.00001);
+   siPip.sym="DJ30"; siPip.digits=2; siPip.point=0.01;
+   OkDbl("r13_pip_dj30: DJ30 pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="DJI"; siPip.digits=2; siPip.point=0.01;
+   OkDbl("r13_pip_dji: DJI pip is 1.0", CopierPipOf(siPip), 1.0, 0.00001);
+   siPip.sym="ABDJ"; siPip.digits=5; siPip.point=0.00001;
+   OkDbl("r13_pip_abdj: ABDJ does not falsely match DJ index rule", CopierPipOf(siPip), 0.0001, 0.000001);
+
+   //==================================================================
+   // 2) CopierExtractSessionSpan same-day / overnight / t>86400
+   //==================================================================
+   long sStart=0, sToday=0, sNext=0;
+   bool spOk1=CopierExtractSessionSpan((datetime)(9*3600), (datetime)(17*3600), sStart, sToday, sNext);
+   Ok("r13_span_day: 09:00-17:00 valid", spOk1);
+   OkInt("r13_span_day: start 32400", sStart, 32400);
+   OkInt("r13_span_day: todayEnd 61200", sToday, 61200);
+   OkInt("r13_span_day: nextEnd 0", sNext, 0);
+
+   bool spOk2=CopierExtractSessionSpan((datetime)(22*3600), (datetime)(5*3600), sStart, sToday, sNext);
+   Ok("r13_span_wrap: t<f 22:00-05:00 valid", spOk2);
+   OkInt("r13_span_wrap: start 79200", sStart, 79200);
+   OkInt("r13_span_wrap: todayEnd 86400", sToday, 86400);
+   OkInt("r13_span_wrap: nextEnd 18000", sNext, 18000);
+
+   bool spOk3=CopierExtractSessionSpan((datetime)(22*3600), (datetime)(29*3600), sStart, sToday, sNext);
+   Ok("r13_span_over: t>86400 22:00-29:00 valid", spOk3);
+   OkInt("r13_span_over: start 79200", sStart, 79200);
+   OkInt("r13_span_over: todayEnd 86400", sToday, 86400);
+   OkInt("r13_span_over: nextEnd 18000", sNext, 18000);
+
+   bool spOk4=CopierExtractSessionSpan((datetime)0, (datetime)86400, sStart, sToday, sNext);
+   Ok("r13_span_full: 00:00-24:00 valid", spOk4);
+   OkInt("r13_span_full: start 0", sStart, 0);
+   OkInt("r13_span_full: todayEnd 86400", sToday, 86400);
+   OkInt("r13_span_full: nextEnd 0", sNext, 0);
+
+   //==================================================================
+   // 3) CopierNormalizeLot minLot precision & NaN/Inf lot rejection
+   //==================================================================
+   CopierSymInfo siLot;
+   ZeroMemory(siLot);
+   siLot.minLot=0.05;
+   siLot.lotStep=0.1;
+   siLot.maxLot=10.0;
+   siLot.digits=2;
+   OkDbl("r13_lot_min_prec: 0.15 preserves 2 decimals with minLot=0.05 step=0.1", CopierNormalizeLot(0.15, siLot), 0.15, 0.00001);
+   OkDbl("r13_lot_min_floor: 0.149 floors down to 0.05", CopierNormalizeLot(0.149, siLot), 0.05, 0.00001);
+
+   double nanLot = MathSqrt(-1.0);
+   double infLot = MathExp(1000.0);
+   bool rejNaN = false;
+   double resNaN = CopierComputeLots(nanLot, CP_SIZE_MULTIPLIER, 1.0, 1.0, siLot, 0.0, 0.0, rejNaN);
+   Ok("r13_lot_nan_rej: NaN senderLots rejected", rejNaN);
+   OkDbl("r13_lot_nan_val: NaN returns 0.0", resNaN, 0.0, 0.000001);
+
+   bool rejInf = false;
+   double resInf = CopierComputeLots(0.1, CP_SIZE_MULTIPLIER, infLot, 1.0, siLot, 0.0, 0.0, rejInf);
+   Ok("r13_lot_inf_rej: Inf param rejected", rejInf);
+   OkDbl("r13_lot_inf_val: Inf returns 0.0", resInf, 0.0, 0.000001);
+
+   //==================================================================
+   // 4) CopierRisk deposit recovery exact !CopierLossExceeded symmetry
+   //==================================================================
+   CopierRisk rk;
+   CopierRiskLimits rl;
+   ZeroMemory(rl);
+   rl.dailyLossPct=5.0;
+   rl.maxDrawdownPct=10.0;
+   rk.Configure(rl);
+   rk.SeedPeak(10000.0);
+   rk.ObserveAt(10000.0, 1, 10000.0);
+   rk.ObserveAt(9400.0, 1, 10000.0);
+   Ok("r13_risk_tripped: daily tripped at 9400", rk.DailyTripped());
+
+   // Deposit +2000 -> dayStart=12000, postEq=11400 (exact 5% loss threshold -> remains tripped)
+   rk.SetDayStartEquity(12000.0);
+   rk.AdjustPeakForCashFlow(2000.0, 9400.0, 11400.0);
+   Ok("r13_risk_boundary_stay: exact boundary keeps daily tripped", rk.DailyTripped());
+
+   // Deposit +500 -> dayStart=12500, postEq=11900 (4.8% loss < 5% -> clears daily latch)
+   rk.SetDayStartEquity(12500.0);
+   rk.AdjustPeakForCashFlow(500.0, 11400.0, 11900.0);
+   Ok("r13_risk_recover_clear: above threshold clears daily latch", !rk.DailyTripped());
+
+   //==================================================================
+   // 5) CopierPanel row truncation (>63 chars) and Destroy cleanup
+   //==================================================================
+   CopierPanel pan;
+   pan.Init("cp_r13_pan", 10, 20, 400);
+   pan.Begin(1);
+   string over70="0123456789012345678901234567890123456789012345678901234567890123456789";
+   pan.Row(0, over70, clrWhite);
+   pan.End();
+   Ok("r13_panel_exists: row label created on chart", ObjectFind(0, "cp_r13_pan_r0") >= 0);
+   string gotTxt = ObjectGetString(0, "cp_r13_pan_r0", OBJPROP_TEXT);
+   OkInt("r13_panel_trunc_len: text truncated to CP_PANEL_MAX_TEXT (63)", StringLen(gotTxt), CP_PANEL_MAX_TEXT);
+   OkStr("r13_panel_trunc_ellipsis: truncated text ends with ...", StringSubstr(gotTxt, CP_PANEL_MAX_TEXT-3, 3), "...");
+   pan.Destroy();
+   Ok("r13_panel_destroy: row label removed on Destroy", ObjectFind(0, "cp_r13_pan_r0") < 0);
+
+   //==================================================================
+   // 6) CopierEventPump disarmed OnEvent gate
+   //==================================================================
+   CopierEventPump pump;
+   pump.Init();
+   Ok("r13_pump_idle: OnEvent returns false when not armed", !pump.OnEvent(CHARTEVENT_CUSTOM+CP_EVENT_PUMP_ID));
+   pump.ArmFast(5000);
+   Ok("r13_pump_armed: OnEvent returns true while armed", pump.OnEvent(CHARTEVENT_CUSTOM+CP_EVENT_PUMP_ID));
+   pump.Disarm();
+   Ok("r13_pump_disarm: OnEvent returns false after Disarm", !pump.OnEvent(CHARTEVENT_CUSTOM+CP_EVENT_PUMP_ID));
+
+   //==================================================================
+   // 7) CopierPeerTable SeenAt empty guard & PongBack probe validation
+   //==================================================================
+   CopierPeerTable pr;
+   long nowMs=CopierNowMs();
+   pr.SeenAt(-1);
+   pr.SeenAt(0);
+   Ok("r13_peer_empty_seen: empty slot 0 remains DOWN after SeenAt(0)", pr.StateAt(0, 15000)==CP_PEER_DOWN);
+   pr.ProbeSent("p1", nowMs);
+   Ok("r13_peer_bad_pong: mismatch timestamp rejected", !pr.PongBack("p1", nowMs+123));
+   OkInt("r13_peer_bad_pong_rtt: rtt stays -1 after mismatch", pr.RttAt(0), -1);
+   Ok("r13_peer_good_pong: matching pong accepted", pr.PongBack("p1", nowMs));
+   Ok("r13_peer_good_pong_rtt: rtt >= 0 after valid pong", pr.RttAt(0) >= 0);
+   Ok("r13_peer_good_pong_up: slot 0 becomes UP", pr.StateAt(0, 15000)==CP_PEER_UP);
+  }
+
 void OnStart()
   {
    //--- FILE_WRITE does not truncate, so clear it explicitly; otherwise a
@@ -3971,6 +4109,7 @@ void OnStart()
    TestAuditRound10();
    TestAuditRound11();
    TestAuditRound12();
+   TestAuditRound13();
 
    string summary="=========== "+ (g_fail==0 ? "ALL PASS" : "FAILURES") +"  pass="
                   +(string)g_pass+" fail="+(string)g_fail+" ===========";

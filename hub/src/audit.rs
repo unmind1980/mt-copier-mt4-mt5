@@ -109,6 +109,7 @@ struct ArchiveShift {
     path: PathBuf,
     max_backups: usize,
     lock: Arc<Mutex<()>>,
+    wait_lock: Arc<Mutex<()>>,
     active_worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
@@ -199,7 +200,7 @@ impl ArchiveShift {
                     let from = self.archive_path(idx);
                     let to = self.archive_path(idx + 1);
                     if from.exists() {
-                        let _ = crate::cluster::atomic_replace_file(&from, &to);
+                        crate::cluster::atomic_replace_file(&from, &to)?;
                     }
                 }
             }
@@ -246,12 +247,17 @@ impl Audit {
     ) -> std::io::Result<Audit> {
         // Ensure file ends with newline so subsequent appends do not fuse with torn line tails
         if path.exists() {
-            if let Ok(data) = std::fs::read(path) {
-                if !data.is_empty() && data.last() != Some(&b'\n') {
-                    if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
-                        use std::io::Write;
-                        let _ = f.write_all(b"\n");
-                        let _ = f.sync_data();
+            if let Ok(mut check_f) = File::open(path) {
+                let len = check_f.metadata().map(|m| m.len()).unwrap_or(0);
+                if len > 0 && check_f.seek(SeekFrom::End(-1)).is_ok() {
+                    let mut last = [0u8; 1];
+                    if check_f.read_exact(&mut last).is_ok() && last[0] != b'\n' {
+                        drop(check_f);
+                        if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
+                            use std::io::Write;
+                            let _ = f.write_all(b"\n");
+                            let _ = f.sync_data();
+                        }
                     }
                 }
             }
@@ -267,6 +273,7 @@ impl Audit {
             path: path.to_path_buf(),
             max_backups,
             lock: Arc::new(Mutex::new(())),
+            wait_lock: Arc::new(Mutex::new(())),
             active_worker: Arc::new(Mutex::new(None)),
         };
 
@@ -330,6 +337,7 @@ impl Audit {
                 path: PathBuf::new(),
                 max_backups: DEFAULT_MAX_BACKUPS,
                 lock: Arc::new(Mutex::new(())),
+                wait_lock: Arc::new(Mutex::new(())),
                 active_worker: Arc::new(Mutex::new(None)),
             },
             path: PathBuf::new(),
@@ -369,6 +377,7 @@ impl Audit {
     /// Wait for any in-flight background rotation/compression to finish.
     #[allow(dead_code)]
     pub fn wait_for_rotation(&self) {
+        let _wait_serial = self.shifter.wait_lock.lock_or_recover();
         let handle = {
             let mut worker = self.shifter.active_worker.lock_or_recover();
             worker.take()
@@ -852,21 +861,31 @@ fn last_seq(path: &Path, max_backups: usize) -> Option<u64> {
 }
 
 fn last_seq_from_gz(path: &Path) -> Option<u64> {
+    use std::io::BufRead;
     let f = File::open(path).ok()?;
-    let mut decoder = GzDecoder::new(f);
-    let mut text = String::new();
-    decoder.read_to_string(&mut text).ok()?;
-    for line in text.lines().rev() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(line) {
-            if let Some(s) = v["seq"].as_u64() {
-                return Some(s);
+    let decoder = GzDecoder::new(f);
+    let mut reader = BufReader::new(decoder);
+    let mut best: Option<u64> = None;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let tr = line.trim();
+                if tr.is_empty() {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(tr) {
+                    if let Some(s) = v["seq"].as_u64() {
+                        best = Some(s);
+                    }
+                }
             }
+            Err(_) => break,
         }
     }
-    None
+    best
 }
 
 fn last_seq_from_file(f: &mut File, len: u64) -> Option<u64> {
@@ -1100,7 +1119,18 @@ mod tests {
         for idx in 1..=15 {
             let _ = std::fs::remove_file(format!("{}.{}.gz", p.display(), idx));
         }
-        let _ = std::fs::remove_file(format!("{}.rotating.{}", p.display(), std::process::id()));
+        if let (Some(parent), Some(fname)) = (p.parent(), p.file_name().and_then(|s| s.to_str())) {
+            let rot_prefix = format!("{}.rotating.", fname);
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for ent in entries.flatten() {
+                    if let Some(name) = ent.file_name().to_str() {
+                        if name.starts_with(&rot_prefix) {
+                            let _ = std::fs::remove_file(ent.path());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1297,5 +1327,39 @@ mod tests {
             assert_eq!(recs_max.len(), 0);
         }
         cleanup(&p);
+    }
+
+    #[test]
+    fn last_seq_from_gz_ignores_truncated_tail() {
+        let p = tmp("gz_truncated_tail");
+        cleanup(&p);
+        let gz = PathBuf::from(format!("{}.1.gz", p.display()));
+        {
+            let f = File::create(&gz).unwrap();
+            let mut enc = GzEncoder::new(BufWriter::new(f), Compression::default());
+            let line = json!({
+                "v": 1, "seq": 42, "ts": 1700000000u64, "utc": "2023-11-14T22:13:20Z",
+                "actor": "admin", "ip": "127.0.0.1", "action": "test.gz.ok",
+                "target": "node:1", "status": "ok"
+            });
+            serde_json::to_writer(&mut enc, &line).unwrap();
+            enc.write_all(b"\n").unwrap();
+            // Flush first complete line into deflate stream, then emit an incomplete line and drop without gzip trailer
+            enc.write_all(b"{\"v\":1,\"seq\":99").unwrap();
+            enc.flush().unwrap();
+        }
+        assert_eq!(last_seq_from_gz(&gz), Some(42));
+        cleanup(&p);
+    }
+
+    #[test]
+    fn cleanup_removes_stale_rotating_files() {
+        let p = tmp("cleanup_rotating");
+        cleanup(&p);
+        let rot = PathBuf::from(format!("{}.rotating.12345", p.display()));
+        std::fs::write(&rot, b"stale").unwrap();
+        assert!(rot.exists());
+        cleanup(&p);
+        assert!(!rot.exists());
     }
 }

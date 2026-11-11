@@ -74,7 +74,7 @@ double CopierPipOf(const CopierSymInfo &si)
       return (si.digits==3) ? si.point*10.0 : si.point;
    // Indices & Crypto: 1 pip = 1.0 price unit
    if(StringFind(si.sym,"BTC")>=0 || StringFind(si.sym,"ETH")>=0 ||
-      StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || StringFind(si.sym,"DJ")>=0)
+      StringFind(si.sym,"US30")>=0 || StringFind(si.sym,"WS30")>=0 || (StringFind(si.sym,"DJ30")>=0 || StringFind(si.sym,"DJI")>=0 || StringFind(si.sym,"DJIA")>=0 || StringFind(si.sym,"DJX")>=0))
       return (si.point>0.0 ? 1.0 : 1.0);
    if(si.digits<=1) return (si.point>0.0 ? si.point : 1.0);
    return (si.digits==3 || si.digits==5) ? si.point*10.0 : si.point;
@@ -330,7 +330,7 @@ bool CopierIsConnected()
 string CopierResolveCrossSymbol(const string pair)
   {
    if(CopierSymbolEnsure(pair)) return pair;
-   string sfx[]={"m",".r","pro",".ecn","ecn","+","_i","c","i",".c"};
+   string sfx[]={"m",".r","pro",".pro",".ecn","ecn","+","_i","c","i",".c"};
    for(int i=0;i<ArraySize(sfx);i++)
      {
       string cand=pair+sfx[i];
@@ -580,7 +580,7 @@ double CopierRealizedToday(const long dayStart,bool &outOk)
       if(!OrderSelect(i,SELECT_BY_POS,MODE_HISTORY)) continue;
       int otype=OrderType();
       if(otype!=OP_BUY && otype!=OP_SELL) continue;
-      if((long)OrderCloseTime()<dayStart) break; // Chronological order: older than dayStart means done
+      if((long)OrderCloseTime()<dayStart) continue; // MT4 MODE_HISTORY order depends on UI sort; scan all entries
       sum+=OrderProfit()+OrderSwap()+OrderCommission();
      }
 #endif
@@ -591,6 +591,23 @@ double CopierRealizedToday(const long dayStart)
   {
    bool ok=true;
    return CopierRealizedToday(dayStart,ok);
+  }
+
+//--- Sum open-order commissions/swap on MT4 so cold-start/rollover cashFlow math stays symmetric
+double CopierOpenCommissionsMT4()
+  {
+   double sum=0.0;
+#ifndef __MQL5__
+   int total=OrdersTotal();
+   for(int i=0;i<total;i++)
+     {
+      if(!OrderSelect(i,SELECT_BY_POS,MODE_TRADES)) continue;
+      int ot=OrderType();
+      if(ot!=OP_BUY && ot!=OP_SELL) continue;
+      sum+=OrderCommission();
+     }
+#endif
+   return sum;
   }
 
 //--- midnight of the current server day, in server time
@@ -1621,6 +1638,15 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       return CopierModifyStops(identifier,sym,sl,tp,outErr);
      }
 
+   double modPx=price;
+   double modStopLimit=stoplimit;
+   CopierSymInfo si;
+   if((modPx>0.0 || modStopLimit>0.0) && CopierGetSymbolInfo(sym,si))
+     {
+      if(modPx>0.0)        modPx=CopierRoundToTick(modPx,si);
+      if(modStopLimit>0.0) modStopLimit=CopierRoundToTick(modStopLimit,si);
+     }
+
 #ifdef __MQL5__
    MqlTradeRequest req;
    MqlTradeResult  res;
@@ -1629,10 +1655,10 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
    req.action=TRADE_ACTION_MODIFY;
    req.order =(ulong)ticket;
    req.symbol=sym;
-   req.price =(price>0.0)?price:OrderGetDouble(ORDER_PRICE_OPEN);
+   req.price =(modPx>0.0)?modPx:OrderGetDouble(ORDER_PRICE_OPEN);
    req.sl    =sl;
    req.tp    =tp;
-   if(stoplimit>0.0) req.stoplimit=stoplimit;
+   if(modStopLimit>0.0) req.stoplimit=modStopLimit;
    if(expire>0)
      {
       req.type_time =ORDER_TIME_SPECIFIED;
@@ -1680,7 +1706,7 @@ bool CopierModifyPendingOrder(const long identifier,const string sym,
       outErr=0;
       return true;
      }
-   double openPx=(price>0.0)?price:OrderOpenPrice();
+   double openPx=(modPx>0.0)?modPx:OrderOpenPrice();
    datetime exp=expire;
    bool ok=OrderModify((int)ticket,openPx,sl,tp,exp,clrNONE);
    if(!ok)

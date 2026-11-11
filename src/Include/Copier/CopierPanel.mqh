@@ -75,6 +75,7 @@ private:
       ObjectSetInteger(0,nm,OBJPROP_SELECTABLE,false);
       ObjectSetInteger(0,nm,OBJPROP_HIDDEN,true);
       ObjectSetInteger(0,nm,OBJPROP_BACK,false);
+      ObjectSetInteger(0,nm,OBJPROP_ZORDER,1);
      }
 
 public:
@@ -89,6 +90,9 @@ public:
    void              Init(const string prefix,const int x,const int y,
                           const int width)
      {
+      if(StringLen(m_pfx)>0) Destroy();
+      m_made=0;
+      m_rows=0;
       m_pfx=prefix;
       m_x=x;
       m_y=y;
@@ -131,10 +135,12 @@ public:
       ObjectSetInteger(0,bg,OBJPROP_SELECTABLE,false);
       ObjectSetInteger(0,bg,OBJPROP_HIDDEN,true);
       ObjectSetInteger(0,bg,OBJPROP_BACK,false);
+      ObjectSetInteger(0,bg,OBJPROP_ZORDER,0);
      }
 
    //--- One row. `c` is the text colour - used to make a stale link red
    //--- without needing a separate status column.
+#define CP_PANEL_MAX_TEXT 63
    void              Row(const int i,const string text,const color c)
      {
       if(!m_ready || i<0 || i>=m_rows) return;
@@ -144,7 +150,11 @@ public:
          m_made++;
         }
       string nm=RowName(i);
-      ObjectSetString(0,nm,OBJPROP_TEXT,text);
+      if(ObjectFind(0,nm)<0) MakeRow(i);
+      string disp=text;
+      if(StringLen(disp)>CP_PANEL_MAX_TEXT)
+         disp=StringSubstr(disp,0,CP_PANEL_MAX_TEXT-3)+"...";
+      ObjectSetString(0,nm,OBJPROP_TEXT,disp);
       ObjectSetInteger(0,nm,OBJPROP_COLOR,c);
      }
 

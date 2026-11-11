@@ -430,7 +430,7 @@ string CopierLoadHubPublicKey(const string inputKey,CopierLog *log,string &outSo
    outSource="none";
 
    // 1. Check local terminal MQLx\Files\copier_hub.key
-   int hLocal=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI);
+   int hLocal=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(hLocal!=INVALID_HANDLE)
      {
       string k=CopierParseHubKeyFileHandle(hLocal);
@@ -449,7 +449,7 @@ string CopierLoadHubPublicKey(const string inputKey,CopierLog *log,string &outSo
      }
 
    // 2. Check shared Terminal\Common\Files\copier_hub.key
-   int hCommon=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   int hCommon=FileOpen(CP_HUB_KEY_FILE,FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(hCommon!=INVALID_HANDLE)
      {
       string k=CopierParseHubKeyFileHandle(hCommon);

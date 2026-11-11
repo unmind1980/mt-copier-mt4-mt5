@@ -151,13 +151,13 @@ public:
    //--- hand. There is no correctness difference - both bounds-check.
    void              SeenAt(const int i)
      {
-      if(i<0 || i>=CP_MAX_PEERS) return;
+      if(i<0 || i>=CP_MAX_PEERS || StringLen(m_name[i])==0) return;
       m_seen[i]=CopierNowMs();
      }
 
    void              ProbeSentAt(const int i,const long ms)
      {
-      if(i<0 || i>=CP_MAX_PEERS) return;
+      if(i<0 || i>=CP_MAX_PEERS || StringLen(m_name[i])==0) return;
       m_ping[i]=ms;
      }
 
@@ -176,8 +176,8 @@ public:
       if(StringLen(name)==0) return false;
       int i=Find(name);
       if(i<0) return false;
-      m_seen[i]=CopierNowMs();
       if(m_ping[i]==0 || m_ping[i]!=ms) return false;
+      m_seen[i]=CopierNowMs();
       m_rtt[i]=CopierNowMs()-ms;
       if(m_rtt[i]<0) m_rtt[i]=0;
       m_rttTime[i]=m_seen[i];
@@ -218,6 +218,7 @@ public:
    long              RttAt(const int i) const
      {
       if(i<0 || i>=CP_MAX_PEERS) return -1;
+      if(m_seen[i]>0 && (CopierNowMs()-m_seen[i]>15000)) return -1;
       if(m_rtt[i]>=0 && m_rttTime[i]>0 && (CopierNowMs()-m_rttTime[i]>12000))
          return -1; // Invalidate stale RTT if no PONG received for > 2 probe cycles
       return m_rtt[i];

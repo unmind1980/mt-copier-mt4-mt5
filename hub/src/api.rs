@@ -1066,14 +1066,12 @@ fn cookie_token(cookies: &str) -> Option<String> {
 }
 
 fn constant_time_eq_str(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    let max_len = a_bytes.len().max(b_bytes.len());
-    let mut diff = (a_bytes.len() ^ b_bytes.len()) as u8;
-    for i in 0..max_len {
-        let x = a_bytes.get(i).copied().unwrap_or(0);
-        let y = b_bytes.get(i).copied().unwrap_or(0);
-        diff |= x ^ y;
+    use sha2::{Digest, Sha256};
+    let ha = Sha256::digest(a.as_bytes());
+    let hb = Sha256::digest(b.as_bytes());
+    let mut diff: u8 = 0;
+    for i in 0..32 {
+        diff |= ha[i] ^ hb[i];
     }
     diff == 0
 }
@@ -1105,12 +1103,16 @@ async fn require_session(
         return next.run(req).await;
     }
     //--- Cluster internal communication authentication (ADR-09):
-    //--- Authenticate via cluster_token in Authorization: Bearer <token> or X-Cluster-Token header.
+    //--- Authenticate via cluster_token in Authorization: Bearer <token> or X-Cluster-Token header,
+    //--- restricted to peer sync/status/handover endpoints (admin mutations require normal RBAC session).
+    let is_cluster_token_path = path == "/api/v1/cluster/status"
+        || path == "/api/v1/cluster/sync"
+        || path == "/api/v1/cluster/handover-request";
     let is_cluster_path = path.starts_with("/api/v1/cluster/");
     if is_cluster_path {
         let cluster_token = st.lock_or_recover().cluster.cluster_token.clone();
         // ISSUE-11: Enforce token_is_usable - reject weak/default cluster tokens (DEFAULT_CLUSTER_TOKEN)
-        if crate::cluster::token_is_usable(&cluster_token) {
+        if is_cluster_token_path && crate::cluster::token_is_usable(&cluster_token) {
             let auth_hdr = req.headers().get(axum::http::header::AUTHORIZATION).and_then(|v| v.to_str().ok());
             let x_hdr = req.headers().get("X-Cluster-Token").and_then(|v| v.to_str().ok());
             let token_matches = auth_hdr.map(|h| h.strip_prefix("Bearer ").unwrap_or(h)).map(|h| constant_time_eq_str(h, &cluster_token)).unwrap_or(false)
@@ -1596,6 +1598,14 @@ async fn users_upsert(
     if !is_primary {
         return standby_readonly_conflict(&peer_url, "Modification").into_response();
     }
+    let user_id = b.id.trim().to_string();
+    if user_id.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "user id cannot be empty" })),
+        )
+            .into_response();
+    }
     let role = match UserRole::parse(&b.role) {
         Some(r) => r,
         None => {
@@ -1626,7 +1636,11 @@ async fn users_upsert(
                 .into_response();
         }
         let salt = crate::users::random_token()[..16].to_string();
-        Some(hash_password(&b.password, &salt))
+        let pw = b.password.clone();
+        let hashed = tokio::task::spawn_blocking(move || hash_password(&pw, &salt))
+            .await
+            .unwrap_or_default();
+        Some(hashed)
     } else {
         None
     };
@@ -1634,7 +1648,7 @@ async fn users_upsert(
         let mut s = st.lock_or_recover();
         let final_pass = match new_hashed_pass {
             Some(p) => p,
-            None => match s.users.get(&b.id).map(|u| u.pass.clone()) {
+            None => match s.users.get(&user_id).map(|u| u.pass.clone()) {
                 Some(p) => p,
                 None => {
                     return (
@@ -1645,8 +1659,9 @@ async fn users_upsert(
                 }
             },
         };
+        let prev_user = s.users.get(&user_id).cloned();
         let u = User {
-            id: b.id.clone(),
+            id: user_id.clone(),
             pass: final_pass,
             role,
             disabled: b.disabled,
@@ -1658,19 +1673,21 @@ async fn users_upsert(
             )
                 .into_response();
         }
-        //--- Still inside the lock, deliberately: `users` is a plain field of
-        //--- the shared state rather than its own Arc, and an admin write is
-        //--- rare enough that one flush here is not the hot path. The audit
-        //--- write below IS moved out, because it is the second flush.
-        if !b.password.is_empty() || b.disabled {
-            s.users.drop_other_sessions(&b.id, None);
-        }
+        //--- Persist before evicting sessions, and rollback in-memory state if save fails.
         if let Err(e) = s.users.save() {
+            if let Some(old_u) = prev_user {
+                let _ = s.users.upsert(old_u);
+            } else {
+                let _ = s.users.remove(&user_id);
+            }
             return (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("failed to save users: {}", e) })),
             )
                 .into_response();
+        }
+        if !b.password.is_empty() || b.disabled {
+            s.users.drop_other_sessions(&user_id, None);
         }
         Arc::clone(&s.audit)
     };
@@ -1678,12 +1695,12 @@ async fn users_upsert(
         &sess.user_id,
         "",
         "user.upsert",
-        &b.id,
+        &user_id,
         None,
         Some(json!({ "role": b.role, "disabled": b.disabled })),
         "ok",
     );
-    Json(json!({ "ok": true, "id": b.id })).into_response()
+    Json(json!({ "ok": true, "id": user_id })).into_response()
 }
 
 async fn users_delete(
@@ -1704,9 +1721,13 @@ async fn users_delete(
     }
     let removed = {
         let mut s = st.lock_or_recover();
+        let prev_user = s.users.get(&id).cloned();
         match s.users.remove(&id) {
             Ok(()) => {
                 if let Err(e) = s.users.save() {
+                    if let Some(old_u) = prev_user {
+                        let _ = s.users.upsert(old_u);
+                    }
                     Err(format!("failed to save users: {}", e))
                 } else {
                     Ok(Arc::clone(&s.audit))
@@ -1777,7 +1798,13 @@ async fn change_password(
         )
             .into_response();
     }
-    let old_ok = stored.map(|h| verify_password(&b.old, &h)).unwrap_or(false);
+    let old_pw = b.old.clone();
+    let old_ok = match stored {
+        Some(h) => tokio::task::spawn_blocking(move || verify_password(&old_pw, &h))
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
     let audit = {
         let s = st.lock_or_recover();
         Arc::clone(&s.audit)
@@ -1799,13 +1826,20 @@ async fn change_password(
             .into_response();
     }
     let new_salt = crate::users::random_token()[..16].to_string();
-    let new_hash = crate::users::hash_password(&b.new, &new_salt);
+    let new_pw = b.new.clone();
+    let new_hash = tokio::task::spawn_blocking(move || crate::users::hash_password(&new_pw, &new_salt))
+        .await
+        .unwrap_or_default();
     let changed = {
         let mut s = st.lock_or_recover();
+        let prev_hash = s.users.get(&sess.user_id).map(|u| u.pass.clone());
         match s.users.set_password_hashed(&sess.user_id, new_hash) {
             Err(e) => Err(e),
             Ok(()) => {
                 if let Err(e) = s.users.save() {
+                    if let Some(old_h) = prev_hash {
+                        let _ = s.users.set_password_hashed(&sess.user_id, old_h);
+                    }
                     Err(format!("failed to save users: {}", e))
                 } else {
                     //--- The old credential is gone, so every session it minted
@@ -1997,6 +2031,7 @@ pub fn spawn(
 
                 let (alert_tx, mut alert_rx) = tokio::sync::mpsc::channel::<crate::alerts::Alert>(1024);
                 let http_client = reqwest::Client::builder()
+                    .no_proxy()
                     .redirect(reqwest::redirect::Policy::none())
                     .timeout(std::time::Duration::from_secs(crate::notifications::HTTP_TIMEOUT_SECS))
                     .build()
@@ -2008,6 +2043,7 @@ pub fn spawn(
                 };
                 let http_worker = http_client.clone();
                 let st_worker = st.clone();
+                let notif_sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
                 tokio::spawn(async move {
                     while let Some(alert) = alert_rx.recv().await {
                         //--- Only the primary notifies.
@@ -2040,7 +2076,11 @@ pub fn spawn(
                         for ch in channels {
                             let c = http_worker.clone();
                             let a = alert.clone();
+                            let Ok(permit) = std::sync::Arc::clone(&notif_sem).acquire_owned().await else {
+                                break;
+                            };
                             tokio::spawn(async move {
+                                let _permit = permit;
                                 let name = ch.name.clone();
                                 let kind = ch.channel_type.clone();
                                 match crate::notifications::send_to_channel(&c, &ch, &a).await {
@@ -2064,6 +2104,7 @@ pub fn spawn(
                 }
                 let current_port: u16 = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
                 let current_host: String = addr.rsplit_once(':').map(|(h, _)| h.to_string()).unwrap_or_default();
+                tls_mgr.set_active_http_port(current_port);
                 {
                     let mut s = st.lock_or_recover();
                     s.http_port = current_port;
@@ -2158,14 +2199,21 @@ pub fn spawn(
                                             if !is_html_nav || path == "/healthz" || path == "/readyz" || path.starts_with("/api/v1/cluster") || path.starts_with("/.well-known") {
                                                 return next.run(req).await;
                                             }
-                                            let host_hdr = req.headers().get(axum::http::header::HOST)
+                                            let raw_host = req.headers().get(axum::http::header::HOST)
                                                 .and_then(|h| h.to_str().ok())
-                                                .and_then(|h| h.split(':').next())
                                                 .unwrap_or("");
+                                            let host_only = if raw_host.starts_with('[') {
+                                                raw_host.split(']').next().map(|s| format!("{}]", s)).unwrap_or_default()
+                                            } else {
+                                                raw_host.split(':').next().unwrap_or("").to_string()
+                                            };
+                                            let host_valid = !host_only.is_empty()
+                                                && host_only.len() <= 253
+                                                && host_only.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'));
                                             let host = if !domain.is_empty() {
                                                 domain.as_str()
-                                            } else if !host_hdr.is_empty() {
-                                                host_hdr
+                                            } else if host_valid {
+                                                host_only.as_str()
                                             } else {
                                                 "localhost"
                                             };
@@ -2175,7 +2223,7 @@ pub fn spawn(
                                             } else {
                                                 format!("https://{}:{}{}", host, https_port, pq)
                                             };
-                                            axum::response::Redirect::permanent(&target).into_response()
+                                            axum::response::Redirect::temporary(&target).into_response()
                                         }
                                     },
                                 ));
@@ -3332,13 +3380,24 @@ async fn notifications_upsert(
         }
     }
 
-    if let Some(url) = config_for_val.get("url").or_else(|| config_for_val.get("webhook_url")).and_then(|u| u.as_str()) {
-        if let Err(e) = crate::notifications::validate_outgoing_url(url).await {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e })),
-            )
-                .into_response();
+    let primary_url = config_for_val.get("url").and_then(|v| v.as_str());
+    let hook_url = config_for_val.get("webhook_url").and_then(|v| v.as_str());
+    let is_wechat_type = b.channel_type == "wechat" || b.channel_type == "xtuis";
+    for (idx, opt_u) in [primary_url, hook_url].iter().enumerate() {
+        if let Some(u) = opt_u {
+            if is_wechat_type && idx == 1 && !u.trim().is_empty() && !u.trim().starts_with("http://") && !u.trim().starts_with("https://") {
+                continue;
+            }
+            if idx == 1 && primary_url.is_some() && u.trim().is_empty() {
+                continue;
+            }
+            if let Err(e) = crate::notifications::validate_outgoing_url(u).await {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": e })),
+                )
+                    .into_response();
+            }
         }
     }
 
@@ -3372,7 +3431,7 @@ async fn notifications_upsert(
     }
 
     if b.channel_type == "wecom" || b.channel_type == "wechat_work" {
-        if let Some(key) = b.config.get("key").and_then(|v| v.as_str()) {
+        if let Some(key) = config_for_val.get("key").and_then(|v| v.as_str()) {
             if !key.is_empty() && !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
@@ -3383,7 +3442,7 @@ async fn notifications_upsert(
         }
     }
     if b.channel_type == "dingtalk" {
-        if let Some(tok) = b.config.get("access_token").and_then(|v| v.as_str()) {
+        if let Some(tok) = config_for_val.get("access_token").and_then(|v| v.as_str()) {
             if !tok.is_empty() && !tok.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
                 return (
                     axum::http::StatusCode::BAD_REQUEST,
@@ -3394,14 +3453,20 @@ async fn notifications_upsert(
         }
     }
 
+    let (existing_lang, existing_created_at) = {
+        let store = notif_store.lock_or_recover();
+        match store.get(&id) {
+            Some(c) => (Some(c.lang.clone()), c.created_at),
+            None => (None, 0),
+        }
+    };
     // WEB-01: Preserve channel's existing language if omitted in request (e.g. toggle active)
     let lang = if !b.lang.trim().is_empty() {
         b.lang.trim().to_string()
     } else if let Some(l) = b.config.get("lang").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
         l.trim().to_string()
     } else {
-        let store = notif_store.lock_or_recover();
-        store.get(&id).map(|c| c.lang.clone()).unwrap_or_else(|| "zh-CN".to_string())
+        existing_lang.unwrap_or_else(|| "zh-CN".to_string())
     };
 
     let ch = NotificationChannel {
@@ -3412,26 +3477,26 @@ async fn notifications_upsert(
         min_severity: b.min_severity,
         lang,
         config: b.config,
-        created_at: 0,
+        created_at: existing_created_at,
     };
 
-    let (saved, err) = {
+    let saved_res = {
         let mut store = notif_store.lock_or_recover();
-        match store.upsert(ch) {
-            Ok(c) => (Some(c), None),
-            Err(e) => (None, Some(e.to_string())),
+        store.upsert(ch)
+    };
+
+    let saved = match saved_res {
+        Ok(c) => c,
+        Err(e) => {
+            let status = if e.kind() == std::io::ErrorKind::InvalidInput {
+                axum::http::StatusCode::BAD_REQUEST
+            } else {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return (status, Json(json!({ "error": e.to_string() }))).into_response();
         }
     };
-
-    if let Some(err) = err {
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": err })),
-        )
-            .into_response();
-    }
-
-    let saved_channel = saved.unwrap();
+    let saved_channel = saved;
     //--- Out of the lock: `record` fsyncs.
     let audit = {
         let s = st.lock_or_recover();
@@ -4168,7 +4233,7 @@ async fn cluster_failback_now(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default();
 
@@ -4877,5 +4942,19 @@ async fn locale_get(Path(code): Path<String>) -> axum::response::Response {
             Json(json!({ "error": format!("cannot read locale: {}", e) })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq_str;
+
+    #[test]
+    fn constant_time_eq_str_checks_equality_and_lengths() {
+        assert!(constant_time_eq_str("", ""));
+        assert!(constant_time_eq_str("secret_token_v1", "secret_token_v1"));
+        assert!(!constant_time_eq_str("secret_token_v1", "secret_token_v2"));
+        assert!(!constant_time_eq_str("secret_token_v1", "secret_token_v1_extra"));
+        assert!(!constant_time_eq_str("", "nonempty"));
     }
 }

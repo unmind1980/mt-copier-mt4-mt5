@@ -316,7 +316,7 @@ public:
       if(peak>m_peakEquity) m_peakEquity=peak;
      }
 
-   void              AdjustPeakForCashFlow(const double cashFlow,const double preCashFlowEquity=0.0)
+   void              AdjustPeakForCashFlow(const double cashFlow,const double preCashFlowEquity=0.0,const double postCashFlowEquity=-1.0)
      {
       if(m_peakEquity<=0.0 || MathAbs(cashFlow)<0.00001) return;
       // Proportional Time-Weighted scaling: preserves percentage drawdown across cash transfers
@@ -333,17 +333,13 @@ public:
       // R5-D4-02: If deposit restored equity above risk thresholds, clear tripped latches
       if(cashFlow>0.0)
         {
-         double curEq=CopierAccountEquity();
-         if(m_lim.maxDrawdownPct>0.0 && m_peakEquity>0.0)
-           {
-            double ddPct=(m_peakEquity-curEq)/m_peakEquity*100.0;
-            if(ddPct<m_lim.maxDrawdownPct) m_ddTripped=false;
-           }
-         if(m_lim.dailyLossPct>0.0 && m_dayStartEquity>0.0)
-           {
-            double dPct=(m_dayStartEquity-curEq)/m_dayStartEquity*100.0;
-            if(dPct<m_lim.dailyLossPct) m_dailyTripped=false;
-           }
+         double curEq=(postCashFlowEquity>=0.0)?postCashFlowEquity:CopierAccountEquity();
+         if(m_lim.maxDrawdownPct>0.0 && m_peakEquity>0.0
+            && !CopierLossExceeded(curEq,m_peakEquity,m_lim.maxDrawdownPct))
+            m_ddTripped=false;
+         if(m_lim.dailyLossPct>0.0 && m_dayStartEquity>0.0
+            && !CopierLossExceeded(curEq,m_dayStartEquity,m_lim.dailyLossPct))
+            m_dailyTripped=false;
         }
      }
 

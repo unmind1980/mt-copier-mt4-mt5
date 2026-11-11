@@ -2898,6 +2898,7 @@
 "use strict";
 // ---------------------------------------------------------------- state
 var s = { data:null, mode:"ws", misses:0, lastAt:0, poller:null, writes:false,
+          renderTickTimer:null, ws:null, wsReconnTimer:null, refreshInFlight:false, dashboardStarted:false,
           users:{ rows:[] },
           cockpitKeys: null,
           cockpitRows: null,
@@ -4718,9 +4719,9 @@ function renderPosNodeDetail(){
     var pzOp = n.paused ? "resume" : "pause";
     var pzText = n.paused ? t("cockpit.btn_resume_node") : t("cockpit.btn_pause_node");
     nodeActions = '<div class="node-banner-actions">' +
-      '<button type="button" class="btn-sm" onclick="openConfigModal(\'' + esc(n.key) + '\')">' + t("nodes.btn_config") + '</button> ' +
-      '<button type="button" class="btn-sm" onclick="sendCommand(\'' + esc(n.key) + '\', \'' + pzOp + '\')">' + pzText + '</button> ' +
-      '<button type="button" class="btn-sm btn-danger" onclick="confirmCloseAllNode(\'' + esc(n.key) + '\')">' + t("cockpit.btn_close_all") + '</button>' +
+      '<button type="button" class="btn-sm" data-node-act="config" data-key="' + esc(n.key) + '">' + t("nodes.btn_config") + '</button> ' +
+      '<button type="button" class="btn-sm" data-node-act="' + esc(pzOp) + '" data-key="' + esc(n.key) + '">' + pzText + '</button> ' +
+      '<button type="button" class="btn-sm btn-danger" data-node-act="closeall" data-key="' + esc(n.key) + '">' + t("cockpit.btn_close_all") + '</button>' +
       '</div>';
   }
 
@@ -5015,7 +5016,7 @@ function renderPosNodeDetail(){
           var btnClass = "pos-close-single-btn" + (isTicketQueued ? " queued" : "");
           var btnText = isTicketQueued ? t("cockpit.btn_queued_close") : t("cockpit.btn_close");
           var btnTitle = isTicketQueued ? t("cockpit.btn_queued_tooltip") : (t("cockpit.btn_close") + " #" + esc(p.ticket));
-          var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" onclick="onCloseSinglePosition(\'' + esc(n.key) + '\',' + esc(p.ticket) + ',\'' + esc(p.symbol) + '\',\'' + sideText + '\',' + esc(p.lots) + ',' + pVal + ')" title="' + btnTitle + '">' + btnText + '</button>';
+          var closeActionHtml = '<button type="button" class="' + btnClass + '" data-tkt="' + esc(p.ticket) + '" data-node-key="' + esc(n.key) + '" data-sym="' + esc(p.symbol) + '" data-side="' + sideText + '" data-lots="' + esc(p.lots) + '" data-profit="' + pVal + '" title="' + btnTitle + '">' + btnText + '</button>';
 
           var details = p.managed
             ? ('Magic: #' + p.magic + (p.comment ? (' · ' + esc(p.comment)) : ''))
@@ -6036,7 +6037,7 @@ function renderCockpit(nodes, pos){
   if(keys !== s.cockpitKeys){
     var items = nodes.map(function(n){
       var activeCls = n.key === activeKey ? " active" : "";
-      return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '" onclick="selectPosNode(\'' + esc(n.key) + '\')">' +
+      return '<div class="node-entry' + activeCls + '" data-ck="' + esc(n.key) + '">' +
              '<div class="node-entry-top">' +
              '<div><span class="dot"></span><span class="ck-name"></span></div>' +
              '<span class="ping-tag"></span>' +
@@ -6632,10 +6633,13 @@ function accept(payload){
 // So the shape is converted here, once, rather than making render() know
 // about two payload shapes.
 function refresh(){
+  if(s.refreshInFlight) return;
+  s.refreshInFlight = true;
   Promise.all([
     api("/api/v1/topology"),
     api("/api/v1/positions").catch(function(){ return { positions: [] }; })
   ]).then(function(res){
+    s.refreshInFlight = false;
     var t = res[0] || {};
     var p = (res[1] && (res[1].senders || res[1].positions)) ? (res[1].senders || res[1].positions) : [];
     accept({
@@ -6647,6 +6651,7 @@ function refresh(){
       cluster: t.cluster || null
     });
   }).catch(function(err){
+    s.refreshInFlight = false;
     // R47-35: Only show login overlay on true 401 Unauthorized; transient network or 5xx errors keep polling
     if(err && err.status === 401){
       showLogin();
@@ -6671,9 +6676,16 @@ function startPolling(){
 }
 
 function startWS(){
+  if(s.wsReconnTimer){ clearTimeout(s.wsReconnTimer); s.wsReconnTimer = null; }
+  if(s.ws){
+    try { s.ws.onclose = null; s.ws.onerror = null; s.ws.onmessage = null; s.ws.close(); } catch(_e){}
+    s.ws = null;
+  }
   var proto = location.protocol === "https:" ? "wss:" : "ws:";
   var ws = new WebSocket(proto + "//" + location.host + "/api/v1/stream");
+  s.ws = ws;
   ws.onopen = function(){
+    if(s.ws !== ws) return;
     s.mode = "ws"; s.misses = 0; s.pollTicks = 0;
     $("mode").textContent = "live";
     $("mode").className = "pill live";
@@ -6690,13 +6702,17 @@ function startWS(){
     }
   };
   ws.onclose = function(){
+    if(s.ws !== ws) return;
+    s.ws = null;
+    var loginEl = $("login");
+    if(loginEl && !loginEl.classList.contains("hidden")) return;
     s.misses++;
     // Immediately refresh via HTTP so dashboard doesn't freeze while reconnecting
     refresh();
     if(s.misses >= 3){ startPolling(); return; }
     $("mode").textContent = "reconnecting";
     $("mode").className = "pill reconn";
-    setTimeout(startWS, 1000);
+    s.wsReconnTimer = setTimeout(startWS, 1000);
   };
   ws.onerror = function(){ /* onclose follows */ };
 }
@@ -6835,7 +6851,7 @@ function onOpClick(ev){
   if(op === "closeall"){
     confirmDialog({
       title: t("nodes.confirm_close_all_title"),
-      desc: t("nodes.confirm_close_all_desc", { key: k }),
+      desc: t("nodes.confirm_close_all_desc", { key: esc(k) }),
       detail: t("nodes.confirm_close_all_detail"),
       danger: true,
       confirmText: t("nodes.btn_close_all")
@@ -6951,15 +6967,60 @@ function refreshWritesState(){
 //--- invitation to the overlay. Every later 401 (an expired session, say)
 //--- comes back here through api()'s rejection path.
 function showLogin(){
+  if(s.poller){ clearInterval(s.poller); s.poller = null; }
+  if(s.renderTickTimer){ clearInterval(s.renderTickTimer); s.renderTickTimer = null; }
+  if(s.wsReconnTimer){ clearTimeout(s.wsReconnTimer); s.wsReconnTimer = null; }
+  if(s.ws){
+    try { s.ws.onclose = null; s.ws.onerror = null; s.ws.onmessage = null; s.ws.close(); } catch(_e){}
+    s.ws = null;
+  }
+  s.refreshInFlight = false;
+  if(sslState.pollTimer){ clearInterval(sslState.pollTimer); sslState.pollTimer = null; }
   $("login").classList.remove("hidden");
   $("loginerr").textContent = "";
 }
 function startDashboard(){
   refresh();
   if(window.WebSocket){ startWS(); } else { startPolling(); }
-  setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
+  if(!s.renderTickTimer){
+    s.renderTickTimer = setInterval(function(){ if(s.lastAt) render(); }, 1000); // keeps "age" honest
+  }
+  if(s.dashboardStarted){
+    refreshWritesState();
+    return;
+  }
+  s.dashboardStarted = true;
   $("nodes").addEventListener("click", onOpClick);
   $("globalops").addEventListener("click", onGlobalClick);
+  var pBanner = $("pos_node_banner");
+  if(pBanner){
+    pBanner.addEventListener("click", function(ev){
+      var btn = ev.target.closest("button[data-node-act]");
+      if(!btn) return;
+      var act = btn.getAttribute("data-node-act");
+      var k = btn.getAttribute("data-key");
+      if(!k) return;
+      if(act === "config"){ openConfigModal(k); }
+      else if(act === "pause" || act === "resume"){ sendCommand(k, act); }
+      else if(act === "closeall"){ confirmCloseAllNode(k); }
+    });
+  }
+  var pBody = $("pos_rec_tbody");
+  if(pBody){
+    pBody.addEventListener("click", function(ev){
+      var btn = ev.target.closest("button.pos-close-single-btn[data-tkt]");
+      if(!btn) return;
+      var nk = btn.getAttribute("data-node-key") || "";
+      var tkt = btn.getAttribute("data-tkt") || "";
+      var sym = btn.getAttribute("data-sym") || "";
+      var side = btn.getAttribute("data-side") || "";
+      var lots = Number(btn.getAttribute("data-lots") || "0");
+      var pval = Number(btn.getAttribute("data-profit") || "0");
+      if(nk && tkt){
+        onCloseSinglePosition(nk, /^\d+$/.test(tkt) ? Number(tkt) : tkt, sym, side, lots, pval);
+      }
+    });
+  }
   var btnBatchP = $("btn-batch-pause");
   if(btnBatchP){
     btnBatchP.addEventListener("click", function(){
@@ -8861,8 +8922,8 @@ $("cfgrollbackbtn").addEventListener("click", function(){
   }
   confirmDialog({
     title: t("cfg.confirm_rollback_title"),
-    desc: t("cfg.confirm_rollback_desc", { target: cfgState.target, rev: rev }),
-    detail: t("cfg.confirm_rollback_detail", { rev: rev }),
+    desc: t("cfg.confirm_rollback_desc", { target: esc(cfgState.target), rev: esc(rev) }),
+    detail: t("cfg.confirm_rollback_detail", { rev: esc(rev) }),
     danger: true,
     confirmText: t("cfg.confirm_rollback_btn", { rev: rev })
   }).then(function(ok){
@@ -8936,7 +8997,8 @@ $("btn-gop-cfg").addEventListener("click", function(){ openConfigModal(); });
 // ============================================================================
 var sslState = {
   data: null,
-  pollTimer: null
+  pollTimer: null,
+  inFlight: false
 };
 
 function openSslModal(){
@@ -8986,9 +9048,12 @@ function onSslModeChange(){
 }
 
 function refreshSslStatus(){
+  if(sslState.inFlight) return;
+  sslState.inFlight = true;
   fetch("/api/v1/tls/status", { credentials: "same-origin" })
     .then(function(r){ return r.json(); })
     .then(function(res){
+      sslState.inFlight = false;
       if(!res || !res.ok) return;
       sslState.data = res;
       var cfg = res.config || {};
@@ -9080,6 +9145,7 @@ function refreshSslStatus(){
       }
     })
     .catch(function(e){
+      sslState.inFlight = false;
       console.warn("[SSL] Failed to fetch status:", e);
     });
 }

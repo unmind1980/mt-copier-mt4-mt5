@@ -4,6 +4,8 @@
 //| Bypasses WM_TIMER floor with max burst cap & hard timeout        |
 //+------------------------------------------------------------------+
 #property strict
+#ifndef __COPIER_PUMP_MQH__
+#define __COPIER_PUMP_MQH__
 
 #define CP_EVENT_PUMP_ID   1001
 #define CP_PUMP_BURST_MAX  500  // Generous burst ceiling so loopback PONG (0.4-1.2ms) is never truncated prematurely
@@ -76,8 +78,11 @@ public:
       if(id==CHARTEVENT_CUSTOM+CP_EVENT_PUMP_ID)
         {
          m_inFlight=false;
+         if(m_fastPumpUntil<=0) return false;
          return true;
         }
       return false;
      }
   };
+
+#endif

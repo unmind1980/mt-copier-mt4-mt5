@@ -300,7 +300,7 @@ impl ClusterManager {
         } else if token_is_usable(&state.cluster_token) {
             state.cluster_token.clone()
         } else {
-            let gen = format!("ctok_{}_{}", unix_secs(), &crate::users::random_token()[..16]);
+            let gen = format!("ctok_{}_{}", unix_secs(), crate::users::random_token());
             //--- NEVER print the token itself. Logs get pasted into tickets,
             //--- chat windows and bug reports; printing a secret is precisely
             //--- how it stops being one. The path is enough for an operator.
@@ -464,21 +464,28 @@ pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::
                 std::thread::sleep(Duration::from_millis(delay));
             }
             Err(rename_err) => {
-                // Fallback: preserve backup before overwriting target to prevent 0-byte truncation
-                if let Ok(mut src) = File::open(tmp) {
-                    let tmp_len = src.metadata().map(|m| m.len()).unwrap_or(0);
-                    if tmp_len > 0 {
-                        let bak = PathBuf::from(format!("{}.bak", target.display()));
-                        let _ = fs::copy(target, &bak);
-                        if let Ok(mut dst) = OpenOptions::new().write(true).truncate(true).create(true).open(target) {
-                            if std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok() {
-                                let _ = fs::remove_file(tmp);
-                                let _ = fs::remove_file(&bak);
-                                return Ok(());
-                            } else {
-                                let _ = fs::copy(&bak, target);
-                            }
+                // Fallback: preserve backup before overwriting target to prevent 0-byte truncation.
+                // Scope File handles before removing/restoring files so Windows sharing locks release cleanly.
+                let tmp_len = fs::metadata(tmp).map(|m| m.len()).unwrap_or(0);
+                if tmp_len > 0 {
+                    let bak = PathBuf::from(format!("{}.bak", target.display()));
+                    let _ = fs::copy(target, &bak);
+                    let copy_ok = {
+                        if let (Ok(mut src), Ok(mut dst)) = (
+                            File::open(tmp),
+                            OpenOptions::new().write(true).truncate(true).create(true).open(target),
+                        ) {
+                            std::io::copy(&mut src, &mut dst).is_ok() && dst.sync_all().is_ok()
+                        } else {
+                            false
                         }
+                    };
+                    if copy_ok {
+                        let _ = fs::remove_file(tmp);
+                        let _ = fs::remove_file(&bak);
+                        return Ok(());
+                    } else if bak.exists() {
+                        let _ = fs::copy(&bak, target);
                     }
                     // DEF-05: Preserve .bak on fallback error so restart can recover
                 }

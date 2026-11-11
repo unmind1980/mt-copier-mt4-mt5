@@ -142,6 +142,7 @@ double CopierNormalizeLot(const double lots,const CopierSymInfo &si)
   {
    if(lots<=0.0 || !MathIsValidNumber(lots) || si.lotStep<=0.0) return 0.0;
    int digits=CopierLotDigits(si.lotStep);
+   if(si.minLot>0.0) { int md=CopierLotDigits(si.minLot); if(md>digits) digits=md; }
    double v=0.0;
    if(si.minLot>0.0 && lots>=si.minLot)
      {
@@ -209,7 +210,7 @@ double CopierComputeLots(const double senderLots,const int mode,const double par
       raw=senderLots*eqRatio*param*symMultiplier;
      }
    else                                  raw=senderLots*param*symMultiplier;
-   if(raw<=0.0) { rejected=true; return 0.0; }
+   if(!MathIsValidNumber(raw) || raw<=0.0) { rejected=true; return 0.0; }
 
    double v=CopierNormalizeLot(raw,si);
    if(v<=0.0) { rejected=true; return 0.0; }

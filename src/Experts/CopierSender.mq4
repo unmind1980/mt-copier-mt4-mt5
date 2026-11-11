@@ -736,7 +736,11 @@ int BuildCurrent()
             else
               {
                long curFrom=from;
-               for(int hops=0;hops<5;hops++)
+               long seen[32];
+               ArrayInitialize(seen,0);
+               int nSeen=0;
+               int hops=0;
+               for(;hops<32;hops++)
                  {
                   // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
                   if(curFrom<=0 || (ulong)curFrom>0xFFFFFFFF || !OrderSelect((int)(uint)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
@@ -749,10 +753,14 @@ int BuildCurrent()
                      slot=j;
                      break;
                     }
+                  bool dup=false;
+                  for(int s=0;s<nSeen;s++) { if(seen[s]==prevFrom) { dup=true; break; } }
+                  if(dup) break;
+                  if(nSeen<32) seen[nSeen++]=prevFrom;
                   curFrom=prevFrom;
                  }
-               if(StringLen(uid)==0 && g_once.ShouldEmit("fromhops|"+(string)p.ticket))
-                  g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket+"; minting fresh UID");
+               if(StringLen(uid)==0 && hops>=32 && g_once.ShouldEmit("fromhops|"+(string)p.ticket))
+                  g_log.Warn("MT4 partial-close 'from #' chain exceeded 32 hops for ticket "+(string)p.ticket+"; minting fresh UID");
               }
            }
 #endif
@@ -2249,7 +2257,16 @@ void HandleDirectStatusFrame(const string raw)
      }
   }
 
+void ProcessTimerTick();
 void OnTimer()
+  {
+   static bool s_inTimer=false;
+   if(s_inTimer) return;
+   s_inTimer=true;
+   ProcessTimerTick();
+   s_inTimer=false;
+  }
+void ProcessTimerTick()
   {
    long now=CopierNowMs();
 
@@ -2421,7 +2438,7 @@ void OnTimer()
          bool filledToMarket=false;
          for(int ci=0; ci<n; ci++)
            {
-            if(g_curScratch[ci].ticket==q.ticket && g_curScratch[ci].kind==CP_ORD_MARKET)
+            if(g_curScratch[ci].ticket==q.ticket && g_curScratch[ci].kind==CP_ORD_MARKET && g_curScratch[ci].uid==q.uid)
               { filledToMarket=true; break; }
            }
          if(filledToMarket)

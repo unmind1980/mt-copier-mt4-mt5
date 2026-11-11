@@ -43,6 +43,7 @@ pub mod win_service {
     // Static handle for service log redirection
     static LOG_HANDLE: Mutex<Option<std::fs::File>> = Mutex::new(None);
     static ACTIVE_SERVICE_LOG: Mutex<Option<(std::path::PathBuf, u64, usize)>> = Mutex::new(None);
+    static SERVICE_ROTATE_LOCK: Mutex<()> = Mutex::new(());
 
     /// H4: the SCM name for a role, optionally suffixed for a second instance.
     ///
@@ -137,7 +138,7 @@ pub mod win_service {
             let from = PathBuf::from(format!("{}.{}", path.display(), i));
             let to = PathBuf::from(format!("{}.{}", path.display(), i + 1));
             if from.exists() {
-                let _ = crate::cluster::atomic_replace_file(&from, &to);
+                crate::cluster::atomic_replace_file(&from, &to)?;
             }
         }
 
@@ -151,6 +152,7 @@ pub mod win_service {
     /// Size-based rotation for Windows Service stdout/stderr log.
     /// Flushes stdio, drops log handle, rotates disk files, and rebinds stdio to fresh log.
     pub fn rotate_service_log(path: &Path, max_bytes: u64, max_backups: usize) -> std::io::Result<bool> {
+        let _rot_guard = SERVICE_ROTATE_LOCK.lock_or_recover();
         if !path.exists() {
             return Ok(false);
         }

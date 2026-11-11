@@ -66,6 +66,37 @@ long   g_sessAt[CP_SESS_CACHE];
 bool   g_sessVal[CP_SESS_CACHE];
 int    g_sessHead=0;
 
+bool CopierExtractSessionSpan(const datetime f,const datetime t,
+                              long &outStartSec,long &outTodayEndSec,long &outNextDayEndSec)
+  {
+   outStartSec=0;
+   outTodayEndSec=0;
+   outNextDayEndSec=0;
+   if(f==0 && t==0) return false;
+
+   long fs=(long)(f%86400);
+   long baseDay=(long)f-fs;
+   long relEnd=(long)t-baseDay;
+   outStartSec=fs;
+   if(relEnd>86400)
+     {
+      outTodayEndSec=86400;
+      long tail=relEnd-86400;
+      if(tail>86400) tail=86400;
+      outNextDayEndSec=tail;
+     }
+   else if((long)t<(long)f)
+     {
+      outTodayEndSec=86400;
+      outNextDayEndSec=(long)(t%86400);
+     }
+   else
+     {
+      outTodayEndSec=relEnd;
+     }
+   return true;
+  }
+
 bool CopierInTradingSession(const string sym)
   {
    if(StringLen(sym)==0) return true;
@@ -74,11 +105,11 @@ bool CopierInTradingSession(const string sym)
    int foundIdx=-1;
    for(int i=0;i<CP_SESS_CACHE;i++)
      {
-      // ISSUE-17 & NM-13: 30-second window to prevent high-frequency re-probing of daily schedules
+      // ISSUE-17 & NM-13: 1-second window so session boundaries take effect promptly
       if(g_sessKey[i]==sym)
         {
          foundIdx=i;
-         if(now>=g_sessAt[i] && now-g_sessAt[i]<30) return g_sessVal[i];
+         if(now>=g_sessAt[i] && now-g_sessAt[i]<1) return g_sessVal[i];
          break;
         }
      }
@@ -89,6 +120,7 @@ bool CopierInTradingSession(const string sym)
    TimeToStruct((datetime)now,dt);
    int secOfDay=dt.hour*3600 + dt.min*60 + dt.sec;
    int dow=dt.day_of_week;
+   int prevDow=(dow+6)%7;
 
    bool anySession=false;
    bool inside=false;
@@ -96,18 +128,24 @@ bool CopierInTradingSession(const string sym)
      {
       datetime f=0,t=0;
       if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dow,i,f,t)) break;
-      if(f==0 && t==0) continue;
+      long fs=0,todayEnd=0,nextTail=0;
+      if(!CopierExtractSessionSpan(f,t,fs,todayEnd,nextTail)) continue;
       anySession=true;
-      long fs=(long)(f%86400);
-      long ts=(long)(t%86400);
-      if(ts==0 && t>f) ts=86400;
-      if(fs<=ts)
+      if(secOfDay>=fs && secOfDay<=todayEnd) { inside=true; break; }
+     }
+   if(!inside)
+     {
+      for(int i=0;i<8;i++)
         {
-         if(secOfDay>=fs && secOfDay<=ts) { inside=true; break; }
-        }
-      else
-        {
-         if(secOfDay>=fs || secOfDay<=ts) { inside=true; break; }
+         datetime f=0,t=0;
+         if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,i,f,t)) break;
+         long fs=0,todayEnd=0,nextTail=0;
+         if(!CopierExtractSessionSpan(f,t,fs,todayEnd,nextTail)) continue;
+         if(nextTail>0)
+           {
+            anySession=true;
+            if(secOfDay<=nextTail) { inside=true; break; }
+           }
         }
      }
 
@@ -156,24 +194,23 @@ int CopierSecondsSinceSessionOpen(const string sym)
    TimeToStruct((datetime)now,dt);
    int secOfDay=dt.hour*3600 + dt.min*60 + dt.sec;
    int dow=dt.day_of_week;
+   int prevDow=(dow+6)%7;
 
    for(int i=0;i<8;i++)
      {
       datetime f=0,t=0;
       if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dow,i,f,t)) break;
-      if(f==0 && t==0) continue;
-      long fs=(long)(f%86400);
-      long ts=(long)(t%86400);
-      if(ts==0 && t>f) ts=86400;
-      if(fs<=ts)
-        {
-         if(secOfDay>=fs && secOfDay<=ts) return (int)(secOfDay-fs);
-        }
-      else
-        {
-         if(secOfDay>=fs || secOfDay<=ts)
-            return (secOfDay>=fs)?(int)(secOfDay-fs):(int)(secOfDay+(86400-fs));
-        }
+      long fs=0,todayEnd=0,nextTail=0;
+      if(!CopierExtractSessionSpan(f,t,fs,todayEnd,nextTail)) continue;
+      if(secOfDay>=fs && secOfDay<=todayEnd) return (int)(secOfDay-fs);
+     }
+   for(int i=0;i<8;i++)
+     {
+      datetime f=0,t=0;
+      if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,i,f,t)) break;
+      long fs=0,todayEnd=0,nextTail=0;
+      if(!CopierExtractSessionSpan(f,t,fs,todayEnd,nextTail)) continue;
+      if(nextTail>0 && secOfDay<=nextTail) return (int)(secOfDay+(86400-fs));
      }
    return -1;
   }

@@ -60,12 +60,11 @@ FRESH=1
 #--- Raise it DELIBERATELY when you add assertions; never lower it to make a
 #--- build pass. (MT4 reports a few less: the platforms differ by ifdef'd
 #--- assertions, which is why this is a constant here rather than derived.)
-#--- 919 = 873 + 46 added by round 12 deep audit (Agent E): MT5 OrderSend filling
-#--- fallback candidates & retcode classification, Ratchet Stops lock on market
-#--- orders, INI CFD `#` symbol prefix parsing, CP_MAX_EQUITY_RATIO division-by-zero
-#--- explosion protection, composite daily loss & drawdown alarm reason, and
-#--- resource lifecycle cleanup verification.
-BASELINE=919
+#--- 962 = 919 + 43 added by round 13 deep audit: CopierPipOf JPY/DJ precision,
+#--- CopierExtractSessionSpan cross-midnight & t>86400, CopierNormalizeLot minLot
+#--- precision & NaN/Inf rejection, CopierRisk cash-flow symmetry, CopierPanel
+#--- truncation & cleanup, CopierEventPump OnEvent gate, CopierPeerTable probe/SeenAt.
+BASELINE=962
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

@@ -605,7 +605,7 @@ pub fn parse_args() -> Result<Args, String> {
     }
     if a.cluster_token.is_empty() {
         if let Ok(tok) = std::fs::read_to_string("cluster_token.txt") {
-            a.cluster_token = tok.trim().to_string();
+            a.cluster_token = tok.trim_start_matches('\u{feff}').trim().to_string();
         }
     }
     Ok(a)
@@ -3494,9 +3494,6 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         }
     }
 
-    // R10-C04: Wait for any background audit log rotation thread to cleanly finish
-    audit.wait_for_rotation();
-
     //--- LINGER is 0, so this returns immediately instead of waiting for
     //--- undelivered messages that a hub has no reason to hold on to.
     drop(sock);
@@ -3506,6 +3503,9 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     if let Some(h) = zap_worker_handle {
         let _ = h.join();
     }
+
+    // R10-C04: Wait for any background audit log rotation thread to cleanly finish
+    audit.wait_for_rotation();
     Ok(())
 }
 

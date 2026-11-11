@@ -1204,8 +1204,7 @@ void TrackSymbolSpread(const string sym,const double curSpread,const bool inWarm
       if(StringLen(g_spreadSym[s])==0)
         {
          g_spreadSym[s]=sym;
-         double defSp=CopierGetSpreadPoints(sym);
-         g_spreadMin[s]=inWarmup ? (defSp>0.0 ? defSp : 0.0) : curSpread;
+         g_spreadMin[s]=inWarmup ? 0.0 : curSpread;
          return;
         }
      }
@@ -1222,9 +1221,25 @@ bool SymbolInOpenWarmup(const string sym,int &elapsedSecs)
    MqlDateTime dt;
    TimeToStruct((datetime)now,dt);
    int prevDow=(dt.day_of_week==0)?6:(dt.day_of_week-1);
-   datetime f=0,t=0;
-   bool prevHadSession=SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,0,f,t);
-   bool continuous247=(prevHadSession && f==0 && (t%86400==0 || t>=86400));
+   bool prevEndsAtMidnight=false;
+   for(int si0=0;si0<8;si0++)
+     {
+      datetime pf=0,pt=0;
+      if(!SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)prevDow,si0,pf,pt)) break;
+      if(pf==0 && pt==0) continue;
+      if(((long)(pt%86400)==0 && pt>pf) || (long)pt>=86400)
+        {
+         prevEndsAtMidnight=true;
+         break;
+        }
+     }
+   bool todayStartsAtMidnight=false;
+   datetime tf=0,tt=0;
+   if(SymbolInfoSessionTrade(sym,(ENUM_DAY_OF_WEEK)dt.day_of_week,0,tf,tt) && (tf!=0 || tt!=0))
+     {
+      if((long)(tf%86400)==0) todayStartsAtMidnight=true;
+     }
+   bool continuous247=(prevEndsAtMidnight && todayStartsAtMidnight);
    if(continuous247) return false;
 
    elapsedSecs=secs;
@@ -1317,7 +1332,7 @@ void MapAdd(const int si,const string from,const string to)
                      +" CP_MAX_SYMBOL_MAP or trim the per-sender maps.");
       return;
      }
-   g_mapFrom[g_nMap]=from;
+   g_mapFrom[g_nMap]=cleanFrom;
    g_mapTo[g_nMap]=cleanTo;
    g_mapSender[g_nMap]=si;
    g_mapMult[g_nMap]=mult;
@@ -1351,10 +1366,33 @@ double GetSymbolMultiplier(const int si,const string sym)
   {
    for(int i=0;i<g_nMap;i++)
      {
-      if(g_mapSender[i]==si && (g_mapFrom[i]==sym || g_mapTo[i]==sym))
+      if(g_mapSender[i]==si && g_mapFrom[i]==sym)
+         return g_mapMult[i];
+     }
+   for(int i=0;i<g_nMap;i++)
+     {
+      if(g_mapSender[i]==si && g_mapTo[i]==sym)
          return g_mapMult[i];
      }
    return 1.0;
+  }
+
+double GetSymbolMultiplierForPair(const int si,const string fromSym,const string toSym)
+  {
+   for(int i=0;i<g_nMap;i++)
+     {
+      if(g_mapSender[i]==si && g_mapFrom[i]==fromSym && g_mapTo[i]==toSym)
+         return g_mapMult[i];
+     }
+   if(StringLen(fromSym)>0)
+     {
+      for(int i=0;i<g_nMap;i++)
+        {
+         if(g_mapSender[i]==si && g_mapFrom[i]==fromSym)
+            return g_mapMult[i];
+        }
+     }
+   return GetSymbolMultiplier(si,toSym);
   }
 
 string MapSymbol(const int si,const string sym,const string suffix)
@@ -1674,6 +1712,7 @@ void ApplyCommonConfig(const CopierIni &ini)
      {
       bool newShow = ini.GetBool("common","showpanel",ShowPanel);
       if(ShowPanel && !newShow) g_panel.Destroy();
+      else if(!ShowPanel && newShow) g_panel.Init("cprcv",10,20,430);
       ShowPanel = newShow;
      }
    if(ini.Has("common","showorphanedlist"))
@@ -1691,6 +1730,8 @@ void ApplyCommonConfig(const CopierIni &ini)
    g_permitted.Set(PermittedSymbols);
    g_permittedMagic.Set(PermittedMagic);
    g_hours.Set(IncludeTradingTimes,DayTradingTimes);
+   if(!g_hubOn && g_nSenders>0)
+      g_senderHours[0].Set(IncludeTradingTimes,DayTradingTimes);
    g_ignore.SetText(IgnoreUids);
 
    if(LogLevel != oldLogLevel)
@@ -2412,8 +2453,11 @@ string ResolveUid(const CopierPos &p)
       if(g_recKnown.GetByTicket(from,prev)) return prev.uid;
 #ifndef __MQL5__
       long curFrom=from;
+      long seen[32];
+      ArrayInitialize(seen,0);
+      int nSeen=0;
       int hops=0;
-      for(;hops<5;hops++)
+      for(;hops<32;hops++)
         {
          // BUG-06: Guard against 32-bit signed int overflow when casting from-ticket to MT4 OrderSelect
          if(curFrom<=0 || (ulong)curFrom>0xFFFFFFFF || !OrderSelect((int)(uint)curFrom,SELECT_BY_TICKET,MODE_HISTORY)) break;
@@ -2423,11 +2467,15 @@ string ResolveUid(const CopierPos &p)
          long prevFrom=CopierMt4FromTicket(OrderComment());
          if(prevFrom<=0) break;
          if(g_recKnown.GetByTicket(prevFrom,prev)) return prev.uid;
+         bool dup=false;
+         for(int s=0;s<nSeen;s++) { if(seen[s]==prevFrom) { dup=true; break; } }
+         if(dup) break;
+         if(nSeen<32) seen[nSeen++]=prevFrom;
          curFrom=prevFrom;
         }
-      // R47-16: Only warn if the loop actually exhausted all 5 hops without resolving
-      if(hops>=5 && g_once.ShouldEmit("recvfromhops|"+(string)p.ticket))
-         g_log.Warn("MT4 partial-close 'from #' chain exceeded 5 hops for ticket "+(string)p.ticket);
+      // R47-16: Only warn if the loop actually exhausted all 32 hops without resolving
+      if(hops>=32 && g_once.ShouldEmit("recvfromhops|"+(string)p.ticket))
+         g_log.Warn("MT4 partial-close 'from #' chain exceeded 32 hops for ticket "+(string)p.ticket);
 #endif
      }
 
@@ -3708,6 +3756,24 @@ void ExecuteQueue()
          // Note: a.kind == CP_ACT_MODIFY does NOT cross spread; it proceeds immediately to protect stops!
         }
 
+      //--- R13: Respect trading hours window when executing queued OPEN actions
+      if(a.kind==CP_ACT_OPEN)
+        {
+         bool hoursOk=true;
+         if(a.senderIdx>=0 && a.senderIdx<g_nSenders && g_senderHours[a.senderIdx].Active())
+            hoursOk=g_senderHours[a.senderIdx].Allows(CopierServerTime());
+         else if(g_hours.Active())
+            hoursOk=g_hours.Allows(CopierServerTime());
+         if(!hoursOk)
+           {
+            if(g_once.ShouldEmit("hours_open|"+(string)a.senderIdx))
+               g_log.Info("outside trading hours window - holding queued OPEN "+a.uid);
+            RotateQueue();
+            skipped++;
+            continue;
+           }
+        }
+
       //--- PAUSED BY HUB COMMAND, on the way OUT. Same reason as every gate
       //--- above: an open queued BEFORE the pause arrived would still fire
       //--- if only converge were gated. Rotated, not dropped - a held open
@@ -4405,10 +4471,10 @@ void ExecuteQueue()
          else
            {
             // R2-M03 & DEF-A01: Transient broker volatility errors (requote, off quotes, context busy, price changed)
-            bool isTransientErr = (err==138 || err==136 || err==137 || err==146 || 
+            bool isTransientErr = (err==138 || err==136 || err==137 || err==145 || err==146 || 
                                    err==2 || err==6 || err==128 || err==135 || err==141 ||
                                    err==10004 || err==10006 || err==10011 || err==10012 || 
-                                   err==10015 || err==10020 || err==10021 || err==10024);
+                                   err==10015 || err==10020 || err==10021 || err==10024 || err==10029);
             isTransientRequote = (err==138 || err==10004 || err==10015);
             bool queuedForSweep = (isBatchClose && (a.kind==CP_ACT_CLOSE || a.kind==CP_ACT_DEDUP) && isTransientRequote);
             if(err==146)
@@ -4692,7 +4758,7 @@ void ExecuteQueue()
 // would need a second position under the same UID, which breaks the
 // one-UID-one-position mapping the whole design rests on.
 //=====================================================================
-double ComputeReceiverLots(const int si,const string sym,const double senderLots,bool &rejected)
+double ComputeReceiverLots(const int si,const string sym,const double senderLots,bool &rejected,const string senderSym="")
   {
    rejected=false;
    CopierSymInfo si2;
@@ -4709,7 +4775,7 @@ double ComputeReceiverLots(const int si,const string sym,const double senderLots
    //---     (a 0.05 fixed size under a 0.1 filter never opened, reported as
    //---     "lot sizing rejected" - which points at the wrong thing).
    //--- The per-position cap is maxLotsPerPosition, applied below.
-   double symMult=GetSymbolMultiplier(si,sym);
+   double symMult=(StringLen(senderSym)>0)?GetSymbolMultiplierForPair(si,senderSym,sym):GetSymbolMultiplier(si,sym);
    double myEq=AccountInfoDouble(ACCOUNT_EQUITY);
    if(myEq<=0.0) { rejected=true; return 0.0; }
    double convSenderEq=g_senderEquity[si];
@@ -4761,12 +4827,12 @@ double ComputeTargetLotsForMirror(const int si,const CopierPos &desired,const st
                    :GetOrUpdateSenderPeakLots(desired.uid,desired.lots);
    if(origLots>0.0 && desired.lots<origLots)
      {
-      double baseLots=ComputeReceiverLots(si,sym,origLots,rejected);
+      double baseLots=ComputeReceiverLots(si,sym,origLots,rejected,desired.sym);
       targetLots=CopierNormalizeLot(baseLots*(desired.lots/origLots),si2);
      }
    else
      {
-      targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected);
+      targetLots=ComputeReceiverLots(si,sym,desired.lots,rejected,desired.sym);
      }
    if(rejected || targetLots<=0.0)
      {
@@ -4983,7 +5049,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
          dOpn=g_stOvOpn[oi];
          if(g_stOvPprice[oi]>0.0) dPPrice=g_stOvPprice[oi];
          if(g_stOvPstop[oi]>0.0)  dPStop=g_stOvPstop[oi];
-         if(g_stOvPexp[oi]>0)     dPExp=g_stOvPexp[oi];
+         if(g_stOvPexp[oi]>0)     { long ovExp=SenderTimeToOurs(si,g_stOvPexp[oi]); if(ovExp>0) dPExp=ovExp; }
         }
      }
 
@@ -5022,8 +5088,9 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
                               effectiveLocalOpen,local.side,false);
      }
 
+   double effPStop=(dPStop>0.0)?dPStop:local.pstop;
    double anchorPx=(local.kind==CP_ORD_PENDING)
-                   ? ((local.pstop>0.0)?local.pstop:effectiveLocalOpen)
+                   ? ((effPStop>0.0)?effPStop:effectiveLocalOpen)
                    : local.openPx;
 
    //--- the sender has no stop of its own, so the local backstop applies
@@ -5195,7 +5262,7 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
       // Do NOT wipe local.pexpire in this case. Only wipe if sender explicitly set pexpire == 0.
       if(desired.pexpire>0)
         {
-         if(dPExp>0 && local.pexpire!=dPExp) pendingDiff=true;
+         if(dPExp>0 && (local.pexpire<=0 || MathAbs(local.pexpire-dPExp)>2)) pendingDiff=true;
         }
       else if(desired.pexpire==0 && local.pexpire!=0) pendingDiff=true;
      }
@@ -5296,9 +5363,21 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
    long   actPExp   = (local.kind==CP_ORD_PENDING) ? dPExp : local.pexpire;
 
-   // DEF-10-03: If existing stops are within broker freezeLevel, modifications will be rejected (10016 / 145 / 130)
+   // DEF-10-03: If existing pending entry/stops are within broker freezeLevel, modifications will be rejected (10016 / 145 / 130)
    if(si2.freezeLevel>0.0)
      {
+      if(local.kind==CP_ORD_PENDING)
+        {
+         double curEntPx=0.0;
+         if(CopierGetPrice(local.sym,local.side,curEntPx) && curEntPx>0.0)
+           {
+            if((local.pprice>0.0 && MathAbs(curEntPx-local.pprice)<=si2.freezeLevel) ||
+               (local.pstop>0.0 && MathAbs(curEntPx-local.pstop)<=si2.freezeLevel))
+              {
+               return;
+              }
+           }
+        }
       double curClosePx=0.0;
       if(CopierGetClosePrice(local.sym,local.side,curClosePx) && curClosePx>0.0)
         {
@@ -5955,7 +6034,8 @@ void RefreshRisk()
 #endif
          if(rOk)
            {
-            double trueStartBal=curBal-realized;
+            double openComm=CopierOpenCommissionsMT4();
+            double trueStartBal=curBal-openComm-realized;
             if(trueStartBal>0.0)
               {
                g_riskDayStartBalance=trueStartBal;
@@ -5988,7 +6068,8 @@ void RefreshRisk()
          double curBal=CopierAccountBalance();
          if(rOk)
            {
-            double trueStartBal=curBal-realized;
+            double openComm=CopierOpenCommissionsMT4();
+            double trueStartBal=curBal-openComm-realized;
             g_riskDayStartBalance=(trueStartBal>0.0)?trueStartBal:curBal;
            }
          else
@@ -6039,15 +6120,7 @@ void RefreshRisk()
          //--- The anchor is "balance at day start", so it must be derived, not
          //--- sampled from the live account.
          // R7-D4-01: In MT4, open trade commissions are deducted from balance immediately; include them to avoid misdiagnosing commissions as capital withdrawals
-         double openComm=0.0;
-#ifndef __MQL5__
-         int totOpen=OrdersTotal();
-         for(int oi=0;oi<totOpen;oi++)
-           {
-            if(OrderSelect(oi,SELECT_BY_POS,MODE_TRADES))
-               openComm+=OrderCommission();
-           }
-#endif
+         double openComm=CopierOpenCommissionsMT4();
          if(g_riskDayStartEquity<=0.0)
            {
             double derivedBase=(curBal-openComm)-realized;
@@ -6643,9 +6716,9 @@ void ConvergeSender(const int si)
 
       //--- 3. Lot calculation
       bool rejected=false;
-      // R6-D2-03: Use ComputeTargetLotsForMirror to respect partial-fill scaling
+      // R6-D2-03: Use ComputeTargetLotsForMirror to respect partial-fill scaling & rejection
       double lots=ComputeTargetLotsForMirror(si,d,rsym);
-      if(lots<=0.0) lots=ComputeReceiverLots(si,rsym,d.lots,rejected);
+      if(lots<=0.0) rejected=true;
       if(rejected || lots<=0.0)
         {
          if(g_once.ShouldEmit("lotsrej|"+g_sid[si]+"|"+d.uid))
@@ -8532,7 +8605,7 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       //--- The sender's PING itself is not wasted - it is broadcast for the
       //--- DIRECT receivers, which do answer, and it happens to be forwarded by
       //--- the hub to central ones as ordinary data.
-      if(g_hubOn) return false;
+   if(g_hubOn) return false;
 
       string pms="",pfrom="";
       CopierKvGet(e.payload,"MS",pms);
@@ -8905,6 +8978,7 @@ int OnInit()
       g_log.Warn("operational state: PAUSED (from "+CmdStatePath()+") - no"
                  +" new mirrors will be opened until the hub sends RESUME");
 
+   g_bootMs=CopierNowMs();
    if(g_hubOn)
      {
       //--- ONE endpoint, and deliberately NOT "subscribe to everything".

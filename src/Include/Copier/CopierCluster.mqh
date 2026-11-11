@@ -28,7 +28,7 @@ public:
       outState.epoch=0;
       outState.updated=0;
 
-      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_READ|FILE_TXT|FILE_ANSI);
+      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(h==INVALID_HANDLE) return false;
 
       while(!FileIsEnding(h))
@@ -64,8 +64,7 @@ public:
       //--- The cache is four lines. A direct truncated write is simpler than
       //--- tmp+swap, and a torn write costs nothing: Load() returns false on any
       //--- unparsable line and the caller keeps the endpoints it already has.
-      FileDelete(CP_CLUSTER_STATE_FILE);
-      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_WRITE|FILE_TXT|FILE_ANSI);
+      int h=FileOpen(CP_CLUSTER_STATE_FILE,FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(h==INVALID_HANDLE)
         {
          Print("[copier] WARN: cannot write cluster cache ",CP_CLUSTER_STATE_FILE,

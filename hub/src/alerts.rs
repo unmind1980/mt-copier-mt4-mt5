@@ -355,20 +355,22 @@ pub fn evaluate(s: &mut Shared, now: u64) -> Vec<Alert> {
             let outage_secs = s.alerts.offline_since.remove(&n.key).map(|t| now.saturating_sub(t));
             // Re-arm node.offline so the next failure triggers an alert immediately
             s.alerts.rearm("node.offline", &n.key);
-            let a = Alert {
-                ts: now,
-                kind: "node.recovered",
-                severity: Severity::Warning,
-                node: n.key.clone(),
-                detail: json!({
-                    "role": n.role_str,
-                    "name": n.name,
-                    "account": n.acc,
-                    "outage_secs": outage_secs,
-                }),
-            };
-            s.alerts.push(a.clone());
-            fired.push(a);
+            if s.alerts.allow("node.recovered", &n.key, now, silence::NODE_OFFLINE) {
+                let a = Alert {
+                    ts: now,
+                    kind: "node.recovered",
+                    severity: Severity::Warning,
+                    node: n.key.clone(),
+                    detail: json!({
+                        "role": n.role_str,
+                        "name": n.name,
+                        "account": n.acc,
+                        "outage_secs": outage_secs,
+                    }),
+                };
+                s.alerts.push(a.clone());
+                fired.push(a);
+            }
         }
 
         //--- clock drift, as a JUMP against the previous offset. A stable

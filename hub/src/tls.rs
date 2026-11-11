@@ -474,7 +474,9 @@ pub fn pem_to_pkcs12(cert_pem: &str, key_pem: &str, password: &str) -> Result<Ve
 pub fn create_tls_acceptor(pfx_bytes: &[u8], password: &str) -> Result<tokio_native_tls::TlsAcceptor, String> {
     let identity = native_tls::Identity::from_pkcs12(pfx_bytes, password)
         .map_err(|e| format!("Failed to parse PKCS#12 identity: {}", e))?;
-    let native_acceptor = native_tls::TlsAcceptor::new(identity)
+    let native_acceptor = native_tls::TlsAcceptor::builder(identity)
+        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+        .build()
         .map_err(|e| format!("Failed to initialize native TLS acceptor: {}", e))?;
     Ok(tokio_native_tls::TlsAcceptor::from(native_acceptor))
 }
@@ -616,8 +618,10 @@ pub struct TlsManager {
     pub cert_paths: CertPaths,
     /// Hot-reloaded TLS acceptor. None if TLS is disabled or certificate is not loaded.
     pub acceptor: Arc<RwLock<Option<tokio_native_tls::TlsAcceptor>>>,
-    /// In-memory ACME challenge tokens: token -> key_authorization
-    pub acme_tokens: Arc<RwLock<HashMap<String, String>>>,
+    /// In-memory ACME challenge tokens: token -> (key_authorization, inserted_at)
+    pub acme_tokens: Arc<RwLock<HashMap<String, (String, Instant)>>>,
+    /// Hub primary HTTP listener port (set by API server) to distinguish self-owned port vs foreign AddrInUse
+    pub active_http_port: std::sync::atomic::AtomicU16,
     /// BUG-08: Dedicated HTTPS listener shutdown sender and port
     pub active_https_shutdown: Arc<Mutex<Option<(u16, tokio::sync::oneshot::Sender<()>)>>>,
 }
@@ -640,8 +644,13 @@ impl TlsManager {
             cert_paths,
             acceptor: Arc::new(RwLock::new(None)),
             acme_tokens: Arc::new(RwLock::new(HashMap::new())),
+            active_http_port: std::sync::atomic::AtomicU16::new(0),
             active_https_shutdown: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn set_active_http_port(&self, port: u16) {
+        self.active_http_port.store(port, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Read persistent certificate files from disk and reload TlsAcceptor without restarting the hub.
@@ -791,10 +800,12 @@ impl TlsManager {
         Ok(())
     }
 
-    /// Register an ACME challenge token for HTTP-01 verification.
+    /// Register an ACME challenge token for HTTP-01 verification (pruning expired entries).
     pub fn register_acme_token(&self, token: &str, key_auth: &str) {
+        let ttl = Duration::from_secs(600);
         let mut tokens = self.acme_tokens.write_or_recover();
-        tokens.insert(token.to_string(), key_auth.to_string());
+        tokens.retain(|_, (_, at)| at.elapsed() < ttl);
+        tokens.insert(token.to_string(), (key_auth.to_string(), Instant::now()));
     }
 
     /// Remove an ACME challenge token after verification completes.
@@ -805,8 +816,15 @@ impl TlsManager {
 
     /// Retrieve key authorization string for a requested ACME challenge token.
     pub fn get_acme_token(&self, token: &str) -> Option<String> {
+        let ttl = Duration::from_secs(600);
         let tokens = self.acme_tokens.read_or_recover();
-        tokens.get(token).cloned()
+        tokens.get(token).and_then(|(ka, at)| {
+            if at.elapsed() < ttl {
+                Some(ka.clone())
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -848,14 +866,21 @@ impl TempChallengeServer {
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                println!(
-                    "[hub] TLS: Port {} is already bound by main HTTP server; relying on primary router for ACME challenge",
-                    http_port
-                );
-                return Ok(TempChallengeServer {
-                    shutdown_tx: None,
-                    port: http_port,
-                });
+                let hub_http_port = tls_mgr.active_http_port.load(std::sync::atomic::Ordering::Relaxed);
+                if hub_http_port != 0 && hub_http_port == http_port {
+                    println!(
+                        "[hub] TLS: Port {} is already bound by main HTTP server; relying on primary router for ACME challenge",
+                        http_port
+                    );
+                    return Ok(TempChallengeServer {
+                        shutdown_tx: None,
+                        port: http_port,
+                    });
+                }
+                return Err(format!(
+                    "Port {} is already bound by another process (hub HTTP listener is on port {})",
+                    http_port, hub_http_port
+                ));
             }
             Err(e) => {
                 return Err(format!(
@@ -1362,8 +1387,21 @@ impl AcmeClient {
             let challenge_url = http_challenge["url"].as_str().unwrap_or_default();
             let key_auth = format!("{}.{}", token, thumbprint);
 
-            // Register challenge token in TlsManager so port 80 listener answers it
+            // Register challenge token in TlsManager so port 80 listener answers it (RAII cleanup on early return)
+            struct AcmeTokenGuard<'a> {
+                mgr: &'a TlsManager,
+                token: String,
+            }
+            impl<'a> Drop for AcmeTokenGuard<'a> {
+                fn drop(&mut self) {
+                    self.mgr.unregister_acme_token(&self.token);
+                }
+            }
             tls_mgr.register_acme_token(token, &key_auth);
+            let _token_guard = AcmeTokenGuard {
+                mgr: tls_mgr.as_ref(),
+                token: token.to_string(),
+            };
 
             // Notify server that challenge is ready
             if nonce.is_empty() {

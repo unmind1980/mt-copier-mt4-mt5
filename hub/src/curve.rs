@@ -84,7 +84,7 @@ fn shape_ok(k: &str) -> bool {
 /// keeping a broken one is a hub that silently never accepts a client.
 pub fn load_or_create_keys(path: &Path) -> Result<(HubKeys, bool), String> {
     if let Ok(text) = std::fs::read_to_string(path) {
-        let mut lines = text.lines();
+        let mut lines = text.trim_start_matches('\u{feff}').lines();
         if lines.next().map(|l| l.trim()) == Some(KEY_FILE_MAGIC) {
             let mut public = String::new();
             let mut secret = String::new();
@@ -197,7 +197,7 @@ impl AllowList {
         let mut keys: Vec<String> = Vec::new();
         let mut raw_keys: HashSet<[u8; 32]> = HashSet::new();
         for raw in text.lines() {
-            let line = raw.trim();
+            let line = raw.trim_start_matches('\u{feff}').trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -216,8 +216,12 @@ impl AllowList {
             //--- on the next start as "not a 40-character key" - which would
             //--- have locked the whole fleet out the moment learn was
             //--- switched off.)
+            let valid_tail = line.len() == 40
+                || (line.len() > 40
+                    && line.is_char_boundary(40)
+                    && line[40..].starts_with(|c: char| c.is_whitespace() || c == '#'));
             let candidate = line.get(..40).unwrap_or(line);
-            if shape_ok(candidate) {
+            if valid_tail && shape_ok(candidate) {
                 if !keys.iter().any(|k| k == candidate) {
                     keys.push(candidate.to_string());
                     if let Ok(raw) = zmq::z85_decode(candidate) {
@@ -427,21 +431,23 @@ pub fn spawn_zap_handler(
         let shared = std::sync::Arc::clone(&shared);
         let path = clients_path.clone();
         std::thread::spawn(move || {
-            // HUB-05: Check (mtime, len) and check crate::EXIT for graceful shutdown
-            let stamp = |p: &std::path::Path| {
-                std::fs::metadata(p).map(|m| (m.modified().ok(), m.len())).ok()
+            // R13: Hash file contents with SHA-256 instead of (mtime, len) so same-second key swaps are caught,
+            // and advance `last` only after a valid non-empty reload commits.
+            let digest = |p: &std::path::Path| -> Option<[u8; 32]> {
+                use sha2::{Digest, Sha256};
+                let bytes = std::fs::read(p).ok()?;
+                Some(Sha256::digest(&bytes).into())
             };
-            let mut last = stamp(&path);
+            let mut last = digest(&path);
             loop {
                 if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                let cur = stamp(&path);
+                let cur = digest(&path);
                 if cur == last || cur.is_none() {
                     continue;
                 }
-                last = cur;
                 match AllowList::load(&path) {
                     Ok(l) => {
                         // SEC-03: If allow-list file was truncated to 0 or empty, do NOT overwrite in-memory allow-list unless in learn mode
@@ -449,6 +455,7 @@ pub fn spawn_zap_handler(
                             eprintln!("[hub] allow-list reload warning: {} is empty, keeping existing allow-list", path.display());
                             continue;
                         }
+                        last = cur;
                         let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
                         *g = l;
                         eprintln!("[hub] allow-list reloaded: {}", path.display());
@@ -680,5 +687,16 @@ mod tests {
         assert!(created4);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allow_list_strips_bom_and_rejects_trailing_garbage() {
+        let k1 = zmq::z85_encode(&zmq::CurveKeyPair::new().unwrap().public_key).unwrap();
+        let k2 = zmq::z85_encode(&zmq::CurveKeyPair::new().unwrap().public_key).unwrap();
+        let text = format!("\u{feff}{}  # ok\n{}garbage\n", k1, k2);
+        let l = AllowList::parse(&text);
+        assert_eq!(l.len(), 1);
+        assert!(l.has_key(&k1));
+        assert!(!l.has_key(&k2));
     }
 }

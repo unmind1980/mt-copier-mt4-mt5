@@ -237,7 +237,7 @@ pub fn mask_webhook_url(url: &str) -> String {
         Some((s, r)) => (Some(s), r),
         None => (None, url),
     };
-    let end = rest.find('/').unwrap_or(rest.len());
+    let end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
     let (authority, path) = rest.split_at(end);
     let masked = match authority.rsplit_once('@') {
         Some((_, host)) => format!("***@{}", host),
@@ -420,10 +420,21 @@ impl NotificationStore {
         if let Some(existing) = self.channels.get(&channel.id) {
             merge_unmasked_config(&mut channel.config, &existing.config, &existing.channel_type);
         }
-        // F-08 & N71-02: validate final unmasked URL syntax and non-network SSRF rules before writing to disk
-        if let Some(url) = channel.config.get("url").or_else(|| channel.config.get("webhook_url")).and_then(|u| u.as_str()) {
-            if let Err(e) = check_url_base(url) {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
+        // F-08 & N71-02: validate both url and webhook_url independently so neither can shadow SSRF checks
+        let primary_url = channel.config.get("url").and_then(|v| v.as_str());
+        let hook_url = channel.config.get("webhook_url").and_then(|v| v.as_str());
+        let is_wechat = channel.channel_type == "wechat" || channel.channel_type == "xtuis";
+        for (idx, opt_u) in [primary_url, hook_url].iter().enumerate() {
+            if let Some(u) = opt_u {
+                if is_wechat && idx == 1 && !u.trim().is_empty() && !u.trim().starts_with("http://") && !u.trim().starts_with("https://") {
+                    continue;
+                }
+                if idx == 1 && primary_url.is_some() && u.trim().is_empty() {
+                    continue;
+                }
+                if let Err(e) = check_url_base(u) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, e));
+                }
             }
         }
         // N83-05 & N84-14: Validate WeChat token/key/webhook_url
@@ -987,9 +998,18 @@ pub async fn send_to_channel(
     }
 }
 
-async fn read_response_body_bounded(resp: reqwest::Response, max_bytes: usize) -> String {
-    let bytes = resp.bytes().await.unwrap_or_default();
-    String::from_utf8_lossy(&bytes[..bytes.len().min(max_bytes)]).to_string()
+async fn read_response_body_bounded(mut resp: reqwest::Response, max_bytes: usize) -> String {
+    let mut buf = Vec::with_capacity(max_bytes.min(4096));
+    while buf.len() < max_bytes {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let take = chunk.len().min(max_bytes - buf.len());
+                buf.extend_from_slice(&chunk[..take]);
+            }
+            _ => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
 }
 
 async fn send_telegram(
@@ -1098,34 +1118,48 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
             if (segs[0] & 0xffc0) == 0xfe80 || (segs[0] == 0xfd00 && segs[1] == 0xec2 && segs[7] == 0x254) {
                 return Err("URL points to prohibited cloud metadata or link-local IPv6".to_string());
             }
+            let mut candidates: [Option<(std::net::Ipv4Addr, &str)>; 4] = [None, None, None, None];
             if segs[0] == 0x2002 {
-                let v4 = std::net::Ipv4Addr::new(
-                    (segs[1] >> 8) as u8, (segs[1] & 0xff) as u8,
-                    (segs[2] >> 8) as u8, (segs[2] & 0xff) as u8,
-                );
-                let oct = v4.octets();
-                if v4.is_link_local()
-                    || (oct[0] == 169 && oct[1] == 254)
-                    || (oct[0] == 100 && oct[1] == 100 && oct[2] == 100 && oct[3] == 200)
-                {
-                    return Err("URL points to prohibited cloud metadata or link-local IPv4 via 6to4".to_string());
-                }
+                candidates[0] = Some((
+                    std::net::Ipv4Addr::new((segs[1] >> 8) as u8, (segs[1] & 0xff) as u8, (segs[2] >> 8) as u8, (segs[2] & 0xff) as u8),
+                    "6to4",
+                ));
             }
             let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
             let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);
             if is_v4_mapped || is_v4_compat {
-                let v4 = std::net::Ipv4Addr::new(
-                    (segs[6] >> 8) as u8,
-                    (segs[6] & 0xff) as u8,
-                    (segs[7] >> 8) as u8,
-                    (segs[7] & 0xff) as u8,
-                );
+                candidates[1] = Some((
+                    std::net::Ipv4Addr::new((segs[6] >> 8) as u8, (segs[6] & 0xff) as u8, (segs[7] >> 8) as u8, (segs[7] & 0xff) as u8),
+                    "IPv4-mapped/compatible",
+                ));
+            }
+            // NAT64: 64:ff9b::/96 (RFC 6052) and 64:ff9b:1::/48 (RFC 8215)
+            let is_nat64 = (segs[0] == 0x0064 && segs[1] == 0xff9b && segs[2..6] == [0, 0, 0, 0])
+                || (segs[0] == 0x0064 && segs[1] == 0xff9b && segs[2] == 1);
+            if is_nat64 {
+                candidates[2] = Some((
+                    std::net::Ipv4Addr::new((segs[6] >> 8) as u8, (segs[6] & 0xff) as u8, (segs[7] >> 8) as u8, (segs[7] & 0xff) as u8),
+                    "NAT64",
+                ));
+            }
+            // Teredo: 2001:0000::/32 (client IPv4 is obfuscated with bitwise NOT in last 32 bits)
+            if segs[0] == 0x2001 && segs[1] == 0x0000 {
+                candidates[3] = Some((
+                    std::net::Ipv4Addr::new(
+                        ((segs[6] ^ 0xffff) >> 8) as u8, ((segs[6] ^ 0xffff) & 0xff) as u8,
+                        ((segs[7] ^ 0xffff) >> 8) as u8, ((segs[7] ^ 0xffff) & 0xff) as u8,
+                    ),
+                    "Teredo",
+                ));
+            }
+            for item in candidates.into_iter().flatten() {
+                let (v4, via) = item;
                 let oct = v4.octets();
                 if v4.is_link_local()
                     || (oct[0] == 169 && oct[1] == 254)
                     || (oct[0] == 100 && oct[1] == 100 && oct[2] == 100 && oct[3] == 200)
                 {
-                    return Err("URL points to prohibited cloud metadata or link-local IPv4".to_string());
+                    return Err(format!("URL points to prohibited cloud metadata or link-local IPv4 via {}", via));
                 }
             }
         }
@@ -1139,45 +1173,65 @@ fn check_single_ip(ip: std::net::IpAddr, allow_local: bool) -> Result<(), String
     if ip.is_loopback() || ip.is_unspecified() {
         return Err("URL points to prohibited loopback or unspecified IP".to_string());
     }
+    let is_prohibited_v4 = |v4: std::net::Ipv4Addr| -> bool {
+        let oct = v4.octets();
+        v4.is_loopback()
+            || v4.is_private()
+            || v4.is_unspecified()
+            || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
+            || (oct[0] == 192 && oct[1] == 0 && oct[2] == 0)
+            || (oct[0] == 198 && (oct[1] & 0xfe) == 18)
+            || oct[0] >= 240
+            || v4.is_broadcast()
+            || v4.is_multicast()
+            || oct[0] == 0
+    };
     match ip {
         std::net::IpAddr::V4(v4) => {
-            let oct = v4.octets();
-            if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
-                || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
-                || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+            if is_prohibited_v4(v4) {
                 return Err("URL points to prohibited private, CGNAT, or reserved IPv4".to_string());
             }
         }
         std::net::IpAddr::V6(v6) => {
             let segs = v6.segments();
-            if (segs[0] & 0xfe00) == 0xfc00 || (segs[0] & 0xff00) == 0xff00 {
-                return Err("URL points to prohibited private or multicast IPv6".to_string());
+            // fc00::/7 ULA, ff00::/8 multicast, fec0::/10 deprecated site-local
+            if (segs[0] & 0xfe00) == 0xfc00
+                || (segs[0] & 0xff00) == 0xff00
+                || (segs[0] & 0xffc0) == 0xfec0
+            {
+                return Err("URL points to prohibited private, site-local, or multicast IPv6".to_string());
             }
             if segs[0] == 0x2002 {
                 let v4 = std::net::Ipv4Addr::new(
                     (segs[1] >> 8) as u8, (segs[1] & 0xff) as u8,
                     (segs[2] >> 8) as u8, (segs[2] & 0xff) as u8,
                 );
-                let oct = v4.octets();
-                if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
-                    || (oct[0] == 100 && (oct[1] & 0xC0) == 64) || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
+                if is_prohibited_v4(v4) {
                     return Err("URL points to prohibited private or reserved IPv4 via 6to4".to_string());
                 }
             }
             let is_v4_mapped = segs[0..5] == [0, 0, 0, 0, 0] && segs[5] == 0xffff;
             let is_v4_compat = segs[0..6] == [0, 0, 0, 0, 0, 0] && (segs[6] != 0 || segs[7] > 1);
-            if is_v4_mapped || is_v4_compat {
+            let is_nat64 = (segs[0] == 0x0064 && segs[1] == 0xff9b && segs[2..6] == [0, 0, 0, 0])
+                || (segs[0] == 0x0064 && segs[1] == 0xff9b && segs[2] == 1);
+            if is_v4_mapped || is_v4_compat || is_nat64 {
                 let v4 = std::net::Ipv4Addr::new(
                     (segs[6] >> 8) as u8,
                     (segs[6] & 0xff) as u8,
                     (segs[7] >> 8) as u8,
                     (segs[7] & 0xff) as u8,
                 );
-                let oct = v4.octets();
-                if v4.is_loopback() || v4.is_private() || v4.is_unspecified()
-                    || (oct[0] == 100 && (oct[1] & 0xC0) == 64)
-                    || v4.is_broadcast() || v4.is_multicast() || oct[0] == 0 {
-                    return Err("URL points to prohibited IPv4-mapped or IPv4-compatible private/loopback".to_string());
+                if is_prohibited_v4(v4) {
+                    return Err("URL points to prohibited IPv4-embedded private/loopback address".to_string());
+                }
+            }
+            if segs[0] == 0x2001 && segs[1] == 0x0000 {
+                let v4 = std::net::Ipv4Addr::new(
+                    ((segs[6] ^ 0xffff) >> 8) as u8, ((segs[6] ^ 0xffff) & 0xff) as u8,
+                    ((segs[7] ^ 0xffff) >> 8) as u8, ((segs[7] ^ 0xffff) & 0xff) as u8,
+                );
+                if is_prohibited_v4(v4) {
+                    return Err("URL points to prohibited private/loopback address via Teredo".to_string());
                 }
             }
         }
@@ -1388,6 +1442,7 @@ pub(crate) async fn resolve_pinned_client(
         addrs.sort_by_key(|a| a.is_ipv6());
 
         let pinned_client = reqwest::Client::builder()
+            .no_proxy()
             .resolve_to_addrs(&host, &addrs)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
@@ -2264,5 +2319,28 @@ mod tests {
         };
         assert_eq!(store.matching_channels_for_alert(&alert).len(), 0);
         assert_eq!(store.matching_channels(Severity::Critical).len(), 0);
+    }
+
+    #[test]
+    fn check_single_ip_blocks_nat64_teredo_and_mask_preserves_delimiters() {
+        for bad in [
+            "64:ff9b::127.0.0.1",
+            "64:ff9b:1::10.0.0.1",
+            "2001::1",
+            "fec0::1",
+            "192.0.0.1",
+            "198.18.0.1",
+            "240.0.0.1",
+        ] {
+            let ip: std::net::IpAddr = bad.parse().unwrap();
+            assert!(check_single_ip(ip, false).is_err(), "must block {}", bad);
+        }
+        assert!(check_single_ip("1.1.1.1".parse().unwrap(), false).is_ok());
+
+        let m_query = mask_webhook_url("https://qyapi.weixin.qq.com?key=secret123456");
+        assert_eq!(m_query, "https://qyapi.weixin.qq.com/***");
+
+        let m_frag = mask_webhook_url("https://example.com#fragsecret123");
+        assert_eq!(m_frag, "https://example.com/***");
     }
 }
