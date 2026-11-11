@@ -1148,17 +1148,7 @@ async fn require_session(
         req.extensions_mut().insert(Token(String::new()));
         return next.run(req).await;
     }
-    let token = req
-        .headers()
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(cookie_token)
-        .or_else(|| {
-            req.headers()
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
-        });
+    let token = header_token(req.headers());
     if let Some(t) = token {
         let sess = st.lock_or_recover().users.session(&t, unix_secs());
         if let Some(sess) = sess {
@@ -1460,14 +1450,24 @@ async fn login(
 
 fn header_token(headers: &axum::http::HeaderMap) -> Option<String> {
     headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(cookie_token)
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .find_map(|v| v.to_str().ok().and_then(cookie_token))
         .or_else(|| {
             headers
                 .get(axum::http::header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
-                .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
+                .and_then(|v| {
+                    let v = v.trim();
+                    if let Some(t) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
+                        let t = t.trim();
+                        if !t.is_empty() { Some(t.to_string()) } else { None }
+                    } else if !v.is_empty() && !v.contains(' ') {
+                        Some(v.to_string())
+                    } else {
+                        None
+                    }
+                })
         })
 }
 
@@ -4677,7 +4677,7 @@ async fn tls_configure(
     let http_port = b.http_port.unwrap_or(crate::tls::DEFAULT_HTTP_PORT);
     let enable_redirect = b.enable_http_redirect.unwrap_or(true);
     let auto_renew = b.auto_renew.unwrap_or(true);
-    let staging = b.staging_mode.unwrap_or(false);
+    let staging = b.staging_mode.unwrap_or_else(|| tls_mgr.config.lock_or_recover().staging_mode);
 
     {
         let mut c = tls_mgr.config.lock_or_recover();

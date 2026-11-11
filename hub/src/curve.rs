@@ -475,7 +475,7 @@ pub fn spawn_zap_handler(
     }
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let handle = std::thread::spawn(move || {
-        let sock = match ctx.socket(zmq::REP) {
+        let mut sock = match ctx.socket(zmq::REP) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("[hub] cannot create the ZAP socket: {}", e);
@@ -505,6 +505,23 @@ pub fn spawn_zap_handler(
                 Err(zmq::Error::EINTR) => continue,
                 Err(zmq::Error::EAGAIN) => {
                     if crate::EXIT.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    continue;
+                }
+                Err(zmq::Error::EFSM) => {
+                    eprintln!("[hub] ZAP socket in EFSM state: recreating inproc socket");
+                    drop(sock);
+                    if let Ok(new_s) = ctx.socket(zmq::REP) {
+                        let _ = new_s.set_linger(0);
+                        let _ = new_s.set_rcvtimeo(500);
+                        let _ = new_s.set_sndtimeo(1000);
+                        if new_s.bind("inproc://zeromq.zap.01").is_ok() {
+                            sock = new_s;
+                        } else {
+                            break;
+                        }
+                    } else {
                         break;
                     }
                     continue;

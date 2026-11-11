@@ -654,6 +654,7 @@ impl CommandStore {
         inner.in_flight.retain(|id| surviving_cmds.contains_key(id));
         inner.commands = surviving_cmds;
         inner.line_count = n;
+        inner.torn = 0;
         inner.dirty_seq += 1;
         Ok(Some(n))
     }
@@ -1373,7 +1374,7 @@ pub fn command_id_op(node: &str, op: &str, seq: u64) -> String {
 /// equivalent inputs - only the size differs.
 fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io::Result<usize> {
     let tmp = crate::cluster::unique_tmp_path(path, "cmd_cmp");
-    {
+    let res = (|| -> std::io::Result<()> {
         let mut f = std::fs::File::create(&tmp)?;
         let mut sorted: Vec<&Command> = commands.values().collect();
         sorted.sort_by(|a, b| (a.ts, a.seq, &a.id).cmp(&(b.ts, b.seq, &b.id)));
@@ -1401,8 +1402,17 @@ fn compact_journal(path: &Path, commands: &HashMap<String, Command>) -> std::io:
         }
         f.write_all(buf.as_bytes())?;
         f.sync_data()?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
-    crate::cluster::atomic_replace_file(&tmp, path)?;
+    let rep_res = crate::cluster::atomic_replace_file(&tmp, path);
+    if rep_res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    rep_res?;
     Ok(commands.len())
 }
 

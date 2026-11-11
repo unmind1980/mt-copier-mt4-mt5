@@ -371,14 +371,15 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw,
    string toCcy=CopierTrim(toCcyRaw);
    StringToUpper(fromCcy);
    StringToUpper(toCcy);
-   if(fromCcy==toCcy || StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 1.0;
+   if(StringLen(fromCcy)==0 || StringLen(toCcy)==0) return 0.0;
+   if(fromCcy==toCcy) return 1.0;
 
    // Direct pair: fromCcy + toCcy (e.g. USDJPY -> 1 USD = px JPY)
    string direct=CopierResolveCrossSymbol(fromCcy+toCcy,extraSuffix);
    if(StringLen(direct)>0)
      {
       double px=0.0;
-      if(CopierGetPrice(direct,CP_SIDE_SELL,px) && px>0.0) return px;
+      if(CopierGetPrice(direct,CP_SIDE_SELL,px) && px>0.0 && MathIsValidNumber(px)) return px;
      }
 
    // Inverted pair: toCcy + fromCcy (e.g. EURUSD -> 1 EUR = px USD -> 1 USD = 1/px EUR)
@@ -386,7 +387,7 @@ double CopierGetCurrencyCrossRate(const string fromCcyRaw,const string toCcyRaw,
    if(StringLen(inverted)>0)
      {
       double px=0.0;
-      if(CopierGetPrice(inverted,CP_SIDE_BUY,px) && px>0.0) return 1.0/px;
+      if(CopierGetPrice(inverted,CP_SIDE_BUY,px) && px>0.0 && MathIsValidNumber(px)) return 1.0/px;
      }
 
    // Intermediate via USD
@@ -1546,7 +1547,7 @@ bool CopierClosePosition(const long identifier,const int deviationPoints,int &ou
          closePx=(type==OP_BUY)?MarketInfo(OrderSymbol(),MODE_BID):MarketInfo(OrderSymbol(),MODE_ASK);
         }
       ok=OrderClose((int)(uint)ticket,lots,closePx,MathMax(0,deviationPoints),clrNONE);
-      if(ok) break;
+      if(ok) { outErr=0; break; }
       outErr=GetLastError();
       if(outErr!=138 && outErr!=135 && outErr!=136 && outErr!=146) break;
       CopierWaitMs(20);
@@ -1837,8 +1838,8 @@ bool CopierClosePartial(const long identifier,const double lots,
 
    long ticket=0;
    bool isPending=false;
-   // R47-02: Use 3-arg resolver to capture isPending
-   if(!CopierResolveCloseTicket(identifier,ticket,isPending))
+   // R47-02: Use 3-arg resolver to capture isPending, strictly targeting market position on collisions
+   if(!CopierResolveCloseTicket(identifier,ticket,isPending,CP_ORD_MARKET))
      {
       outErr=0;            // already gone
       return true;
@@ -1897,6 +1898,11 @@ bool CopierClosePartial(const long identifier,const double lots,
    if((fillMode&SYMBOL_FILLING_FOK)!=0) candidates[nCand++]=ORDER_FILLING_FOK;
    if((fillMode&SYMBOL_FILLING_IOC)!=0) candidates[nCand++]=ORDER_FILLING_IOC;
    candidates[nCand++]=ORDER_FILLING_RETURN;
+   if(nCand==1 && fillMode<=0)
+     {
+      candidates[nCand++]=ORDER_FILLING_FOK;
+      candidates[nCand++]=ORDER_FILLING_IOC;
+     }
 
    MqlTradeRequest req;
    MqlTradeResult  res;
@@ -1928,6 +1934,7 @@ bool CopierClosePartial(const long identifier,const double lots,
             outClosedLots=(res.volume>0.0)?MathMin(lots,res.volume):0.0;
          else
             outClosedLots=(res.volume>0.0)?MathMin(lots,res.volume):lots;
+         outErr=0;
          return true;
         }
 

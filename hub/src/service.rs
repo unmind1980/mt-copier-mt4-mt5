@@ -327,14 +327,17 @@ pub mod win_service {
         });
 
         // Run the main hub engine using the parsed command line args
+        let mut exit_code = ServiceExitCode::Win32(0);
         match crate::parse_args() {
             Ok(args) => {
                 if let Err(e) = crate::run_hub(args) {
                     eprintln!("[service] Hub execution error: {}", e);
+                    exit_code = ServiceExitCode::Win32(1);
                 }
             }
             Err(e) => {
                 eprintln!("[service] Failed to parse hub arguments in service mode: {}", e);
+                exit_code = ServiceExitCode::Win32(1);
             }
         }
 
@@ -344,7 +347,7 @@ pub mod win_service {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Stopped,
             controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
+            exit_code,
             checkpoint: 0,
             wait_hint: Duration::default(),
             process_id: None,

@@ -749,10 +749,11 @@ impl Audit {
         // For since > 0: inspect archives whenever active file's oldest seq is greater than `since + 1`
         // or total records do not satisfy `limit`, ensuring forward pagination across archives never skips records.
         let oldest_active_seq = out.first().and_then(|r| r["seq"].as_u64()).unwrap_or(u64::MAX);
+        let mut oldest_cur_seq = oldest_active_seq;
         let need_archive = if since == 0 {
             out.len() < limit
         } else {
-            oldest_active_seq > since.saturating_add(1) || out.len() < limit
+            oldest_active_seq > since.saturating_add(1)
         };
 
         if need_archive {
@@ -781,7 +782,7 @@ impl Audit {
                                 if let Ok(v) = serde_json::from_str::<Value>(&line) {
                                     stats.lines += 1;
                                     let s = v["seq"].as_u64().unwrap_or(0);
-                                    if s > 0 && s < oldest_active_seq {
+                                    if s > 0 && s < oldest_cur_seq {
                                         // Sliding window: keep only the latest records from archive
                                         if archive_recs.len() >= max_archive_needed {
                                             archive_recs.pop_front();
@@ -794,6 +795,9 @@ impl Audit {
                         let mut combined: Vec<Value> = archive_recs.into();
                         combined.extend(out);
                         out = combined;
+                        if let Some(first) = out.first() {
+                            oldest_cur_seq = first["seq"].as_u64().unwrap_or(oldest_cur_seq);
+                        }
                     }
                 }
             } else {

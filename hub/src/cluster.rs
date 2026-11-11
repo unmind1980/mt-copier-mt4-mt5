@@ -466,7 +466,11 @@ pub fn next_epoch(base: u64) -> u64 {
 pub(crate) fn atomic_replace_file(tmp: &Path, target: &Path) -> Result<(), std::io::Error> {
     for attempt in 0..10 {
         match fs::rename(tmp, target) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                let bak = PathBuf::from(format!("{}.bak", target.display()));
+                let _ = fs::copy(target, &bak);
+                return Ok(());
+            }
             Err(_) if attempt < 9 => {
                 let delay = if attempt < 4 { 15 * (1 << attempt) } else { 150 };
                 std::thread::sleep(Duration::from_millis(delay));
@@ -520,7 +524,11 @@ pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
     }
-    atomic_replace_file(&tmp, path)
+    let res = atomic_replace_file(&tmp, path);
+    if res.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    res
 }
 
 /// Autonomous recovery when Standby loses all contact with Primary after having previously connected.
@@ -659,6 +667,12 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
                 let mut s = st.lock_or_recover();
                 s.cluster.peer_online = false;
                 s.cluster.last_sync_err = format!("cluster_id mismatch: peer has {} vs local {}", remote_st.cluster_id, my_cluster_id);
+                continue;
+            }
+            if remote_st.epoch == u64::MAX {
+                let mut s = st.lock_or_recover();
+                s.cluster.peer_online = false;
+                s.cluster.last_sync_err = "peer reports exhausted/invalid epoch (u64::MAX)".to_string();
                 continue;
             }
 

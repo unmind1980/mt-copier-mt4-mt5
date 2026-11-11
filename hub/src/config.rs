@@ -163,11 +163,17 @@ impl ConfigStore {
         }
         // Ensure file ends with newline so subsequent appends do not fuse with torn line tails
         if path.exists() {
-            if let Ok(data) = std::fs::read(path) {
-                if !data.is_empty() && data.last() != Some(&b'\n') {
-                    if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
-                        use std::io::Write;
-                        let _ = f.write_all(b"\n");
+            use std::io::{Read, Seek, SeekFrom};
+            if let Ok(mut check_f) = File::open(path) {
+                let len = check_f.metadata().map(|m| m.len()).unwrap_or(0);
+                if len > 0 && check_f.seek(SeekFrom::End(-1)).is_ok() {
+                    let mut last = [0u8; 1];
+                    if check_f.read_exact(&mut last).is_ok() && last[0] != b'\n' {
+                        drop(check_f);
+                        if let Ok(mut f) = OpenOptions::new().append(true).open(path) {
+                            let _ = f.write_all(b"\n");
+                            let _ = f.sync_data();
+                        }
                     }
                 }
             }
@@ -844,15 +850,24 @@ pub fn compact_journal(path: &Path, keep_per_node: usize) -> std::io::Result<usi
     }; // file and reader dropped here, freeing the Windows file lock before rename
 
     let tmp = crate::cluster::unique_tmp_path(path, "cfg_cmp");
-    {
+    let res = (|| -> std::io::Result<()> {
         let mut f = std::fs::File::create(&tmp)?;
         for (_, line) in &keep_lines {
             f.write_all(line.as_bytes())?;
             f.write_all(b"\n")?;
         }
         f.sync_data()?;
+        Ok(())
+    })();
+    if let Err(e) = res {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
-    crate::cluster::atomic_replace_file(&tmp, path)?;
+    let rep_res = crate::cluster::atomic_replace_file(&tmp, path);
+    if rep_res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    rep_res?;
     Ok(keep_lines.len())
 }
 

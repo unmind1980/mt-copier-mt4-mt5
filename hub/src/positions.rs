@@ -42,6 +42,9 @@ const MAX_RECORDS: usize = 4096;
 /// pathological or hostile; either way the view stays bounded.
 const MAX_SYMBOLS: usize = 64;
 
+/// Maximum distinct senders tracked concurrently in the positions table.
+pub const MAX_SENDERS: usize = 1000;
+
 /// Drop a sender's view once nothing has refreshed it for this long.
 ///
 /// Generous on purpose: a sender that has stopped is worth still seeing, and the
@@ -134,6 +137,15 @@ impl Positions {
         if !count_ok {
             self.mismatched += 1;
             return;
+        }
+
+        if self.by_sender.len() >= MAX_SENDERS && !self.by_sender.contains_key(sid) {
+            self.evict(now);
+            if self.by_sender.len() >= MAX_SENDERS {
+                if let Some(oldest_key) = self.by_sender.iter().min_by_key(|(_, v)| v.updated).map(|(k, _)| k.clone()) {
+                    self.by_sender.remove(&oldest_key);
+                }
+            }
         }
 
         let e = self.by_sender.entry(sid.to_string()).or_insert_with(|| SenderView {
@@ -252,8 +264,14 @@ impl Positions {
 
 /// Lots with the trailing zeros trimmed, supporting up to 8 decimal places for micro-lots.
 pub fn lots_str(l: f64) -> String {
-    let s = format!("{:.8}", l);
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
+    let rounded = (l * 1e8).round() / 1e8;
+    let s = format!("{:.8}", rounded);
+    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Extract only the receipt hash (H=) without decompressing or parsing the body.
@@ -710,5 +728,13 @@ mod tests {
         // stable, which is what makes the line diffable
         assert_eq!(t[1].0, "bbb");
         assert_eq!(t[2].0, "ccc");
+    }
+
+    #[test]
+    fn test_lots_str_zero_and_precision() {
+        assert_eq!(lots_str(0.0), "0");
+        assert_eq!(lots_str(1.5), "1.5");
+        assert_eq!(lots_str(0.001), "0.001");
+        assert_eq!(lots_str(0.1 + 0.2), "0.3");
     }
 }

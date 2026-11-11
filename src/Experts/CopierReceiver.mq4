@@ -3359,7 +3359,7 @@ bool PushAction(const int si,const int kind,const string uid,const string sym,
                g_q[qidx].kind=CP_ACT_NONE;
                openCancelled=true;
               }
-            else if(g_q[qidx].kind==CP_ACT_MODIFY)
+            else if(g_q[qidx].kind==CP_ACT_MODIFY || g_q[qidx].kind==CP_ACT_TRIM)
               {
                g_q[qidx].kind=CP_ACT_NONE;
               }
@@ -4634,6 +4634,8 @@ void ExecuteQueue()
                // R6-D1-02: MT4 trade context busy clears quickly: yield and park briefly (100ms)
                CopierWaitMs(50);
                fails=g_backoff.NotePark(boKey,100,5);
+               ShiftQueue();
+               break; // R18-A02: Stop processing queue for this tick so remaining actions stay buffered
               }
             else if(queuedForSweep)
               {
@@ -5592,28 +5594,34 @@ void QueueModifyIfNeeded(const int si,const CopierPos &desired,
    double actPStop  = (local.kind==CP_ORD_PENDING && dPStop>0.0) ? dPStop : local.pstop;
    long   actPExp   = (local.kind==CP_ORD_PENDING) ? ((desired.pexpire>0 && dPExp==0) ? local.pexpire : dPExp) : local.pexpire;
 
-   // DEF-10-03: If existing pending entry/stops are within broker freezeLevel, modifications will be rejected (10016 / 145 / 130)
-   if(si2.freezeLevel>0.0)
+   // DEF-10-03 & R18-A01: If existing or new pending entry/stops are within broker freezeLevel/stopLevel, modifications will be rejected (10016 / 145 / 130)
+   double safeDist=MathMax(si2.freezeLevel, si2.stopLevel);
+   if(safeDist>0.0)
      {
       if(local.kind==CP_ORD_PENDING)
         {
          double curEntPx=0.0;
          if(CopierGetPrice(local.sym,local.side,curEntPx) && curEntPx>0.0)
            {
-            if((local.pprice>0.0 && MathAbs(curEntPx-local.pprice)<=si2.freezeLevel) ||
-               (local.pstop>0.0 && MathAbs(curEntPx-local.pstop)<=si2.freezeLevel))
+            if((local.pprice>0.0 && MathAbs(curEntPx-local.pprice)<=safeDist) ||
+               (local.pstop>0.0 && MathAbs(curEntPx-local.pstop)<=safeDist) ||
+               (actPPrice>0.0 && MathAbs(curEntPx-actPPrice)<=safeDist) ||
+               (actPStop>0.0 && MathAbs(curEntPx-actPStop)<=safeDist))
               {
                return;
               }
            }
         }
-      double curClosePx=0.0;
-      if(CopierGetClosePrice(local.sym,local.side,curClosePx) && curClosePx>0.0)
+      else if(local.kind==CP_ORD_MARKET)
         {
-         if((local.sl>0.0 && MathAbs(curClosePx-local.sl)<=si2.freezeLevel) ||
-            (local.tp>0.0 && MathAbs(curClosePx-local.tp)<=si2.freezeLevel))
+         double curClosePx=0.0;
+         if(CopierGetClosePrice(local.sym,local.side,curClosePx) && curClosePx>0.0)
            {
-            return;
+            if((local.sl>0.0 && MathAbs(curClosePx-local.sl)<=safeDist) ||
+               (local.tp>0.0 && MathAbs(curClosePx-local.tp)<=safeDist))
+              {
+               return;
+              }
            }
         }
      }
@@ -6673,6 +6681,7 @@ void ConvergeSender(const int si)
          continue;
         }
 
+      g_reopenExpected.Forget(g_sid[si]+":"+g_locScratch[i].uid);
       PushAction(si,CP_ACT_CLOSE,g_locScratch[i].uid,g_locScratch[i].sym,g_locScratch[i].side,g_locScratch[i].lots,g_locScratch[i].ticket,
                  0,"",0.0,0.0,g_locScratch[i].kind);
      }

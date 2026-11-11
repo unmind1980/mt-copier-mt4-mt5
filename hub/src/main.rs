@@ -1539,7 +1539,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[hub] cannot create socket: {}", e);
-            std::process::exit(1);
+            return Err(format!("cannot create socket: {}", e));
         }
     };
 
@@ -1556,7 +1556,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     })();
     if let Err(e) = setup {
         eprintln!("[hub] cannot configure socket: {}", e);
-        std::process::exit(1);
+        return Err(format!("cannot configure socket: {}", e));
     }
 
     //--- CURVE (the plan's §19.1 link boundary). Set BEFORE bind: a CURVE
@@ -1568,7 +1568,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             Ok(k) => k,
             Err(e) => {
                 eprintln!("[hub] cannot use CURVE keys: {}", e);
-                std::process::exit(1);
+                return Err(format!("cannot use CURVE keys: {}", e));
             }
         };
         let clients_path = std::path::PathBuf::from(&args.curve_clients);
@@ -1598,7 +1598,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                 eprintln!("[hub]   or write a lone '*' to accept any keypair, or start");
                 eprintln!("[hub]   with --curve-learn on to build the list automatically.");
                 eprintln!("[hub]   Every node's public key is printed in its EA log.");
-                std::process::exit(1);
+                return Err(format!("--curve on but client allow-list unusable: {}", e));
             }
         };
         if list.is_empty() && !args.curve_learn {
@@ -1616,7 +1616,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             eprintln!("[hub]   --curve-learn on to build the list automatically.");
             eprintln!("[hub]   Refusing to start: CURVE with no allow-list accepts every");
             eprintln!("[hub]   keypair, which is the same exposure as no CURVE at all.");
-            std::process::exit(1);
+            return Err(format!("--curve on but {} contains no keys", clients_path.display()));
         }
         if args.curve_learn && !list.is_empty() {
             println!(
@@ -1635,7 +1635,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             _ => {
                 eprintln!("[hub] the CURVE public key in {} is not 40-char Z85",
                           keys_path.display());
-                std::process::exit(1);
+                return Err(format!("the CURVE public key in {} is not 40-char Z85", keys_path.display()));
             }
         };
         let sec_raw = match zmq::z85_decode(&keys.secret) {
@@ -1643,7 +1643,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             _ => {
                 eprintln!("[hub] the CURVE secret key in {} is not 40-char Z85",
                           keys_path.display());
-                std::process::exit(1);
+                return Err(format!("the CURVE secret key in {} is not 40-char Z85", keys_path.display()));
             }
         };
         let applied = (|| -> zmq::Result<()> {
@@ -1654,7 +1654,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         })();
         if let Err(e) = applied {
             eprintln!("[hub] cannot enable CURVE on the socket: {}", e);
-            std::process::exit(1);
+            return Err(format!("cannot enable CURVE on the socket: {}", e));
         }
 
         println!("[hub] CURVE ENABLED - this hub is the CURVE server");
@@ -1682,7 +1682,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
     let endpoint = format!("tcp://{}:{}", args.bind, args.port);
     if let Err(e) = sock.bind(&endpoint) {
         println!("[hub] cannot bind {}: {}", endpoint, e);
-        std::process::exit(1);
+        return Err(format!("cannot bind {}: {}", endpoint, e));
     }
 
     let cluster_state_path = std::path::PathBuf::from(&args.cluster_state);
@@ -1700,7 +1700,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         Ok(cm) => cm,
         Err(e) => {
             eprintln!("[hub] cluster init error: {}", e);
-            std::process::exit(1);
+            return Err(format!("cluster init error: {}", e));
         }
     };
 
@@ -1775,7 +1775,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                 eprintln!("[hub] cannot open the audit log {}: {}", path.display(), e);
                 eprintln!("[hub] refusing to start rather than run unaudited -");
                 eprintln!("[hub] pass --audit none if that is really what you want.");
-                std::process::exit(1);
+                return Err(format!("cannot open audit log {}: {}", path.display(), e));
             }
         }
     };
@@ -1807,7 +1807,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             Err(e) => {
                 eprintln!("[hub] cannot open the config store {}: {}", path.display(), e);
                 eprintln!("[hub] pass --config none to run without it.");
-                std::process::exit(1);
+                return Err(format!("cannot open config store {}: {}", path.display(), e));
             }
         }
     };
@@ -1839,7 +1839,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             Err(e) => {
                 eprintln!("[hub] cannot open the command journal {}: {}", path.display(), e);
                 eprintln!("[hub] pass --commands none to run without it.");
-                std::process::exit(1);
+                return Err(format!("cannot open command journal {}: {}", path.display(), e));
             }
         }
     };
@@ -1973,7 +1973,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             Err(e) => {
                 eprintln!("[hub] {} is unreadable ({}), refusing to start",
                           users_path.display(), e);
-                std::process::exit(1);
+                return Err(format!("{} is unreadable ({})", users_path.display(), e));
             }
         };
         if store.users().is_empty() {
@@ -2018,7 +2018,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             } else {
                 eprintln!("[hub] could not write {} - the hub cannot start unauthenticated",
                           users_path.display());
-                std::process::exit(1);
+                return Err(format!("could not write {} - the hub cannot start unauthenticated", users_path.display()));
             }
         }
         shared.lock_or_recover().users = store;

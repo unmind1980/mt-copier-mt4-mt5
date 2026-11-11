@@ -227,14 +227,8 @@ private:
       ArrayResize(frame,1+plen);
       frame[0]=cmdByte;
       for(int k=0;k<plen;k++) frame[1+k]=pbytes[k];
-      int copies=(m_connectedHubs>1)?m_connectedHubs:1;
-      int sent=0;
-      for(int c=0;c<copies;c++)
-        {
-         if(m_sub.send(frame,true)) sent++;
-         else m_errno=CopierZmqErrno();
-        }
-      return (sent>0);
+      if(!m_sub.send(frame,true)) { m_errno=CopierZmqErrno(); return false; }
+      return true;
      }
 
    //--- Decode a 40-character Z85 CURVE key into the 32 raw bytes that the
@@ -521,18 +515,6 @@ public:
       if(StringLen(ep)==0) return false;
       if(!m_sub.connect(ep)) return false;
       if(!CloseDanglingMultipart()) return false;
-      // H-06 & R17-B02: Replay 1 frame per existing subscription to newly attached pipe
-      for(int i=0;i<m_nSubPrefixes;i++)
-        {
-         uchar frame[];
-         uchar pbytes[];
-         StringToUtf8(m_subPrefixes[i],pbytes,false);
-         int plen=ArraySize(pbytes);
-         ArrayResize(frame,1+plen);
-         frame[0]=0x01;
-         for(int k=0;k<plen;k++) frame[1+k]=pbytes[k];
-         m_sub.send(frame,true);
-        }
       m_connectedHubs++;
       return true;
    }

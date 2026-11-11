@@ -435,6 +435,20 @@ def build_direct_package():
     shutil.copy2(MT5_EXPERT_SRC / "CopierSender.ex5", pkg_dir / "MT5" / "MQL5" / "Experts" / "CopierSender.ex5")
     shutil.copy2(ZMQ_MT5_DLL, pkg_dir / "MT5" / "MQL5" / "Libraries" / "libzmq.dll")
 
+    mt4_scripts = MT4_EXPERT_SRC.parent / "Scripts"
+    if mt4_scripts.exists():
+        dest = pkg_dir / "MT4" / "MQL4" / "Scripts"
+        dest.mkdir(parents=True, exist_ok=True)
+        for s in mt4_scripts.glob("*.ex4"):
+            shutil.copy2(s, dest / s.name)
+
+    mt5_scripts = MT5_EXPERT_SRC.parent / "Scripts"
+    if mt5_scripts.exists():
+        dest = pkg_dir / "MT5" / "MQL5" / "Scripts"
+        dest.mkdir(parents=True, exist_ok=True)
+        for s in mt5_scripts.glob("*.ex5"):
+            shutil.copy2(s, dest / s.name)
+
     # Documentation and installer
     (pkg_dir / "README.txt").write_text(DIRECT_README_EN, encoding="utf-8")
     (pkg_dir / "install_direct.bat").write_text(DIRECT_INSTALL_BAT, encoding="utf-8")
@@ -489,6 +503,20 @@ def build_hub_suite_package():
     shutil.copy2(MT5_EXPERT_SRC / "CopierReceiver.ex5", term_dir / "MT5" / "MQL5" / "Experts" / "CopierReceiver.ex5")
     shutil.copy2(MT5_EXPERT_SRC / "CopierSender.ex5", term_dir / "MT5" / "MQL5" / "Experts" / "CopierSender.ex5")
     shutil.copy2(ZMQ_MT5_DLL, term_dir / "MT5" / "MQL5" / "Libraries" / "libzmq.dll")
+
+    mt4_scripts = MT4_EXPERT_SRC.parent / "Scripts"
+    if mt4_scripts.exists():
+        dest = term_dir / "MT4" / "MQL4" / "Scripts"
+        dest.mkdir(parents=True, exist_ok=True)
+        for s in mt4_scripts.glob("*.ex4"):
+            shutil.copy2(s, dest / s.name)
+
+    mt5_scripts = MT5_EXPERT_SRC.parent / "Scripts"
+    if mt5_scripts.exists():
+        dest = term_dir / "MT5" / "MQL5" / "Scripts"
+        dest.mkdir(parents=True, exist_ok=True)
+        for s in mt5_scripts.glob("*.ex5"):
+            shutil.copy2(s, dest / s.name)
 
     # Documentation
     (pkg_dir / "README.txt").write_text(HUB_README_EN, encoding="utf-8")

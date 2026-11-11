@@ -7003,6 +7003,7 @@ function refreshWritesState(){
 //--- comes back here through api()'s rejection path.
 function showLogin(){
   if(typeof stopPosAutoPoll==="function") stopPosAutoPoll();
+  if(typeof cfgState !== "undefined" && cfgState && cfgState.pollTimer){ clearTimeout(cfgState.pollTimer); cfgState.pollTimer = null; }
   if(s.poller){ clearInterval(s.poller); s.poller = null; }
   if(s.renderTickTimer){ clearInterval(s.renderTickTimer); s.renderTickTimer = null; }
   if(s.wsReconnTimer){ clearTimeout(s.wsReconnTimer); s.wsReconnTimer = null; }
