@@ -785,7 +785,7 @@ string CopierPayloadModify(const string uid,const double openPx,
       s+=CP_SEP_KV+"PPRICE="+CopierFmtDouble(pprice,CP_DIGITS_PX);
    if(pstop>0.0)
       s+=CP_SEP_KV+"PSTOP="+CopierFmtDouble(pstop,CP_DIGITS_PX);
-   if(pexpire>0 || pprice>0.0)
+   if(pexpire>0 || pprice>0.0 || pstop>0.0)
       s+=CP_SEP_KV+"PEXP="+(string)pexpire;
    return s;
   }

@@ -1300,13 +1300,9 @@ public:
       bool isNew=(i<0);
       if(i>=0)
         {
-         //--- A failure arriving long after the previous one is a NEW
-         //--- problem, not a continuation of the old one. Without this, a
-         //--- single blip yesterday would put today's unrelated failure
-         //--- straight onto a 24-hour ladder.
-         //--- R1-M03: Cap reset threshold to 120s so high backoff tiers reset on silence.
-         long prev=CopierBackoffMs(m_n[i]);
-         n=((now-m_t[i])>MathMin(prev*2,120000))?1:(m_n[i]+1);
+         //--- F6-20: A failure arriving long after previous backoff window expired is a NEW
+         //--- problem. If it occurs within 120s of the backoff expiration (m_u[i]), it is a continuation.
+         n=(now>m_u[i]+120000)?1:(m_n[i]+1);
         }
       else
          i=FreeSlot();
@@ -1335,8 +1331,8 @@ public:
       bool isNew=(i<0);
       if(i>=0)
         {
-         long prev=CopierBackoffMs(m_n[i]);
-         n=((now-m_t[i])>MathMin(prev*2,120000))?1:(m_n[i]+1);
+         // F6-20: Reset only if failure occurs long after previous backoff window expired (silence window)
+         n=(now>m_u[i]+120000)?1:(m_n[i]+1);
         }
       else
          i=FreeSlot();

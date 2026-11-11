@@ -2031,7 +2031,8 @@ pub fn spawn(
                     loop {
                         DASHBOARD_POKE_NOTIFY.notified().await;
                         throttle.tick().await;
-                        if tx_poke.receiver_count() > 0 && DASHBOARD_POKE_FLAG.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        let flagged = DASHBOARD_POKE_FLAG.swap(false, std::sync::atomic::Ordering::Relaxed);
+                        if flagged && tx_poke.receiver_count() > 0 {
                             let snap = snapshot_text(&st_poke);
                             let _ = tx_poke.send(std::sync::Arc::new(snap));
                         }
