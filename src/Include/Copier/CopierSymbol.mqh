@@ -511,6 +511,12 @@ long CopierSymbolQuoteAgeMs(const string sym)
    return age;
   }
 
+#define CP_SYMEXISTS_CACHE 64
+string g_seKey[CP_SYMEXISTS_CACHE];
+long   g_seAt[CP_SYMEXISTS_CACHE];
+bool   g_seVal[CP_SYMEXISTS_CACHE];
+int    g_seHead=0;
+
 //--- Reset the tracker. Called from OnInit so a reinitialise cannot inherit a
 //--- stale timestamp and hold every symbol for a minute on attach.
 void CopierSymbolQuoteReset()
@@ -528,6 +534,13 @@ void CopierSymbolQuoteReset()
       g_sfcAt[j]=0;
       g_sfcAge[j]=0;
      }
+   for(int k=0;k<CP_SYMEXISTS_CACHE;k++)
+     {
+      g_seKey[k]="";
+      g_seAt[k]=0;
+      g_seVal[k]=false;
+     }
+   g_seHead=0;
   }
 
 //--- Is this symbol's feed stale enough to stop acting on it?
@@ -570,57 +583,64 @@ bool CopierSymbolExists(const string sym)
    //--- is NOT yet usable is worth an attempt to select.
    if(CopierSymbolReady(sym)) return true;
 
+   long now=CopierNowMs();
+   for(int i=0;i<CP_SYMEXISTS_CACHE;i++)
+     {
+      if(g_seKey[i]==sym && now-g_seAt[i]<5000)
+         return g_seVal[i];
+     }
+
+   bool res=false;
 #ifdef __MQL5__
    //--- SymbolSelect returns false for a symbol the broker does not offer,
    //--- and is a no-op when it is already in Market Watch. It is also what
    //--- makes the symbol's data available, so calling it here is the point.
-   if(!SymbolSelect(sym,true)) return false;
-   // Ensure cross-currency conversion pair is selected in Market Watch for accurate MT4 OrderProfit
-   string acctCcy = CopierAccountCurrency();
-   string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
-   if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+   if(!SymbolSelect(sym,true)) res=false;
+   else
      {
-      SymbolSelect(profCcy+acctCcy, true);
-      SymbolSelect(acctCcy+profCcy, true);
+      string acctCcy = CopierAccountCurrency();
+      string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+      if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+        {
+         SymbolSelect(profCcy+acctCcy, true);
+         SymbolSelect(acctCcy+profCcy, true);
+        }
+      string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
+      if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
+        {
+         SymbolSelect(marginCcy+acctCcy, true);
+         SymbolSelect(acctCcy+marginCcy, true);
+        }
+      res=CopierSymbolReady(sym);
      }
-   string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
-   if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
-     {
-      SymbolSelect(marginCcy+acctCcy, true);
-      SymbolSelect(acctCcy+marginCcy, true);
-     }
-   return CopierSymbolReady(sym);
 #else
-   //--- MT4 DOES have SymbolSelect, and it is required here.
-   //---
-   //--- This used to be a bare MarketInfo() call on the assumption that MT4
-   //--- reports properties for any symbol the broker lists, Market Watch or
-   //--- not. That assumption is WRONG: MarketInfo returns 0 for a symbol that
-   //--- is offered but not selected, so a perfectly tradeable symbol was
-   //--- reported "not offered by this broker" and skipped for good - the
-   //--- receiver could never fix that by itself, and the operator saw a
-   //--- plausible-looking error about a broker limitation that did not exist.
-   //---
-   //--- Verified by compiling a probe against this machine's MT4, WITH a
-   //--- negative control (a deliberately invalid function) to prove the check
-   //--- can fail. Do not "simplify" this back to a bare MarketInfo.
-   if(!SymbolSelect(sym,true)) return false;
-   // Ensure cross-currency conversion pair is selected in Market Watch for accurate MT4 OrderProfit
-   string acctCcy = CopierAccountCurrency();
-   string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
-   if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+   if(!SymbolSelect(sym,true)) res=false;
+   else
      {
-      SymbolSelect(profCcy+acctCcy, true);
-      SymbolSelect(acctCcy+profCcy, true);
+      string acctCcy = CopierAccountCurrency();
+      string profCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+      if(StringLen(profCcy)>0 && profCcy!=acctCcy)
+        {
+         SymbolSelect(profCcy+acctCcy, true);
+         SymbolSelect(acctCcy+profCcy, true);
+        }
+      string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
+      if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
+        {
+         SymbolSelect(marginCcy+acctCcy, true);
+         SymbolSelect(acctCcy+marginCcy, true);
+        }
+      res=CopierSymbolReady(sym);
      }
-   string marginCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
-   if(StringLen(marginCcy)>0 && marginCcy!=acctCcy && marginCcy!=profCcy)
-     {
-      SymbolSelect(marginCcy+acctCcy, true);
-      SymbolSelect(acctCcy+marginCcy, true);
-     }
-   return CopierSymbolReady(sym);
 #endif
+
+   int slot=g_seHead;
+   g_seHead++;
+   if(g_seHead>=CP_SYMEXISTS_CACHE) g_seHead=0;
+   g_seKey[slot]=sym;
+   g_seAt[slot]=now;
+   g_seVal[slot]=res;
+   return res;
   }
 
 class CopierSymbolMap

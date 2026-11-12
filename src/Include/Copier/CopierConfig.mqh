@@ -178,6 +178,7 @@ public:
             string recovered="";
             if(CopierIniReadAll(path+".tmp",recovered) && StringLen(recovered)>0)
               {
+               FileDelete(path);
                int rh=FileOpen(path,FILE_WRITE|FILE_TXT|FILE_ANSI);
                if(rh!=INVALID_HANDLE)
                  {

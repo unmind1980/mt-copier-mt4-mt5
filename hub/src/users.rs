@@ -782,6 +782,23 @@ impl UserStore {
         Some(s.clone())
     }
 
+    /// Read-only check for background WebSocket keep-alive ticks without resetting idle timer
+    pub fn is_session_valid(&self, token: &str, now: u64) -> bool {
+        if let Some(s) = self.sessions.get(token) {
+            let is_exp = now.saturating_sub(s.seen) >= SESSION_IDLE_SECS
+                || now.saturating_sub(s.created_at) >= SESSION_MAX_SECS;
+            if is_exp {
+                return false;
+            }
+            match self.users.iter().find(|u| u.id == s.user_id) {
+                Some(u) => !u.disabled && u.role == s.role && (s.pass_hash.is_empty() || s.pass_hash == u.pass),
+                None => false,
+            }
+        } else {
+            false
+        }
+    }
+
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }

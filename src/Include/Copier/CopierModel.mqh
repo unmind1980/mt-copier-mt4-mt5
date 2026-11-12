@@ -435,7 +435,6 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
          ulong tk=OrderGetTicket(i);
          if(tk==0) continue;
          if((long)tk!=identifier) continue;
-         if(!OrderSelect(tk)) continue;
          long ost=(long)OrderGetInteger(ORDER_STATE);
          if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
          ticket=(long)tk;
@@ -505,7 +504,6 @@ bool CopierResolveCloseTicket(const long identifier,long &ticket,bool &isPending
       ulong tk=OrderGetTicket(i);
       if(tk==0) continue;
       if((long)tk!=identifier) continue;
-      if(!OrderSelect(tk)) continue;
       long ost=(long)OrderGetInteger(ORDER_STATE);
       if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
       ticket=(long)tk;
@@ -858,7 +856,6 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
      {
       ulong tk=PositionGetTicket(i);
       if(tk==0) continue;
-      if(!PositionSelectByTicket(tk)) continue;
       if(n>=maxOut)
         {
          Print("[copier] CRITICAL: Terminal positions exceed max capacity (",maxOut,"); table saturated, truncation occurred!");
@@ -901,7 +898,6 @@ int CopierReadPositions(CopierPos &out[],const int maxOut,const bool readComment
      {
       ulong tk=OrderGetTicket(i);
       if(tk==0) continue;
-      if(!OrderSelect(tk)) continue;
       long ost=(long)OrderGetInteger(ORDER_STATE);
       if(ost!=ORDER_STATE_PLACED && ost!=ORDER_STATE_PARTIAL) continue;
       int pt=CopierPendFromPlatformType((long)OrderGetInteger(ORDER_TYPE));

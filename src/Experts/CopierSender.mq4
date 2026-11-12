@@ -1597,9 +1597,8 @@ void SnapRepairMaybe(const string who,const int idx,const long now,const bool is
       //--- to "" - everything. So the repair is a broadcast. That is the right
       //--- trade here rather than a gap, because direct mode is one sender to
       //--- one receiver in every deployment this is used for.
-      // P2-25 & M-03 fix: direct mode repair transmits only on direct channel.
-      // Re-send the last broadcast snapshot (g_snapPayload) so g_snapHash stays aligned with the central network.
-      string snapPayload=(StringLen(g_snapPayload)>0)?g_snapPayload:g_latestSnapPayload;
+      // P2-25 & M-03 & LOGIC-02: Prefer latest in-memory payload with fresh stops for direct-mode on-demand repair
+      string snapPayload=(StringLen(g_latestSnapPayload)>0)?g_latestSnapPayload:g_snapPayload;
       Emit(CP_T_SNAP,snapPayload,true,false);
       if(!g_hubOn && StringLen(g_snapPayload)==0)
         {
@@ -2193,7 +2192,7 @@ string EncodeSenderPositions(const int count)
    return CopierCompressField(sb.Result());
   }
 
-void SendSenderStatusReport(const int count)
+void SendSenderStatusReport(const int count,const bool includeDetail=true)
   {
    if(!g_hubOn) return;
    double bal=CopierAccountBalance();
@@ -2219,8 +2218,11 @@ void SendSenderStatusReport(const int count)
    if(rtt<0) rtt=g_peers.RttFor("hub:standby");
    if(rtt>=0) st+=CP_SEP_KV+"PING="+(string)rtt;
 
-   string posEnc=EncodeSenderPositions(count);
-   st+=CP_SEP_KV+"POS="+posEnc;
+   if(includeDetail)
+     {
+      string posEnc=EncodeSenderPositions(count);
+      if(StringLen(posEnc)>0) st+=CP_SEP_KV+"POS="+posEnc;
+     }
 
    CopierEnv e;
    e.v=CP_PROTO_V;
@@ -2566,11 +2568,17 @@ void ProcessTimerTick()
         }
      }
 
-   // MQL-08: Send sender status report AFTER step 5 so new position records and UIDs in g_prev are synchronized
-   if(g_forcePosReport && g_hubOn)
+   // LOGIC-01: Send periodic status report (5s summary, 60s detail or on force) so Web Cockpit shows live equity/balance
+   static long s_lastSenderStatMs=0;
+   static long s_lastSenderDetailMs=0;
+   bool dueSenderDetail = (g_forcePosReport || s_lastSenderDetailMs==0 || (now-s_lastSenderDetailMs>=60000));
+   bool dueSenderSummary = (g_forcePosReport || s_lastSenderStatMs==0 || (now-s_lastSenderStatMs>=5000));
+   if((dueSenderSummary || dueSenderDetail) && g_hubOn)
      {
+      s_lastSenderStatMs=now;
+      if(dueSenderDetail) s_lastSenderDetailMs=now;
       g_forcePosReport=false;
-      SendSenderStatusReport(n);
+      SendSenderStatusReport(n,dueSenderDetail);
      }
 
    //--- 6) snapshot

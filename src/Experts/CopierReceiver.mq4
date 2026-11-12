@@ -10121,9 +10121,18 @@ void OnTimer()
             s_fastRrStart=(start+1)%g_nSenders;
            }
          ExecuteQueue();
-         g_lastConvergeSweepMs = now; // BUG-08: Stave off immediate redundant slow-lane sweep in the same invocation
-         g_convergeDirtyAll = false;
-         for(int k=0; k<g_nSenders; k++) g_convergeDirty[k]=false;
+         // BUG-01 (Report 2): Only clear dirty flags for senders that actually converged in this fast batch
+         bool anyRemainingDirty=false;
+         for(int k=0; k<g_nSenders; k++)
+           {
+            if(fastSender[k]) g_convergeDirty[k]=false;
+            else if(g_convergeDirty[k]) anyRemainingDirty=true;
+           }
+         if(!anyRemainingDirty)
+           {
+            g_convergeDirtyAll = false;
+            g_lastConvergeSweepMs = now; // Stave off immediate redundant slow-lane sweep only when all senders clean
+           }
         }
 
       // N67-04 & N68-03: Clear string references on static conflate table to prevent dead string retention

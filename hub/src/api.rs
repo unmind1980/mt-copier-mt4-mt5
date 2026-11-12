@@ -914,9 +914,9 @@ async fn handle_socket(
                 }
             }
             _ = auth_tick.tick() => {
-                // M2: Re-verify session validity every 5s during WebSocket lifecycle to immediately terminate revoked/expired sessions
+                // M2 & OPT-03: Re-verify session validity read-only every 5s without sliding idle timeout
                 if !token.is_empty() {
-                    let valid = st.lock_or_recover().users.session(&token, unix_secs()).is_some();
+                    let valid = st.lock_or_recover().users.is_session_valid(&token, unix_secs());
                     if !valid {
                         let _ = socket.send(Message::Close(Some(axum::extract::ws::CloseFrame {
                             code: axum::extract::ws::close_code::NORMAL,
@@ -2188,7 +2188,7 @@ pub fn spawn(
                             let redirect_opt = {
                                 let c = tls_mgr_spawn.config.lock_or_recover();
                                 let has_acceptor = tls_mgr_spawn.acceptor.read_or_recover().is_some();
-                                if c.enabled && c.enable_http_redirect && has_acceptor && c.https_port != 0 && c.https_port != current_port && current_port == c.http_port {
+                                if c.enabled && c.enable_http_redirect && has_acceptor && c.https_port != 0 && c.https_port != current_port {
                                     Some((c.domain.clone(), c.https_port))
                                 } else {
                                     None
@@ -3169,14 +3169,16 @@ async fn commands_global(
         *guard = Some(Instant::now());
     }
 
-    //--- Every known receiver, in a deterministic order, one command each.
+    //--- Every known target node in deterministic order.
+    //--- LOGIC-03: Pos queries (reqpos/refreshpos/refresh) query both senders & receivers
+    let is_pos_query = op == "reqpos" || op == "refreshpos" || op == "refresh";
     let nodes: Vec<String> = {
         let s = st.lock_or_recover();
         let mut v: Vec<String> = s
             .reg
             .nodes()
             .iter()
-            .filter(|n| n.key.starts_with("receiver:"))
+            .filter(|n| n.key.starts_with("receiver:") || (is_pos_query && n.key.starts_with("sender:")))
             .map(|n| n.key.clone())
             .collect();
         v.sort();

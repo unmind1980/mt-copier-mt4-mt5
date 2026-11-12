@@ -306,6 +306,9 @@ impl ClusterManager {
         } else if token_is_usable(&state.cluster_token) {
             state.cluster_token.clone()
         } else {
+            if !cluster_token.is_empty() {
+                eprintln!("[hub] WARN LOGIC-04: provided cluster token is shorter than 16 chars or is a known default token; rejected and replaced with random token");
+            }
             let gen = format!("ctok_{}_{}", unix_secs(), crate::users::random_token());
             //--- NEVER print the token itself. Logs get pasted into tickets,
             //--- chat windows and bug reports; printing a secret is precisely

@@ -2195,7 +2195,7 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                         //--- existed it produced NO symptom whatsoever.
                         st.note_single_dropped();
                     }
-                } else if parts.len() >= 2 {
+                } else if parts.len() == 2 {
                     let topic = &parts[0];
                     let payload = &parts[1];
 
@@ -3181,6 +3181,8 @@ pub fn run_hub(args: Args) -> Result<(), String> {
                     }
                 }
             }
+        } else {
+            st.note_dropped();
         }
     }
             Err(zmq::Error::EINTR) => continue,
