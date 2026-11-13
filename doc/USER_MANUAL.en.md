@@ -168,7 +168,7 @@ Use Hub Mode when accounts are distributed across different VPS providers, or wh
 | **`InpMaxLotsPerPosition`** | `0.0` | **Maximum Lot Size per Single Trade**.<br>Caps individual order volume (e.g. `2.0` prevents any trade from exceeding 2.0 lots; 0 = unlimited). |
 | **`InpMaxTotalLots`** | `0.0` | **Maximum Aggregate Portfolio Lots**.<br>Rejects new entries when sum of all open copied lots reaches this ceiling (0 = unlimited). |
 | **`InpMaxOpenPositions`** | `0` | **Maximum Open Positions Count**.<br>Caps total concurrent open copied positions (e.g. `10` stops opening after 10 active trades; 0 = unlimited). |
-| **`InpDailyLossPct`** | `0.0` | **Daily Equity Loss Circuit Breaker (%)**.<br>Calculated against 00:00 server equity baseline. E.g. `5.0` halts copying if daily drawdown reaches 5%. |
+| **`InpDailyLossPct`** | `0.0` | **Daily Equity Loss Circuit Breaker (%)**.<br>Calculated against the day-start (00:00 server time) **balance**, so floating P/L carried over midnight counts as today's loss - the same whether or not the EA was restarted. E.g. `5.0` halts copying if daily drawdown reaches 5%. With `RiskCloseAllOnTrip` on, a trip closes every mirrored position, including right after a restart. |
 | **`InpMaxDrawdownPct`** | `0.0` | **Maximum High-Water Mark Drawdown (%)**.<br>Emergency shutdown if account drawdown from all-time peak exceeds threshold. |
 | **`InpRiskCloseAllOnTrip`** | `false` | **Emergency Liquidation on Circuit Breaker Trip**.<br>• `false`: Stop taking new trades; allow existing positions to exit normally.<br>• `true`: Instantly close all open copied positions at market (emergency evacuation). |
 

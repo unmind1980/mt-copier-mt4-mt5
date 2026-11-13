@@ -247,9 +247,13 @@ Package Contents:
    - start_hub.bat            : Interactive console runner (Primary: 6000 / Web: 6010)
    - start_primary_ha.bat     : Launch Primary Hub in HA cluster mode
    - start_standby_ha.bat     : Launch Standby Hub in HA cluster mode
-   - install_service.bat      : Register Hub as a background Windows Service
-   - uninstall_service.bat    : Unregister Windows Service
+   - install_service.bat      : Register the PRIMARY Hub as a Windows Service
+   - install_standby_service.bat : Register the STANDBY Hub as a Windows Service
+   - uninstall_service.bat    : Unregister the Primary and/or Standby service
    - reset_password.bat       : Reset WebUI dashboard credentials
+   - tools/curve_show_key.bat : Print the Hub CURVE public key (for EA input HubPublicKey)
+   - tools/curve_enable.bat   : Start the Hub with CURVE encryption ON
+   - tools/reset_ssl.bat      : Emergency switch-off of HTTPS (back to plain HTTP)
 2. Terminals/
    - MT4/                     : MetaTrader 4 EAs (.ex4) & 32-bit libzmq.dll
    - MT5/                     : MetaTrader 5 EAs (.ex5) & 64-bit libzmq.dll
@@ -297,6 +301,25 @@ To run mt-copier without keeping a command prompt open:
 1. Right-click "Hub-Server/install_service.bat" -> Run as Administrator.
 2. The Hub is now registered as native Windows Service "MTCopierPrimary".
    It will start automatically on boot and restart upon unexpected termination.
+3. On the Standby machine run "Hub-Server/install_standby_service.bat" as
+   Administrator instead. It asks for the Primary's IP and registers
+   "MTCopierStandby". Copy cluster_token.txt from the Primary first.
+
+================================================================================
+Security: CURVE encryption and HTTPS
+================================================================================
+CURVE (ZeroMQ link between EAs and the Hub):
+1. Run "Hub-Server/tools/curve_show_key.bat". It creates curve_hub.keys on
+   first use and prints the PUBLIC key.
+2. In every EA set HubUseCurve=true and paste that key into HubPublicKey.
+3. Start the Hub with "Hub-Server/tools/curve_enable.bat". The first run uses
+   --curve-learn, so each EA that connects is added to curve_clients.txt;
+   once all your terminals are connected, restart without learning.
+HTTPS (dashboard):
+- Configure it in the dashboard (Settings -> TLS): Let's Encrypt, import a
+  certificate, or self-signed.
+- If a bad certificate locks you out, run "Hub-Server/tools/reset_ssl.bat"
+  and restart the Hub: it goes back to plain HTTP.
 
 ================================================================================
 High-Availability (HA) Dual-Active Setup
@@ -304,6 +327,8 @@ High-Availability (HA) Dual-Active Setup
 For institutional zero-downtime redundancy:
 - Machine A (Primary) : Run "start_primary_ha.bat" (Port 6000 / Web 6010)
 - Machine B (Standby) : Run "start_standby_ha.bat" (Port 6001 / Web 6011)
+Both Hubs need the same cluster token (cluster_token.txt): the first start
+creates it - copy it to the other Hub folder before starting the second Hub.
 Terminals uplink to both Hubs concurrently, so trade data keeps flowing if
 either Hub stops. Config, command, user and notification state replicate from
 the Primary to the Standby. The Standby is READ-ONLY.
@@ -337,8 +362,19 @@ pause
 """
 
 HUB_START_PRIMARY_HA_BAT = """@echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
+rem --- Cluster token: both hubs MUST use the same one. It lives in
+rem --- cluster_token.txt next to copier-hub.exe. The first hub to start mints
+rem --- it; copy that file to the other machine before starting the second hub.
+if not exist "cluster_token.txt" (
+    for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N')"`) do set "MTC_NEWTOK=%%i"
+    if defined MTC_NEWTOK (
+        > "cluster_token.txt" echo !MTC_NEWTOK!
+        echo [cluster] Minted a NEW cluster token in %CD%\\cluster_token.txt
+        echo [cluster] Copy this file to the peer Hub folder before starting it.
+    )
+)
 title mt-copier Primary Hub [HA Cluster]
 echo ===============================================================================
 echo   mt-copier PRIMARY Hub (HA Cluster Mode)
@@ -354,8 +390,19 @@ pause
 """
 
 HUB_START_STANDBY_HA_BAT = """@echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
+rem --- Cluster token: both hubs MUST use the same one. It lives in
+rem --- cluster_token.txt next to copier-hub.exe. The first hub to start mints
+rem --- it; copy that file to the other machine before starting the second hub.
+if not exist "cluster_token.txt" (
+    for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "[guid]::NewGuid().ToString('N')+[guid]::NewGuid().ToString('N')"`) do set "MTC_NEWTOK=%%i"
+    if defined MTC_NEWTOK (
+        > "cluster_token.txt" echo !MTC_NEWTOK!
+        echo [cluster] Minted a NEW cluster token in %CD%\\cluster_token.txt
+        echo [cluster] Copy this file to the peer Hub folder before starting it.
+    )
+)
 title mt-copier Standby Hub [HA Cluster]
 echo ===============================================================================
 echo   mt-copier STANDBY Hub (HA Cluster Mode)
@@ -396,6 +443,7 @@ echo   Unregistering mt-copier Windows Service...
 echo ===============================================================================
 echo.
 copier-hub.exe --service-uninstall primary
+copier-hub.exe --service-uninstall standby
 echo.
 pause
 """
@@ -422,6 +470,73 @@ if errorlevel 1 (
 )
 echo.
 echo Password updated successfully.
+pause
+"""
+
+
+HUB_INSTALL_STANDBY_SVC_BAT = r"""@echo off
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [ERROR] Run this file as Administrator ^(right-click -^> Run as administrator^).
+    pause
+    exit /b 1
+)
+echo ===============================================================================
+echo   Registering mt-copier STANDBY Hub as Windows Service ^(MTCopierStandby^)
+echo ===============================================================================
+if not exist "cluster_token.txt" (
+    echo [WARN] cluster_token.txt not found. Copy it from the PRIMARY Hub folder
+    echo        first, or the two Hubs cannot talk to each other.
+    echo.
+)
+if not exist "standby_data" mkdir "standby_data"
+set "PEER_IP="
+set /p PEER_IP="Primary Hub IP (e.g. 10.0.0.5, Enter = configure later in Web UI): "
+set "PEER_ARGS="
+if not "!PEER_IP!"=="" set "PEER_ARGS=--peer-api http://!PEER_IP!:6010 --peer-zmq tcp://!PEER_IP!:6000"
+copier-hub.exe --service-install standby --workdir "%CD%" --port 6000 --http 0.0.0.0:6010 --role standby !PEER_ARGS! --cluster-state standby_data\cluster_state.json --config standby_data\config_revisions.jsonl --commands standby_data\commands.jsonl --users standby_data\users.json --notifications standby_data\alert_channels.json --curve-clients standby_data\curve_clients.txt --curve-keys curve_hub.keys --audit standby_data\audit.jsonl
+if errorlevel 1 (
+    echo [ERROR] Service install failed.
+    pause
+    exit /b 1
+)
+copier-hub.exe --service-start standby
+echo.
+copier-hub.exe --service-status standby
+echo.
+echo The Standby is READ-ONLY and does not promote itself. If the Primary is
+echo down, click Promote in this Hub's dashboard. To allow automatic promotion
+echo after 30 s, reinstall with --auto-promote added to the command above.
+pause
+"""
+
+HUB_CURVE_SHOW_BAT = r"""@echo off
+setlocal
+cd /d "%~dp0.."
+copier-hub.exe --curve-show
+echo.
+echo Paste the PUBLIC KEY above into every EA's HubPublicKey input and set
+echo HubUseCurve=true. Keep curve_hub.keys private: it holds the secret half.
+pause
+"""
+
+HUB_CURVE_ENABLE_BAT = r"""@echo off
+setlocal
+cd /d "%~dp0.."
+echo ===============================================================================
+echo   mt-copier Hub with CURVE encryption
+echo ===============================================================================
+if not exist "curve_clients.txt" (
+    echo [learn] curve_clients.txt does not exist yet: starting with --curve-learn,
+    echo         so every EA that connects now is added to the allow-list.
+    echo         When all terminals are connected, close this window and run it
+    echo         again - it will then start WITHOUT learning.
+    copier-hub.exe --port 6000 --http 0.0.0.0:6010 --curve on --curve-learn %*
+) else (
+    copier-hub.exe --port 6000 --http 0.0.0.0:6010 --curve on %*
+)
 pause
 """
 
@@ -488,6 +603,16 @@ def build_hub_suite_package():
     (hub_dir / "install_service.bat").write_text(HUB_INSTALL_SVC_BAT, encoding="utf-8")
     (hub_dir / "uninstall_service.bat").write_text(HUB_UNINSTALL_SVC_BAT, encoding="utf-8")
     (hub_dir / "reset_password.bat").write_text(HUB_RESET_PWD_BAT, encoding="utf-8")
+    (hub_dir / "install_standby_service.bat").write_text(HUB_INSTALL_STANDBY_SVC_BAT, encoding="utf-8")
+    tools_dir = hub_dir / "tools"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "curve_show_key.bat").write_text(HUB_CURVE_SHOW_BAT, encoding="utf-8")
+    (tools_dir / "curve_enable.bat").write_text(HUB_CURVE_ENABLE_BAT, encoding="utf-8")
+    #--- reset_ssl.bat works on tls_config.json in the CURRENT directory, so
+    #--- the packaged copy first changes to the Hub folder.
+    rs = (REPO_ROOT / "tools" / "reset_ssl.bat").read_text(encoding="utf-8")
+    rs = rs.replace("setlocal enabledelayedexpansion", "setlocal enabledelayedexpansion\ncd /d \"%~dp0..\"", 1)
+    (tools_dir / "reset_ssl.bat").write_text(rs, encoding="utf-8")
 
     # Terminals (Both MT4 and MT5)
     term_dir = pkg_dir / "Terminals"

@@ -8,6 +8,13 @@
 
 - **HA: a Standby no longer promotes itself by default (ADR-03).** Before this release a Standby that lost contact with its Primary for 30 s promoted itself. With two hubs and no witness, a link cut between them looks the same as a dead Primary, so that could leave two writable Primaries. Now the Standby stays read-only, logs a warning and records `cluster.peer_lost_manual_promote_required` in the audit log about once a minute, and waits for an operator to click **Promote** (or `POST /api/v1/cluster/promote`). Start the Standby with `--auto-promote` to get the old behaviour. Trade data still flows through the Standby without any action, because terminals connect to both hubs.
 - **HA handover:** a handover request is accepted only when the requesting hub was also *probed* as the configured primary. The request body's claim alone is no longer enough.
+- **Daily loss guard: one baseline.** The day-start baseline is now the day-start *balance* at midnight rollover too, the same as after a restart. Floating P/L carried over midnight counts toward today's loss whether or not the EA was restarted. Before, a running EA excluded it and a restarted EA included it. With `RiskCloseAllOnTrip` on, a trip, including one right after a restart, closes every mirrored position.
+
+### Hub package additions
+
+- `install_standby_service.bat`: registers the Standby as the Windows service `MTCopierStandby` (asks for the Primary IP). `uninstall_service.bat` now removes both services.
+- `tools/curve_show_key.bat`, `tools/curve_enable.bat` (first run learns the EA keys), `tools/reset_ssl.bat` (emergency switch back to HTTP).
+- The HA launchers create a shared `cluster_token.txt`. Copy it to the peer Hub before starting it.
 
 ### Fixes in the final v1.1.0 audit
 
