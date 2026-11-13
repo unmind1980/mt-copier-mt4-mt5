@@ -42,6 +42,11 @@ import time
 import zmq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+#--- The hub reads tls_config.json (and writes cluster state) relative to its
+#--- working directory. Run it in a scratch dir so the operator's repo-root
+#--- TLS config (HTTP->HTTPS redirect) cannot change what this suite sees.
+import tempfile
+HUB_CWD = tempfile.mkdtemp(prefix="mtc_hub_api_")
 REPO = os.path.dirname(HERE)
 HUB_BIN = "copier-hub.exe" if sys.platform == "win32" else "copier-hub"
 HUB = os.path.join(REPO, "hub", "target", "release", HUB_BIN)
@@ -204,7 +209,7 @@ def main():
          #--- suite that does not test it must say so explicitly.
          "--curve", "off",
          "--stats-every", "30", "--duration", "40"],
-        stdout=out, stderr=subprocess.STDOUT,
+        stdout=out, stderr=subprocess.STDOUT, cwd=HUB_CWD,
     )
     try:
         time.sleep(2.0)                     # bind + API thread
@@ -697,7 +702,7 @@ def main():
         [HUB, "--port", str(free_port), "--http", "none", "--users", users_path,
          "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
-        stdout=out2, stderr=subprocess.STDOUT,
+        stdout=out2, stderr=subprocess.STDOUT, cwd=HUB_CWD,
     )
     try:
         time.sleep(1.5)
@@ -763,7 +768,7 @@ def main():
     hub3 = subprocess.Popen(
         [HUB, "--port", "6183", "--users", users_path, "--curve", "off",
          "--stats-every", "0", "--duration", "6"],
-        stdout=out3, stderr=subprocess.STDOUT,
+        stdout=out3, stderr=subprocess.STDOUT, cwd=HUB_CWD,
     )
     try:
         time.sleep(1.5)

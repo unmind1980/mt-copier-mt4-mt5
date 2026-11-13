@@ -982,6 +982,7 @@ fn cluster_json(s: &Shared) -> Value {
         "is_configured_primary": s.cluster.state.is_configured_primary,
         "failback_locked": s.cluster.state.failback_locked,
         "failback_stabilization_hours": s.cluster.state.failback_stabilization_hours,
+        "auto_promote": s.cluster.auto_promote,
         "continuous_online_secs": s.cluster.continuous_online_start.map(|t| now.saturating_duration_since(t).as_secs_f64()).unwrap_or(0.0),
     })
 }

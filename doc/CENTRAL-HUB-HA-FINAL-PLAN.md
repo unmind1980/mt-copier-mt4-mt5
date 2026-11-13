@@ -46,7 +46,7 @@
 | :--- | :--- | :--- |
 | **ADR-01** | **服务可用性承诺** | **链路冗余 + 状态最终收敛（Eventual Consistency via Snapshots）**。<br>两路 ZMQ 并发传输确保主机宕机时下行链路 0ms 顶上；不宣称“数学意义绝对 0 丢单”，通过 15s 权威全量快照与收据修复机制确保仓位在秒级内 100% 收敛一致。 |
 | **ADR-02** | **数据面传输拓扑** | **双端双活连接（Active-Active Dual-Connected XSUB）**。<br>Sender 与 Receiver 均同时连接 Primary 与 Standby；两台 Hub 均实时转发数据帧。依靠协议内置的 `SEQ` 序列号和 Receiver 本地 `CopierSeenRing`（`g_seen`）实现微秒级幂等去重。 |
-| **ADR-03** | **控制面写权限与切主** | **严格单写（Single-Writer）+ MVP 阶段受控人工 Promote**。<br>Standby 默认只读（`writes = false`）。拒绝在双机直连心跳超时下盲目自动提权（防网络分区脑裂）；需人工确认旧主隔离后在 Standby 界面点击「一键提权（Promote）」。 |
+| **ADR-03** | **控制面写权限与切主** | **严格单写（Single-Writer）+ MVP 阶段受控人工 Promote**。<br>Standby 默认只读（`writes = false`）。拒绝在双机直连心跳超时下盲目自动提权（防网络分区脑裂）；需人工确认旧主隔离后在 Standby 界面点击「一键提权（Promote）」。<br>（r22）自动提权默认关闭；仅当以 `--auto-promote` 启动时，Standby 失联 30s 后才自行提权。未开启时只记录审计事件 `cluster.peer_lost_manual_promote_required` 并等待人工 Promote。 |
 | **ADR-04** | **世代号（Epoch）** | **引入持久化 `epoch`（`cluster_state.json`）作为恢复与版本防护元数据**。<br>Standby 提权时 `epoch++`；原主恢复上线后发现自身 `epoch` 落后，**强制以 Standby 只读身份加入，并自动反向从新主拉取增量数据**，彻底杜绝旧主数据覆盖新主。 |
 | **ADR-05** | **客户端接入演进** | **显式双地址先行，自动拓扑（`T=TOPOLOGY`）后置**。<br>Phase 1 优先支持 `HubEndpoint` 填入分号分隔的双地址（如 `主IP:6000;备IP:6001`）；Phase 3 再引入 `T=TOPOLOGY` 下发与本地 `copier_hub_cluster.st` 缓存，降低首发复杂度。 |
 | **ADR-06** | **CURVE 加密规范** | **共享同一套 `curve_hub.keys` 服务端密钥对**。<br>`libzmq` 底层限制一个 XSUB 套接字只能绑定一个服务端公钥。主备共享密钥对，客户端只需下载配置一次 `copier_hub.key` 即可双连成功。 |

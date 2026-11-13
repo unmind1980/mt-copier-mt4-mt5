@@ -331,6 +331,7 @@ pub struct Args {
     cluster_state: String,
     failback_hours: f64,
     failback_lock: bool,
+    auto_promote: bool,
     peer_zmq: String,
     advertise_zmq: String,
     pub service_run: Option<String>,
@@ -373,6 +374,7 @@ pub fn parse_args() -> Result<Args, String> {
         cluster_state: cluster::DEFAULT_STATE_FILE.to_string(),
         failback_hours: cluster::DEFAULT_FAILBACK_HOURS,
         failback_lock: false,
+        auto_promote: false,
         peer_zmq: String::new(),
         advertise_zmq: String::new(),
         service_run: None,
@@ -423,6 +425,10 @@ pub fn parse_args() -> Result<Args, String> {
             }
             "--failback-lock" => {
                 a.failback_lock = true;
+                i += 1;
+            }
+            "--auto-promote" => {
+                a.auto_promote = true;
                 i += 1;
             }
             "--peer-zmq" => {
@@ -674,6 +680,10 @@ fn usage() {
     println!("  --verbose      log every message, not just events and stats");
     println!("  --stats-every  seconds between stats lines (default 30, 0 = never)");
     println!("  --duration     exit after this many seconds (0 = run until Ctrl-C)");
+    println!("  --auto-promote let a Standby promote itself after 30s without its peer.");
+    println!("                 OFF by default (ADR-03): with two hubs and no witness a");
+    println!("                 cut link between them looks like a dead Primary, and");
+    println!("                 auto-promotion then gives two writable Primaries.");
     println!("  --service-install ROLE install as Windows Service (primary or standby)");
     println!("  --service-uninstall ROLE uninstall Windows Service");
     println!("  --service-start ROLE   start Windows Service");
@@ -1691,7 +1701,10 @@ pub fn run_hub(args: Args) -> Result<(), String> {
         args.failback_hours,
         args.failback_lock,
     ) {
-        Ok(cm) => cm,
+        Ok(mut cm) => {
+            cm.auto_promote = args.auto_promote;
+            cm
+        }
         Err(e) => {
             eprintln!("[hub] cluster init error: {}", e);
             return Err(format!("cluster init error: {}", e));
@@ -1714,6 +1727,12 @@ pub fn run_hub(args: Args) -> Result<(), String> {
             cluster_mgr.state.failback_stabilization_hours,
             cluster_mgr.state.failback_locked
         );
+        if cluster_mgr.auto_promote {
+            println!("[hub] WARNING --auto-promote is ON: this Standby promotes itself after 30s");
+            println!("[hub]   without its peer. A link cut between the hubs then gives TWO Primaries.");
+        } else {
+            println!("[hub] auto-promote OFF (ADR-03): a Standby waits for a manual promote");
+        }
     }
     println!("[hub] EAs connect an XSUB here; the hub needs no other configuration");
     if !args.curve {

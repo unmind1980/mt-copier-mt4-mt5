@@ -298,6 +298,13 @@ involved.
                     stopped being one.
 --failback-hours N  hours of continuous online stabilization required before auto-failback (default 24.0)
 --failback-lock     lock failback transitions, keeping current topology frozen
+--auto-promote      let a Standby promote itself after 30s without peer contact.
+                    OFF by default (ADR-03): without it the Standby stays
+                    read-only, logs + audits `cluster.peer_lost_manual_promote_required`,
+                    and waits for a manual Promote (dashboard or
+                    POST /api/v1/cluster/promote). Enable only when the two hubs
+                    cannot be partitioned from each other while both stay
+                    reachable by terminals, or split-brain becomes possible.
 --verbose           log every message, not just events and stats
 --stats-every SECS  seconds between stats lines (default 30, 0 = never)
 --duration SECS     exit after this many seconds (0 = run until Ctrl-C)
@@ -937,6 +944,7 @@ secret masking, and the closed-loop recovery path (`node.recovered` after
 2. **Single-Writer Enforcement (ADR-03)**:
    - Primary Hub has full read-write authority (`writes: true`).
    - Standby Hub enforces read-only mode (`writes: false`), rejecting mutating REST calls with `409 Conflict`.
+   - A Standby that loses its peer does **not** promote itself unless the hub was started with `--auto-promote`; promotion is a manual step by default.
 3. **Epoch Fencing (ADR-04) & Tie-Breaking**:
    - Every promotion increments cluster epoch. Stale Primaries observing a peer with higher epoch automatically demote themselves to Standby.
    - Dual-standby recovery incorporates deterministic tie-breaking (`is_configured_primary` followed by lexical hub ID comparison) to prevent split-brain oscillation.

@@ -170,6 +170,12 @@ pub struct ClusterManager {
     pub api_cfg_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
     pub api_cmd_cache: std::sync::Arc<std::sync::Mutex<JournalCache>>,
     pub handover_lease_until: Option<Instant>,
+    /// ADR-03: a Standby that loses its peer does NOT promote itself unless the
+    /// operator opted in with `--auto-promote`. With two hubs and no witness, a
+    /// link cut between them looks identical to a dead Primary, and promoting on
+    /// that evidence gives two writable Primaries. Off by default; manual
+    /// promotion via `POST /api/v1/cluster/promote` is the supported path.
+    pub auto_promote: bool,
 }
 
 /// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
@@ -338,6 +344,7 @@ impl ClusterManager {
             api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             handover_lease_until: None,
+            auto_promote: false,
         };
 
         cm.save().map_err(|e| format!("cannot save {}: {}", state_path.display(), e))?;
@@ -456,6 +463,7 @@ impl ClusterManager {
             api_cfg_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             handover_lease_until: None,
+            auto_promote: false,
         }
     }
 }
@@ -535,6 +543,12 @@ pub(crate) fn save_state_to_file(path: &Path, state: &ClusterStateFile) -> std::
 }
 
 /// Autonomous recovery when Standby loses all contact with Primary after having previously connected.
+///
+/// ADR-03: gated on `auto_promote` (CLI `--auto-promote`, default OFF). Without
+/// it a Standby that loses its peer stays read-only and says so once a minute;
+/// the operator promotes it with `POST /api/v1/cluster/promote` after confirming
+/// the old Primary is really down. Two hubs with no witness cannot tell "peer
+/// dead" from "link between us cut", and guessing wrong gives two writers.
 fn try_orphan_recovery(st: &SharedState) {
     let mut s = st.lock_or_recover();
     let role = s.cluster.state.role.clone();
@@ -542,6 +556,28 @@ fn try_orphan_recovery(st: &SharedState) {
     let outage_opt = s.cluster.last_peer_contact.map(|t| t.elapsed().as_secs());
     if role == "standby" && !handover_in_flight {
         if let Some(outage) = outage_opt {
+            if outage >= 30 && !s.cluster.auto_promote {
+                //--- report once per minute, not every probe
+                if outage % 60 < 5 {
+                    let audit_rec = Arc::clone(&s.audit);
+                    drop(s);
+                    eprintln!(
+                        "[hub] STANDBY: peer unreachable for {}s. NOT promoting (ADR-03, --auto-promote is off). \
+                         Confirm the Primary is down, then promote this hub from the dashboard or POST /api/v1/cluster/promote.",
+                        outage
+                    );
+                    audit_rec.record(
+                        "cluster",
+                        "",
+                        "cluster.peer_lost_manual_promote_required",
+                        &format!("peer unreachable {}s; auto-promote disabled", outage),
+                        None,
+                        None,
+                        "ok",
+                    );
+                }
+                return;
+            }
             if outage >= 30 {
                 s.cluster.handover_lease_until = None;
                 let target_ep = Some(next_epoch(
@@ -1438,6 +1474,50 @@ pub fn spawn_cluster_worker(st: SharedState, check_interval: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-03: a Standby that has lost its peer for well over 30s must stay
+    /// read-only unless `--auto-promote` was given, and must promote when it was.
+    #[test]
+    fn standby_does_not_self_promote_unless_auto_promote_is_on() {
+        let make = |auto: bool| -> SharedState {
+            let audit = Arc::new(crate::audit::Audit::disabled());
+            let cfg = Arc::new(crate::config::ConfigStore::disabled());
+            let cmds = Arc::new(crate::commands::CommandStore::disabled());
+            let mut cm = ClusterManager::disabled();
+            cm.state.role = "standby".to_string();
+            cm.state.is_configured_primary = false;
+            cm.last_peer_contact = Instant::now().checked_sub(Duration::from_secs(120));
+            cm.auto_promote = auto;
+            cm.state_path = std::env::temp_dir()
+                .join(format!("mtc_adr03_state_{}_{}.json", std::process::id(), auto));
+            let mut s = crate::api::Shared::new(
+                0,
+                audit,
+                cfg,
+                cmds,
+                true,
+                None,
+                cm,
+            );
+            s.writes = false;
+            Arc::new(std::sync::Mutex::new(s))
+        };
+
+        let off = make(false);
+        try_orphan_recovery(&off);
+        {
+            let s = off.lock_or_recover();
+            assert_eq!(s.cluster.state.role, "standby", "must not self-promote when auto_promote is off");
+            assert!(!s.writes, "write gate must stay closed when auto_promote is off");
+        }
+
+        let on = make(true);
+        try_orphan_recovery(&on);
+        {
+            let s = on.lock_or_recover();
+            assert_eq!(s.cluster.state.role, "primary", "must self-promote when auto_promote is on");
+        }
+    }
 
     #[test]
     fn test_cluster_state_file_save_and_load() {
