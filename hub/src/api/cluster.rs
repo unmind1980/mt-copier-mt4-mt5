@@ -274,7 +274,15 @@ pub(crate) async fn cluster_handover_request(
     //--- cluster token can force the real primary to close its write gate and
     //--- demote - that is a demotion order, not a handover. The field has
     //--- existed on HandoverRequest since cluster.rs:102 and was never read.
-    if !req.is_configured_primary {
+    //--- The body's claim is also cross-checked against what this hub last
+    //--- PROBED from its peer, so a hand-built request cannot self-assert it.
+    let probed_configured_primary = s
+        .cluster
+        .peer_status
+        .as_ref()
+        .map(|p| p.hub_id == req.from_hub_id && p.is_configured_primary)
+        .unwrap_or(false);
+    if !req.is_configured_primary || !probed_configured_primary {
         return (
             axum::http::StatusCode::FORBIDDEN,
             Json(json!({

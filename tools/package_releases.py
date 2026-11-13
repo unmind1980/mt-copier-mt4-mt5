@@ -18,7 +18,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "releases" / f"v{VERSION}"
@@ -157,8 +157,10 @@ Step 3: Attach EAs to Chart & Start Copying
    - Open any chart.
    - Drag "CopierReceiver" onto the chart.
    - In the "Inputs" tab:
-     * Senders: Set to the Sender's address (e.g. "127.0.0.1:5000" or the sender's account number).
-     * LotMultiplier: Adjust lot ratio as desired (default: 1.0 = 1:1 mirroring).
+     * HubEndpoint: leave EMPTY (empty = direct mode).
+     * SenderIP / SenderPort: the sender's address and its EventsPort
+       (shown in the sender's chart panel and Experts log).
+     * SenderLotMode / SenderLotParam: lot sizing (default multiplier 1.0 = 1:1).
    - Click OK.
 
 Done! Any market orders, pending orders, modifications, or closes placed on the
@@ -230,7 +232,8 @@ It pairs MetaTrader 4 and MetaTrader 5 client nodes with a centralized Rust
 Hub service providing:
 - Real-time Web Cockpit & Multi-Node Monitor (:6010)
 - Multi-Channel Instant Push Alerts (WeChat, Telegram, WeCom, DingTalk, Webhook)
-- Active-Standby High-Availability (HA) Cluster with automated failover (ADR-10)
+- Active-Standby High-Availability (HA) cluster: journal replication, operator
+  Promote, and two-phase failback (opt-in automatic promotion: --auto-promote)
 - ZeroMQ CURVE 256-bit asymmetric encryption & native TLS 1.3 / HTTPS
 - Centralized fleet configuration management & durable audit logging
 - Background Windows Service daemons for 24/7 uninterrupted execution
@@ -280,8 +283,8 @@ Step 3: Connect Terminals to Hub
 --------------------------------
 1. Attach CopierSender (on master terminal) or CopierReceiver (on slave terminal).
 2. In the "Inputs" tab:
-    * HubAddress : Set to "127.0.0.1:6000" (or your Hub VPS public IP/domain).
-    * CentralHubMode : Set to true.
+    * HubEndpoint : Set to "127.0.0.1:6000" (or your Hub VPS IP/domain:6000).
+                    A non-empty HubEndpoint is what switches the EA to hub mode.
 3. Click OK.
 4. Check the Web Dashboard at http://127.0.0.1:6010: all active Sender and
    Receiver nodes, latency metrics, and real-time open positions will appear
@@ -301,8 +304,16 @@ High-Availability (HA) Dual-Active Setup
 For institutional zero-downtime redundancy:
 - Machine A (Primary) : Run "start_primary_ha.bat" (Port 6000 / Web 6010)
 - Machine B (Standby) : Run "start_standby_ha.bat" (Port 6001 / Web 6011)
-Terminals automatically uplink to both Hubs concurrently. State, config, and
-command journals continuously mirror in real time with zero split-brain risk.
+Terminals uplink to both Hubs concurrently, so trade data keeps flowing if
+either Hub stops. Config, command, user and notification state replicate from
+the Primary to the Standby. The Standby is READ-ONLY.
+
+If the Primary fails, the Standby does NOT promote itself by default (this
+avoids two writers after a network split). Confirm the Primary is really down,
+then click "Promote" on the Standby dashboard (or POST /api/v1/cluster/promote).
+To let the Standby promote itself after 30 s without peer contact, add
+--auto-promote to start_standby_ha.bat - only when the two Hubs cannot be
+partitioned from each other while both stay reachable by the terminals.
 
 ================================================================================
 License: MIT License. Open-source & institutional-grade trade replication.
@@ -353,6 +364,7 @@ echo   Local ZMQ     : 0.0.0.0:6001
 echo   Web Dashboard : http://127.0.0.1:6011 (Read-Only)
 echo   Peer ZMQ      : tcp://127.0.0.1:6000
 echo   Peer API      : http://127.0.0.1:6010
+echo   Promotion     : MANUAL (add --auto-promote to opt in)
 echo ===============================================================================
 echo.
 copier-hub.exe --port 6001 --http 0.0.0.0:6011 --role standby --peer-api http://127.0.0.1:6010 --peer-zmq tcp://127.0.0.1:6000 %*
@@ -435,19 +447,6 @@ def build_direct_package():
     shutil.copy2(MT5_EXPERT_SRC / "CopierSender.ex5", pkg_dir / "MT5" / "MQL5" / "Experts" / "CopierSender.ex5")
     shutil.copy2(ZMQ_MT5_DLL, pkg_dir / "MT5" / "MQL5" / "Libraries" / "libzmq.dll")
 
-    mt4_scripts = MT4_EXPERT_SRC.parent / "Scripts"
-    if mt4_scripts.exists():
-        dest = pkg_dir / "MT4" / "MQL4" / "Scripts"
-        dest.mkdir(parents=True, exist_ok=True)
-        for s in mt4_scripts.glob("*.ex4"):
-            shutil.copy2(s, dest / s.name)
-
-    mt5_scripts = MT5_EXPERT_SRC.parent / "Scripts"
-    if mt5_scripts.exists():
-        dest = pkg_dir / "MT5" / "MQL5" / "Scripts"
-        dest.mkdir(parents=True, exist_ok=True)
-        for s in mt5_scripts.glob("*.ex5"):
-            shutil.copy2(s, dest / s.name)
 
     # Documentation and installer
     (pkg_dir / "README.txt").write_text(DIRECT_README_EN, encoding="utf-8")
@@ -504,19 +503,6 @@ def build_hub_suite_package():
     shutil.copy2(MT5_EXPERT_SRC / "CopierSender.ex5", term_dir / "MT5" / "MQL5" / "Experts" / "CopierSender.ex5")
     shutil.copy2(ZMQ_MT5_DLL, term_dir / "MT5" / "MQL5" / "Libraries" / "libzmq.dll")
 
-    mt4_scripts = MT4_EXPERT_SRC.parent / "Scripts"
-    if mt4_scripts.exists():
-        dest = term_dir / "MT4" / "MQL4" / "Scripts"
-        dest.mkdir(parents=True, exist_ok=True)
-        for s in mt4_scripts.glob("*.ex4"):
-            shutil.copy2(s, dest / s.name)
-
-    mt5_scripts = MT5_EXPERT_SRC.parent / "Scripts"
-    if mt5_scripts.exists():
-        dest = term_dir / "MT5" / "MQL5" / "Scripts"
-        dest.mkdir(parents=True, exist_ok=True)
-        for s in mt5_scripts.glob("*.ex5"):
-            shutil.copy2(s, dest / s.name)
 
     # Documentation
     (pkg_dir / "README.txt").write_text(HUB_README_EN, encoding="utf-8")

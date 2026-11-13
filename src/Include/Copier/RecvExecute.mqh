@@ -875,11 +875,14 @@ void ExecuteQueue()
            }
          if(!marginOk)
            {
-            g_log.Warn("insufficient free margin to open "+a.uid+" "+a.sym+" ("
-                       +DoubleToString(a.lots,2)+" lots) - skipping open to prevent broker rejection");
-            // Park briefly (2s) without climbing 24h exponential backoff
-            string boKey=g_sid[a.senderIdx]+":"+(string)a.kind+":"+a.uid;
-            g_backoff.Park(boKey,2000);
+            if(g_once.ShouldEmit("nomargin|"+a.key))
+               g_log.Warn("insufficient free margin to open "+a.uid+" "+a.sym+" ("
+                          +DoubleToString(a.lots,2)+" lots) - skipping open to prevent broker rejection");
+            // Park briefly (2s) without climbing 24h exponential backoff.
+            // Must be the action's OWN key (it carries the ordKind suffix), or
+            // PushAction's Blocked() never matches and converge re-queues it
+            // on every pass.
+            g_backoff.Park(a.key,2000);
             ShiftQueue();
             continue;
            }
@@ -1373,6 +1376,16 @@ void ExecuteQueue()
                // R6-D1-02: MT4 trade context busy clears quickly: yield and park briefly (100ms)
                CopierWaitMs(50);
                fails=g_backoff.NotePark(boKey,100,5);
+               //--- R22: an orphan/manual CLOSE has no sender to re-derive it,
+               //--- so put it back before yielding the tick (same budget as L2).
+               if(a.senderIdx<0 && a.kind==CP_ACT_CLOSE && fails<=5)
+                 {
+                  CopierAction retry146=a;
+                  ShiftQueue();
+                  PushAction(-1,CP_ACT_CLOSE,retry146.uid,retry146.sym,retry146.side,retry146.lots,
+                             retry146.ticket,0,"",0.0,0.0,retry146.ordKind);
+                  break;
+                 }
                ShiftQueue();
                break; // R18-A02: Stop processing queue for this tick so remaining actions stay buffered
               }
@@ -1483,8 +1496,13 @@ void ExecuteQueue()
       //--- position stayed open forever, with nothing anywhere to retry it.
       //--- Re-queue while the retry budget lasts; the queue's 1s CLOSE cap keeps
       //--- the rate at one attempt per second and `skipped <= g_qn` bounds the pass.
-      if(a.senderIdx<0 && a.kind==CP_ACT_CLOSE && fails<=5
-         && !CopierIsTradeDisabled(err) && !CopierIsMarketClosed(err)
+      //--- R22: market-closed / trade-disabled are NOT a reason to give up - the
+      //--- broker is not refusing THIS order, it is refusing everything until the
+      //--- session opens or AutoTrading comes back. Those are re-queued without
+      //--- spending the retry budget; boKey is already parked (CP_MKTCLOSED_MS or
+      //--- the base rate), so the retry is paced by the backoff, not by this loop.
+      bool waitOnly=(CopierIsTradeDisabled(err) || CopierIsMarketClosed(err));
+      if(a.senderIdx<0 && a.kind==CP_ACT_CLOSE && (fails<=5 || waitOnly)
          && err!=-4 && err!=-5)
         {
          if(g_once.ShouldEmit("cmdretry|"+a.uid+"|"+(string)a.ticket))

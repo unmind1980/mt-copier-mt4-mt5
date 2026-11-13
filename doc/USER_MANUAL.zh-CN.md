@@ -75,7 +75,7 @@
 适合管理分布在不同 VPS 上的多个主从账户，提供统一 Web 监控面板、手机推送与双机热备。
 
 ### 步骤 1：启动 Hub 服务端
-1. 解压 `mt-copier-hub-suite-v1.0.0.zip`，进入 `Hub-Server` 文件夹；
+1. 解压 `mt-copier-hub-suite-v1.1.0.zip`，进入 `Hub-Server` 文件夹；
 2. **前台调试运行**：双击运行 `start_hub.bat`；
 3. **生产后台守护运行（推荐）**：右键点击 `install_service.bat` -> 选择 **以管理员身份运行**，Hub 即被注册为原生 Windows 服务（开机自动静默启动，异常自动拉起）；
 4. 打开浏览器访问：`http://127.0.0.1:6010`；

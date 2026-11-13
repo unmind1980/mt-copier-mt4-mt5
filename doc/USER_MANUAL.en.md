@@ -77,7 +77,7 @@ In **every** terminal (both Master and Slave):
 Use Hub Mode when accounts are distributed across different VPS providers, or when you require Web Cockpit monitoring, REST API control, and high availability.
 
 ### Step 1: Start the Central Hub Server
-1. Extract `mt-copier-hub-suite-v1.0.0.zip` on your central server/VPS.
+1. Extract `mt-copier-hub-suite-v1.1.0.zip` on your central server/VPS.
 2. **Foreground Console Mode (Testing)**:
    - Double-click `start_hub.bat`.
 3. **Background Service Mode (Production, Recommended)**:

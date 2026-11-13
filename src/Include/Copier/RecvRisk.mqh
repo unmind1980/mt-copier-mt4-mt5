@@ -67,15 +67,12 @@ void RefreshRisk()
       bool wasColdStart=(g_riskDay==0);
       g_riskDay=dayStart;
       double openComm=0.0;
-#ifndef __MQL5__
-      // LOGIC-03: Account for open position commissions on MT4 so cold start / rollover matches 60s calibration
-      int totOpenComm=OrdersTotal();
-      for(int oci=0;oci<totOpenComm;oci++)
-        {
-         if(OrderSelect(oci,SELECT_BY_POS,MODE_TRADES))
-            openComm+=OrderCommission();
-        }
-#endif
+      //--- R22: the day-start balance is derived as (balance - realised) in ALL
+      //--- three places: cold start, rollover, and the 60s recalibration below.
+      //--- MT4 books an open trade's commission into the balance only when it
+      //--- closes, so subtracting open commissions here made the next
+      //--- recalibration see a phantom cash flow of exactly that amount and
+      //--- scale the baseline and peak down once a day. Kept at 0 deliberately.
       if(wasColdStart)
         {
          bool rOk=false;

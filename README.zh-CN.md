@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-MT4%20%7C%20MT5%20%7C%20Windows%20%7C%20Linux%20(Wine)-green.svg)]()
 [![Rust Backend](https://img.shields.io/badge/Rust-1.80%2B%20(Tokio%20%26%20ZeroMQ)-orange.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-179%2F179%20Rust%20PASS%20%7C%20743%20MQL%20Assertions-brightgreen.svg)]()
-[![MQL Build](https://img.shields.io/badge/MQL%20Matrix-16%2F16%20Binaries%20ALL%20GREEN-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-201%2F201%20Rust%20PASS%20%7C%20990%20MQL%20Assertions-brightgreen.svg)]()
+[![MQL Build](https://img.shields.io/badge/MQL%20Matrix-5%20Terminals%20ALL%20GREEN-success.svg)]()
 
 **[ English ](README.md) | [ 简体中文 ](README.zh-CN.md)**
 
@@ -22,8 +22,8 @@
 
 | 发行版本 | 核心适用场景 | 包含核心组件 | 部署复杂度 |
 | :--- | :--- | :--- | :--- |
-| **[极简直连版 (Direct P2P Edition)](#模式-1p2p-直连模式轻量化无需中心服务)**<br>`mt-copier-direct-v1.0.0.zip` | 单电脑 / 单 VPS 本地终端极简互跟（MT4 ↔ MT5）。 | • 预编译 MT4 EA (`.ex4`) 与 MT5 EA (`.ex5`)<br>• 独立 MinGW 32位与64位 `libzmq.dll`<br>• 一键本地多终端自动部署批处理脚本 | **零配置 / 开箱即用**<br>(无需运行中心服务，无需 VC++ 运行库) |
-| **[旗舰完全版 (Complete Hub Suite)](#模式-2中央-hub-模式集中监控统一配置与管理)**<br>`mt-copier-hub-suite-v1.0.0.zip` | 跨 VPS 跨机房远程跟单、多对多船队监控、Web 大屏、双机热备 HA、手机告警。 | • Rust 异步高性能服务端 (`copier-hub.exe`)<br>• 实时 Web 交易驾驶舱与 REST API<br>• Windows 原生后台静默服务安装套件<br>• 外部国际化语言包与全套客户端终端 | **工业级全套方案**<br>(一键注册为 Windows 后台保活服务) |
+| **[极简直连版 (Direct P2P Edition)](#模式-1p2p-直连模式轻量化无需中心服务)**<br>`mt-copier-direct-v1.1.0.zip` | 单电脑 / 单 VPS 本地终端极简互跟（MT4 ↔ MT5）。 | • 预编译 MT4 EA (`.ex4`) 与 MT5 EA (`.ex5`)<br>• 独立 MinGW 32位与64位 `libzmq.dll`<br>• 一键本地多终端自动部署批处理脚本 | **零配置 / 开箱即用**<br>(无需运行中心服务，无需 VC++ 运行库) |
+| **[旗舰完全版 (Complete Hub Suite)](#模式-2中央-hub-模式集中监控统一配置与管理)**<br>`mt-copier-hub-suite-v1.1.0.zip` | 跨 VPS 跨机房远程跟单、多对多船队监控、Web 大屏、双机热备 HA、手机告警。 | • Rust 异步高性能服务端 (`copier-hub.exe`)<br>• 实时 Web 交易驾驶舱与 REST API<br>• Windows 原生后台静默服务安装套件<br>• 外部国际化语言包与全套客户端终端 | **工业级全套方案**<br>(一键注册为 Windows 后台保活服务) |
 
 > 💡 **特别说明（免运行库依赖）**：软件包内包含的 ZeroMQ 动态链接库使用 MinGW-w64 独立编译并静态内嵌 libsodium，**无需在宿主机器或云 VPS 上安装任何微软 Visual C++ Redistributable (VC++ 运行库)**，解压即用。
 
@@ -45,7 +45,7 @@
 | **平台中立性** | MQL4（32 位）↔ MQL5（64 位）双向全矩阵无缝互跟 | 发送端与接收端均原生支持 MT4/MT5，跨语言混转无需中间繁琐格式转换，统一协议封包。 |
 | **唯一身份溯源** | 订单注释写入确定性 8 位字母数字 `UID`（格式：`tc\|<uid>\|<ticket>`） | 接收端自主标记源头，不依赖发送端权限；即使券商截断注释或 MT4 部分平仓更换 ticket 依然精准溯源。 |
 | **交易安全防御** | 距离重锚、移动保本止损跟随、断线保护门禁 | 网络中断或停盘喂价停滞时：**严格保护已有持仓，暂停接收新单**，杜绝脱水价格下随意盲开。 |
-| **双活高可用** | Primary (6000/6010) / Standby (6001/6011) 双机热备 | 单调递增 Epoch 仲裁、两阶段 Journal 日志复制，彻底杜绝脑裂；支持 ADR-10 两阶段平滑自动回切。 |
+| **双活高可用** | Primary (6000/6010) / Standby (6001/6011) 双机热备 | 单调递增 Epoch 仲裁、两阶段 Journal 日志复制，彻底杜绝脑裂；默认由运维人工 Promote（加 `--auto-promote` 才自动提权）；支持 ADR-10 两阶段平滑自动回切。 |
 
 ---
 
@@ -63,7 +63,7 @@
 ### 2. 企业级双活高可用（HA）集群
 - **主备实时强同步**：Primary Hub 实时将命令日志、配置修订、通知渠道及 CURVE 客户端白名单强同步给 Standby Hub。
 - **用户表需显式开启**：`users.json` 含口令摘要，而集群通道可能是明文，因此**默认不复制**。需要主备账号一致时，在**两台 Hub** 上都设置 `MTC_SYNC_USERS=1`；是否生效可在 `GET /api/v1/cluster/status` 的 `users_sync_enabled` 字段确认。未开启时切换后 Standby 上仍是旧的账号与口令。
-- **自动故障转移与平滑回切（ADR-04 / ADR-10）**：基于严格的 Epoch 决胜仲裁与心跳探针，主节点故障备机自动接管，主机恢复后完成两阶段握手平滑回切，无状态丢失与重复开仓风险。
+- **自动故障转移与平滑回切（ADR-04 / ADR-10）**：基于严格的 Epoch 决胜仲裁与心跳探针，主节点故障时数据面经备机继续转发，控制面默认需人工 Promote（加 `--auto-promote` 可 30 秒后自动提权），主机恢复后完成两阶段握手平滑回切，无状态丢失与重复开仓风险。
 - **原子日志持久化**：具备两阶段写入屏障与 `sync_data` 刷盘保证，所有管理命令 100% 具备掉电持久性。
 
 ### 3. 金融级传输安全与加密防御
@@ -97,7 +97,7 @@
 - **多渠道独立语言**：各个推送目的地可独立分配不同的推送语言偏好。
 
 ### 7. 生产级 Windows 系统服务支持
-- **后台静默守护**：提供一键安装脚本（`install_services.bat`、`start_services.bat`），将主备 Hub 注册为原生 Windows 服务，开机自启动，崩溃自动拉起。
+- **后台静默守护**：提供一键安装脚本（`tools/service_install.bat`、`tools/service_start.bat`），将主备 Hub 注册为原生 Windows 服务，开机自启动，崩溃自动拉起。
 - **同机多实例**：`copier-hub.exe --service-install primary --instance edge` 会注册 `MTCopierPrimary_edge`（显示名 "MT-Copier Primary Hub (edge)"），而不是改写已有的 `MTCopierPrimary`。`--service-uninstall/start/stop/status` 接受同一个 `--instance`；`tools/service_*.bat` 支持 `MTC_INSTANCE` 环境变量，交互脚本也能驱动任一套部署。每个实例的服务日志写在各自的 `--workdir` 下（`hub_<服务名>_service.log`），两个实例不会争用同一个日志文件。
 
 ---
@@ -121,7 +121,7 @@
 ```
 
 ### 模式 3：双活高可用 HA 集群模式（金融级零停机方案）
-两台独立物理机或 VPS 运行主备 Hub，实时同步，故障自动无缝转移。
+两台独立物理机或 VPS 运行主备 Hub，实时同步；数据面无缝转移，备机提权默认人工确认（或 `--auto-promote`）。
 ```text
 [ 终端节点集合 ] ── (同时双向连接主备两台 Hub)
          │
@@ -171,7 +171,7 @@ mt-copier/
     ├── selftest_run.sh           # MQL 自检无头门禁（专用 portable MT5）
     ├── start_primary.bat         # 启动 Primary 主机 (ZMQ 6000 / Web 6010)
     ├── start_standby.bat         # 启动 Standby 备机 (ZMQ 6001 / Web 6011)
-    └── install_services.bat      # Windows 后台服务一键安装脚本
+    └── service_install.bat       # Windows 后台服务一键安装脚本
 ```
 
 ---
@@ -197,7 +197,7 @@ bash tools/compile.sh
 ```
 
 **方式二 —— 原生 Windows 服务守护模式**：
-右键以管理员身份运行 `install_services.bat`，即可一键将主备 Hub 安装为 Windows 自动启动服务，后台静默守护。
+右键以管理员身份运行 `tools/service_install.bat`，即可一键将主备 Hub 安装为 Windows 自动启动服务，后台静默守护。
 
 ### 第三步：在终端中挂载 EA
 1. 打开 MetaTrader 终端，在菜单 `工具 -> 选项 -> 智能交易系统` 中勾选 **允许导入动态链接库 (DLL)** 和 **允许实时自动交易**；
@@ -244,6 +244,8 @@ python tools/i18n_check.py
 
 - **[用户使用手册 (简体中文)](doc/USER_MANUAL.zh-CN.md)** — 全功能使用说明书、输入参数深度解析、跨券商映射与风控配置。
 - **[User Manual (English)](doc/USER_MANUAL.en.md)** — 英文版使用手册与全参数技术参考。
+- [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) — 当前架构：组件、设计原则、模块划分与 HA。
+- [CHANGELOG.md](CHANGELOG.md) — 版本发布说明。
 - [doc/PROTOCOL.md](doc/PROTOCOL.md) — 网络通信协议、封包格式与信封设计规范白皮书。
 - [doc/HANDOFF.md](doc/HANDOFF.md) — 核心系统架构演进历史、运维操作手册与架构决策记录（ADR）。
 - [locales/README.md](locales/README.md) — 多语言扩展指南与本地化翻译字典编写规范。

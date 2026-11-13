@@ -176,6 +176,8 @@ pub struct ClusterManager {
     /// that evidence gives two writable Primaries. Off by default; manual
     /// promotion via `POST /api/v1/cluster/promote` is the supported path.
     pub auto_promote: bool,
+    /// When the "peer lost, manual Promote required" warning was last raised.
+    pub last_manual_promote_warn: Option<Instant>,
 }
 
 /// Compute SHA-256 hex string of a file with mtime/len fast-path caching. Returns empty string if file does not exist.
@@ -345,6 +347,7 @@ impl ClusterManager {
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             handover_lease_until: None,
             auto_promote: false,
+            last_manual_promote_warn: None,
         };
 
         cm.save().map_err(|e| format!("cannot save {}: {}", state_path.display(), e))?;
@@ -464,6 +467,7 @@ impl ClusterManager {
             api_cmd_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             handover_lease_until: None,
             auto_promote: false,
+            last_manual_promote_warn: None,
         }
     }
 }
@@ -557,8 +561,16 @@ fn try_orphan_recovery(st: &SharedState) {
     if role == "standby" && !handover_in_flight {
         if let Some(outage) = outage_opt {
             if outage >= 30 && !s.cluster.auto_promote {
-                //--- report once per minute, not every probe
-                if outage % 60 < 5 {
+                //--- report once per minute, not every probe. The worker
+                //--- probes about once a second, so `outage % 60` would let
+                //--- several ticks through in each window.
+                let due = s
+                    .cluster
+                    .last_manual_promote_warn
+                    .map(|t| t.elapsed() >= Duration::from_secs(60))
+                    .unwrap_or(true);
+                if due {
+                    s.cluster.last_manual_promote_warn = Some(Instant::now());
                     let audit_rec = Arc::clone(&s.audit);
                     drop(s);
                     eprintln!(

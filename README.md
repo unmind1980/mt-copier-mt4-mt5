@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-MT4%20%7C%20MT5%20%7C%20Windows%20%7C%20Linux%20(Wine)-green.svg)]()
 [![Rust Backend](https://img.shields.io/badge/Rust-1.80%2B%20(Tokio%20%26%20ZeroMQ)-orange.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-179%2F179%20Rust%20PASS%20%7C%20743%20MQL%20Assertions-brightgreen.svg)]()
-[![MQL Build](https://img.shields.io/badge/MQL%20Matrix-16%2F16%20Binaries%20ALL%20GREEN-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-201%2F201%20Rust%20PASS%20%7C%20990%20MQL%20Assertions-brightgreen.svg)]()
+[![MQL Build](https://img.shields.io/badge/MQL%20Matrix-5%20Terminals%20ALL%20GREEN-success.svg)]()
 
 **[ English ](README.md) | [ 简体中文 ](README.zh-CN.md)**
 
@@ -22,8 +22,8 @@ Choose the edition that best matches your trading topology:
 
 | Edition | Primary Use Case | Components Included | Setup Complexity |
 | :--- | :--- | :--- | :--- |
-| **[Direct P2P Edition](#mode-1-direct-p2p-edition)**<br>`mt-copier-direct-v1.0.0.zip` | Single PC / Single VPS local replication between MT4 and MT5. | • Precompiled MT4 EAs (`.ex4`) & MT5 EAs (`.ex5`)<br>• Standalone 32-bit & 64-bit `libzmq.dll`<br>• Automated batch deploy script | **Zero Configuration**<br>(No external server or VC++ runtime needed) |
-| **[Complete Hub Suite](#mode-2-centralized-hub-suite)**<br>`mt-copier-hub-suite-v1.0.0.zip` | Fleet management, remote copy across VPS, Web Cockpit, HA Cluster, mobile alerts. | • Rust async Central Hub (`copier-hub.exe`)<br>• Real-time Web Cockpit & REST API<br>• Windows Service background daemons<br>• Multi-language packs & Client Terminals | **Enterprise Grade**<br>(1-Click background service install) |
+| **[Direct P2P Edition](#mode-1-direct-p2p-edition)**<br>`mt-copier-direct-v1.1.0.zip` | Single PC / Single VPS local replication between MT4 and MT5. | • Precompiled MT4 EAs (`.ex4`) & MT5 EAs (`.ex5`)<br>• Standalone 32-bit & 64-bit `libzmq.dll`<br>• Automated batch deploy script | **Zero Configuration**<br>(No external server or VC++ runtime needed) |
+| **[Complete Hub Suite](#mode-2-centralized-hub-suite)**<br>`mt-copier-hub-suite-v1.1.0.zip` | Fleet management, remote copy across VPS, Web Cockpit, HA Cluster, mobile alerts. | • Rust async Central Hub (`copier-hub.exe`)<br>• Real-time Web Cockpit & REST API<br>• Windows Service background daemons<br>• Multi-language packs & Client Terminals | **Enterprise Grade**<br>(1-Click background service install) |
 
 > 💡 **Notice for Windows Users**: The included ZeroMQ native binaries are built with MinGW-w64 with statically linked libsodium. **No Microsoft Visual C++ Redistributable (VC++ Runtime) is required** on your machine or VPS.
 
@@ -45,7 +45,7 @@ Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-
 | **Platform Neutrality** | MQL4 (32-bit) ↔ MQL5 (64-bit) bi-directional matrix | Any terminal can act as Sender or Receiver with identical protocol framing and shared C++ MinGW-w64 ZeroMQ binaries. |
 | **Identity Guarantee** | Deterministic 8-char alphanumeric `UID` in order comments | Receiver tracks origin without modifying sender trades; survive MT4 ticket replacements and partial fills. |
 | **Fail-Safe Discipline** | Re-anchor stop distance, signed break-even trailing, disconnect protection | On network loss or feed stall: **keep existing positions protected**, halt new entries, and trigger immediate circuit breakers. |
-| **High Availability** | Dual-active Primary (6000/6010) / Standby (6001/6011) with ADR-10 failback | Monotonic epoch fencing, two-phase journal replication, zero split-brain risk, automatic promotion and graceful handover. |
+| **High Availability** | Dual-active Primary (6000/6010) / Standby (6001/6011) with ADR-10 failback | Monotonic epoch fencing, two-phase journal replication, zero split-brain risk, operator Promote (automatic only with `--auto-promote`) and graceful handover. |
 
 ---
 
@@ -63,7 +63,7 @@ Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-
 ### 2. Enterprise High-Availability (HA) Dual-Active Cluster
 - **Active-Standby Redundancy**: Primary Hub continuously synchronizes commands, configuration revisions, alert channels and the CURVE client allow-list to the Standby Hub.
 - **User table is opt-in**: `users.json` carries password digests and the cluster channel may be plaintext, so it is **not replicated by default**. Set `MTC_SYNC_USERS=1` on **both** hubs if the standby must have the same accounts; `GET /api/v1/cluster/status` reports `users_sync_enabled`. Without it, a failover leaves the standby's old accounts and passwords in force.
-- **Failover & Auto-Failback (ADR-04 / ADR-10)**: Strict epoch-based tie breaking, continuous heartbeat health probes, and stabilized two-phase handover without state loss or duplicate orders.
+- **Failover & Auto-Failback (ADR-03 / ADR-04 / ADR-10)**: Strict epoch-based tie breaking, continuous heartbeat health probes, and stabilized two-phase handover without state loss or duplicate orders. Trade data keeps flowing through the Standby; control-plane promotion is manual by default (dashboard **Promote**), or automatic after 30 s with `--auto-promote`.
 - **Atomic Journal Persistence**: Two-phase write barriers with `sync_data` fsync barriers, guaranteeing 100% crash durability for all operational commands.
 
 ### 3. Financial-Grade Security & Encryption
@@ -97,7 +97,7 @@ Traditional copiers suffer from chronic un-bounded memory growth, lack of cross-
 - **Per-Channel Localization**: Each alert destination can be assigned its own language preference independently.
 
 ### 7. Production Windows Services
-- **Background Daemon Installation**: Simple scripts (`install_services.bat`, `start_services.bat`) to install Primary and Standby Hubs as native Windows services, running invisibly with automatic restart on failure.
+- **Background Daemon Installation**: Simple scripts (`tools/service_install.bat`, `tools/service_start.bat`) to install Primary and Standby Hubs as native Windows services, running invisibly with automatic restart on failure.
 - **Multiple instances per host**: `copier-hub.exe --service-install primary --instance edge` registers `MTCopierPrimary_edge` (display name "MT-Copier Primary Hub (edge)") instead of reconfiguring the existing `MTCopierPrimary`. `--service-uninstall/start/stop/status` take the same `--instance`, and the `tools/service_*.bat` helpers honour an `MTC_INSTANCE` environment variable so the interactive scripts can drive either deployment. Each instance keeps its own service log under its `--workdir` (`hub_<service>_service.log`), so two instances never share a log file.
 
 ---
@@ -121,7 +121,7 @@ Single central Rust process coordinating dozens of senders and receivers with we
 ```
 
 ### Mode 3: High-Availability Dual-Active Cluster (Enterprise Zero-Downtime)
-Two mutually synchronized hubs with automatic split-brain prevention and seamless failover.
+Two mutually synchronized hubs with split-brain prevention. Data-plane failover is seamless; the Standby is promoted by the operator (or automatically with `--auto-promote`).
 ```text
 [ Sender / Receiver Nodes ] ── (Dual uplink to both Hubs)
            │
@@ -171,7 +171,7 @@ mt-copier/
     ├── selftest_run.sh           # headless MQL self-test gate (portable MT5)
     ├── start_primary.bat         # Launch Primary Hub (Port 6000 / Web 6010)
     ├── start_standby.bat         # Launch Standby Hub (Port 6001 / Web 6011)
-    └── install_services.bat      # Install as background Windows Services
+    └── service_install.bat       # Install as background Windows Services
 ```
 
 ---
@@ -197,7 +197,7 @@ Double-click `start_primary_hub.bat` in the root folder, or launch via command l
 ```
 
 **Option B — Native Windows Service Mode**:
-Right-click `install_services.bat` and select **Run as Administrator** to install the Hub as a background auto-start Windows Service.
+Right-click `tools/service_install.bat` and select **Run as Administrator** to install the Hub as a background auto-start Windows Service.
 
 ### Step 3: Attach EAs to Your Terminals
 1. Open your MetaTrader terminal, ensure **Allow DLL imports** and **AutoTrading** are checked in terminal settings.
@@ -244,6 +244,8 @@ python tools/i18n_check.py
 
 - **[User Manual (English)](doc/USER_MANUAL.en.md)** — Comprehensive operating guide, Input parameter breakdown, sizing models, and FAQ.
 - **[用户使用手册 (简体中文)](doc/USER_MANUAL.zh-CN.md)** — 全功能使用说明书、输入参数深度解析、跨券商映射与风控配置。
+- [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) — Current architecture: components, design rules, module map, HA.
+- [CHANGELOG.md](CHANGELOG.md) — Release notes.
 - [doc/PROTOCOL.md](doc/PROTOCOL.md) — Comprehensive wire protocol, envelope format, and framing specifications.
 - [doc/HANDOFF.md](doc/HANDOFF.md) — Complete engineering history, operational runbook, and architectural decisions (ADR).
 - [locales/README.md](locales/README.md) — Guide for creating and customizing language translation packs.
