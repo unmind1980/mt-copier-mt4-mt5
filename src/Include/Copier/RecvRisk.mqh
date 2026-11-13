@@ -129,11 +129,14 @@ void RefreshRisk()
            }
          if(rOk)
            {
-            // Preserve pre-midnight floating equity offset to avoid false trip on pre-existing floating loss (D4-03)
-            // D-02: Pre-existing floating losses MUST be preserved across rollover to prevent baseline inflation at midnight!
-            double curEq=CopierAccountEquity();
-            double floatingOffset=curEq-curBal;
-            g_riskDayStartEquity=MathMax(0.0, g_riskDayStartBalance+floatingOffset);
+            //--- R22 (operator decision): rollover uses the SAME baseline as a
+            //--- cold start - the day-start BALANCE. Floating P/L carried over
+            //--- midnight therefore counts toward today's loss, whether or not
+            //--- the EA was restarted. Before, a running EA kept the floating
+            //--- offset (D-02) while a restarted one dropped it, so the same
+            //--- account could trip the daily guard (and RiskCloseAllOnTrip)
+            //--- only after a restart. One rule now, in both paths.
+            g_riskDayStartEquity=g_riskDayStartBalance;
            }
         }
       g_risk.SetDayStartEquity(g_riskDayStartEquity);
