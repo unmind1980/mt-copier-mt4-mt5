@@ -1,5 +1,7 @@
 # Phase 1 · 透明代理 —— 详细设计
 
+> **当前架构以 [`doc/ARCHITECTURE.md`](ARCHITECTURE.md) 为准。** 本文为历史/设计记录，与 ARCHITECTURE.md 冲突时以后者为准。
+
 > 上位文档：`doc/CENTRAL-HUB-PLAN.md`（v2.3，D1–D14 已全部确认）
 > 本阶段目标：**让数据面先跑通，且 Tier 1 一个字节都不改。**
 > 本阶段**不做**：注册表、监控、配置下发、前端、主备。

@@ -1,4 +1,7 @@
 # mt-copier 主备 Hub 双机热备设计方案书
+
+> **当前架构以 [`doc/ARCHITECTURE.md`](ARCHITECTURE.md) 为准。** 本文为历史/设计记录，与 ARCHITECTURE.md 冲突时以后者为准。
+
 ## 核心模式：双端双活连接（Active-Active Dual-Connected Model）
 
 > **状态**：方案已选定（方案 A），待团队评审确认  

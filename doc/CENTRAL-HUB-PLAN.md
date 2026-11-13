@@ -1,5 +1,7 @@
 # MT-Copier 中央中枢（Central Hub）计划书
 
+> **当前架构以 [`doc/ARCHITECTURE.md`](ARCHITECTURE.md) 为准。** 本文为历史/设计记录，与 ARCHITECTURE.md 冲突时以后者为准。
+
 > 状态：**已落地实现并验证（D1–D14 已全部确认并纳入核心代码）**
 >   
 > 范围：中央中枢架构与实施规范

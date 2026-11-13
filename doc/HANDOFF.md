@@ -1,5 +1,7 @@
 # MT-Copier 项目交接与系统状态手册 (Project Handoff & Status Manual)
 
+> **当前架构以 [`doc/ARCHITECTURE.md`](ARCHITECTURE.md) 为准。** 本文为历史/设计记录，与 ARCHITECTURE.md 冲突时以后者为准。
+
 > 生成时间：2026-10-20 00:45 (UTC+8)  
 > 状态：**生产就绪 (Production Ready) / 全部测试全绿 (All Suites Green)**  
 > 适用对象：系统维护人员、量化交易员、后继开发人员
@@ -2130,7 +2132,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
   - Rust 167/167 单元测试通过（新增 4 条），0 warnings；
   - Python 全套 24 个套件全绿，其中 `hub_stat_path_test.py` 从 20 项增至 28 项。
 
-- **第 109 轮独立复核（outputs/mt-copier-fullstack-audit-2026-11-06-r3.md）发现并已修复的回归**：
+- **第 109 轮独立复核（doc/archive/audits/mt-copier-fullstack-audit-2026-11-06-r3.md）发现并已修复的回归**：
   1. **F-01 `CopierIniCmpNormalize` 是 O(n²)**（本轮新增代码的严重性能回归）：逐字符 `out += c` 在 100-sender / 270 KB ini 上会产生数十 GB 复制，且每次 CFG 推送调用两次，跑在 EA 主线程。**已改为 `CopierIniCmpDiff()` 双游标比较，零分配 O(n)**；SelfTest 增加"200 KB 文本比较 < 200 ms"的性能护栏。
   2. **F-02 bat 延迟展开陷阱**：`set` 写在 `if (...)` 复合块内、用 `%VAR%` 引用，cmd 在进入块前就完成展开 → `--instance` 永远为空，装第二个服务会静默重配第一个。**已把定义移到块外顶层，并全部改用 `!VAR!`**；`sc start/stop/query` 也补上 `!MTC_INST_SUFFIX!`（已用 cmd 冒烟验证 `arg=--instance edge / suffix=_edge`）。
   3. **F-03 分块尺寸错误**：`CP_STAT_RH_CHUNK=1200` 是按"`CP_MAX_SENDERS`=32"算的，实际是 100（约 2.1 KB）→ 满配必分 2 帧，且第 2 帧没有 `SID=`/`H=`，老 Hub 静默丢掉其余 sender 的收据。**已提到 4096（满配单帧），每帧都带 `SID=`/`H=`**，新增 Rust 单测锁住"满配必须单帧"的算术。
@@ -2191,7 +2193,7 @@ MT-Copier 是一套高性能、低延迟、生产级跨账户 MetaTrader 4 / Met
 
 ### 一百一十次演进：订阅引用计数、Standby 只读命令、峰值手数按行存储与配置序列化线性化（2026-11-07；12 项审计发现全部闭环）
 
-- **来源**：独立只读审计 `outputs/mt-copier-fullstack-audit-2026-11-07.md`（12 项，N-01..N-12）。本轮 12 项全部落地（N-08 的 Hub 侧本就正确，只补了节点侧）。
+- **来源**：独立只读审计 `doc/archive/audits/mt-copier-fullstack-audit-2026-11-07.md`（12 项，N-01..N-12）。本轮 12 项全部落地（N-08 的 Hub 侧本就正确，只补了节点侧）。
 
 - **已修**：
   1. **N-01 订阅引用计数（中）**：`CopierTransport::Subscribe` 改为**幂等**（同一 socket 上已发过 `0x01` 就不再发），并用 `m_subSent[]` 记录每个前缀实际发出的帧数，`Unsubscribe` 按该数量补 `0x00`。此前 `HubAnnounce` 每 5 秒无条件重订阅，XPUB 的 `(pipe,prefix)` 引用计数单调增长到数千，**一次 0x00 永远减不到 0**——从 copier.ini 删掉的 sender 仍持续收到数据，Hub 的 `subs` 视图也随之失真。`ConnectExtraHub` 的重放同样计数，保证退订时收支平衡。
