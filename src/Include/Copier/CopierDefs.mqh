@@ -883,6 +883,24 @@ string CopierSanitize(string s,const int maxLen)
 string CopierSanitizeSymbol(const string s)  { return CopierSanitize(s,CP_SYM_MAXLEN);  }
 string CopierSanitizeComment(const string s) { return CopierSanitize(s,CP_COMM_MAXLEN); }
 
+// Validate peer names (receiver login / hub roles) to protect peer tables
+// and UI panels from corrupted or fragmented network frames.
+bool CopierPeerNameValid(const string name)
+  {
+   int len=StringLen(name);
+   if(len<=0 || len>32) return false;
+   for(int i=0;i<len;i++)
+     {
+      ushort c=StringGetCharacter(name,i);
+      bool ok=((c>='0' && c<='9') ||
+               (c>='a' && c<='z') ||
+               (c>='A' && c<='Z') ||
+               c=='_' || c=='-' || c==':');
+      if(!ok) return false;
+     }
+   return true;
+  }
+
 // Extract value of "KEY=" from a ";"-separated payload.
 // Returns false when the key is absent.
 bool CopierKvGet(const string payload,const string key,string &out)

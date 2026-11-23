@@ -1130,7 +1130,8 @@ int ScanAndResolveAccountPositions()
 
          int oursSi=MagicToSender(g_rawScratch[i].magic);
          bool isOurs=(oursSi>=0);
-         bool orphan=(!isOurs && StringLen(CopierUidFromComment(g_rawScratch[i].cmt))>0);
+         bool isPeer=(!isOurs && IsPeerDirectReceiverMagic(g_rawScratch[i].magic));
+         bool orphan=(!isOurs && !isPeer && StringLen(CopierUidFromComment(g_rawScratch[i].cmt))>0);
 
          //--- Keep the durable UID <-> ticket map current - but only here.
          //--- LocalForSender used to Upsert every position on every tick,

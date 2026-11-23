@@ -858,12 +858,12 @@ string CopierPayloadHeartbeat(const double bal,const double eq,const double mgn,
 //--- Addressing a BROADCAST cannot work; identifying the RESPONDER can.
 string CopierPayloadPing(const long ms,const string from)
   {
-   return "MS="+(string)ms+CP_SEP_KV+"FROM="+from;
+   return "MS="+(string)ms+CP_SEP_KV+"FROM="+from+CP_SEP_KV;
   }
 
 string CopierPayloadPong(const long ms,const string from,const string to)
   {
-   return "MS="+(string)ms+CP_SEP_KV+"FROM="+from+CP_SEP_KV+"TO="+to;
+   return "MS="+(string)ms+CP_SEP_KV+"FROM="+from+CP_SEP_KV+"TO="+to+CP_SEP_KV;
   }
 
 //--- REG / HBT2, the central channel's "who are you" pair.

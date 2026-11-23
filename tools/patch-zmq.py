@@ -67,6 +67,12 @@ RULES = [
         ("int zmq_has(const char &capability[]);",
          "int zmq_has(const uchar &capability[]);"),
     ]),
+    ("Mql/Lang/Native.mqh", [
+        ("string StringFromUtf8Pointer(intptr_t psz,int len)\n  {\n   if(len < 0) return NULL;\n   string res;\n   int required=MultiByteToWideChar(CP_UTF8,0,psz,len,res,0);\n   StringInit(res,required);\n   int rlen=MultiByteToWideChar(CP_UTF8,0,psz,len,res,required);\n   return rlen != required ? NULL : res;\n  }",
+         "string StringFromUtf8Pointer(intptr_t psz,int len)\n  {\n   if(len<=0 || psz==0) return \"\";\n   uchar bytes[];\n   ArrayResize(bytes,len);\n   ArrayFromPointer(bytes,psz,len);\n   return CharArrayToString(bytes,0,len,CP_UTF8);\n  }"),
+        ("string StringFromUtf8Pointer(intptr_t psz)\n  {\n   if(psz==0) return NULL;\n   int len=lstrlen(psz);\n   if(len==0) return NULL;\n   return StringFromUtf8Pointer(psz, len);\n  }",
+         "string StringFromUtf8Pointer(intptr_t psz)\n  {\n   if(psz==0) return \"\";\n   int len=lstrlen(psz);\n   if(len<=0) return \"\";\n   return StringFromUtf8Pointer(psz, len);\n  }"),
+    ]),
 ]
 
 

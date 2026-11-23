@@ -140,21 +140,20 @@ uintptr_t StringToPointer(string &s)
 //+------------------------------------------------------------------+
 string StringFromUtf8Pointer(intptr_t psz,int len)
   {
-   if(len < 0) return NULL;
-   string res;
-   int required=MultiByteToWideChar(CP_UTF8,0,psz,len,res,0);
-   StringInit(res,required);
-   int rlen=MultiByteToWideChar(CP_UTF8,0,psz,len,res,required);
-   return rlen != required ? NULL : res;
+   if(len<=0 || psz==0) return "";
+   uchar bytes[];
+   ArrayResize(bytes,len);
+   ArrayFromPointer(bytes,psz,len);
+   return CharArrayToString(bytes,0,len,CP_UTF8);
   }
 //+------------------------------------------------------------------+
 //| for null-terminated string                                       |
 //+------------------------------------------------------------------+
 string StringFromUtf8Pointer(intptr_t psz)
   {
-   if(psz==0) return NULL;
+   if(psz==0) return "";
    int len=lstrlen(psz);
-   if(len==0) return NULL;
+   if(len<=0) return "";
    return StringFromUtf8Pointer(psz, len);
   }
 //+------------------------------------------------------------------+

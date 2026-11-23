@@ -2290,6 +2290,32 @@ void TestPeerLiveness()
    Ok("peers: probe sets pending ping timestamp and pongback succeeds",p.PongBack("hub:primary",tProbe));
    Ok("peers: rtt is measured upon valid pong",p.RttFor("hub:primary")>=0);
    Ok("peers: mismatching or stale probe timestamp is rejected",!p.PongBack("hub:primary",tProbe+999));
+
+   // Corrupted peer name validation and immunity against malformed frames
+   Ok("peers: valid peer names accepted",
+      CopierPeerNameValid("53156249") &&
+      CopierPeerNameValid("hub") &&
+      CopierPeerNameValid("hub:primary") &&
+      CopierPeerNameValid("hub:standby") &&
+      CopierPeerNameValid("5236") &&
+      CopierPeerNameValid("receiver"));
+
+   Ok("peers: malformed or frame-fragment peer names rejected",
+      !CopierPeerNameValid("") &&
+      !CopierPeerNameValid("53156249AYED=0") &&
+      !CopierPeerNameValid("53156249N=0") &&
+      !CopierPeerNameValid("53156249,0,90001,1795210500~") &&
+      !CopierPeerNameValid("53156249n silent for 15s)") &&
+      !CopierPeerNameValid("53156249104755909,GBPUSD,1,0.01") &&
+      !CopierPeerNameValid("toolongpeernameexceedingthirtytwochars1234567890"));
+
+   // Corrupted peer name is completely ignored by Seen, ProbeSent, PongBack
+   int countBefore=p.Count();
+   p.Seen("53156249AYED=0");
+   p.Seen("53156249n silent for 15s)");
+   p.ProbeSent("53156249,0,90001,1795210500~",CopierNowMs());
+   Ok("peers: table rejects addition of malformed peers",p.Count()==countBefore);
+   Ok("peers: PongBack rejects malformed peer",!p.PongBack("53156249AYED=0",tProbe));
   }
 
 void TestSymbolQuoteAge()

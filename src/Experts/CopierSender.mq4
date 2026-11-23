@@ -2011,13 +2011,13 @@ void HandleSenderStat(const CopierEnv &se)
    CopierKvGet(se.payload,"ORPHAN",orphan);
    CopierKvGet(se.payload,"WAIT",wait);
 
-   if(StringLen(login)>0)
+   if(StringLen(login)>0 && CopierPeerNameValid(login))
       g_peers.Seen(login);
 
    string rk=risk;
    if(StringLen(rk)==0 && StringLen(nsend)>0) rk="ok";
    if(StringLen(orphan)>0 && CopierParseLong(orphan)>0) rk="orphan:"+orphan;
-   if(StringLen(login)>0 && StringLen(rk)>0)
+   if(StringLen(login)>0 && CopierPeerNameValid(login) && StringLen(rk)>0)
      {
       g_peers.SetNote(login,rk);
       if(g_once.ShouldEmit("stat|"+login+"|"+rk))
@@ -2048,7 +2048,7 @@ void HandleHubSubFrame(const CopierEnv &he)
       CopierKvGet(he.payload,"FROM",hfrom);
       CopierKvGet(he.payload,"TO",hto);
       if(StringLen(hto)>0 && hto!=(string)g_nid && hto!=(string)CopierAccountLogin()) return;
-      if(StringLen(hfrom)>0)
+      if(StringLen(hfrom)>0 && CopierPeerNameValid(hfrom))
         {
          if(g_connectedEpCount<=1 && StringSubstr(hfrom,0,4)=="hub:")
            {
@@ -2087,7 +2087,7 @@ void HandleHubSubFrame(const CopierEnv &he)
         {
          //--- R60-16: Record receiver as active peer in central mode so on-chart panel
          //--- and disconnect detector accurately show connected receivers.
-         if(StringLen(rwho)>0) g_peers.Seen(rwho);
+         if(StringLen(rwho)>0 && CopierPeerNameValid(rwho)) g_peers.Seen(rwho);
          SnapTrack(rwho,rh,true);
         }
       return;
@@ -2250,7 +2250,7 @@ void HandleDirectStatusFrame(const string raw)
       string pms="",pfrom="";
       CopierKvGet(se.payload,"MS",pms);
       CopierKvGet(se.payload,"FROM",pfrom);
-      if(StringLen(pfrom)>0 && g_peers.PongBack(pfrom,CopierParseLong(pms)))
+      if(StringLen(pfrom)>0 && CopierPeerNameValid(pfrom) && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
          // V3/C4: only drop the fast pump once every expected echo has landed
          if(g_pumpPongExpect>0) g_pumpPongExpect--;
@@ -2266,7 +2266,7 @@ void HandleDirectStatusFrame(const string raw)
       string pms="",pfrom="";
       CopierKvGet(se.payload,"MS",pms);
       CopierKvGet(se.payload,"FROM",pfrom);
-      if(StringLen(pfrom)>0)
+      if(StringLen(pfrom)>0 && CopierPeerNameValid(pfrom))
         {
          g_peers.Seen(pfrom);
          // R47-23: Pass centralToo=false for direct PONG echo responses

@@ -136,6 +136,17 @@ private:
    bool              m_midMultipart;
    bool              m_midInboundMultipart;
 
+   // Zero-allocation, clean native UTF-8 string extractor that bypasses Win32 DLL
+   // MultiByteToWideChar buffer-overrun bug on 64-bit MT5 platforms.
+   static string     CopierMsgToString(ZmqMsg &msg)
+     {
+      size_t sz=msg.size();
+      if(sz<=0) return "";
+      uchar bytes[];
+      msg.getData(bytes);
+      return CharArrayToString(bytes,0,(int)sz,CP_UTF8);
+     }
+
    int               DrainSocket(Socket *s,string &out[],const int maxMsgs)
      {
       int limit=(maxMsgs<CP_DRAIN_MAX)?maxMsgs:CP_DRAIN_MAX;
@@ -153,7 +164,7 @@ private:
         {
          ZmqMsg msg;
          if(!s.recv(msg,true)) break;   // EAGAIN -> nothing pending
-         string data=msg.getData();
+         string data=CopierMsgToString(msg);
          // R6-D6-02 & R12-B01: Drain any remaining frames of THIS multipart message without draining subsequent messages
          bool hasMore=msg.more();
          bool drainOk=true;
@@ -738,7 +749,7 @@ public:
         {
          ZmqMsg m0;
          if(!m_sub.recv(m0,true)) break;          // EAGAIN -> nothing pending
-         string first=m0.getData();
+         string first=CopierMsgToString(m0);
          string topic="",payload=first;
          if(m0.more())
            {
@@ -772,7 +783,7 @@ public:
                break;
               }
             topic=first;
-            payload=m1.getData();
+            payload=CopierMsgToString(m1);
             //--- Drain and drop any unexpected additional frames (>2) to prevent
             //--- socket frame misalignment on subsequent message reads.
             bool hasMore=m1.more();

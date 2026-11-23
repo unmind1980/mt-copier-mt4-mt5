@@ -144,7 +144,7 @@ public:
    //--- the round trip only means something for an actual echo.
    void              Seen(const string name)
      {
-      if(StringLen(name)==0) return;
+      if(StringLen(name)==0 || !CopierPeerNameValid(name)) return;
       m_seen[Slot(name)]=CopierNowMs();
      }
 
@@ -168,7 +168,7 @@ public:
    //--- Remember when a probe went out, so the echo can be matched to it.
    void              ProbeSent(const string name,const long ms)
      {
-      if(StringLen(name)==0) return;
+      if(StringLen(name)==0 || !CopierPeerNameValid(name)) return;
       m_ping[Slot(name)]=ms;
      }
 
@@ -177,7 +177,7 @@ public:
    //--- round trip that never happened.
    bool              PongBack(const string name,const long ms)
      {
-      if(StringLen(name)==0) return false;
+      if(StringLen(name)==0 || !CopierPeerNameValid(name)) return false;
       int i=Find(name);
       if(i<0) return false;
       if(m_ping[i]==0 || m_ping[i]!=ms) return false;
@@ -192,7 +192,7 @@ public:
    //--- What the peer said about itself, for display only.
    void              SetNote(const string name,const string note)
      {
-      if(StringLen(name)==0) return;
+      if(StringLen(name)==0 || !CopierPeerNameValid(name)) return;
       m_note[Slot(name)]=note;
      }
 

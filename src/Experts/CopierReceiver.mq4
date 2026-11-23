@@ -2794,6 +2794,17 @@ void DelLockChartId(const string name)
    GlobalVariableDel(name); // legacy cleanup
   }
 
+bool IsPeerDirectReceiverMagic(const long magic)
+  {
+   if(magic<=0 || g_hubOn) return false;
+   string name="CP_LOCK_RCV_D_"+(string)magic;
+   if(!GlobalVariableCheck(name+"_H") || !GlobalVariableCheck(name+"_L"))
+      return false;
+   long holderChart=GetLockChartId(name);
+   if(holderChart<=0) return false;
+   return ChartExists(holderChart);
+  }
+
 bool AcquireInstanceLock()
   {
    string name=InstanceLockName();
@@ -3080,6 +3091,7 @@ void ReportOrphanedMirrors()
          if(g_scanScratch[i].magic==g_magic[k]) { owned=true; break; }
         }
       if(owned) continue;
+      if(IsPeerDirectReceiverMagic(g_scanScratch[i].magic)) continue;
 
       bad++;
       g_log.Error("ORPHAN: "+g_scanScratch[i].sym+" ticket="+(string)g_scanScratch[i].ticket
@@ -4068,11 +4080,14 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       string pms="",pfrom="";
       CopierKvGet(e.payload,"MS",pms);
       CopierKvGet(e.payload,"FROM",pfrom);
-      //--- address the reply back to whoever asked, so other receivers ignore
-      //--- it; FROM names us, so the sender can attribute our echo.
-      CopierSendStatus(CP_T_PONG,
-                       CopierPayloadPong(CopierParseLong(pms),
-                                         (string)CopierAccountLogin(),pfrom));
+      if(StringLen(pfrom)>0 && CopierPeerNameValid(pfrom))
+        {
+         //--- address the reply back to whoever asked, so other receivers ignore
+         //--- it; FROM names us, so the sender can attribute our echo.
+         CopierSendStatus(CP_T_PONG,
+                          CopierPayloadPong(CopierParseLong(pms),
+                                            (string)CopierAccountLogin(),pfrom));
+        }
       return false;
      }
    if(e.type==CP_T_PONG)
@@ -4089,6 +4104,7 @@ bool RouteMessage(const string topic,const CopierEnv &e,const int stream)
       //--- account number, so the panel listed itself as a second, silent
       //--- "sender" beside the real one - forever.
       if((pto==(string)CopierAccountLogin() || (g_hubOn && pto==(string)g_nid)) && StringLen(pfrom)>0
+         && CopierPeerNameValid(pfrom)
          && g_peers.PongBack(pfrom,CopierParseLong(pms)))
         {
          // V3/C4: disarm only after every expected echo has landed
