@@ -18,7 +18,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "releases" / f"v{VERSION}"

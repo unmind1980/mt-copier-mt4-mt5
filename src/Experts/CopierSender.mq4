@@ -16,7 +16,7 @@
 //| Everything platform specific lives in CopierModel.mqh.            |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.10"
+#property version   "1.11"
 #property description "Trade copier sender: publishes positions over ZeroMQ."
 
 #import "winmm.dll"

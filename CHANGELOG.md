@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.1.1 — 2026-11-23
+
+Patch release resolving Direct P2P mode peer table corruption and multi-chart orphan reporting on 64-bit MT5:
+
+### Fixes & Improvements
+
+- **ZeroMQ 64-bit MT5 string decoding (buffer overrun fix)**: Replaced Win32 DLL `MultiByteToWideChar` string marshalling in `Native.mqh` and `CopierTransport.mqh` with MQL native `CharArrayToString(..., CP_UTF8)`. Fixes a severe 64-bit MT5 memory buffer overrun where non-null-terminated network frames leaked historical heap strings (such as alert messages, order payloads, and hash fragments) into decoded messages.
+- **Direct Mode peer table immunity**:
+  - Direct P2P Sender terminals no longer get flooded with corrupted peer entries (e.g. `53156249AYED=0`, `53156249:39d5614f`, `53156249n silent for 15s)`).
+  - Added strict `CopierPeerNameValid()` validation to protect `CopierPeerTable` and UI panels against malformed or fragmented peer identifiers.
+  - Added explicit trailing delimiters `;` on latency probe `PING` and echo `PONG` payloads to prevent adjacent field bleeding.
+- **Multi-Chart Direct Mode orphan isolation**:
+  - Implemented `IsPeerDirectReceiverMagic()` in `CopierReceiver` and `RecvReconcile`.
+  - When running multiple CopierReceiver charts on a single receiver terminal to copy from multiple senders, each chart recognizes the magic numbers of peer charts via active instance locks (`CP_LOCK_RCV_D_<Magic>`).
+  - Active positions belonging to sibling receiver charts on the same account are no longer falsely reported as orphans (`risk=orphan:N`).
+- **Selftest regression suite**:
+  - Added comprehensive unit tests in `CopierSelfTest` verifying peer name validation and corrupted peer rejection (all 994 assertions pass).
+
 ## v1.1.0 — 2026-11-13
 
 32 commits since v1.0.0. Mostly audit fixes (rounds r1–r22) plus one behaviour change in HA.

@@ -18,7 +18,7 @@
 //|     never from inside a receive loop, never re-entrantly.         |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.10"
+#property version   "1.11"
 #property description "Trade copier receiver: subscribes to N senders and mirrors them."
 
 #import "winmm.dll"
